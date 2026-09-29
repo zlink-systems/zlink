@@ -237,7 +237,7 @@ internal sealed class ZLinkSpotPeerConnector(
 
             if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
             {
-                node.DisconnectPeerLifetime(peerRid, peer.LifecycleGeneration);
+                node.DisconnectPeerLifetime(peerRid, endpoint, peer.LifecycleGeneration);
             }
             else
             {

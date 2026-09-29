@@ -9,6 +9,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 final class ZLinkSpotActivationFactory {
@@ -178,10 +180,7 @@ final class ZLinkSpotActivationFactory {
                                         () ->
                                                 ZLinkHandlerStages.fromStageSupplier(
                                                         activation.spot()::onInitialize)))
-                .thenRun(
-                        () ->
-                                registerDispatchHandler(
-                                        activation.backendSpot, activation::handleDispatchEvent));
+                .thenRun(() -> registerDispatchHandler(activation.backendSpot, activation));
     }
 
     EntrySpotActivation activateEntry(
@@ -239,7 +238,8 @@ final class ZLinkSpotActivationFactory {
                         });
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        registerDispatchHandler(backendSpot, activation::handleDispatchEvent);
+        registerDispatchHandler(
+                backendSpot, activation::handleDispatchEvent, activation::admitRoute);
         return activation;
     }
 
@@ -284,7 +284,10 @@ final class ZLinkSpotActivationFactory {
                             var activation =
                                     new ZLinkInstanceSpotActivation(
                                             host, handlerInvoker, spot, backendSpot, context);
-                            registerDispatchHandler(backendSpot, activation::handleDispatchEvent);
+                            registerDispatchHandler(
+                                    backendSpot,
+                                    activation::handleDispatchEvent,
+                                    activation::admitRoute);
                             return activation;
                         })
                 .whenComplete(
@@ -321,19 +324,87 @@ final class ZLinkSpotActivationFactory {
                             SpotActivation activation =
                                     new SpotActivation(
                                             host, handlerInvoker, spot, backendSpot, context);
-                            registerDispatchHandler(backendSpot, activation::handleDispatchEvent);
+                            registerDispatchHandler(backendSpot, activation);
                             return new SpotActivationCreateResult(activation, effectiveResponse);
                         });
     }
 
     private static void registerDispatchHandler(
             ZLinkBackendSpot backendSpot,
-            Function<ZLinkBackendSpotDispatchInfo, CompletionStage<Void>> handler) {
+            Function<ZLinkBackendSpotDispatchInfo, CompletionStage<Void>> handler,
+            BiFunction<ZLinkBackendReceived, CompletableFuture<Void>, CompletionStage<Void>>
+                    routeHandler) {
         backendSpot.onDispatchEvent(
                 new ZLinkInternalAsyncSpotDispatchHandler() {
                     @Override
                     public CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info) {
                         return handler.apply(info);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                        return routeHandler.apply(received, null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleRoute(
+                            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+                        return routeHandler.apply(received, admission);
+                    }
+                });
+    }
+
+    private static void registerDispatchHandler(
+            ZLinkBackendSpot backendSpot, SpotActivation activation) {
+        backendSpot.onDispatchEvent(
+                new ZLinkInternalAsyncSpotDispatchHandler() {
+                    @Override
+                    public CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info) {
+                        return activation.handleDispatchEvent(info);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                        return activation.admitRoute(received);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleRoute(
+                            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+                        return activation.admitRoute(received, admission);
+                    }
+
+                    @Override
+                    public Boolean handleTopic(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendTopicMessage
+                                    message) {
+                        return activation.admitTopic(message);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleJoin(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorJoinRequest
+                                    request) {
+                        return activation.admitJoin(request);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleActor(
+                            java.util.List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    messages) {
+                        return activation.admitActor(messages);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleLifecycle(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorLifecycleEvent
+                                    event) {
+                        return activation.admitLifecycle(event);
                     }
                 });
     }

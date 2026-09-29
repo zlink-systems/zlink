@@ -208,7 +208,7 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task RemovingUnadmittedIntent_PreservesAnotherOutboundReplacement()
+    public async Task ReplacingUnknownRidIntent_PreservesOutboundConnection()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var owner = NewNode(context, "mesh-mid");
@@ -224,8 +224,9 @@ public sealed partial class StatefulServiceRuntimeTests
         var endpoint = Assert.IsType<string>(replacement.Status().LocalEndpoint);
         owner.SetBind("tcp://127.0.0.1:0");
         owner.Start();
-        var staleIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
+        var staleIntent = owner.ConnectPeer(endpoint);
         var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
+        Assert.NotEqual(staleIntent, replacementIntent);
         try
         {
             await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));

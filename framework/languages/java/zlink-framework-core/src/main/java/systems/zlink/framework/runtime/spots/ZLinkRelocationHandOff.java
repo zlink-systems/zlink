@@ -5,6 +5,7 @@ import systems.zlink.contracts.core.RoutingId;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
@@ -12,10 +13,10 @@ import java.util.logging.Logger;
 
 /**
  * The one source-side hand-off order every relocation unit uses (spec 28 §4.4): Restore until relay
- * readiness, ordered relay, one cutover submit, then authority settlement. A failure before relay
+ * readiness, ordered relay, one cutover submit, and authority settlement. A failure before relay
  * readiness completes the returned stage exceptionally so the caller restores the source. After
- * relay readiness the outcome is only the settlement — a relay or cutover submit terminal is
- * neither success nor failure and never reopens the source.
+ * relay readiness the outcome is only the settlement. Relay admission cannot delay the Store's
+ * Restore deadline decision; a relay or cutover submit terminal never reopens the source.
  */
 final class ZLinkRelocationHandOff {
     private static final Logger LOGGER = Logger.getLogger(ZLinkRelocationHandOff.class.getName());
@@ -41,33 +42,29 @@ final class ZLinkRelocationHandOff {
         RoutingId targetRid = request.targetNodeRid();
         return client.stage(targetRid, request, timeout)
                 .thenCompose(
-                        ready ->
-                                relayCapturedIngress
-                                        .get()
-                                        .thenCompose(
-                                                ignored ->
-                                                        client.publish(
-                                                                targetRid,
-                                                                request.fence(),
-                                                                timeout))
-                                        .handle(
-                                                (ignored, failure) -> {
-                                                    if (failure != null) {
-                                                        LOGGER.warning(
-                                                                "Relocation relay or CUTOVER"
-                                                                        + " submit failed;"
-                                                                        + " authority settlement"
-                                                                        + " decides the unit: "
-                                                                        + unwrap(failure));
-                                                    }
-                                                    return null;
-                                                })
-                                        .thenCompose(
-                                                ignored ->
-                                                        client.settle(
-                                                                targetRid,
-                                                                request.fence(),
-                                                                restoreDeadline)));
+                        ready -> {
+                            CompletionStage<Void> relay;
+                            try {
+                                relay = relayCapturedIngress.get();
+                            } catch (RuntimeException failure) {
+                                relay = CompletableFuture.failedFuture(failure);
+                            }
+                            relay.thenCompose(
+                                            ignored ->
+                                                    client.publish(
+                                                            targetRid, request.fence(), timeout))
+                                    .whenComplete(
+                                            (ignored, failure) -> {
+                                                if (failure != null) {
+                                                    LOGGER.warning(
+                                                            "Relocation relay or CUTOVER submit"
+                                                                    + " failed; authority settlement"
+                                                                    + " decides the unit: "
+                                                                    + unwrap(failure));
+                                                }
+                                            });
+                            return client.settle(targetRid, request.fence(), restoreDeadline);
+                        });
     }
 
     private static Throwable unwrap(Throwable failure) {

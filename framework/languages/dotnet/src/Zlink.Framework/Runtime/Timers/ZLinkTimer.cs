@@ -109,32 +109,22 @@ internal sealed class ZLinkTimer : IZLinkTimer
         if (startFrozen)
             _resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _stopSource = CancellationTokenSource.CreateLinkedTokenSource(spotStopToken);
-        _scheduler.Register(this);
-
         SchedulerSchedule? schedule = null;
         var startDispatch = false;
-        (schedule, startDispatch) = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (!startFrozen && _pendingTick is null)
-                    return (
-                        PrepareScheduleOnLane(_nextScheduledAt ?? ComputeNextScheduledAtOnLane()),
-                        false
-                    );
-                if (!startFrozen && _pendingTick is not null)
-                {
-                    _activeDispatch = NewDispatchSource();
-                    return ((SchedulerSchedule?)null, true);
-                }
-                return ((SchedulerSchedule?)null, false);
-            })
-        );
+        if (!startFrozen && _pendingTick is null)
+            schedule = PrepareScheduleOnLane(_nextScheduledAt ?? ComputeNextScheduledAtOnLane());
+        else if (!startFrozen && _pendingTick is not null)
+        {
+            _activeDispatch = NewDispatchSource();
+            startDispatch = true;
+        }
+        _scheduler.Register(this);
         PublishSchedule(schedule);
         if (startDispatch)
             StartPendingDispatch();
     }
 
-    public bool IsDisposed => AwaitStateLane(_lane.RunAsync(() => _disposed != 0));
+    public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     internal ZLinkTimerLogicalSnapshot Freeze() =>
         AwaitStateLane(
@@ -191,13 +181,10 @@ internal sealed class ZLinkTimer : IZLinkTimer
         );
     }
 
-    internal bool IsScheduleCurrent(long version) =>
-        AwaitStateLane(_lane.RunAsync(() => !IsDisposedOnLane && _scheduleVersion == version));
-
-    internal void NotifyDue(long version)
+    internal async ValueTask NotifyDueAsync(long version)
     {
-        var startDispatch = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var startDispatch = await _lane
+            .RunAsync(() =>
             {
                 if (IsDisposedOnLane || _scheduleVersion != version || _resume is not null)
                     return false;
@@ -211,7 +198,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 }
                 return false;
             })
-        );
+            .ConfigureAwait(false);
 
         if (startDispatch)
             StartPendingDispatch();
@@ -219,41 +206,48 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     internal void Resume()
     {
-        var resumeState = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var resume = _resume;
-                _resume = null;
-                SchedulerSchedule? schedule = null;
-                var startDispatch = false;
-                if (resume is not null && !IsDisposedOnLane)
-                {
-                    if (_pendingTick is not null)
-                    {
-                        if (_activeDispatch is null)
-                        {
-                            _activeDispatch = NewDispatchSource();
-                            startDispatch = true;
-                        }
-                    }
-                    else
-                    {
-                        schedule = PrepareScheduleOnLane(
-                            _nextScheduledAt ?? ComputeNextScheduledAtOnLane()
-                        );
-                    }
-                }
-                return (resume, schedule, startDispatch);
-            })
-        );
-
+        var resumeState = AwaitStateLane(_lane.RunAsync(PrepareResumeOnLane));
         resumeState.resume?.TrySetResult();
         PublishSchedule(resumeState.schedule);
         if (resumeState.startDispatch)
             StartPendingDispatch();
     }
 
-    public ValueTask CancelAsync() => new(GetOrStartFinalization());
+    private (
+        TaskCompletionSource? resume,
+        SchedulerSchedule? schedule,
+        bool startDispatch
+    ) PrepareResumeOnLane()
+    {
+        var resume = _resume;
+        _resume = null;
+        SchedulerSchedule? schedule = null;
+        var startDispatch = false;
+        if (resume is not null && !IsDisposedOnLane)
+        {
+            if (_pendingTick is not null)
+            {
+                if (_activeDispatch is null)
+                {
+                    _activeDispatch = NewDispatchSource();
+                    startDispatch = true;
+                }
+            }
+            else
+            {
+                schedule = PrepareScheduleOnLane(
+                    _nextScheduledAt ?? ComputeNextScheduledAtOnLane()
+                );
+            }
+        }
+        return (resume, schedule, startDispatch);
+    }
+
+    public async ValueTask CancelAsync()
+    {
+        var finalization = await GetOrStartFinalizationAsync().ConfigureAwait(false);
+        await finalization.ConfigureAwait(false);
+    }
 
     public ValueTask DisposeAsync() => CancelAsync();
 
@@ -263,7 +257,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     private static TaskCompletionSource NewDispatchSource() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private bool IsDisposedOnLane => _disposed != 0;
+    private bool IsDisposedOnLane => IsDisposed;
 
     private ZLinkTimerLogicalSnapshot SnapshotOnLane()
     {
@@ -279,31 +273,30 @@ internal sealed class ZLinkTimer : IZLinkTimer
         );
     }
 
-    private Task GetOrStartFinalization()
+    private async ValueTask<Task> GetOrStartFinalizationAsync()
     {
         TaskCompletionSource? completion = null;
-        var finalization = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var finalization = await _lane
+            .RunAsync(() =>
             {
                 if (_finalization is not null)
                     return _finalization;
 
-                _disposed = 1;
+                Volatile.Write(ref _disposed, 1);
                 completion = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
                 _finalization = completion.Task;
                 return _finalization;
             })
-        );
+            .ConfigureAwait(false);
 
         // Start cancellation before returning, outside the state lane: a
         // queued worker could run after the active callback unregisters.
         if (completion is not null)
-        {
-            using (ExecutionContext.SuppressFlow())
-                _ = CompleteFinalizationAsync(completion);
-        }
+            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                CompleteFinalizationAsync(completion)
+            );
         return finalization;
     }
 
@@ -326,8 +319,9 @@ internal sealed class ZLinkTimer : IZLinkTimer
         try
         {
             _stopSource.Cancel();
-            _scheduler.Unregister(this);
-            Resume();
+            await _scheduler.UnregisterAsync(this).ConfigureAwait(false);
+            var resumeState = await _lane.RunAsync(PrepareResumeOnLane).ConfigureAwait(false);
+            resumeState.resume?.TrySetResult();
         }
         catch (Exception exception)
         {
@@ -336,7 +330,9 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
         try
         {
-            var activeDispatch = AwaitStateLane(_lane.RunAsync(() => _activeDispatch?.Task));
+            var activeDispatch = await _lane
+                .RunAsync(() => _activeDispatch?.Task)
+                .ConfigureAwait(false);
             if (activeDispatch is not null)
                 await activeDispatch.ConfigureAwait(false);
         }
@@ -354,7 +350,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
             (failures ??= []).Add(exception);
         }
 
-        var dispatchFailure = AwaitStateLane(_lane.RunAsync(() => _dispatchFailure));
+        var dispatchFailure = await _lane.RunAsync(() => _dispatchFailure).ConfigureAwait(false);
         if (dispatchFailure is not null)
             (failures ??= []).Add(dispatchFailure);
 
@@ -372,8 +368,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     private async Task DispatchPendingAsync()
     {
-        var prepared = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var prepared = await _lane
+            .RunAsync(() =>
             {
                 var dispatch = _activeDispatch;
                 if (dispatch is null)
@@ -386,7 +382,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 }
                 return (Dispatch: dispatch, Tick: (ZLinkTimerTick?)pending);
             })
-        );
+            .ConfigureAwait(false);
         if (prepared.Dispatch is null || prepared.Tick is not { } tick)
             return;
 
@@ -404,8 +400,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
             failure = exception;
         }
 
-        var nextSchedule = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var nextSchedule = await _lane
+            .RunAsync(() =>
             {
                 SchedulerSchedule? nextSchedule = null;
                 if (failure is not null)
@@ -437,7 +433,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
                     _activeDispatch = null;
                 return nextSchedule;
             })
-        );
+            .ConfigureAwait(false);
         prepared.Dispatch.TrySetResult();
         PublishSchedule(nextSchedule);
     }

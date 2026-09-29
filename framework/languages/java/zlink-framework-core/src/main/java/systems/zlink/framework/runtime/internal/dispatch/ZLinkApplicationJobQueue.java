@@ -146,6 +146,64 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         return CompletableFuture.completedFuture(permit);
     }
 
+    /**
+     * Reserves one permit for a receive owner without holding its thread while it waits.
+     *
+     * <p>Returns the permit when capacity is free now. Otherwise the owner joins the same FIFO as
+     * {@link #acquire()}, this method returns {@code null}, and the owner ends its current turn.
+     * The grant runs {@code resume} with the permit on {@code executor}. The owner keeps the
+     * acquisition until that task starts, so close can return a grant even when shutdown drops the
+     * queued task. Queue close ends the receive turn.
+     */
+    public Permit acquireOrResume(
+            Executor executor,
+            Consumer<Permit> resume,
+            java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending) {
+        Objects.requireNonNull(executor, "executor");
+        Objects.requireNonNull(resume, "resume");
+        Objects.requireNonNull(pending, "pending");
+        CompletableFuture<Permit> acquisition = acquire().toCompletableFuture();
+        if (acquisition.isDone()) {
+            try {
+                return acquisition.join();
+            } catch (CancellationException closedQueue) {
+                return null;
+            }
+        }
+        pending.set(acquisition);
+        acquisition.whenComplete(
+                (permit, failure) -> {
+                    try {
+                        executor.execute(
+                                () -> {
+                                    if (pending.compareAndSet(acquisition, null)) {
+                                        resume.accept(permit);
+                                    }
+                                });
+                    } catch (java.util.concurrent.RejectedExecutionException stopped) {
+                        if (permit != null && pending.compareAndSet(acquisition, null)) {
+                            permit.abandonReservation();
+                        }
+                    }
+                });
+        return null;
+    }
+
+    /** Returns an unconsumed receive grant and cancels its FIFO wait when the owner closes. */
+    public static void cancelPendingAcquire(
+            java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending) {
+        CompletableFuture<Permit> waiting = pending.getAndSet(null);
+        if (waiting != null) {
+            waiting.thenAccept(
+                    permit -> {
+                        if (permit != null) {
+                            permit.abandonReservation();
+                        }
+                    });
+            waiting.cancel(false);
+        }
+    }
+
     /** Blocking bridge for dedicated receive-loop threads. */
     public Permit acquireBlocking() throws InterruptedException {
         CompletableFuture<Permit> future = acquire().toCompletableFuture();

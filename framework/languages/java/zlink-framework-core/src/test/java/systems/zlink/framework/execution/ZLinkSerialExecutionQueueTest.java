@@ -37,6 +37,62 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
     @Test
+    void closingSealRetainsEarlierTurnAndRejectsNewAdmission() throws Exception {
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        AtomicInteger handled = new AtomicInteger();
+        CompletionStage<Void> accepted =
+                queue.enqueueRelocatableLazyRecord(
+                        () -> new byte[] {1},
+                        1,
+                        () -> {
+                            handled.incrementAndGet();
+                            return release;
+                        },
+                        () -> {});
+
+        queue.sealClosingAdmission();
+        CompletionStage<Void> rejected =
+                queue.enqueueRelocatableLazyRecord(
+                        () -> new byte[] {2},
+                        1,
+                        () -> {
+                            handled.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {});
+        ExecutionException failure =
+                assertThrows(
+                        ExecutionException.class,
+                        () -> rejected.toCompletableFuture().get(3, TimeUnit.SECONDS));
+        assertInstanceOf(
+                systems.zlink.framework.errors.ZLinkFrameworkException.class, failure.getCause());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause())
+                        .kind());
+        release.complete(null);
+        accepted.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(1, handled.get());
+    }
+
+    @Test
+    void relocationSealHoldsIngressInsteadOfClosingRejection() throws Exception {
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        var seal = queue.trySealRelocation().orElseThrow();
+        CompletionStage<Void> held =
+                queue.enqueueRelocatableLazyRecord(
+                        () -> new byte[] {7},
+                        1,
+                        () -> CompletableFuture.completedFuture(null),
+                        () -> {});
+        assertFalse(held.toCompletableFuture().isDone());
+        assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
+        assertTrue(queue.abortRelocation(seal));
+        held.toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
     void completedTurnCarrierDoesNotOwnLaterYield() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         AtomicReference<Object> carrier = new AtomicReference<>();

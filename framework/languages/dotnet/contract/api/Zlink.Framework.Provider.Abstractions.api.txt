@@ -151,6 +151,19 @@ assembly Zlink.Framework.Provider.Abstractions
     method override System.String ToString() [return=read:not-null,write:not-null]
     method static System.Boolean op_Equality(Zlink.Framework.LocationProvider.ZLinkStoreCondition.Missing? left [nullability=read:nullable,write:nullable], Zlink.Framework.LocationProvider.ZLinkStoreCondition.Missing? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method static System.Boolean op_Inequality(Zlink.Framework.LocationProvider.ZLinkStoreCondition.Missing? left [nullability=read:nullable,write:nullable], Zlink.Framework.LocationProvider.ZLinkStoreCondition.Missing? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value : Zlink.Framework.LocationProvider.ZLinkStoreCondition, System.IEquatable<Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value>, System.IEquatable<Zlink.Framework.LocationProvider.ZLinkStoreCondition>
+    ctor Value(Zlink.Framework.LocationProvider.ZLinkStoreKey Key [nullability=read:not-null,write:not-null], System.ReadOnlyMemory<System.Byte> Expected [nullability=read:not-null,write:not-null])
+    property System.ReadOnlyMemory<System.Byte> Expected { get; init; } [nullability=read:not-null,write:not-null]
+    property Zlink.Framework.LocationProvider.ZLinkStoreKey Key { get; init; } [nullability=read:not-null,write:not-null]
+    method virtual Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Zlink.Framework.LocationProvider.ZLinkStoreKey Key [nullability=read:not-null,write:not-null], out System.ReadOnlyMemory<System.Byte> Expected [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method sealed-override System.Boolean Equals(Zlink.Framework.LocationProvider.ZLinkStoreCondition? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value? left [nullability=read:nullable,write:nullable], Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value? left [nullability=read:nullable,write:nullable], Zlink.Framework.LocationProvider.ZLinkStoreCondition.Value? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.LocationProvider.ZLinkStoreCondition.Version : Zlink.Framework.LocationProvider.ZLinkStoreCondition, System.IEquatable<Zlink.Framework.LocationProvider.ZLinkStoreCondition.Version>, System.IEquatable<Zlink.Framework.LocationProvider.ZLinkStoreCondition>
     ctor Version(Zlink.Framework.LocationProvider.ZLinkStoreKey Key [nullability=read:not-null,write:not-null], Zlink.Framework.LocationProvider.ZLinkStoreVersion Expected [nullability=read:not-null,write:not-null])
     property Zlink.Framework.LocationProvider.ZLinkStoreVersion Expected { get; init; } [nullability=read:not-null,write:not-null]

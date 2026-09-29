@@ -67,6 +67,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
+    // A committed relocation moved this queue's work to the target.
+    internal bool IsRelocated
+    {
+        get
+        {
+            lock (_admissionGate)
+                return _relocated;
+        }
+    }
+
     internal Task ApplicationDrained
     {
         get
@@ -1299,6 +1309,19 @@ internal enum ZLinkAcceptedWorkAdmission
     Closed = 1,
     RelocationMoving = 2,
     Closing = 3,
+}
+
+internal static class ZLinkAcceptedWorkAdmissionErrors
+{
+    // The one mapping from a refused admission to its error kind
+    // (spec 06-spot-address-messaging §9, 07-framework-error-model).
+    internal static ZLinkFrameworkErrorKind ErrorKind(this ZLinkAcceptedWorkAdmission admission) =>
+        admission switch
+        {
+            ZLinkAcceptedWorkAdmission.Closed => ZLinkFrameworkErrorKind.ShuttingDown,
+            ZLinkAcceptedWorkAdmission.RelocationMoving => ZLinkFrameworkErrorKind.Unavailable,
+            _ => ZLinkFrameworkErrorKind.Rejected,
+        };
 }
 
 internal enum ZLinkSerialPostAdmission

@@ -4546,7 +4546,7 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkSpotRelocationReadyOutcome.Continued,
             (await spot.NextCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5))).Outcome
         );
-        Assert.True(activation.AbortRelocation(seal));
+        Assert.True(await activation.AbortRelocationAsync(seal));
         Assert.True(activation.IsRelocationReady);
     }
 
@@ -4595,7 +4595,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal(2, spot.RelocatedCallbackCount);
         Assert.All(spot.AdmissionWasClosed, Assert.True);
 
-        Assert.True(activation.AbortRelocation(seal));
+        Assert.True(await activation.AbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -4813,7 +4813,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5)
             )
         );
-        Assert.True(activation.TrySealPerActorShellRelocation(out var shellSeal));
+        var shellSeal = await activation.TrySealPerActorShellRelocationAsync();
+        Assert.NotNull(shellSeal);
         Assert.True(
             activation.CommitRelocation(shellSeal, out var held, preserveActorExecution: true)
         );
@@ -11980,7 +11981,11 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public void DisconnectPeer(string endpoint) { }
 
-        public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration) { }
+        public void DisconnectPeerLifetime(
+            RoutingId peerRid,
+            string endpoint,
+            ulong lifecycleGeneration
+        ) { }
 
         public IZLinkBackendSpot CreateSpot()
         {

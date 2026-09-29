@@ -498,23 +498,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             monitor = monitoring.openSocketMonitor(subscriber);
             connection = new Connection(descriptor, connectionId, subscriber, monitor);
             Connection candidate = connection;
-            ZLinkSocketMonitorDrainLoop.start(
-                    "zlink-fanout-location-monitor",
-                    monitor,
-                    event -> {
-                        if (isReadyEvent(event.event())) {
-                            inStateLane(
-                                    () -> {
-                                        if (connections.get(connectionId) == candidate
-                                                && candidate.phase != ConnectionPhase.CLOSING) {
-                                            candidate.nativeReady = true;
-                                        }
-                                        return null;
-                                    });
-                        } else if (isTerminatedEvent(event.event())) {
-                            remove(connectionId, candidate, null);
-                        }
-                    });
             boolean accepted =
                     inStateLane(
                             () -> {
@@ -536,6 +519,23 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 closeUnregistered(candidate);
                 return;
             }
+            ZLinkSocketMonitorDrainLoop.start(
+                    "zlink-fanout-location-monitor",
+                    monitor,
+                    event -> {
+                        if (isReadyEvent(event.event())) {
+                            inStateLane(
+                                    () -> {
+                                        if (connections.get(connectionId) == candidate
+                                                && candidate.phase != ConnectionPhase.CLOSING) {
+                                            candidate.nativeReady = true;
+                                        }
+                                        return null;
+                                    });
+                        } else if (isTerminatedEvent(event.event())) {
+                            remove(connectionId, candidate, null);
+                        }
+                    });
             subscriber.connect(descriptor.endpoint());
             boolean committed =
                     inStateLane(

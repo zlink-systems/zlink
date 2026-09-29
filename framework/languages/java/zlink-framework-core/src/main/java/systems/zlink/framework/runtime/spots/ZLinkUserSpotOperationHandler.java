@@ -423,14 +423,8 @@ final class ZLinkUserSpotOperationHandler
                                                                             .operation(
                                                                                     () -> {
                                                                                         activation
-                                                                                                .backendSpot
-                                                                                                .sealSpotAdmission(
-                                                                                                        () ->
-                                                                                                                activation
-                                                                                                                        .host
-                                                                                                                        .spotAdmissionFailure(
-                                                                                                                                fence
-                                                                                                                                        .spotId()));
+                                                                                                .context
+                                                                                                .sealClosingAdmission();
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
                                                                                                         null);

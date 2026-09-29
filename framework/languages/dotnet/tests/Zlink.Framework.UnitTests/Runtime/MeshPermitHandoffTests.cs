@@ -188,17 +188,29 @@ public sealed class MeshPermitHandoffTests
         ulong lifecycleGeneration
     )
     {
-        var peer = new ZLinkMeshPeer(
-            1,
-            "inproc://permit-source",
-            routingId,
-            string.Empty,
-            ZLinkServiceConnectionDirection.Inbound
-        )
+        var peer = new ZLinkMeshPeer(1)
         {
             RoutingId = routingId,
             PhysicalRoutingId = routingId,
             LifecycleGeneration = lifecycleGeneration,
+            Admission = new ZLinkServiceWireCodec.AdmissionRecord(
+                "permit-ingress",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                "inproc://permit-source",
+                lifecycleGeneration,
+                1,
+                new Dictionary<string, uint>(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                new Dictionary<byte, byte[]>(),
+                Array.Empty<byte>()
+            ),
             State = MeshPeerState.Admitted,
             Admitted = true,
         };

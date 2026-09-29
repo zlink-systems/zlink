@@ -1,5 +1,3 @@
-using Zlink.Framework.Runtime.Execution;
-
 namespace Zlink.Framework.Runtime.Streams;
 
 internal enum ZLinkStreamLivenessDecision
@@ -18,60 +16,44 @@ internal sealed class ZLinkStreamSessionLiveness(TimeProvider? timeProvider = nu
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
-    private readonly ZLinkStateLane _lane = new();
     private long _lastApplicationInbound = (timeProvider ?? TimeProvider.System).GetTimestamp();
     private long _lastHeartbeatPing = (timeProvider ?? TimeProvider.System).GetTimestamp();
-    private bool _heartbeatOutstanding;
+    private int _heartbeatOutstanding;
 
     public void RecordApplicationInbound()
     {
-        AwaitStateLane(_lane.RunAsync(() => _lastApplicationInbound = _time.GetTimestamp()));
+        Interlocked.Exchange(ref _lastApplicationInbound, _time.GetTimestamp());
     }
 
     public void RecordHeartbeatPong()
     {
-        AwaitStateLane(_lane.RunAsync(() => _heartbeatOutstanding = false));
+        Volatile.Write(ref _heartbeatOutstanding, 0);
     }
 
     public void RecordHeartbeatPing()
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _lastHeartbeatPing = _time.GetTimestamp();
-                _heartbeatOutstanding = true;
-            })
-        );
+        Interlocked.Exchange(ref _lastHeartbeatPing, _time.GetTimestamp());
+        Volatile.Write(ref _heartbeatOutstanding, 1);
     }
 
     public ZLinkStreamLivenessDecision Evaluate()
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var now = _time.GetTimestamp();
-                if (
-                    _heartbeatOutstanding
-                    && _time.GetElapsedTime(_lastHeartbeatPing, now) >= HeartbeatTimeout
-                )
-                    return ZLinkStreamLivenessDecision.HeartbeatTimeout;
+        var now = _time.GetTimestamp();
+        if (
+            Volatile.Read(ref _heartbeatOutstanding) != 0
+            && _time.GetElapsedTime(Volatile.Read(ref _lastHeartbeatPing), now) >= HeartbeatTimeout
+        )
+            return ZLinkStreamLivenessDecision.HeartbeatTimeout;
 
-                if (_time.GetElapsedTime(_lastApplicationInbound, now) >= IdleTimeout)
-                    return ZLinkStreamLivenessDecision.IdleTimeout;
+        if (_time.GetElapsedTime(Volatile.Read(ref _lastApplicationInbound), now) >= IdleTimeout)
+            return ZLinkStreamLivenessDecision.IdleTimeout;
 
-                if (
-                    !_heartbeatOutstanding
-                    && _time.GetElapsedTime(_lastHeartbeatPing, now) >= HeartbeatInterval
-                )
-                    return ZLinkStreamLivenessDecision.SendHeartbeat;
+        if (
+            Volatile.Read(ref _heartbeatOutstanding) == 0
+            && _time.GetElapsedTime(Volatile.Read(ref _lastHeartbeatPing), now) >= HeartbeatInterval
+        )
+            return ZLinkStreamLivenessDecision.SendHeartbeat;
 
-                return ZLinkStreamLivenessDecision.None;
-            })
-        );
+        return ZLinkStreamLivenessDecision.None;
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }

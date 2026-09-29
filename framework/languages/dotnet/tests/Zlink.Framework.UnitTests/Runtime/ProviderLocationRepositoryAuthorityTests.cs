@@ -15,6 +15,87 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
     [Fact]
+    public async Task OwnerLeaseRenewalPreservesSpiBytesAndChangesProviderVersion()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "renew-bytes-owner");
+        var key = ZLinkProviderLocationRepository.OwnerKey(owner.OwnerId);
+        var before = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(key));
+
+        Assert.IsType<ZLinkOwnerLeaseRenewResult.Renewed>(
+            await repository.RenewOwnerLeaseAsync(owner, TimeSpan.FromMinutes(1))
+        );
+
+        var after = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(key));
+        Assert.Equal(before.Value.Bytes.ToArray(), after.Value.Bytes.ToArray());
+        Assert.NotEqual(before.Value.Version, after.Value.Version);
+    }
+
+    [Fact]
+    public async Task InMemoryValueConditionChecksBytesAndExpiryAtCommit()
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        var lease = new ZLinkStoreKey("value:lease");
+        var mutation = new ZLinkStoreKey("value:mutation");
+        var expected = new byte[] { 0, 1, 255 };
+
+        async Task PutAsync(byte[] bytes, TimeSpan? retention = null)
+        {
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await provider.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(lease, bytes, retention)]
+                    )
+                )
+            );
+        }
+
+        async Task CheckAsync(bool shouldApply)
+        {
+            var result = await provider.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Value(lease, expected)],
+                    [new ZLinkStoreMutation.Put(mutation, new byte[] { 9 }, null)]
+                )
+            );
+            if (shouldApply)
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(result);
+            else
+            {
+                Assert.IsType<ZLinkStoreWriteResult.Conflict>(result);
+                Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(mutation));
+            }
+            if (shouldApply)
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                    await provider.WriteAsync(
+                        new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(mutation)])
+                    )
+                );
+        }
+
+        await PutAsync(expected);
+        var first = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(lease));
+        await PutAsync(expected, TimeSpan.FromMinutes(1));
+        var renewed = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(lease));
+        Assert.NotEqual(first.Value.Version, renewed.Value.Version);
+        await CheckAsync(true);
+        await PutAsync(new byte[] { 0, 1, 254 });
+        await CheckAsync(false);
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(
+                new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(lease)])
+            )
+        );
+        await CheckAsync(false);
+        await PutAsync(expected, TimeSpan.FromMilliseconds(1));
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        await CheckAsync(false);
+    }
+
+    [Fact]
     public async Task InMemoryProviderRoundsFractionalMillisecondRetentionUp()
     {
         var provider = new ZLinkInMemoryProviderLocationStore(new ManualTimeProvider());
@@ -477,7 +558,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public async Task DescriptorRenewRetriesAfterSameOwnerLeaseHeartbeat()
+    public async Task DescriptorRenewCommitsThroughSameOwnerLeaseHeartbeat()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
         var provider = new DescriptorCasConflictLocationStore(
@@ -508,7 +589,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
 
         Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
-        Assert.Equal(2, provider.DescriptorWriteAttempts);
+        Assert.Equal(1, provider.DescriptorWriteAttempts);
         Assert.Equal(
             ZLinkFrameworkRuntimeState.Serving,
             Assert.Single((await repository.ListMeshNodesAsync("play", default)).Items).State
@@ -554,7 +635,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public async Task DescriptorRenewStopsAfterThreeHeartbeatRetries()
+    public async Task DescriptorRenewCommitsThroughRepeatedOwnerLeaseHeartbeat()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
         var provider = new DescriptorCasConflictLocationStore(
@@ -585,8 +666,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             ZLinkLocationWriteIntent.Renew
         );
 
-        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, result.Status);
-        Assert.Equal(4, provider.DescriptorWriteAttempts);
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
+        Assert.Equal(1, provider.DescriptorWriteAttempts);
     }
 
     [Fact]
@@ -3486,7 +3567,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         )
         {
             var ownerCondition = request
-                .Conditions.OfType<ZLinkStoreCondition.Version>()
+                .Conditions.OfType<ZLinkStoreCondition.Value>()
                 .Single(static condition =>
                     condition.Key.Value.StartsWith("owner-lease\0", StringComparison.Ordinal)
                 );

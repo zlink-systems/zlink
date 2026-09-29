@@ -131,28 +131,30 @@ class DeliveryDispatchClientScenario {
         println("deliverydispatch-subscribe=$deliveryId")
 
         val created =
-            post(
-                path = "/deliveries",
-                body =
-                    CreateDeliveryReq(
-                        deliveryId = deliveryId,
-                        customerId = "customer-1",
-                        pickupAddress = "Kitchen 12",
-                        dropoffAddress = "Customer Lobby",
-                    ),
-                responseType = CreateDeliveryRes::class.java,
-            )
-        ZLinkKotlinStreamAssert.ensure(
-            created.deliveryId == deliveryId,
-            "created success delivery id mismatch",
-        )
-        println("deliverydispatch-create=$deliveryId")
+            async(start = CoroutineStart.UNDISPATCHED) {
+                post(
+                    path = "/deliveries",
+                    body =
+                        CreateDeliveryReq(
+                            deliveryId = deliveryId,
+                            customerId = "customer-1",
+                            pickupAddress = "Kitchen 12",
+                            dropoffAddress = "Customer Lobby",
+                        ),
+                    responseType = CreateDeliveryRes::class.java,
+                )
+            }
 
         val courierOffer = offer.await().payload()
         println("deliverydispatch-offer=$deliveryId:${courierOffer.courierId}")
         courier
             .send(CourierDecisionMsg(courierOffer.deliveryId, courierOffer.courierId, true, null))
             .await()
+        ZLinkKotlinStreamAssert.ensure(
+            created.await().deliveryId == deliveryId,
+            "created success delivery id mismatch",
+        )
+        println("deliverydispatch-create=$deliveryId")
 
         val notifications = statuses.await().map { it.payload() }
         ZLinkKotlinStreamAssert.ensure(
@@ -221,22 +223,19 @@ class DeliveryDispatchClientScenario {
         println("deliverydispatch-subscribe=$deliveryId")
 
         val created =
-            post(
-                path = "/deliveries",
-                body =
-                    CreateDeliveryReq(
-                        deliveryId = deliveryId,
-                        customerId = "customer-1",
-                        pickupAddress = "Kitchen 12",
-                        dropoffAddress = "Customer Lobby",
-                    ),
-                responseType = CreateDeliveryRes::class.java,
-            )
-        ZLinkKotlinStreamAssert.ensure(
-            created.deliveryId == deliveryId,
-            "created reassignment delivery id mismatch",
-        )
-        println("deliverydispatch-create=$deliveryId")
+            async(start = CoroutineStart.UNDISPATCHED) {
+                post(
+                    path = "/deliveries",
+                    body =
+                        CreateDeliveryReq(
+                            deliveryId = deliveryId,
+                            customerId = "customer-1",
+                            pickupAddress = "Kitchen 12",
+                            dropoffAddress = "Customer Lobby",
+                        ),
+                    responseType = CreateDeliveryRes::class.java,
+                )
+            }
 
         val staleOffer = firstOffer.await().payload()
         println("deliverydispatch-offer=$deliveryId:courier-a")
@@ -245,6 +244,11 @@ class DeliveryDispatchClientScenario {
         courierB
             .send(CourierDecisionMsg(acceptedOffer.deliveryId, acceptedOffer.courierId, true, null))
             .await()
+        ZLinkKotlinStreamAssert.ensure(
+            created.await().deliveryId == deliveryId,
+            "created reassignment delivery id mismatch",
+        )
+        println("deliverydispatch-create=$deliveryId")
 
         val notifications = statuses.await().map { it.payload() }
         ZLinkKotlinStreamAssert.ensure(
