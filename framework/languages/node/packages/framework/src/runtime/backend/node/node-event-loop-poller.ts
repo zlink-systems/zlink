@@ -9,13 +9,13 @@ import { zlink } from './node-backend-adapter-support';
 export class ZLinkNodeEventLoopPoller {
   private readonly poller = zlink.createPoller();
   private readonly events = zlink.createPollEvents(1);
-  private readableHandler: () => void;
+  private readableHandler: (receiveReady: boolean, routeReady: boolean) => void;
   private disposed = false;
 
   constructor(
     socket: Socket,
     pollCompletion: boolean,
-    readableHandler: () => void,
+    readableHandler: (receiveReady: boolean, routeReady: boolean) => void,
     pollRoute = false
   ) {
     this.readableHandler = readableHandler;
@@ -34,7 +34,7 @@ export class ZLinkNodeEventLoopPoller {
     }
   }
 
-  setReadableHandler(handler: () => void): void {
+  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void {
     this.readableHandler = handler;
   }
 
@@ -48,12 +48,8 @@ export class ZLinkNodeEventLoopPoller {
   private readonly onReady = (): void => {
     if (this.disposed) return;
     const ready = this.poller.wait(this.events, 0);
-    if (
-      ready === 0 ||
-      this.events.hasEvent(0, zlink.PollEventFlag.PollIn) ||
-      this.events.hasEvent(0, zlink.PollEventFlag.PollRoute)
-    ) {
-      this.readableHandler();
-    }
+    const receiveReady = ready === 0 || this.events.hasEvent(0, zlink.PollEventFlag.PollIn);
+    const routeReady = ready > 0 && this.events.hasEvent(0, zlink.PollEventFlag.PollRoute);
+    if (receiveReady || routeReady) this.readableHandler(receiveReady, routeReady);
   };
 }
