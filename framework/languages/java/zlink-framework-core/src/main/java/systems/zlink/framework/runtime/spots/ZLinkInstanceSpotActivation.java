@@ -296,23 +296,55 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             received.parts(),
                             received.applicationMetadataSize(),
                             received.acceptedJournalRecordSize()));
-            trackRouteReceived(received);
-            ParsedPacket packet;
-            try {
-                packet = ZLinkSpotRuntime.parsePacket(received.parts());
-            } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
-                //  A JSON-object first frame that is not a valid shared
-                //  envelope is a protocol error (C++ decode parity).
-                failRouteInvalidFlow(received, invalidEnvelope);
-                continue;
-            } catch (RuntimeException invalid) {
-                closeRouteReceived(received);
-                continue;
-            }
-            CompletionStage<Void> dispatched = dispatchSpotRouteHandler(received, packet);
+            CompletionStage<Void> dispatched = admitRoute(received);
             tail = tail.thenCombine(dispatched, (ignored, done) -> null);
         }
         return tail;
+    }
+
+    CompletionStage<Void> admitRoute(ZLinkBackendReceived received) {
+        return admitRoute(received, null);
+    }
+
+    CompletionStage<Void> admitRoute(
+            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+        if (hostRejection != null) {
+            received.close();
+            if (admission != null) admission.completeExceptionally(hostRejection);
+            return CompletableFuture.failedFuture(hostRejection);
+        }
+        trackRouteReceived(received);
+        CompletionStage<Void> admitted;
+        try {
+            admitted = context.enqueueDispatch(
+                    ZLinkReceiveBatchBudget.bytesOf(
+                            received.parts(), received.applicationMetadataSize(),
+                            received.acceptedJournalRecordSize()),
+                    () -> {
+                        ParsedPacket packet;
+                        try {
+                            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+                        } catch (systems.zlink.framework.errors.ZLinkFrameworkException
+                                invalidEnvelope) {
+                            failRouteInvalidFlow(received, invalidEnvelope);
+                            return CompletableFuture.completedFuture(null);
+                        } catch (RuntimeException failure) {
+                            closeRouteReceived(received);
+                            return CompletableFuture.failedFuture(failure);
+                        }
+                        return dispatchSpotRouteHandler(received, packet);
+                    }, admission);
+        } catch (RuntimeException | Error failure) {
+            if (admission != null) admission.completeExceptionally(failure);
+            closeRouteReceived(received);
+            throw failure;
+        }
+        return admitted.whenComplete((done, failure) -> {
+            if (failure != null) {
+                closeRouteReceived(received);
+            }
+        });
     }
 
     @Override
@@ -326,7 +358,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             CompletionStage<Void> tail,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
-        return tail.thenCompose(ignored -> context.enqueueDispatch(payloadBytes, operation));
+        return tail.thenCompose(ignored -> operation.get());
     }
 
     @Override
@@ -342,8 +374,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     void close(ZLinkSpotCloseReason reason, Instant deadline) {
         inStateLane(
                 () -> {
-                    backendSpot.sealSpotAdmission(
-                            () -> host.spotAdmissionFailure(context.spotId()));
+                    context.sealClosingAdmission();
                     drainRoutes();
                     return null;
                 });
@@ -414,12 +445,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                         List.of(
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
-                                                            backendSpot.sealSpotAdmission(
-                                                                    () ->
-                                                                            host
-                                                                                    .spotAdmissionFailure(
-                                                                                            context
-                                                                                                    .spotId()));
+                                                            context.sealClosingAdmission();
                                                             return CompletableFuture
                                                                     .completedFuture(null);
                                                         }),

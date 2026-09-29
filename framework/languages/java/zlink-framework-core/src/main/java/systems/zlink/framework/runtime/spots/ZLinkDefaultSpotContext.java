@@ -198,8 +198,14 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     @Override
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(payloadBytes, operation, null);
+    }
+
+    CompletionStage<Void> enqueueDispatch(
+            long payloadBytes, Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         host.ensureOwnerAdmissionOpen();
-        return enqueueAccepted(payloadBytes, operation);
+        return enqueueAccepted(payloadBytes, operation, admission);
     }
 
     /**
@@ -212,11 +218,18 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     private CompletionStage<Void> enqueueAccepted(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueAccepted(payloadBytes, operation, null);
+    }
+
+    private CompletionStage<Void> enqueueAccepted(
+            long payloadBytes, Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
                 () ->
                         runApplicationExecution(
-                                null, false, () -> host.runEntryDispatch(this, operation)));
+                                null, false, () -> host.runEntryDispatch(this, operation)),
+                admission);
     }
 
     @Override
@@ -773,15 +786,31 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueAcceptedDispatch(
+                acceptedJournalRecord, acceptedJournalRecordSizeHint,
+                operation, relocationRelease, null);
+    }
+
+    CompletionStage<Void> enqueueAcceptedDispatch(
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return serials.executeAcceptedSpotLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation),
-                relocationRelease);
+                relocationRelease,
+                admission);
     }
 
     CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.executeLifecycle(() -> runLifecycleExecution(operation));
+    }
+
+    CompletionStage<Void> enqueueJoinLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return serials.enqueueSpotLifecycleAdmission(() -> runLifecycleExecution(operation));
     }
 
     @Override
@@ -791,6 +820,18 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
         return serials.awaitAllLanes(spotScope);
+    }
+
+    void sealClosingAdmission() {
+        serials.sealClosingAdmission();
+    }
+
+    CompletionStage<Void> admitIngress(Supplier<CompletionStage<Void>> admission) {
+        return serials.admitIngress(admission);
+    }
+
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
+        return serials.tryEnqueueSpot(operation);
     }
 
     boolean isCurrentSpotTurn() {
