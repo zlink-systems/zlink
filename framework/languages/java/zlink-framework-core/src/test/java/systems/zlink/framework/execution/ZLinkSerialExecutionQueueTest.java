@@ -37,6 +37,46 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
     @Test
+    void closeDetectsActiveAndSuspendedRelocationBoundaryUntilFinished() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
+                queue.reserveRelocationTurnBoundary().orElseThrow();
+        Runnable drain = executor.take();
+        try {
+            assertThrows(AssertionError.class, queue::close);
+            drain.run();
+            boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertThrows(AssertionError.class, queue::close);
+        } finally {
+            boundary.release();
+        }
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
+    @Test
+    void closeDetectsPendingRelocationBoundary() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        queue.enqueue(() -> CompletableFuture.completedFuture(null));
+        Runnable drain = executor.take();
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
+                queue.reserveRelocationTurnBoundary().orElseThrow();
+        try {
+            assertThrows(AssertionError.class, queue::close);
+        } finally {
+            drain.run();
+            boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            boundary.release();
+        }
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
+    @Test
     void closingSealRetainsEarlierTurnAndRejectsNewAdmission() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> release = new CompletableFuture<>();

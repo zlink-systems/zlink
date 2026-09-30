@@ -124,9 +124,33 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public void close() {
+        assert assertRelocationBoundariesFinished();
         if (ownedExecutor != null) {
             ownedExecutor.shutdown();
         }
+    }
+
+    private synchronized boolean assertRelocationBoundariesFinished() {
+        List<String> pending = new ArrayList<>();
+        if (active != null
+                && active.relocationBoundary != null
+                && !active.relocationBoundary.finished.isDone()) {
+            pending.add("relocation boundary:" + active.sequence);
+        }
+        if (suspendedLifecycle != null
+                && suspendedLifecycle.relocationBoundary != null
+                && !suspendedLifecycle.relocationBoundary.finished.isDone()) {
+            pending.add("relocation boundary:" + suspendedLifecycle.sequence);
+        }
+        for (Entry entry : lifecyclePending) {
+            if (entry.relocationBoundary != null && !entry.relocationBoundary.finished.isDone()) {
+                pending.add("relocation boundary:" + entry.sequence);
+            }
+        }
+        if (!pending.isEmpty()) {
+            throw new AssertionError("incomplete drain work: " + pending);
+        }
+        return true;
     }
 
     /**
@@ -721,6 +745,7 @@ public final class ZLinkSerialExecutionQueue {
             quiescent = takeQuiescenceWaitersIfReady();
         }
         scheduleDrainIfNeeded(scheduleDrain);
+        completeBoundary(entry);
         quiescent.forEach(waiter -> waiter.complete(null));
     }
 
@@ -747,7 +772,6 @@ public final class ZLinkSerialExecutionQueue {
 
     private Entry finish(Entry entry, boolean continueBatch) {
         List<CompletableFuture<Void>> quiescent = List.of();
-        RelocationBoundary boundary = entry.relocationBoundary;
         boolean scheduleDrain = false;
         Entry next = null;
         synchronized (this) {
@@ -773,11 +797,15 @@ public final class ZLinkSerialExecutionQueue {
             quiescent = takeQuiescenceWaitersIfReady();
         }
         scheduleDrainIfNeeded(scheduleDrain);
-        if (boundary != null) {
-            boundary.finished.complete(null);
-        }
+        completeBoundary(entry);
         quiescent.forEach(waiter -> waiter.complete(null));
         return next;
+    }
+
+    private static void completeBoundary(Entry entry) {
+        if (entry.relocationBoundary != null) {
+            entry.relocationBoundary.finished.complete(null);
+        }
     }
 
     /** Which accepted work a quiescence waiter waits for. */
