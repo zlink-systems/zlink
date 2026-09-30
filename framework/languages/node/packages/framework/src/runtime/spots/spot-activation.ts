@@ -114,7 +114,6 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly routedTransport?: ZLinkSpotRoutedTransport;
   readonly addressTransport?: ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
-  readonly channelMeshNameForChannel?: (channelName: string) => string | undefined;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly closeErrorSink?: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
