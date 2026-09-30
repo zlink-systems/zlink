@@ -310,4 +310,14 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
                                                         : framework_error_kind_t::internal_failure);
 }
 
+inline message_flow_reason_t
+message_flow_reason_from_error (const framework_exception_t *error) noexcept
+{
+    if (dispatch_reason_from_error (error) == dispatch_error_reason_t::shutdown)
+        return message_flow_reason_t::shutdown;
+    if (error && error->kind () == framework_error_kind_t::deadline_exceeded)
+        return message_flow_reason_t::backpressure;
+    return message_flow_reason_t::stale_target;
+}
+
 } // namespace zlink::framework::detail

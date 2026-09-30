@@ -1843,40 +1843,30 @@ class stream_host_service_t::listener_t
                   : framework_exception_t (framework_error_kind_t::internal_failure,
                                            "Local Actor session binding failed");
             }
-            std::tie (error, binding) = _mesh_node->native_node ().sessions ().bind_remote (
-              transport_connection, verified_actor.value (), actor_route->node_generation,
-              static_cast<std::uint64_t> (actor_route->owner.lease_generation), true,
-              binding_generation);
+            binding = {transport_connection, binding_generation, verified_actor.value (),
+                       actor_route->node_generation,
+                       static_cast<std::uint64_t> (actor_route->owner.lease_generation)};
         } else {
-            const runtime::stateful::object_ref_t verified_actor{
-              runtime::stateful::object_kind_t::actor,
-              std::string (actor.actor_id ().value ()),
-              actor.object_generation (),
-              actor_route->authority_owner_generation,
-              actor_route->mesh_name,
-              actor_route->node_rid.to_string ()};
-            std::tie (error, binding) = _mesh_node->native_node ().sessions ().bind_remote (
-              transport_connection, verified_actor, actor_route->node_generation,
-              static_cast<std::uint64_t> (actor_route->owner.lease_generation), true,
-              binding_generation);
-        }
-        if (error != runtime::stateful::stateful_error_t::none) {
-            if (error == runtime::stateful::stateful_error_t::conflict && binding_generation != 0
-                && previous_binding && previous_binding->binding_generation > binding_generation) {
-                auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
-                actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()), "session_registry_bind_stale_ignored",
-                  "session_rid=" + session_rid.to_hex () + " binding_generation="
-                    + std::to_string (binding_generation) + " current_binding_generation="
-                    + std::to_string (previous_binding->binding_generation),
-                  &session_rid);
-            }
-            throw framework_exception_t (framework_error_kind_t::not_configured,
-                                         "Framework rejected STREAM actor binding");
+            binding = {transport_connection, binding_generation,
+                       runtime::stateful::object_ref_t{
+                         runtime::stateful::object_kind_t::actor,
+                         std::string (actor.actor_id ().value ()), actor.object_generation (),
+                         actor_route->authority_owner_generation, actor_route->mesh_name,
+                         actor_route->node_rid.to_string ()},
+                       actor_route->node_generation,
+                       static_cast<std::uint64_t> (actor_route->owner.lease_generation)};
         }
 
         result_t<void> recorded = result_t<void>::success ();
         std::optional<detail::application_actor_session_bind_outcome_t> retryable_outcome;
+        decltype (replacement->actor_bindings)::node_type prepared_replacement;
+        if (replacement) {
+            decltype (replacement->actor_bindings) prepared;
+            prepared.emplace (std::string (actor.actor_id ().value ()),
+                              replacement_session_state_t::actor_binding_t{
+                                actor.object_generation (), binding_generation});
+            prepared_replacement = prepared.extract (prepared.begin ());
+        }
         const auto publish_session_route = [&] {
             const auto local_status = _mesh_node->native_node ().status ();
             auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
@@ -1886,7 +1876,22 @@ class stream_host_service_t::listener_t
                 *local_node, session_rid, actor.object_generation (),
                 local_status.lifecycle_generation (), actor_route->authority_owner_generation,
                 static_cast<std::uint64_t> (actor_route->owner.lease_generation),
-                binding.binding_generation, 0, 0});
+                binding.binding_generation, 0, 0},
+              [&] {
+                  if (publish_client_binding)
+                      publish_client_binding ();
+                  if (replacement) {
+                      const std::lock_guard lock (replacement->gate);
+                      prepared_replacement.mapped ().binding_generation =
+                        binding.binding_generation;
+                      const auto previous =
+                        replacement->actor_bindings.find (prepared_replacement.key ());
+                      if (previous != replacement->actor_bindings.end ())
+                          previous->second = prepared_replacement.mapped ();
+                      else
+                          replacement->actor_bindings.insert (std::move (prepared_replacement));
+                  }
+              });
             if (!transition) {
                 return result_t<void>::failure (transition.error_kind (),
                                                 transition.error ()
@@ -1899,16 +1904,6 @@ class stream_host_service_t::listener_t
                 + " binding_generation=" + std::to_string (binding.binding_generation)
                 + " replaced=" + (transition.value ().changed ? "true" : "false"),
               &session_rid);
-            if (transition.value ().current
-                && transition.value ().current->binding_generation != binding.binding_generation) {
-                actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()),
-                  "session_owner_route_publish_stale_ignored",
-                  "session_rid=" + session_rid.to_hex () + " binding_generation="
-                    + std::to_string (binding.binding_generation) + " current_binding_generation="
-                    + std::to_string (transition.value ().current->binding_generation),
-                  &session_rid);
-            }
             if (transition.value ().changed && transition.value ().previous
                 && transition.value ().previous->session_rid
                 && transition.value ().previous->node_generation != 0
@@ -1938,7 +1933,7 @@ class stream_host_service_t::listener_t
             return result_t<void>::success ();
         };
         if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
-            recorded = publish_session_route ();
+            recorded = result_t<void>::success ();
         } else {
             auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               binding_deadline - std::chrono::steady_clock::now ());
@@ -1962,70 +1957,30 @@ class stream_host_service_t::listener_t
                       result_t<void>::failure (framework_error_kind_t::unavailable,
                                                "Remote Actor session binding owner is not ready");
                 } else {
-                    recorded = publish_session_route ();
+                    recorded = result_t<void>::success ();
                 }
             }
         }
         if (recorded) {
-            auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
-            recorded = actor_gateway.record_session_relay_source (actor, session_rid,
-                                                                  binding.binding_generation);
-        }
-        if (recorded) {
-            try {
-                if (publish_client_binding)
-                    publish_client_binding ();
-            }
-            catch (const framework_exception_t &error) {
-                recorded = detail::result_access_t::failure<void> (error);
-            }
-            catch (const std::exception &error) {
+            std::tie (error, binding) = _mesh_node->native_node ().sessions ().bind_remote (
+              transport_connection, binding.actor, binding.target_node_generation,
+              binding.owner_lease_generation,
+              [&] (const runtime::stateful::stream_binding_t &committed) {
+                  binding = committed;
+                  recorded = publish_session_route ();
+                  return recorded ? runtime::stateful::stateful_error_t::none
+                                  : runtime::stateful::stateful_error_t::conflict;
+              },
+              binding_generation);
+            if (error != runtime::stateful::stateful_error_t::none)
                 recorded =
-                  result_t<void>::failure (framework_error_kind_t::unavailable, error.what ());
-            }
-        }
-        if (recorded) {
-            if (replacement) {
-                const std::lock_guard lock (replacement->gate);
-                replacement->actor_bindings.insert_or_assign (
-                  std::string (actor.actor_id ().value ()),
-                  replacement_session_state_t::actor_binding_t{actor.object_generation (),
-                                                               binding.binding_generation});
-            }
-            auto retained = _mesh_node->native_node ().sessions ().complete_route_publish (binding);
-            if (!retained) {
-                recorded =
-                  result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                           "STREAM Actor route publication lost its binding fence");
-            } else {
-                auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
-                actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()), "session_owner_route_publish_complete",
-                  "session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " held_pushes=" + std::to_string (retained->size ()),
-                  &session_rid);
-                for (auto &settle : *retained) {
-                    asio::post (*io, [settle = std::move (settle)] () mutable {
-                        if (settle)
-                            settle (true);
-                    });
-                }
-            }
+                  result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                           "Framework rejected STREAM actor binding publication");
         }
         if (recorded) {
             co_return;
         }
 
-        const auto rollback = _mesh_node->native_node ().sessions ().unbind (binding);
-        auto restore_error = rollback;
-        if (restore_error == runtime::stateful::stateful_error_t::none && previous_binding) {
-            restore_error = _mesh_node->native_node ().sessions ().restore (*previous_binding);
-        }
-        if (restore_error != runtime::stateful::stateful_error_t::none) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "Framework STREAM actor binding rollback failed");
-        }
         if (retryable_outcome
             && detail::can_retry_application_actor_session_bind (*retryable_outcome)) {
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
