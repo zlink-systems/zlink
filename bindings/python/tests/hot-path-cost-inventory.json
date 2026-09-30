@@ -14,6 +14,12 @@
       "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
     },
     {
+      "path": "src/zlink/_runtime/sockets/socket_base.py:_grow_topic_receive_buffer",
+      "owner": "Core-reported topic length before retrying its retained record",
+      "cost_class": "allocation",
+      "guard_test": "test_xpub_xsub_long_topic_message"
+    },
+    {
       "path": "src/zlink/_runtime/messaging/routed_async.py:CompletionOwner",
       "owner": "Socket-local completion registry and drain ownership",
       "cost_class": "lock",

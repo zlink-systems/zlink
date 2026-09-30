@@ -1660,114 +1660,32 @@ static PyObject *py_router_routes_snapshot (PyObject *self, PyObject *args)
     return Py_BuildValue ("iiN", (int) rc, err, rows);
 }
 
-static PyObject *py_subscribe_parts (PyObject *self, PyObject *args)
+/* The Python receiver owns topic growth for native and ctypes paths. Call it
+ * only after the native short-topic receive reports insufficient capacity. */
+static PyObject *call_topic_receive_helper (unsigned long long handle_value,
+                                            int flags)
 {
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int rc = ZLINK_RECV_OK;
-    int err = 0;
-    zlink_routing_id_t routing_copy;
-    int has_routing = 0;
     char topic[256];
-    size_t topic_len = 0;
-    received_parts_t received = {0};
-
-    (void) self;
-    memset (&routing_copy, 0, sizeof (routing_copy));
-    memset (topic, 0, sizeof (topic));
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
+    PyObject *module = PyImport_ImportModule ("zlink._runtime.sockets.socket_base");
+    PyObject *helper = NULL;
+    PyObject *topic_view = NULL;
+    PyObject *result = NULL;
+    if (!module)
         return NULL;
-    if (ensure_received_capacity (&received, 1) != 0) {
-        PyErr_NoMemory ();
+    helper = PyObject_GetAttrString (module, "_receive_subscribe_owner");
+    Py_DECREF (module);
+    if (!helper)
         return NULL;
-    }
-
-    void *handle = (void *) (uintptr_t) handle_value;
-    Py_BEGIN_ALLOW_THREADS while (1)
-    {
-        const zlink_routing_id_t *source_rid = NULL;
-        size_t part_count = 0;
-        rc = zlink_subscribe (handle, &source_rid, topic, sizeof (topic),
-                              &topic_len, received.parts,
-                              (size_t) received.capacity, &part_count,
-                              (zlink_recv_flags_t) flags);
-        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
-            if (part_count <= (size_t) received.capacity
-                || ensure_received_capacity (&received, part_count) != 0) {
-                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
-                rc = ZLINK_RECV_INTERNAL_ERROR;
-                break;
-            }
-            continue;
-        }
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            break;
-        }
-        if (part_count == 0 || part_count > (size_t) received.capacity
-            || topic_len > sizeof (topic)) {
-            err = EPROTO;
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            break;
-        }
-        received.count = (Py_ssize_t) part_count;
-        if (source_rid && source_rid->size > 0) {
-            routing_copy = *source_rid;
-            has_routing = 1;
-        }
-        break;
-    }
-    Py_END_ALLOW_THREADS
-
-      if (rc != ZLINK_RECV_OK)
-    {
-        close_received_parts (&received);
-        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
-            Py_RETURN_FALSE;
-        Py_INCREF (Py_None);
-        Py_INCREF (Py_None);
-        Py_INCREF (Py_None);
-        return Py_BuildValue ("iiNNN", rc, err, Py_None, Py_None, Py_None);
-    }
-
-    PyObject *routing_obj = Py_None;
-    PyObject *topic_obj = PyBytes_FromStringAndSize (topic, (Py_ssize_t) topic_len);
-    PyObject *parts_obj = PyTuple_New (received.count);
-    if (!topic_obj || !parts_obj) {
-        Py_XDECREF (topic_obj);
-        Py_XDECREF (parts_obj);
-        close_received_parts (&received);
+    topic_view = PyMemoryView_FromMemory (topic, (Py_ssize_t) sizeof (topic),
+                                          PyBUF_WRITE);
+    if (!topic_view) {
+        Py_DECREF (helper);
         return NULL;
     }
-    if (has_routing) {
-        routing_obj = PyBytes_FromStringAndSize ((const char *) routing_copy.data,
-                                                 (Py_ssize_t) routing_copy.size);
-        if (!routing_obj) {
-            Py_DECREF (topic_obj);
-            Py_DECREF (parts_obj);
-            close_received_parts (&received);
-            return NULL;
-        }
-    } else {
-        Py_INCREF (Py_None);
-    }
-
-    for (Py_ssize_t i = 0; i < received.count; ++i) {
-        void *data = zlink_msg_data (&received.parts[i]);
-        size_t size = zlink_msg_size (&received.parts[i]);
-        PyObject *part = PyBytes_FromStringAndSize ((const char *) data, (Py_ssize_t) size);
-        if (!part) {
-            Py_DECREF (routing_obj);
-            Py_DECREF (topic_obj);
-            Py_DECREF (parts_obj);
-            close_received_parts (&received);
-            return NULL;
-        }
-        PyTuple_SET_ITEM (parts_obj, i, part);
-    }
-
-    PyObject *result = Py_BuildValue ("iiNNN", rc, err, routing_obj, topic_obj, parts_obj);
-    close_received_parts (&received);
+    result = PyObject_CallFunction (helper, "KiO", handle_value,
+                                    flags, topic_view);
+    Py_DECREF (topic_view);
+    Py_DECREF (helper);
     return result;
 }
 
@@ -1784,57 +1702,39 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
     received_parts_t received = {0};
 
     (void) self;
-    memset (&routing_copy, 0, sizeof (routing_copy));
-    memset (topic, 0, sizeof (topic));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    memset (&routing_copy, 0, sizeof (routing_copy));
+    memset (topic, 0, sizeof (topic));
     if (ensure_received_capacity (&received, 1) != 0) {
         PyErr_NoMemory ();
         return NULL;
     }
 
     void *handle = (void *) (uintptr_t) handle_value;
+    const zlink_routing_id_t *source_rid = NULL;
+    size_t part_count = 0;
     const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
     PyThreadState *_save = NULL;
     if (release_gil)
         _save = PyEval_SaveThread ();
-    while (1) {
-        const zlink_routing_id_t *source_rid = NULL;
-        size_t part_count = 0;
-        rc = zlink_subscribe (handle, &source_rid, topic, sizeof (topic),
-                              &topic_len, received.parts,
-                              (size_t) received.capacity, &part_count,
-                              (zlink_recv_flags_t) flags);
-        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
-            if (part_count <= (size_t) received.capacity
-                || ensure_received_capacity (&received, part_count) != 0) {
-                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
-                rc = ZLINK_RECV_INTERNAL_ERROR;
-                break;
-            }
-            continue;
-        }
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            break;
-        }
-        if (part_count == 0 || part_count > (size_t) received.capacity
-            || topic_len > sizeof (topic)) {
-            err = EPROTO;
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            break;
-        }
-        received.count = (Py_ssize_t) part_count;
-        if (source_rid && source_rid->size > 0) {
-            routing_copy = *source_rid;
-            has_routing = 1;
-        }
-        break;
+    rc = zlink_subscribe (handle, &source_rid, topic, sizeof (topic),
+                          &topic_len, received.parts,
+                          (size_t) received.capacity, &part_count,
+                          (zlink_recv_flags_t) flags);
+    if (rc == ZLINK_RECV_OK && source_rid && source_rid->size > 0) {
+        routing_copy = *source_rid;
+        has_routing = 1;
     }
     if (release_gil)
         PyEval_RestoreThread (_save);
 
+    if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+        close_received_parts (&received);
+        return call_topic_receive_helper (handle_value, flags);
+    }
     if (rc != ZLINK_RECV_OK) {
+        err = zlink_errno ();
         close_received_parts (&received);
         if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
             Py_RETURN_FALSE;
@@ -1843,10 +1743,21 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
         Py_INCREF (Py_None);
         return Py_BuildValue ("iiNNN", rc, err, Py_None, Py_None, Py_None);
     }
+    if (part_count == 0 || part_count > (size_t) received.capacity
+        || topic_len > sizeof (topic)) {
+        err = EPROTO;
+        rc = ZLINK_RECV_INTERNAL_ERROR;
+        close_received_parts (&received);
+        Py_INCREF (Py_None);
+        Py_INCREF (Py_None);
+        Py_INCREF (Py_None);
+        return Py_BuildValue ("iiNNN", rc, err, Py_None, Py_None, Py_None);
+    }
 
-    PyObject *routing_obj = Py_None;
+    received.count = (Py_ssize_t) part_count;
     PyObject *topic_obj = PyBytes_FromStringAndSize (topic, (Py_ssize_t) topic_len);
     PyObject *owner_obj = build_native_parts_owner (&received);
+    PyObject *routing_obj = Py_None;
     if (!topic_obj || !owner_obj) {
         Py_XDECREF (topic_obj);
         Py_XDECREF (owner_obj);
@@ -1854,8 +1765,8 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
         return NULL;
     }
     if (has_routing) {
-        routing_obj = PyBytes_FromStringAndSize ((const char *) routing_copy.data,
-                                                 (Py_ssize_t) routing_copy.size);
+        routing_obj = PyBytes_FromStringAndSize (
+          (const char *) routing_copy.data, (Py_ssize_t) routing_copy.size);
         if (!routing_obj) {
             Py_DECREF (topic_obj);
             Py_DECREF (owner_obj);
@@ -1864,7 +1775,6 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
     } else {
         Py_INCREF (Py_None);
     }
-
     return Py_BuildValue ("iiNNN", rc, err, routing_obj, topic_obj, owner_obj);
 }
 
@@ -1970,10 +1880,8 @@ static PyMethodDef zlink_native_methods[] = {
    "Receive routed multipart payload parts as a native owner."},
   {"router_routes_snapshot", py_router_routes_snapshot, METH_VARARGS,
    "Read the ROUTER selected-route snapshot."},
-  {"subscribe_parts", py_subscribe_parts, METH_VARARGS,
-   "Receive topic multipart payload parts through zlink_subscribe."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
-   "Receive topic multipart payload parts as a native owner."},
+   "Receive topic multipart payload parts through the shared receiver."},
   {NULL, NULL, 0, NULL},
 };
 
