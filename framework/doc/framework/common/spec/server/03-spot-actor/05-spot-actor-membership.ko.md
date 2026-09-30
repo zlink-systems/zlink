@@ -424,8 +424,10 @@ Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체
 이 절만 가리킨다.
 
 다른 node로의 Actor Join에서 target이 보내는 승인 wire 응답은 target의 수락과 temporary queue·factory
-준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS와 그 결과의 판정은
-[Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 소유한다. 승인 응답이
+준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS의 실행 조건과 확정된 authority에
+따른 후속 처리는 [Actor와 Spot relocation 전체 흐름 §4.4–§4.6](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)을
+따르고, CAS 응답 불확정의 판정과 재제출은 그 흐름이 참조하는
+[Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. 승인 응답이
 수락된 뒤 난 실패는 같은 wire 요청에 다시 응답하지 않고, 확정된 authority에 따라 Actor Join
 completion으로 전달한다.
 
