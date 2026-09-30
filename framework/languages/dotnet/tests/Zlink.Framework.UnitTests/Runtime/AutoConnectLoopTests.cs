@@ -218,7 +218,7 @@ public sealed class AutoConnectLoopTests
     }
 
     [Fact]
-    public async Task Failed_Stamp_Preflight_Applies_The_First_Complete_Recovery_List()
+    public async Task Failed_Stamp_Preflight_Defers_Missing_Target_Until_Owner_Lease_Ttl()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -254,9 +254,17 @@ public sealed class AutoConnectLoopTests
         await loop.TickAsync();
         Assert.Single(reconciler.ActiveTargets);
 
-        // stamp 조회가 실패한 뒤 전체 목록 조회가 성공했으므로 첫 복구 목록을 즉시 적용합니다.
+        // The failed stamp read marks recovery before the complete list read succeeds.
         stamps.FailNext = true;
         resolver.Rows = [];
+        await loop.TickAsync();
+
+        Assert.Empty(executor.Disconnected);
+        Assert.Single(reconciler.ActiveTargets);
+
+        time.Advance(TimeSpan.FromSeconds(14));
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        time.Advance(TimeSpan.FromSeconds(1));
         await loop.TickAsync();
 
         Assert.Single(executor.Disconnected);

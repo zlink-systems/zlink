@@ -765,7 +765,7 @@ int main ()
     gate.require (messaging_test.find ("\"errorMessage\":\"missing handler\"") != std::string::npos,
                   "E2E-CP-33", "RL-D4 has no raw camelCase errorMessage assertion");
 
-    /* IMP-CP-06 — 복구 뒤 완전한 snapshot을 확인하면 같은 tick에서 적용합니다. */
+    /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =
       location_auto_connect.find ("} while (page.continuation_token);");
     const auto recovery_owner_check =
@@ -781,10 +781,18 @@ int main ()
         && recovery_republish != std::string::npos && recovery_invalidation != std::string::npos
         && recovery_diff != std::string::npos
         && location_auto_connect.find (
+             "loop.recovery_started_at = std::chrono::steady_clock::now ()", recovery_republish)
+             != std::string::npos
+        && location_auto_connect.find ("< _runtime->options ().owner_lease_ttl", recovery_diff)
+             != std::string::npos
+        && location_auto_connect.find ("for (const auto &[key, target] : desired)", recovery_diff)
+             != std::string::npos
+        && location_auto_connect.find (
              "invalidate_all_routes_after_store_recovery ();\n            return;",
              recovery_republish)
              == std::string::npos,
-      "IMP-CP-06", "auto-connect applies the first complete recovery snapshot");
+      "IMP-CP-06",
+      "auto-connect recovery must defer missing-target removal and connect new targets");
     gate.require (location_auto_connect.find ("_runtime->options ().polling_interval")
                       != std::string::npos
                     && location_auto_connect.find ("sleep_for (std::chrono::milliseconds (100))")

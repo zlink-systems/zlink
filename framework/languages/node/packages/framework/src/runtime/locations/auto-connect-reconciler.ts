@@ -53,6 +53,7 @@ export class ZLinkAutoConnectReconciler {
   private localPublished = false;
   private storeFailedValue = false;
   private storeFailureStartedAtMs: number | undefined;
+  private recoveryDeferUntilMs = 0;
   private lastDesired = new Map<string, ZLinkAutoConnectTarget>();
   private meshMemberRidHexes?: ReadonlySet<string>;
 
@@ -154,6 +155,7 @@ export class ZLinkAutoConnectReconciler {
       await this.lane.run(() => {
         this.storeFailedValue = false;
         this.storeFailureStartedAtMs = undefined;
+        this.recoveryDeferUntilMs = this.monotonicNowMs() + this.options.ownerLeaseTtlMs;
       });
     }
 
@@ -185,6 +187,18 @@ export class ZLinkAutoConnectReconciler {
     const activeKeys = await this.lane.run(() => new Set(this.active.keys()));
     for (const [key, target] of existingTargets) {
       if (activeKeys.has(key)) desired.set(key, target);
+    }
+    const deferringMissingTargets =
+      this.monotonicNowMs() < (await this.lane.run(() => this.recoveryDeferUntilMs));
+    let staleCandidates = candidates;
+    if (deferringMissingTargets) {
+      const retainedCandidates = new Map(candidates);
+      const lastDesired = await this.lane.run(() => [...this.lastDesired]);
+      for (const [key, target] of lastDesired) {
+        if (!desired.has(key)) desired.set(key, target);
+        if (!retainedCandidates.has(key)) retainedCandidates.set(key, target);
+      }
+      staleCandidates = retainedCandidates;
     }
     await this.lane.run(() => {
       this.lastDesired = new Map(desired);
@@ -253,7 +267,7 @@ export class ZLinkAutoConnectReconciler {
       }
     }
 
-    this.executor.disconnectStalePeers?.([...candidates.values()]);
+    this.executor.disconnectStalePeers?.([...staleCandidates.values()]);
 
     const activeTargets = await this.lane.run(() => [...this.active]);
     for (const [key, target] of activeTargets) {

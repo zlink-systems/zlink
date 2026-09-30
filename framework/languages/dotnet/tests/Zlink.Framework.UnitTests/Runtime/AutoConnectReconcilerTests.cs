@@ -833,7 +833,7 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
-    public async Task Store_Outage_Is_Fail_Static_And_First_Complete_Recovery_Snapshot_Removes_Missing_Target()
+    public async Task Store_Outage_Defers_Missing_Target_Removal_Until_Lease_Ttl_After_Recovery()
     {
         var fixture = await FixtureAsync();
         await fixture.PublishPeerAsync("r1", "tcp://r:1");
@@ -846,13 +846,43 @@ public sealed class AutoConnectReconcilerTests
         Assert.Empty(fixture.Executor.Disconnected);
         Assert.Single(fixture.Reconciler.ActiveTargets);
 
-        // 복구 뒤 첫 전체 목록에 r1이 없으므로 해당 연결을 즉시 제거합니다.
+        // The recovered snapshot cannot remove a missing target until the owner lease TTL.
         await fixture.RemovePeerAsync("r1");
         fixture.PeerResolver.Fail = false;
         await fixture.Reconciler.TickAsync();
         Assert.False(fixture.Reconciler.StoreFailed);
+        Assert.Empty(fixture.Executor.Disconnected);
+        Assert.Single(fixture.Reconciler.ActiveTargets);
+
+        fixture.Time.Advance(TimeSpan.FromSeconds(14));
+        Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
+        await fixture.Reconciler.TickAsync();
+        Assert.Empty(fixture.Executor.Disconnected);
+
+        fixture.Time.Advance(TimeSpan.FromSeconds(1));
+        await fixture.Reconciler.TickAsync();
         Assert.Single(fixture.Executor.Disconnected);
         Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Recovery_Preserves_Unconnected_Target_Intent_Until_Lease_Ttl()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        fixture.Executor.ConnectSucceeds = false;
+        await fixture.Reconciler.TickAsync();
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+
+        fixture.PeerResolver.Fail = true;
+        await fixture.Reconciler.TickAsync();
+        await fixture.RemovePeerAsync("r1");
+        fixture.Executor.ConnectSucceeds = true;
+        fixture.PeerResolver.Fail = false;
+        await fixture.Reconciler.TickAsync();
+
+        Assert.Equal("tcp://r:1", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);
+        Assert.Empty(fixture.Executor.Disconnected);
     }
 
     [Fact]
@@ -940,20 +970,22 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(["tcp://r:1"], fixture.Executor.Connected.Select(target => target.Endpoint));
         Assert.Equal("tcp://r:1", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);
 
-        // 복구 시 local row를 재게시한 뒤 조회한 전체 목록에 따라 필요한 변경을 적용합니다.
+        // The newly visible target connects on the first recovered snapshot.
         fixture.PeerResolver.Fail = false;
         await fixture.Reconciler.TickAsync();
 
         Assert.False(fixture.Reconciler.StoreFailed);
-        Assert.Equal("tcp://r:1", Assert.Single(fixture.Executor.Disconnected).Endpoint);
+        Assert.Empty(fixture.Executor.Disconnected);
         Assert.Equal(
             ["tcp://r:1", "tcp://r:2"],
             fixture.Executor.Connected.Select(target => target.Endpoint)
         );
-        Assert.Equal("tcp://r:2", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);
+        Assert.Equal(2, fixture.Reconciler.ActiveTargets.Count);
 
         Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
-        fixture.Time.Advance(TimeSpan.FromSeconds(6));
+        fixture.Time.Advance(TimeSpan.FromSeconds(14));
+        Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
+        fixture.Time.Advance(TimeSpan.FromSeconds(1));
         await fixture.Reconciler.TickAsync();
 
         Assert.False(fixture.Reconciler.StoreFailed);

@@ -27,6 +27,7 @@ final class ZLinkAutoConnectReconciler {
             new HashMap<>();
     private boolean storeFailed;
     private long storeFailureStartedNanos = -1;
+    private long recoveryDeferUntilNanos;
 
     ZLinkAutoConnectReconciler(
             ZLinkAutoConnectPlanner.Local local,
@@ -90,9 +91,13 @@ final class ZLinkAutoConnectReconciler {
         if (storeFailed) {
             storeFailed = false;
             storeFailureStartedNanos = -1;
+            recoveryDeferUntilNanos = nanoTime.getAsLong() + options.ownerLeaseTtl().toNanos();
         }
         Map<String, ZLinkAutoConnectPlanner.Target> desired =
                 ZLinkAutoConnectPlanner.computeDesired(local, rows);
+        if (nanoTime.getAsLong() < recoveryDeferUntilNanos) {
+            lastDesired.forEach(desired::putIfAbsent);
+        }
         Map<String, ZLinkAutoConnectPlanner.Target> nextNotRequired =
                 ZLinkAutoConnectPlanner.computeNotRequired(local, rows);
         Map<String, ZLinkAutoConnectPlanner.Target> nextExpectations = new HashMap<>();

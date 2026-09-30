@@ -18,9 +18,10 @@ internal sealed class ZLinkLiveLocationRows(ZLinkOwnerLeaseTracker leaseTracker)
                 .ConfigureAwait(false)
         )
         {
-            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"live_row_rejected reason=owner_not_live owner={ownerOf(row)}"
-            );
+            if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"live_row_rejected reason=owner_not_live owner={ownerOf(row)}"
+                );
             return (null, false);
         }
 
@@ -49,9 +50,10 @@ internal sealed class ZLinkLiveLocationRows(ZLinkOwnerLeaseTracker leaseTracker)
                     .ConfigureAwait(false);
             if (!ownerLive)
             {
-                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"live_row_filter rejected=owner_not_live owner={ownerOf(row)}"
-                );
+                if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"live_row_filter rejected=owner_not_live owner={ownerOf(row)}"
+                    );
                 continue;
             }
 

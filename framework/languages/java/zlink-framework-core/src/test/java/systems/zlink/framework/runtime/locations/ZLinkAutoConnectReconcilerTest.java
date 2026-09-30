@@ -47,7 +47,7 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     @Test
-    void firstRecoveredSnapshotDisconnectsMissingTargetImmediately() {
+    void recoveredSnapshotDefersMissingTargetUntilOwnerLeaseTtl() {
         MutableResolver resolver = new MutableResolver();
         RecordingExecutor executor = new RecordingExecutor();
         AtomicLong now = new AtomicLong();
@@ -66,7 +66,54 @@ final class ZLinkAutoConnectReconcilerTest {
         resolver.rows = List.of();
         now.set(Duration.ofMillis(100).toNanos());
         reconciler.tick().toCompletableFuture().join();
+        assertEquals(0, executor.disconnects);
+        now.set(Duration.ofMillis(3099).toNanos());
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(0, executor.disconnects);
+        now.set(Duration.ofMillis(3100).toNanos());
+        reconciler.tick().toCompletableFuture().join();
         assertEquals(1, executor.disconnects);
+    }
+
+    @Test
+    void recoveredSnapshotConnectsNewTargetImmediately() {
+        MutableResolver resolver = new MutableResolver();
+        RecordingExecutor executor = new RecordingExecutor();
+        AtomicLong now = new AtomicLong();
+        var reconciler = reconciler(resolver, executor, new ZLinkLocationOptions(), now);
+
+        resolver.rows = List.of(peer());
+        reconciler.tick().toCompletableFuture().join();
+        resolver.failure = new IllegalStateException("store unavailable");
+        reconciler.tick().toCompletableFuture().join();
+
+        resolver.failure = null;
+        resolver.rows = List.of(peer("server-new"));
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        assertEquals(0, executor.disconnects);
+    }
+
+    @Test
+    void recoveryPreservesUnconnectedTargetIntentUntilOwnerLeaseTtl() {
+        MutableResolver resolver = new MutableResolver();
+        RecordingExecutor executor = new RecordingExecutor();
+        executor.connectSucceeds = false;
+        AtomicLong now = new AtomicLong();
+        var reconciler = reconciler(resolver, executor, new ZLinkLocationOptions(), now);
+
+        resolver.rows = List.of(peer());
+        reconciler.tick().toCompletableFuture().join();
+        resolver.failure = new IllegalStateException("store unavailable");
+        reconciler.tick().toCompletableFuture().join();
+        int attemptsBeforeRecovery = executor.connects;
+        resolver.failure = null;
+        resolver.rows = List.of();
+        executor.connectSucceeds = true;
+        reconciler.tick().toCompletableFuture().join();
+
+        assertEquals(attemptsBeforeRecovery + 1, executor.connects);
+        assertEquals(0, executor.disconnects);
     }
 
     @Test
@@ -141,18 +188,22 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     private static ZLinkAutoConnectPeer peer() {
+        return peer("server");
+    }
+
+    private static ZLinkAutoConnectPeer peer(String name) {
         return new ZLinkAutoConnectPeer(
                 ZLinkAutoConnectType.CLIENT_SERVER,
                 "orders",
-                RoutingId.from("server"),
+                RoutingId.from(name),
                 ZLinkLocationRole.ROUTER,
-                "inproc://server",
+                "inproc://" + name,
                 100,
                 false,
                 9,
                 Map.of(),
                 List.of(),
-                "owner-server",
+                "owner-" + name,
                 4,
                 Instant.parse("2026-07-27T00:00:00Z"));
     }
