@@ -41,6 +41,7 @@ int request_errno (request_result_t result_) noexcept
         case request_result_t::invalid_argument: return EINVAL;
         case request_result_t::invalid_state: return EFSM;
         case request_result_t::not_supported: return ENOTSUP;
+        case request_result_t::backpressured: return EAGAIN;
         default: return EIO;
     }
 }
