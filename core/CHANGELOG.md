@@ -12,6 +12,22 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.12.0]
+
+### Changed
+
+- STREAM sockets are bind-only. `zlink_connect` is rejected with
+  `ZLINK_CONNECT_NOT_SUPPORTED` (602) and `ENOTSUP`. An accepted peer is
+  disconnected with `zlink_disconnect_rid`; a RID that does not exist returns
+  `ZLINK_CONNECT_NOT_FOUND` (605) (#1164).
+
+### Fixed
+
+- NODROP PUB/XPUB no longer ends a record partway through when HWM is reached
+  after writing the topic frame. HWM is checked once at record start for each
+  pipe whose filter matches, and an accepted record is written to completion
+  (#1157).
+
 ## [1.11.0]
 
 ### Changed
