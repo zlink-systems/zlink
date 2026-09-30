@@ -47,10 +47,6 @@ internal static class BoundaryValidation
         var byteCount = Encoding.UTF8.GetByteCount(value);
         if (!allowEmpty && byteCount == 0)
             throw new ArgumentException("Value must not be empty.", paramName);
-        if (byteCount > FixedUtf8MaxBytes)
-            throw new ArgumentOutOfRangeException(paramName,
-                $"UTF-8 length must be between {(allowEmpty ? 0 : 1)} and " +
-                $"{FixedUtf8MaxBytes} bytes.");
     }
 
     public static uint EncodeTimeoutMilliseconds(TimeSpan timeout,

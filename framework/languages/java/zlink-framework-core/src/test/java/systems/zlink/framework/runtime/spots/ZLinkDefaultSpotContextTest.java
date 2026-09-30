@@ -753,8 +753,8 @@ final class ZLinkDefaultSpotContextTest {
                             "actor-a",
                             () -> {
                                 handle.set(
-                                        context.actorRelocationLane("actor-a")
-                                                .captureActiveTurnSealHandle()
+                                        ZLinkSerialExecutionQueue
+                                                .captureCurrentActiveTurnSealHandle()
                                                 .orElseThrow());
                                 activeStarted.complete(null);
                                 return activeRelease;
@@ -985,7 +985,7 @@ final class ZLinkDefaultSpotContextTest {
                 long payloadBytes,
                 Supplier<CompletionStage<Void>> operation) {
             actorDispatchSubmissions.incrementAndGet();
-            return target.executeActor(actorId, payloadBytes, operation);
+            return target.executeActor(actorId, payloadBytes, operation, null);
         }
 
         @Override
@@ -1012,7 +1012,8 @@ final class ZLinkDefaultSpotContextTest {
                     acceptedJournalRecord,
                     acceptedJournalRecordSizeHint,
                     operation,
-                    relocationRelease);
+                    relocationRelease,
+                    null);
         }
 
         private static ZLinkBackendSpot backendSpot() {

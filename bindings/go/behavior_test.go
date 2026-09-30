@@ -3,6 +3,7 @@ package zlink_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -803,6 +804,127 @@ func TestSubSubscribeAggregateRoundTrip(t *testing.T) {
 	}
 	if got := string(msg.Data()); got != "42.5" {
 		t.Fatalf("payload = %q, want %q", got, "42.5")
+	}
+}
+
+func TestSubSubscribeLongTopics(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	endpoint := inprocEndpoint("pubsub-long-topic")
+	xpubSocket, err := ctx.XPubSocket()
+	if err != nil {
+		t.Fatalf("XPubSocket() error = %v", err)
+	}
+	subSocket, err := ctx.SubSocket()
+	if err != nil {
+		t.Fatalf("SubSocket() error = %v", err)
+	}
+	defer xpubSocket.Close()
+	defer subSocket.Close()
+
+	if err := xpubSocket.Bind(endpoint); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if err := subSocket.Connect(endpoint); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	if err := subSocket.SetSubscription("t"); err != nil {
+		t.Fatalf("SetSubscription() error = %v", err)
+	}
+	if err := subSocket.SetReceiveTimeout(5 * time.Second); err != nil {
+		t.Fatalf("SetReceiveTimeout() error = %v", err)
+	}
+	if err := xpubSocket.SetReceiveTimeout(5 * time.Second); err != nil {
+		t.Fatalf("SetReceiveTimeout() error = %v", err)
+	}
+
+	var event zlink.SubscriptionEvent
+	ok, err := xpubSocket.ReceiveSubscriptionEvent(&event, zlink.RecvFlagsNone)
+	if err != nil {
+		t.Fatalf("ReceiveSubscriptionEvent() error = %v", err)
+	}
+	if !ok {
+		t.Fatalf("ReceiveSubscriptionEvent() returned ok=false before publish")
+	}
+	if !event.Subscribed() || event.Topic() != "t" {
+		t.Fatalf("subscription event = (subscribed=%v, topic length=%d), want (true, 1)", event.Subscribed(), len(event.Topic()))
+	}
+
+	var message zlink.TopicMessage
+	defer message.Close()
+	for _, topicLen := range []int{300, 70_000} {
+		topic := strings.Repeat("t", topicLen)
+		if _, err := xpubSocket.Publish(topic).Message(newMessage(t, "payload")).Submit(context.Background()); err != nil {
+			t.Fatalf("Publish() error = %v", err)
+		}
+
+		ok, err := subSocket.Subscribe(&message, zlink.RecvFlagsNone)
+		if err != nil {
+			t.Fatalf("Subscribe() error = %v", err)
+		}
+		if !ok {
+			t.Fatalf("Subscribe() returned ok=false for topic length %d", topicLen)
+		}
+		if got := message.Topic(); got != topic {
+			t.Fatalf("Topic() length %d = %d bytes, want %d", topicLen, len(got), len(topic))
+		}
+		part, err := message.SinglePartOrError()
+		if err != nil {
+			t.Fatalf("SinglePartOrError() error = %v", err)
+		}
+		if got := string(part.Data()); got != "payload" {
+			t.Fatalf("payload = %q, want %q", got, "payload")
+		}
+	}
+}
+
+func TestXPubReceiveLongSubscriptionTopics(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	endpoint := inprocEndpoint("xpub-long-subscription-topic")
+	xpubSocket, err := ctx.XPubSocket()
+	if err != nil {
+		t.Fatalf("XPubSocket() error = %v", err)
+	}
+	subSocket, err := ctx.SubSocket()
+	if err != nil {
+		t.Fatalf("SubSocket() error = %v", err)
+	}
+	defer xpubSocket.Close()
+	defer subSocket.Close()
+
+	if err := xpubSocket.Bind(endpoint); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if err := subSocket.Connect(endpoint); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	if err := xpubSocket.SetReceiveTimeout(5 * time.Second); err != nil {
+		t.Fatalf("SetReceiveTimeout() error = %v", err)
+	}
+
+	var event zlink.SubscriptionEvent
+	for _, topicLen := range []int{300, 70_000} {
+		topic := strings.Repeat("t", topicLen)
+		if err := subSocket.SetSubscription(topic); err != nil {
+			t.Fatalf("SetSubscription() error = %v", err)
+		}
+
+		ok, err := xpubSocket.ReceiveSubscriptionEvent(&event, zlink.RecvFlagsNone)
+		if err != nil {
+			t.Fatalf("ReceiveSubscriptionEvent() error = %v", err)
+		}
+		if !ok {
+			t.Fatalf("ReceiveSubscriptionEvent() returned ok=false for topic length %d", topicLen)
+		}
+		if !event.Subscribed() {
+			t.Fatalf("Subscribed() = false for topic length %d", topicLen)
+		}
+		if got := event.Topic(); got != topic {
+			t.Fatalf("Topic() length %d = %d bytes, want %d", topicLen, len(got), len(topic))
+		}
 	}
 }
 

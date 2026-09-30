@@ -260,7 +260,8 @@ doesn't secretly move or destroy an Actor.
 `JoinEntrySpot` doesn't take a target node RID. The framework finds the
 target Spot and owner node to use. If the Actor's and target Spot's owner
 node differ, Actor relocation is also performed within the same Join
-operation.
+operation. The framework handles same-node Actor Join directly through a
+single local Join path and does not submit Mesh Join records.
 
 The application doesn't directly specify relocation stage, target node,
 state adapter, or owner token. The framework decides these values based on

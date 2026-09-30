@@ -35,6 +35,7 @@ public sealed class test_binding_core_parity
                 TimeSpan.FromSeconds(3)));
         watch.Stop();
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.Equal(110, error.NativeErrno);
         // The binding has no 5 s default of its own; Core applied the option.
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3));
     }

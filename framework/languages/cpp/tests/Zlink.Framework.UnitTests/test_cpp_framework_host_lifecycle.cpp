@@ -460,11 +460,10 @@ class observing_actor_creation_store_t final : public zlink::framework::location
         }
         auto written = inner->write (std::move (request));
         if (!writes_terminal || !force_terminal_write_conflict.load (std::memory_order_acquire))
-            return written;
-        written.result ().value ();
-        return zlink::framework::task_t<zlink::framework::store_write_result_t> (
-          zlink::framework::result_t<zlink::framework::store_write_result_t>::success (
-            zlink::framework::store_write_conflict_t{std::chrono::system_clock::now ()}));
+            co_return co_await written;
+        (void) co_await written;
+        co_return zlink::framework::store_write_result_t{
+          zlink::framework::store_write_conflict_t{std::chrono::system_clock::now ()}};
     }
 
     zlink::framework::task_t<zlink::framework::store_scan_result_t>
@@ -2076,10 +2075,14 @@ int main ()
     }
 
     const auto shutdown = app.shutdown (std::chrono::seconds (1)).result ().value ();
+    const auto shutdown_state = app.runtime_state ();
     if (shutdown.outcome != zlink::framework::termination_outcome_t::stopped
         || shutdown.reason != zlink::framework::termination_reason_t::none
-        || app.runtime_state () != zlink::framework::framework_runtime_state_t::stopped) {
-        std::cerr << "Shutdown must complete the shared termination operation\n";
+        || shutdown_state != zlink::framework::framework_runtime_state_t::stopped) {
+        std::cerr << "Shutdown must complete the shared termination operation"
+                  << " outcome=" << static_cast<int> (shutdown.outcome)
+                  << " reason=" << static_cast<int> (shutdown.reason)
+                  << " state=" << static_cast<int> (shutdown_state) << '\n';
         return EXIT_FAILURE;
     }
     const auto after_shutdown =

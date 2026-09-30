@@ -16,23 +16,23 @@ final class ZLinkSessionSerialExecutor {
     }
 
     CompletionStage<Void> executeApplication(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation);
+        return queue.enqueue(operation, null);
     }
 
     CompletionStage<Void> executeControl(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation);
+        return queue.enqueue(operation, null);
     }
 
     CompletionStage<Void> executeInfrastructure(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation);
+        return queue.enqueue(operation, null);
     }
 
     CompletionStage<Void> executeFinal(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation);
+        return queue.enqueue(operation, null);
     }
 
     CompletionStage<Void> executeLifecycleNext(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueueBarrierNext(operation);
+        return queue.enqueueBarrierNext(operation, null);
     }
 
     CompletionStage<Void> awaitQuiescence() {

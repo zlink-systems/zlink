@@ -43,8 +43,8 @@ func (s *subscribeSocket) Subscribe(out *TopicMessage, flags RecvFlags) (bool, e
 	if handle == nil {
 		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	err := recvTopicMessageInto(out, func(rid **C.zlink_routing_id_t, topic *C.char, topicLen *C.size_t, parts *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) (C.zlink_recv_result_t, error) {
-		result, cerr := C.zlink_subscribe(handle, rid, topic, recvTopicBufferCap, topicLen, parts, capacity, count, recvFlags)
+	err := recvTopicMessageInto(out, func(rid **C.zlink_routing_id_t, topic *C.char, topicCapacity C.size_t, topicLen *C.size_t, parts *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) (C.zlink_recv_result_t, error) {
+		result, cerr := C.zlink_subscribe(handle, rid, topic, topicCapacity, topicLen, parts, capacity, count, recvFlags)
 		return result, cerr
 	}, flags)
 	if err != nil {
@@ -68,18 +68,18 @@ func (s *xpubSubscribeSocket) ReceiveSubscriptionEvent(out *SubscriptionEvent, f
 	if handle == nil {
 		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	err := recvSubscriptionEventInto(out, func(rid *C.zlink_routing_id_t, subscribed *C.int, topic *C.char, topicLen *C.size_t, recvFlags C.zlink_recv_flags_t) error {
+	err := recvSubscriptionEventInto(out, func(rid *C.zlink_routing_id_t, subscribed *C.int, topic *C.char, topicCapacity C.size_t, topicLen *C.size_t, recvFlags C.zlink_recv_flags_t) (C.zlink_recv_result_t, error) {
 		var sourceRID *C.zlink_routing_id_t
-		rc82, errno82 := C.zlink_xpub_recv(handle, &sourceRID, subscribed, topic, recvTopicBufferCap, topicLen, recvFlags)
-		if err := recvErrorFromCall(rc82, errno82); err != nil {
-			return err
+		rc82, errno82 := C.zlink_xpub_recv(handle, &sourceRID, subscribed, topic, topicCapacity, topicLen, recvFlags)
+		if rc82 != C.ZLINK_RECV_OK {
+			return rc82, errno82
 		}
 		if sourceRID != nil {
 			*rid = *sourceRID
 		} else {
 			*rid = C.zlink_routing_id_t{}
 		}
-		return nil
+		return rc82, errno82
 	}, flags)
 	if err != nil {
 		if isNoData(err) {

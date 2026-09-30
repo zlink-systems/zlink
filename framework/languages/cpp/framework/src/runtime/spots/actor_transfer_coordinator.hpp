@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,8 @@
 
 namespace zlink::framework::detail
 {
+
+inline constexpr std::size_t max_pending_handoff_requests = 1024;
 
 class actor_join_lifecycle_reservation_t;
 
@@ -71,10 +74,20 @@ struct pending_actor_admission_t
                           std::uint64_t operation_low) const;
 };
 
+struct handoff_packet_t;
+
 struct expired_actor_admission_t
 {
     std::string transfer_id;
     pending_actor_admission_t admission;
+    std::vector<handoff_packet_t> discarded_backlog;
+};
+
+struct actor_transfer_cleanup_snapshot_t
+{
+    std::vector<expired_actor_admission_t> expired_admissions;
+    std::vector<std::pair<std::string, std::string>> source_remote_transfers;
+    std::vector<std::string> blocked_dispatch_keys;
 };
 
 struct removed_actor_message_follow_t
@@ -82,6 +95,8 @@ struct removed_actor_message_follow_t
     std::string actor_key;
     runtime::protocol::actor_route_fence_t source_fence;
     std::string transfer_id;
+    spot_route_t target_route;
+    std::uint64_t target_generation = 0;
 };
 
 struct actor_message_follow_target_t
@@ -154,6 +169,7 @@ inline constexpr std::string_view actor_handoff_operation_high_key =
 inline constexpr std::string_view actor_handoff_operation_low_key =
   "__zlink.actorHandoffOperationLow";
 inline constexpr std::string_view actor_handoff_reply_route_key = "__zlink.actorHandoffReplyRoute";
+inline constexpr std::string_view actor_handoff_deadline_key = "__zlink.actorHandoffDeadline";
 
 struct actor_move_completion_t
 {
@@ -197,7 +213,7 @@ class actor_transfer_coordinator_t
     bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
-    void cancel_move (const std::string &actor_key);
+    std::vector<handoff_packet_t> cancel_move (const std::string &actor_key);
     void mark_reconcile (const std::string &actor_key,
                          std::chrono::steady_clock::duration bound,
                          std::optional<reconcile_target_context_t> context = std::nullopt);
@@ -317,7 +333,9 @@ class actor_transfer_coordinator_t
     // Decides whether a new Join attempt may start its admission. A newer
     // attempt displaces an older one that has not reached commit authority;
     // the displaced attempt releases its lifecycle position with it.
-    bool admit_attempt (const std::string &actor_key, const std::string &transfer_id);
+    bool admit_attempt (const std::string &actor_key,
+                        const std::string &transfer_id,
+                        std::vector<handoff_packet_t> &discarded_backlog);
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
     std::optional<pending_actor_admission_t> admission (const std::string &transfer_id) const;
     // True iff transfer_id is still the move actor_key is tracking. A
@@ -326,9 +344,11 @@ class actor_transfer_coordinator_t
     // before publishing an effect a newer, evicting attempt must not race
     // (spec 15 §4.2 newest-attempt-wins).
     bool is_current (const std::string &actor_key, const std::string &transfer_id) const;
-    std::optional<pending_actor_admission_t> begin_commit (const std::string &transfer_id,
-                                                           const actor_ref_t &source_actor,
-                                                           const spot_id_t &target_spot_id);
+    std::optional<pending_actor_admission_t>
+    begin_commit (const std::string &transfer_id,
+                  const actor_ref_t &source_actor,
+                  const spot_id_t &target_spot_id,
+                  std::vector<handoff_packet_t> &discarded_backlog);
     std::optional<pending_actor_admission_t> pending_commit (const std::string &transfer_id,
                                                              const actor_ref_t &source_actor,
                                                              const spot_id_t &target_spot_id) const;
@@ -353,10 +373,11 @@ class actor_transfer_coordinator_t
                                                std::uint64_t target_authority_owner_generation);
     std::optional<pending_actor_admission_t>
     session_relocation_admission (const std::string &transfer_id) const;
-    void fail_commit (const std::string &transfer_id, bool reconcile);
+    std::vector<handoff_packet_t> fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
-    std::vector<expired_actor_admission_t>
-    cleanup_expired (std::chrono::steady_clock::time_point now);
+    task_t<actor_transfer_cleanup_snapshot_t>
+    cleanup_expired_async (std::chrono::steady_clock::time_point now,
+                           std::vector<std::string> blocked_candidates);
     std::size_t pending_count () const;
     std::optional<std::chrono::steady_clock::time_point> next_activity () const;
     void set_activity_handler (std::function<void ()> handler);
@@ -384,6 +405,11 @@ class actor_transfer_coordinator_t
         std::optional<reconcile_target_context_t> reconcile_context;
     };
 
+    static bool is_source_remote (const move_state_t &move) noexcept
+    {
+        return move.phase == actor_move_phase_t::source_remote;
+    }
+
     struct message_follow_route_t
     {
         runtime::protocol::actor_route_fence_t source_fence;
@@ -401,6 +427,9 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
       std::chrono::steady_clock::time_point now) const;
+    actor_transfer_cleanup_snapshot_t
+    cleanup_expired_on_lane (std::chrono::steady_clock::time_point now,
+                             const std::vector<std::string> &blocked_candidates);
     actor_transfer_dispatch_state_snapshot_t
     project_dispatch_state_unlocked (const std::string &actor_key,
                                      const runtime::protocol::actor_route_fence_t *source_fence,

@@ -640,12 +640,17 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
               request.actor.target_node_routing_id, request.actor.actor_id,
               request.actor.object_generation, request.actor.target_node_generation,
               request.correlation);
-            const auto admitted = spot.admit_remote_actor_to_spot (
-              std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id, payload_message,
-              request.actor.target_node_generation, request.correlation,
-              request.actor.authority_owner_generation, request.actor.target_node_generation,
-              request.actor.owner_lease_generation, true, request.target_spot.object_generation,
-              request.target_spot.authority_owner_generation);
+            // This runs in the target Spot's admission lifecycle item
+            // (dispatch_wire_actor_join_admission), so the admission is inline.
+            const auto admitted =
+              spot
+                .admit_remote_actor_to_spot (
+                  std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id, payload_message,
+                  request.actor.target_node_generation, request.correlation,
+                  request.actor.authority_owner_generation, request.actor.target_node_generation,
+                  request.actor.owner_lease_generation, true, request.target_spot.object_generation,
+                  request.target_spot.authority_owner_generation)
+                .result ();
             if (!admitted)
                 return typed_terminal (admitted.error_kind ());
             auto application_reply =
@@ -2313,27 +2318,23 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
     }
 }
 
-result_t<actor_join_reply_t>
+task_t<actor_join_reply_t>
 mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &actor,
                                                            const node_rid_t &target_node,
                                                            const zlink::message_t &request,
                                                            std::chrono::milliseconds timeout)
 {
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ()) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "local Actor handle was not found");
-    }
-    host::pending_operation_t operation;
-    const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
-      zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
-    if (submitted != zlink::submit_result_t::ok) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                      "Actor entry Spot join was not submitted");
-    }
-    auto joined = wait_for_join_completion (operation, actor, timeout);
-    return joined;
+    // The operation completion delivers the reply (submit_application_actor_entry_spot_join).
+    detail::task_completion_source_t<actor_join_reply_t> joined;
+    auto result = joined.task ();
+    const auto submitted = submit_application_actor_entry_spot_join (
+      actor, target_node, request, timeout, [joined] (result_t<actor_join_reply_t> reply) mutable {
+          joined.complete (std::move (reply));
+      });
+    if (!submitted)
+        joined.complete (detail::propagate_failure<actor_join_reply_t> (
+          submitted, "Actor entry Spot join failed"));
+    return result;
 }
 
 result_t<void>
@@ -3508,20 +3509,6 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
       reply});
 }
 
-result_t<actor_join_reply_t>
-mesh_node_runtime_t::wait_for_join_completion (const host::pending_operation_t &operation,
-                                               const actor_ref_t &actor,
-                                               std::chrono::milliseconds timeout)
-{
-    auto completed = wait_for_completion (operation, timeout);
-    if (!completed) {
-        return result_t<actor_join_reply_t>::failure (
-          completed.error_kind (),
-          completed.error () ? completed.error ()->what () : "Actor Spot join failed");
-    }
-    auto completion = std::move (completed.value ());
-    return actor_join_reply_from_completion (completion.record, completion.parts, actor, _state);
-}
 
 task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
   const actor_ref_t &actor,
@@ -3583,7 +3570,6 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                          + (header.metadata.contains (std::string (message_follow_path_key))
                               ? 1
                               : message_follow_path_key.size ());
-        const bool source_transfer_in_progress = spot_runtime.actor_transfer_in_progress (actor);
         const bool replays_handoff_packet =
           header.metadata.contains (std::string (detail::actor_handoff_source_node_key))
           || header.metadata.contains ("__zlink.actorHandoffLateReplay");
@@ -3592,8 +3578,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
           has_exact_stale_route
           && stale_route.target_node_routing_id == local_routing_id->to_bytes ();
         auto acquired_follow =
-          (source_transfer_in_progress && !replays_handoff_packet)
-              || !exact_route_targets_local_source
+          !exact_route_targets_local_source
             ? result_t<std::optional<detail::actor_message_follow_target_t>>::success (std::nullopt)
             : spot_runtime.try_acquire_actor_message_follow (actor, payload_bytes,
                                                              incoming_hop_count, stale_route);
@@ -3708,19 +3693,28 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                 ? std::make_optional (zlink::message_t::from (decoded.value ().payload))
                 : std::nullopt);
         }
+        const bool targets_local_node =
+          !actor.node_rid ().empty ()
+          && actor.node_rid ().value () == local_routing_id->to_string ();
         const auto &target_actor = actor;
         auto target_node_rid =
           zlink::routing_id_t::from (std::string (target_actor.node_rid ().value ()));
+        if (has_exact_stale_route
+            && (stale_route.actor_id != target_actor.actor_id ().value ()
+                || stale_route.object_generation != target_actor.object_generation ()
+                || stale_route.target_node_routing_id != target_node_rid.to_bytes ()
+                || stale_route.authority_owner_generation == 0)) {
+            co_return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::invalid_operation,
+              "bound Session Actor route fence is inconsistent");
+        }
+        if (targets_local_node && !replays_handoff_packet)
+            co_return co_await spot_runtime.relay_local_actor_packet (
+              actor, header, payload, source_node, stale_route, incoming_hop_count,
+              original_operation, original_reply_route_id, timeout);
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
-        const auto local_descriptor = _node->transport ().topology ().local_descriptor ();
-        const bool targets_local_node =
-          !target_actor.node_rid ().empty ()
-          && target_actor.node_rid ().value ()
-               == zlink::routing_id_t::from (local_descriptor.node_routing_id).to_string ();
-        const bool targets_moving_local_source = targets_local_node && source_transfer_in_progress;
-        if (targets_local_node && !source_transfer_in_progress
-            && !spot_runtime.actor_route (target_actor)) {
+        if (targets_local_node && !spot_runtime.actor_route (target_actor)) {
             if (spot_runtime.actor_transfer_marker_enabled ()) {
                 spot_runtime.emit_actor_transfer_marker ("message_follow_expired", target_actor, {},
                                                          std::nullopt, std::nullopt);
@@ -3731,14 +3725,6 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
         const bool has_exact_remote_route =
           has_exact_stale_route && !exact_route_targets_local_source;
         if (has_exact_remote_route) {
-            if (stale_route.actor_id != target_actor.actor_id ().value ()
-                || stale_route.object_generation != target_actor.object_generation ()
-                || stale_route.target_node_routing_id != target_node_rid.to_bytes ()
-                || stale_route.authority_owner_generation == 0) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::invalid_operation,
-                  "bound Session Actor route fence is inconsistent");
-            }
             /* A committed Session binding is already an exact route snapshot.
              * Use its authority and owner fence together instead of combining
              * its target node with a Location cache entry from the previous
@@ -3758,7 +3744,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             // or relays it through Message Follow. Replacing that route from a
             // location lookup here can split one Session's serial stream across
             // the old and new owners and let a later packet overtake backlog.
-            if (!targets_moving_local_source && !await_remote_admission)
+            if (!await_remote_admission)
                 target_node_rid = resolved->node_rid;
             authority_owner_generation = resolved->authority_owner_generation;
             owner_lease_generation = static_cast<std::uint64_t> (resolved->owner.lease_generation);
@@ -4363,6 +4349,19 @@ host::node_status_t mesh_node_runtime_t::status () const
     return _node->status ();
 }
 
+task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
+mesh_node_runtime_t::monitoring_configuration_async () const
+{
+    return _state->lane.run_task ([state = _state] {
+        return std::tuple{channel_names_on_lane (*state), state->actor_limit, state->spot_limit};
+    });
+}
+
+task_t<std::pair<std::size_t, std::size_t>> mesh_node_runtime_t::monitoring_counts_async () const
+{
+    return spot_node_runtime_t (_state->spot_state).monitoring_counts_async ();
+}
+
 bool mesh_node_runtime_t::relocation_source_stopped () const
 {
     if (_stopping.load (std::memory_order_acquire))
@@ -4405,15 +4404,18 @@ object_role_t mesh_node_runtime_t::object_role () const
 
 std::vector<std::string> mesh_node_runtime_t::channel_names () const
 {
-    return _state->lane
-      .run ([&] {
-          std::vector<std::string> result;
-          result.reserve (_state->channels.size ());
-          for (const auto &[name, _] : _state->channels)
-              result.push_back (name);
-          return result;
-      })
+    return _state->lane.run_checked ([state = _state] { return channel_names_on_lane (*state); })
       .get ();
+}
+
+std::vector<std::string>
+mesh_node_runtime_t::channel_names_on_lane (const mesh_node_builder_state_t &state)
+{
+    std::vector<std::string> result;
+    result.reserve (state.channels.size ());
+    for (const auto &[name, _] : state.channels)
+        result.push_back (name);
+    return result;
 }
 
 std::map<std::string, int> mesh_node_runtime_t::channel_weights () const

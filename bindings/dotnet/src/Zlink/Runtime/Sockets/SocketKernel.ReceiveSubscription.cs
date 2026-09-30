@@ -62,18 +62,36 @@ internal sealed partial class SocketKernel : IDisposable
     private bool ReceiveSubscriptionEventInto(SubscriptionEvent result,
         int flags)
     {
-        var topicBuffer = ArrayPool<byte>.Shared.Rent(TopicBufferSize);
+        var topicBuffer = ArrayPool<byte>.Shared.Rent(InitialTopicBufferSize);
         try
         {
-            var rc = NativeMethods.zlink_xpub_recv(Handle,
-                out var sourceRoutingId, out var subscribedInt, topicBuffer,
-                (nuint)topicBuffer.Length, out var topicLength, flags);
-            if (rc != 0)
+            int rc;
+            IntPtr sourceRoutingId;
+            int subscribedInt;
+            nuint topicLength;
+            while (true)
             {
-                if ((flags & DontWaitFlag) != 0
-                    && (RecvResult)rc == RecvResult.NoData)
-                    return false;
-                throw ZlinkException.CreateRecvException((RecvResult)rc);
+                rc = NativeMethods.zlink_xpub_recv(Handle,
+                    out sourceRoutingId, out subscribedInt, topicBuffer,
+                    (nuint)topicBuffer.Length, out topicLength, flags);
+                if (rc == 0)
+                    break;
+
+                if ((RecvResult)rc != RecvResult.BufferTooSmall)
+                {
+                    if ((flags & DontWaitFlag) != 0
+                        && (RecvResult)rc == RecvResult.NoData)
+                        return false;
+                    throw ZlinkException.CreateRecvException((RecvResult)rc);
+                }
+
+                if (!TopicBufferNeedsGrowth(topicBuffer, topicLength))
+                    throw new ZlinkRecvException(RecvResult.InternalError);
+
+                var expandedTopicBuffer = ArrayPool<byte>.Shared.Rent(
+                    checked((int)topicLength));
+                ArrayPool<byte>.Shared.Return(topicBuffer);
+                topicBuffer = expandedTopicBuffer;
             }
 
             var routingIdBytes = CopyRoutingIdBytes(sourceRoutingId);

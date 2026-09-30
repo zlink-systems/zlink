@@ -314,7 +314,8 @@ final class ZLinkChannelRouteDispatcher {
                                                                 replyFailure);
                                                     }
                                                 })
-                                        .whenComplete((ignored, error) -> payload.close()));
+                                        .whenComplete((ignored, error) -> payload.close()),
+                        null);
         return true;
     }
 
@@ -432,7 +433,8 @@ final class ZLinkChannelRouteDispatcher {
                                                             (ignored, error) -> {
                                                                 payload.close();
                                                             })
-                                                    .thenApply(ignored -> null));
+                                                    .thenApply(ignored -> null),
+                                    null);
             queued.whenComplete(
                     (ignored, error) -> {
                         if (error != null) {
@@ -528,7 +530,8 @@ final class ZLinkChannelRouteDispatcher {
                                                     .whenComplete(
                                                             (ignored, error) -> {
                                                                 payload.close();
-                                                            }));
+                                                            }),
+                                    null);
             queued.whenComplete(
                     (ignored, error) -> {
                         if (error != null) {

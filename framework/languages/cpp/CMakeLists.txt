@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.26.0 LANGUAGES C CXX)
+add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
 
@@ -2068,6 +2069,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_executable(test_cpp_framework_locations_redis
       tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis
       GTest::gtest_main)

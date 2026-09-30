@@ -45,7 +45,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
                         ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                         assertEquals(0, queue.snapshot().permitsInUse());
                         return handlerContinuation;
-                    });
+                    },
+                    null);
         } finally {
             first.abandonReservation();
         }
@@ -75,7 +76,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
                 () -> {
                     firstStarted.complete(null);
                     return firstActive;
-                });
+                },
+                null);
         firstStarted.get();
 
         ZLinkApplicationJobQueue.Permit permit =
@@ -89,7 +91,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
                                 ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                                 transferredStarted.complete(null);
                                 return transferredActive;
-                            });
+                            },
+                            null);
         } finally {
             permit.abandonReservation();
         }

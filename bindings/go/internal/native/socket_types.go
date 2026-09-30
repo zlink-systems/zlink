@@ -57,7 +57,7 @@ const (
 	ReceiveFlowPaused  ReceiveFlowState = 1
 )
 
-const recvTopicBufferCap = 64 * 1024
+const initialTopicBufferSize = 64 * 1024
 
 type PairSocket struct {
 	*directSocket

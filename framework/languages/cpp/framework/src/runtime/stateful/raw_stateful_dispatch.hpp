@@ -232,12 +232,6 @@ class raw_relocation_replay_coordinator_t
     }
 
     bool register_target (raw_relocation_target_registration_t registration);
-    bool seal_target (const protocol::relocation_id_t &relocation,
-                      std::uint64_t target_attempt_generation,
-                      const protocol::relocation_object_t &object);
-    bool drain_target (const protocol::relocation_id_t &relocation,
-                       std::uint64_t target_attempt_generation,
-                       const protocol::relocation_object_t &object);
     bool unregister_target (const protocol::relocation_id_t &relocation,
                             std::uint64_t target_attempt_generation,
                             const protocol::relocation_object_t &object);

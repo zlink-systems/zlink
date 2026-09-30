@@ -37,6 +37,46 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
     @Test
+    void closeDetectsActiveAndSuspendedRelocationBoundaryUntilFinished() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
+                queue.reserveRelocationTurnBoundary().orElseThrow();
+        Runnable drain = executor.take();
+        try {
+            assertThrows(AssertionError.class, queue::close);
+            drain.run();
+            boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertThrows(AssertionError.class, queue::close);
+        } finally {
+            boundary.release();
+        }
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
+    @Test
+    void closeDetectsPendingRelocationBoundary() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        queue.enqueue(() -> CompletableFuture.completedFuture(null), null);
+        Runnable drain = executor.take();
+        ZLinkSerialExecutionQueue.RelocationBoundary boundary =
+                queue.reserveRelocationTurnBoundary().orElseThrow();
+        try {
+            assertThrows(AssertionError.class, queue::close);
+        } finally {
+            drain.run();
+            boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            boundary.release();
+        }
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
+    @Test
     void closingSealRetainsEarlierTurnAndRejectsNewAdmission() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> release = new CompletableFuture<>();
@@ -49,7 +89,8 @@ final class ZLinkSerialExecutionQueueTest {
                             handled.incrementAndGet();
                             return release;
                         },
-                        () -> {});
+                        () -> {},
+                        null);
 
         queue.sealClosingAdmission();
         CompletionStage<Void> rejected =
@@ -60,7 +101,8 @@ final class ZLinkSerialExecutionQueueTest {
                             handled.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         },
-                        () -> {});
+                        () -> {},
+                        null);
         ExecutionException failure =
                 assertThrows(
                         ExecutionException.class,
@@ -85,7 +127,8 @@ final class ZLinkSerialExecutionQueueTest {
                         () -> new byte[] {7},
                         1,
                         () -> CompletableFuture.completedFuture(null),
-                        () -> {});
+                        () -> {},
+                        null);
         assertFalse(held.toCompletableFuture().isDone());
         assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
         assertTrue(queue.abortRelocation(seal));
@@ -100,7 +143,8 @@ final class ZLinkSerialExecutionQueueTest {
                         () -> {
                             carrier.set(ZLinkSuspendInvocationContext.currentSerialExecutionTurn());
                             return CompletableFuture.completedFuture(null);
-                        })
+                        },
+                        null)
                 .toCompletableFuture()
                 .get(3, TimeUnit.SECONDS);
 
@@ -123,7 +167,8 @@ final class ZLinkSerialExecutionQueueTest {
                     ranOnSubmitterStack.set(Thread.currentThread() == submitter);
                     started.complete(null);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         started.get(3, TimeUnit.SECONDS);
         assertFalse(ranOnSubmitterStack.get());
@@ -158,7 +203,8 @@ final class ZLinkSerialExecutionQueueTest {
                                         () -> {
                                             order.add(sequence);
                                             return CompletableFuture.completedFuture(null);
-                                        })
+                                        },
+                                        null)
                                 .toCompletableFuture());
                 if (index == 0) {
                     assertTrue(entered.await(3, TimeUnit.SECONDS));
@@ -179,9 +225,10 @@ final class ZLinkSerialExecutionQueueTest {
         CountingExecutor executor = new CountingExecutor();
         ZLinkSerialExecutionQueue queue = batchQueue(executor, Duration.ofSeconds(10));
         CompletableFuture<Void> gate = new CompletableFuture<>();
-        CompletableFuture<Void> first = queue.enqueue(() -> gate).toCompletableFuture();
+        CompletableFuture<Void> first = queue.enqueue(() -> gate, null).toCompletableFuture();
         CompletableFuture<Void> next =
-                queue.enqueue(() -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
 
         executor.take().run();
         assertFalse(first.isDone());
@@ -205,18 +252,21 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     order.add("first-1");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         Runnable firstBatch = executor.take();
         first.enqueue(
                 () -> {
                     order.add("first-2");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         second.enqueue(
                 () -> {
                     order.add("second");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         Runnable secondOwner = executor.take();
 
         firstBatch.run();
@@ -246,13 +296,14 @@ final class ZLinkSerialExecutionQueueTest {
                                         throw new IllegalStateException(interrupted);
                                     }
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         Thread worker = Thread.ofVirtual().start(executor.take());
         try {
             assertTrue(entered.await(3, TimeUnit.SECONDS));
             CompletableFuture<Void> independent =
-                    second.enqueue(() -> CompletableFuture.completedFuture(null))
+                    second.enqueue(() -> CompletableFuture.completedFuture(null), null)
                             .toCompletableFuture();
             executor.take().run();
             assertTrue(independent.isDone());
@@ -290,7 +341,8 @@ final class ZLinkSerialExecutionQueueTest {
                         queue.enqueue(
                                         () -> {
                                             throw new AssertionError("rejected work must not run");
-                                        })
+                                        },
+                                        null)
                                 .toCompletableFuture();
             }
             assertEquals(
@@ -301,7 +353,7 @@ final class ZLinkSerialExecutionQueueTest {
             assertEquals(0, jobs.snapshot().permitsInUse());
             reject.set(false);
             CompletableFuture<Void> next =
-                    queue.enqueue(() -> CompletableFuture.completedFuture(null))
+                    queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
                             .toCompletableFuture();
             accepted.take().run();
             assertTrue(next.isDone());
@@ -318,7 +370,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     started.complete(null);
                     return active;
-                });
+                },
+                null);
         started.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> queued =
                 queue.enqueueRelocatableLazyRecord(
@@ -328,7 +381,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 },
                                 1L,
                                 () -> CompletableFuture.completedFuture(null),
-                                () -> {})
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         active.complete(null);
@@ -351,7 +405,8 @@ final class ZLinkSerialExecutionQueueTest {
                     sealNow.join();
                     sealed.complete(queue.trySealRelocation().orElseThrow());
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         activeStarted.get(3, TimeUnit.SECONDS);
         queue.enqueueRelocatableLazyRecord(
                 () -> {
@@ -360,7 +415,8 @@ final class ZLinkSerialExecutionQueueTest {
                 },
                 2L,
                 () -> CompletableFuture.completedFuture(null),
-                () -> {});
+                () -> {},
+                null);
 
         sealNow.complete(null);
         ZLinkSerialExecutionQueue.RelocationSeal seal = sealed.get(3, TimeUnit.SECONDS);
@@ -383,20 +439,23 @@ final class ZLinkSerialExecutionQueueTest {
                     order.add("active");
                     activeStarted.complete(null);
                     return activeGate;
-                });
+                },
+                null);
         activeStarted.get(3, TimeUnit.SECONDS);
         CompletionStage<Void> queued =
                 queue.enqueue(
                         () -> {
                             order.add("queued");
                             return CompletableFuture.completedFuture(null);
-                        });
+                        },
+                        null);
         CompletionStage<Void> barrier =
                 queue.enqueueBarrierNext(
                         () -> {
                             order.add("barrier");
                             return CompletableFuture.completedFuture(null);
-                        });
+                        },
+                        null);
 
         activeGate.complete(null);
         CompletableFuture.allOf(queued.toCompletableFuture(), barrier.toCompletableFuture())
@@ -446,14 +505,17 @@ final class ZLinkSerialExecutionQueueTest {
                                                                                 events.add(
                                                                                         "actor-resume"));
                                                     }
-                                                }))
+                                                },
+                                                null),
+                                null)
                         .toCompletableFuture();
         actorLane.enqueue(
                 () -> {
                     events.add("actor-next");
                     actorSecond.complete(null);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         actorStarted.get(3, TimeUnit.SECONDS);
         spotGate.enqueue(
@@ -461,7 +523,8 @@ final class ZLinkSerialExecutionQueueTest {
                     events.add("spot-probe");
                     spotProbe.complete(null);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         spotProbe.get(3, TimeUnit.SECONDS);
         assertFalse(actorSecond.isDone());
@@ -490,26 +553,29 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     actorAStarted.complete(null);
                     return actorAGate;
-                });
+                },
+                null);
         actorA.enqueue(
                 () -> {
                     actorASecond.complete(null);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         timerA.enqueue(
                 () -> {
                     timerAStarted.complete(null);
                     return timerAGate;
-                });
+                },
+                null);
 
         actorAStarted.get(3, TimeUnit.SECONDS);
         timerAStarted.get(3, TimeUnit.SECONDS);
         CompletableFuture.allOf(
-                        actorB.enqueue(() -> CompletableFuture.completedFuture(null))
+                        actorB.enqueue(() -> CompletableFuture.completedFuture(null), null)
                                 .toCompletableFuture(),
-                        spot.enqueue(() -> CompletableFuture.completedFuture(null))
+                        spot.enqueue(() -> CompletableFuture.completedFuture(null), null)
                                 .toCompletableFuture(),
-                        timerB.enqueue(() -> CompletableFuture.completedFuture(null))
+                        timerB.enqueue(() -> CompletableFuture.completedFuture(null), null)
                                 .toCompletableFuture())
                 .get(3, TimeUnit.SECONDS);
         assertFalse(actorASecond.isDone());
@@ -532,14 +598,16 @@ final class ZLinkSerialExecutionQueueTest {
                                     events.add("first-start");
                                     firstStarted.complete(null);
                                     return firstGate.thenRun(() -> events.add("first-complete"));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> second =
                 queue.enqueue(
                                 () -> {
                                     events.add("second-start");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         firstStarted.get(3, TimeUnit.SECONDS);
@@ -561,7 +629,7 @@ final class ZLinkSerialExecutionQueueTest {
                         null, ZLinkExecutionLanePolicy.generic(), 2, Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
 
-        queue.enqueueRelocatable(new byte[6], () -> active).toCompletableFuture();
+        queue.enqueueRelocatable(new byte[6], () -> active, () -> {}, null).toCompletableFuture();
         assertTrue(
                 queue.tryEnqueueRelocatable(
                         new byte[1], () -> CompletableFuture.completedFuture(null)));
@@ -582,14 +650,17 @@ final class ZLinkSerialExecutionQueueTest {
 
         CompletableFuture<Void> first =
                 queue.enqueueWithPayloadBytes(
-                                Long.MAX_VALUE - 2, () -> CompletableFuture.completedFuture(null))
+                                Long.MAX_VALUE - 2,
+                                () -> CompletableFuture.completedFuture(null),
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> lastRepresentable =
-                queue.enqueue(() -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
 
         assertTrue(queue.tryEnqueue(() -> CompletableFuture.completedFuture(null)));
         assertFalse(
-                queue.enqueue(() -> CompletableFuture.completedFuture(null))
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
                         .toCompletableFuture()
                         .isCompletedExceptionally());
 
@@ -605,7 +676,7 @@ final class ZLinkSerialExecutionQueueTest {
                         null, ZLinkExecutionLanePolicy.generic(), 2, Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
 
-        queue.enqueueWithPayloadBytes(6, () -> active);
+        queue.enqueueWithPayloadBytes(6, () -> active, null);
         assertTrue(
                 queue.tryEnqueueWithPayloadBytes(0, () -> CompletableFuture.completedFuture(null)));
 
@@ -626,15 +697,16 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     activeStarted.complete(null);
                     return active;
-                });
+                },
+                null);
         activeStarted.get(3, TimeUnit.SECONDS);
 
         CompletableFuture<Void> firstBarrier =
-                queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null))
+                queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null), null)
                         .toCompletableFuture();
         assertFalse(firstBarrier.isCompletedExceptionally());
         assertFalse(
-                queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null))
+                queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null), null)
                         .toCompletableFuture()
                         .isCompletedExceptionally());
         active.complete(null);
@@ -653,7 +725,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     started.complete(null);
                     return active;
-                });
+                },
+                null);
         started.get(3, TimeUnit.SECONDS);
         queue.enqueueLifecycleBarrier(
                 () -> {
@@ -674,7 +747,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     order.add("application");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         active.complete(null);
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
@@ -695,14 +769,16 @@ final class ZLinkSerialExecutionQueueTest {
                                     firstStarted.complete(null);
                                     return ZLinkSerialExecutionQueue.yieldCurrent(firstGate)
                                             .thenRun(() -> events.add("first-complete"));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> second =
                 queue.enqueue(
                                 () -> {
                                     events.add("second-start");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         firstStarted.get(3, TimeUnit.SECONDS);
@@ -738,7 +814,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     started.complete(null);
                                     return firstYield.thenRun(
                                             () -> continuationIsCurrent.set(queue.isCurrent()));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         started.get(3, TimeUnit.SECONDS);
@@ -775,13 +852,15 @@ final class ZLinkSerialExecutionQueueTest {
                                                                                             null));
                                                         });
                                         return result;
-                                    })
+                                    },
+                                    null)
                             .toCompletableFuture();
             queue.enqueue(
                     () -> {
                         probeStarted.complete(null);
                         return CompletableFuture.completedFuture(null);
-                    });
+                    },
+                    null);
 
             handlerStarted.get(3, TimeUnit.SECONDS);
             probeStarted.get(3, TimeUnit.SECONDS);
@@ -800,12 +879,14 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     events.add("first-start");
                     return CompletableFuture.failedFuture(new IllegalStateException("boom"));
-                });
+                },
+                null);
         queue.enqueue(
                         () -> {
                             events.add("second-start");
                             return CompletableFuture.completedFuture(null);
-                        })
+                        },
+                        null)
                 .toCompletableFuture()
                 .join();
 
@@ -830,7 +911,8 @@ final class ZLinkSerialExecutionQueueTest {
                                                 observed.complete(
                                                         ZLinkFlowContext.current().flowId()));
                     }
-                });
+                },
+                null);
 
         started.get(3, TimeUnit.SECONDS);
         gate.complete(null);
@@ -849,7 +931,8 @@ final class ZLinkSerialExecutionQueueTest {
                     () -> {
                         observed.complete(ZLinkFlowContext.current().flowId());
                         return CompletableFuture.completedFuture(null);
-                    });
+                    },
+                    null);
         }
 
         assertEquals(flow.flowId(), observed.get(3, TimeUnit.SECONDS));
@@ -872,13 +955,15 @@ final class ZLinkSerialExecutionQueueTest {
                                                     ignored ->
                                                             ZLinkSerialExecutionQueue.yieldCurrent(
                                                                     afterYield));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         queue.enqueue(
                 () -> {
                     secondStarted.complete(null);
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         firstStarted.get(3, TimeUnit.SECONDS);
         CompletableFuture.runAsync(() -> remote.complete(null)).join();
@@ -903,20 +988,25 @@ final class ZLinkSerialExecutionQueueTest {
                     sealNow.join();
                     sealed.complete(queue.trySealRelocation().orElseThrow());
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         intentStarted.get(3, TimeUnit.SECONDS);
         queue.enqueueRelocatable(
                 new byte[] {1},
                 () -> {
                     handled.add("one");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                () -> {},
+                null);
         queue.enqueueRelocatable(
                 new byte[] {2},
                 () -> {
                     handled.add("two");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                () -> {},
+                null);
         sealNow.complete(null);
         ZLinkSerialExecutionQueue.RelocationSeal seal = sealed.get(3, TimeUnit.SECONDS);
 
@@ -925,13 +1015,16 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     handled.add("three");
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                () -> {},
+                null);
         CompletableFuture<Void> infrastructure =
                 queue.enqueue(
                                 () -> {
                                     handled.add("infrastructure");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         assertFalse(infrastructure.isDone());
         assertEquals(List.of(), handled);
@@ -957,7 +1050,8 @@ final class ZLinkSerialExecutionQueueTest {
                     sealNow.join();
                     sealed.complete(queue.trySealRelocation().orElseThrow());
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
         intentStarted.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> captured =
                 queue.enqueueRelocatable(
@@ -965,7 +1059,9 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     ran.set(true);
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         sealNow.complete(null);
         ZLinkSerialExecutionQueue.RelocationSeal seal = sealed.get(3, TimeUnit.SECONDS);
@@ -975,7 +1071,9 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     ran.set(true);
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         List<ZLinkSerialExecutionQueue.QueuedRecord> relay =
@@ -988,11 +1086,14 @@ final class ZLinkSerialExecutionQueueTest {
         assertArrayEquals(new byte[] {2}, relay.getFirst().payload());
         assertTrue(
                 queue.enqueueRelocatable(
-                                new byte[] {3}, () -> CompletableFuture.completedFuture(null))
+                                new byte[] {3},
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture()
                         .isCompletedExceptionally());
         assertTrue(
-                queue.enqueue(() -> CompletableFuture.completedFuture(null))
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
                         .toCompletableFuture()
                         .isCompletedExceptionally());
     }
@@ -1010,7 +1111,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     ran.set(true);
                                     return CompletableFuture.completedFuture(null);
                                 },
-                                releases::incrementAndGet)
+                                releases::incrementAndGet,
+                                null)
                         .toCompletableFuture();
 
         assertEquals(1, queue.commitRelocation(seal).orElseThrow().size());
@@ -1021,7 +1123,7 @@ final class ZLinkSerialExecutionQueueTest {
                 assertThrows(
                         ExecutionException.class,
                         () ->
-                                queue.enqueue(() -> CompletableFuture.completedFuture(null))
+                                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
                                         .toCompletableFuture()
                                         .get(3, TimeUnit.SECONDS));
         assertInstanceOf(IllegalStateException.class, sourceFenced.getCause());
@@ -1034,7 +1136,10 @@ final class ZLinkSerialExecutionQueueTest {
         ZLinkSerialExecutionQueue.RelocationSeal seal = queue.trySealRelocation().orElseThrow();
         CompletableFuture<Void> held =
                 queue.enqueueRelocatable(
-                                new byte[] {7}, () -> CompletableFuture.completedFuture(null))
+                                new byte[] {7},
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         var frozen = queue.freezeRelocationIngress(seal).orElseThrow();
@@ -1043,7 +1148,9 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> suffix =
                 queue.enqueueRelocatable(
                                 new byte[] {8, 8, 8, 8, 8, 8, 8, 8},
-                                () -> CompletableFuture.completedFuture(null))
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit.Commit
@@ -1057,7 +1164,10 @@ final class ZLinkSerialExecutionQueueTest {
         var firstCut = commit.cut();
         CompletableFuture<Void> late =
                 queue.enqueueRelocatable(
-                                new byte[] {9}, () -> CompletableFuture.completedFuture(null))
+                                new byte[] {9},
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         assertFalse(commit.tryEstablishDurableCut(firstCut));
         var durableCut = commit.cut();
@@ -1065,7 +1175,10 @@ final class ZLinkSerialExecutionQueueTest {
         assertTrue(commit.tryEstablishDurableCut(durableCut));
         CompletableFuture<Void> duringActivation =
                 queue.enqueueRelocatable(
-                                new byte[] {10}, () -> CompletableFuture.completedFuture(null))
+                                new byte[] {10},
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         assertFalse(commit.tryFinishCapture(durableCut));
         var finalCut = commit.cut();
@@ -1090,7 +1203,9 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     handled.add("first");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
         CompletableFuture<Void> second =
@@ -1101,14 +1216,16 @@ final class ZLinkSerialExecutionQueueTest {
                                     handled.add("second");
                                     return CompletableFuture.completedFuture(null);
                                 },
-                                () -> {})
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> third =
                 queue.enqueue(
                                 () -> {
                                     handled.add("third");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> fourth =
                 queue.enqueueRelocatable(
@@ -1116,7 +1233,9 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     handled.add("fourth");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         assertTrue(queue.abortRelocation(seal));
@@ -1140,7 +1259,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     yieldRegistered.complete(null);
                                     return yielded.thenRun(
                                             () -> continuationFinished.complete(null));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         yieldRegistered.get(3, TimeUnit.SECONDS);
@@ -1166,7 +1286,8 @@ final class ZLinkSerialExecutionQueueTest {
                                             ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                     yielded.complete(null);
                                     return continuation;
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         yielded.get(3, TimeUnit.SECONDS);
@@ -1207,7 +1328,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("application");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         application.get(3, TimeUnit.SECONDS);
@@ -1235,7 +1357,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     order.add("join");
                                     started.complete(null);
                                     return joinTerminal;
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         started.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> payload =
@@ -1243,12 +1366,31 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("payload");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         assertFalse(payload.isDone());
         joinTerminal.complete(null);
         CompletableFuture.allOf(join, payload).get(3, TimeUnit.SECONDS);
         assertEquals(List.of("join", "payload"), order);
+    }
+
+    @Test
+    void currentLifecycleTurnCapturesItsActorQueueSealHandle() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.actorDelivery());
+        queue.enqueueBarrierNext(
+                        () -> {
+                            var handle =
+                                    ZLinkSerialExecutionQueue.captureCurrentActiveTurnSealHandle()
+                                            .orElseThrow();
+                            var seal = queue.trySealRelocation(handle).orElseThrow();
+                            assertTrue(queue.abortRelocation(seal));
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        null)
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
     }
 
     @Test
@@ -1274,7 +1416,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("application");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         remote.complete(null);
 
@@ -1300,7 +1443,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     order.add("application-start");
                                     return ZLinkSerialExecutionQueue.yieldCurrent(
                                             applicationRemote);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         application.whenComplete((ignored, failure) -> order.add("application-resume"));
         ready.poll(3, TimeUnit.SECONDS).run();
@@ -1322,7 +1466,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {
                                     order.add("application-next");
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
 
         ready.poll(3, TimeUnit.SECONDS).run();
@@ -1351,7 +1496,8 @@ final class ZLinkSerialExecutionQueueTest {
                                     applicationStarted.complete(null);
                                     return ZLinkSerialExecutionQueue.yieldCurrent(applicationRemote)
                                             .thenRun(() -> order.add("application-terminal"));
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         applicationStarted.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> close =
@@ -1387,9 +1533,11 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     started.complete(null);
                     return active;
-                });
+                },
+                null);
         CompletableFuture<Void> queued =
-                queue.enqueue(() -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
 
         started.get(3, TimeUnit.SECONDS);
         CompletableFuture<Void> barrier = queue.awaitQuiescence().toCompletableFuture();
@@ -1407,13 +1555,14 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Boolean> sealed = new CompletableFuture<>();
 
         CompletableFuture<Void> dispatch =
-                queue.enqueue(() -> ZLinkSerialExecutionQueue.yieldCurrent(remote))
+                queue.enqueue(() -> ZLinkSerialExecutionQueue.yieldCurrent(remote), null)
                         .toCompletableFuture();
         queue.enqueue(
                 () -> {
                     sealed.complete(queue.trySealRelocation().isPresent());
                     return CompletableFuture.completedFuture(null);
-                });
+                },
+                null);
 
         assertFalse(sealed.get(3, TimeUnit.SECONDS));
         remote.complete(null);

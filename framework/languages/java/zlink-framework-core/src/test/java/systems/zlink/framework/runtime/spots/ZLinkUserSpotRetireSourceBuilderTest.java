@@ -39,6 +39,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,6 +54,59 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     private static final String SPOT_ID = "room-a";
     private static final RoutingId SOURCE_RID = RoutingId.from("source-node");
     private static final RoutingId TARGET_RID = RoutingId.from("target-node");
+
+    @Test
+    void pendingUserSpotStateLaneReturnsSealAndAbortStagesWithoutWaiting() throws Exception {
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options(locations, relocations))) {
+            host.spotManager()
+                    .getOrCreate(SPOT_ID, STABLE_TYPE)
+                    .submit()
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            DefaultSpotContext context = (DefaultSpotContext) LiveSpot.last.get().context();
+            ZLinkUserSpotRelocationBarrier barrier =
+                    context.relocationBarrier(runtime.actorSessions());
+            var field = ZLinkUserSpotRelocationBarrier.class.getDeclaredField("stateLane");
+            field.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            field.get(barrier);
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            CompletionStage<Void> held =
+                    lane.runAsync(
+                            () -> {
+                                entered.countDown();
+                                try {
+                                    release.await();
+                                } catch (InterruptedException failure) {
+                                    Thread.currentThread().interrupt();
+                                    throw new IllegalStateException(failure);
+                                }
+                            });
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            try {
+                var sealCall =
+                        CompletableFuture.supplyAsync(
+                                () -> barrier.sealAtTurnBoundary(ignored -> true, () -> true));
+                var abortCall = CompletableFuture.supplyAsync(() -> barrier.abortAsync(null));
+                var sealing = sealCall.get(3, TimeUnit.SECONDS).toCompletableFuture();
+                var aborting = abortCall.get(3, TimeUnit.SECONDS).toCompletableFuture();
+                assertFalse(sealing.isDone());
+                assertFalse(aborting.isDone());
+                release.countDown();
+                held.toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertTrue(sealing.get(3, TimeUnit.SECONDS).isEmpty());
+                assertFalse(aborting.get(3, TimeUnit.SECONDS));
+            } finally {
+                release.countDown();
+            }
+        }
+    }
 
     @Test
     void applicationSignaledTurnWithoutRelocationCompletesBeforeNextJob() throws Exception {
@@ -127,7 +181,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             ZLinkUserSpotRelocationBarrier.Seal seal =
                     sealing.toCompletableFuture().get().orElseThrow();
 
-            assertTrue(barrier.abort(seal));
+            assertTrue(barrier.abort(seal).toCompletableFuture().get());
             CompletableFuture.allOf(first.toCompletableFuture(), held.toCompletableFuture()).get();
 
             assertEquals(List.of("turn", "continued", "held"), List.copyOf(LiveSpot.events));

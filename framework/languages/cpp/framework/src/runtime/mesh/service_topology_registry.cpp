@@ -211,6 +211,15 @@ service_node_descriptor_t service_topology_registry_t::local_descriptor () const
     return _lane.run ([this] { return _local; }).get ();
 }
 
+task_t<std::tuple<service_node_descriptor_t,
+                  std::vector<admitted_peer_t>,
+                  std::vector<service_node_descriptor_t>>>
+service_topology_registry_t::monitoring_snapshot_async () const
+{
+    return _lane.run_task (
+      [this] { return std::tuple{_local, peers_on_lane (), not_required_peers_on_lane ()}; });
+}
+
 peer_admission_result_t service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                                             std::vector<std::uint8_t> connection_id)
 {
@@ -330,29 +339,31 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
 
 std::vector<admitted_peer_t> service_topology_registry_t::peers () const
 {
-    return _lane
-      .run ([this] {
-          std::vector<admitted_peer_t> result;
-          result.reserve (_peers.size ());
-          for (const auto &[_, peer] : _peers) {
-              result.push_back (peer);
-          }
-          return result;
-      })
-      .get ();
+    return _lane.run_checked ([this] { return peers_on_lane (); }).get ();
 }
 
 std::vector<service_node_descriptor_t> service_topology_registry_t::not_required_peers () const
 {
-    return _lane
-      .run ([this] {
-          std::vector<service_node_descriptor_t> result;
-          result.reserve (_not_required_peers.size ());
-          for (const auto &[_, descriptor] : _not_required_peers)
-              result.push_back (descriptor);
-          return result;
-      })
-      .get ();
+    return _lane.run_checked ([this] { return not_required_peers_on_lane (); }).get ();
+}
+
+std::vector<admitted_peer_t> service_topology_registry_t::peers_on_lane () const
+{
+    std::vector<admitted_peer_t> result;
+    result.reserve (_peers.size ());
+    for (const auto &[_, peer] : _peers)
+        result.push_back (peer);
+    return result;
+}
+
+std::vector<service_node_descriptor_t>
+service_topology_registry_t::not_required_peers_on_lane () const
+{
+    std::vector<service_node_descriptor_t> result;
+    result.reserve (_not_required_peers.size ());
+    for (const auto &[_, descriptor] : _not_required_peers)
+        result.push_back (descriptor);
+    return result;
 }
 
 std::optional<admitted_peer_t>

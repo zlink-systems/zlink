@@ -7,6 +7,9 @@
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/state_lane.hpp"
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+#include "runtime/execution/infrastructure_wait_guard.hpp"
+#endif
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -25,6 +28,27 @@ namespace
 
 using namespace zlink::framework;
 using namespace std::chrono_literals;
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (ZLinkFrameworkSyncSubmit, DebugWaitRejectsPendingInfrastructureTask)
+{
+    ASSERT_DEATH (
+      {
+          detail::task_completion_source_t<void> pending;
+          runtime::infrastructure_wait_guard::infrastructure_scope_t scope (&pending);
+          (void) pending.task ().result_for (1ms);
+      },
+      "infrastructure wait guard: task/result_for");
+}
+
+TEST (ZLinkFrameworkSyncSubmit, DebugWaitAcceptsReadyInfrastructureTask)
+{
+    detail::task_completion_source_t<void> ready;
+    ready.complete (result_t<void>::success ());
+    runtime::infrastructure_wait_guard::infrastructure_scope_t scope (&ready);
+    EXPECT_TRUE (ready.task ().result_for (1ms).has_value ());
+}
+#endif
 
 static_assert (std::is_same_v<decltype (std::declval<request_call_t<int> &> ().submit ()), int>);
 static_assert (

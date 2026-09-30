@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <future>
 #include <limits>
 #include <map>
 #include <memory>
@@ -325,6 +326,40 @@ class application_job_queue_t
         std::shared_ptr<waiter_state_t> _waiter;
     };
 
+    /* One receiving owner's pending supply (Application job queue §3: permit
+     * before receive). The queue's waiter callback fills it, so the owner
+     * keeps its own management work going while it waits; `notify`, when
+     * given, is how that callback wakes the owner. */
+    class supply_request_t
+    {
+      public:
+        /* The supply once it is ready within `wait`: a permit, or an empty
+         * permit after the queue stopped. Empty while the supply is pending. */
+        std::optional<std::optional<permit_t>> take (application_job_queue_t &queue,
+                                                     std::chrono::milliseconds wait,
+                                                     std::function<void ()> notify = {})
+        {
+            if (!_supply.valid ()) {
+                auto filled = std::make_shared<std::promise<std::optional<permit_t>>> ();
+                _supply = filled->get_future ();
+                _waiter = queue.wait_for_supply (
+                  [filled, notify = std::move (notify)] (std::optional<permit_t> permit) {
+                      filled->set_value (std::move (permit));
+                      if (notify)
+                          notify ();
+                  });
+            }
+            if (_supply.wait_for (wait) != std::future_status::ready)
+                return std::nullopt;
+            _waiter = {};
+            return _supply.get ();
+        }
+
+      private:
+        waiter_t _waiter;
+        std::future<std::optional<permit_t>> _supply;
+    };
+
     explicit application_job_queue_t (application_job_queue_configuration_t configuration,
                                       receive_flow_config_failure_sink_t failure_sink = {}) :
         _state (std::make_shared<state_t> (std::move (configuration), std::move (failure_sink)))
@@ -387,27 +422,14 @@ class application_job_queue_t
         return waiter_t (_state, std::move (waiter));
     }
 
+    // For a caller whose own call is the wait (a synchronous public submit).
     std::optional<permit_t> wait_for_supply_blocking ()
     {
-        struct blocking_state_t
-        {
-            std::mutex mutex;
-            std::condition_variable changed;
-            bool completed = false;
-            std::optional<permit_t> permit;
-        };
-        auto state = std::make_shared<blocking_state_t> ();
-        auto waiter = wait_for_supply ([state] (std::optional<permit_t> permit) mutable {
-            {
-                std::lock_guard lock (state->mutex);
-                state->permit = std::move (permit);
-                state->completed = true;
-            }
-            state->changed.notify_all ();
-        });
-        std::unique_lock lock (state->mutex);
-        state->changed.wait (lock, [&] { return state->completed; });
-        return std::move (state->permit);
+        supply_request_t request;
+        for (;;) {
+            if (auto supply = request.take (*this, std::chrono::hours (1)))
+                return std::move (*supply);
+        }
     }
 
     application_job_queue_status_t snapshot () const noexcept

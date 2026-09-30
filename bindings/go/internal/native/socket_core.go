@@ -51,28 +51,28 @@ func (s *socketCore) isClosed() bool {
 }
 
 func (s *socketCore) Bind(endpoint string) error {
-	return s.withCString(endpoint, func(cstr *C.char) error {
+	return s.withEndpointCString(endpoint, func(cstr *C.char) error {
 		nativeResult0, nativeErr0 := C.zlink_bind(s.raw(), cstr)
 		return bindErrorFromCall(nativeResult0, nativeErr0)
 	})
 }
 
 func (s *socketCore) Connect(endpoint string) error {
-	return s.withCString(endpoint, func(cstr *C.char) error {
+	return s.withEndpointCString(endpoint, func(cstr *C.char) error {
 		nativeResult1, nativeErr1 := C.zlink_connect(s.raw(), cstr)
 		return connectErrorFromCall(nativeResult1, nativeErr1)
 	})
 }
 
 func (s *socketCore) Unbind(endpoint string) error {
-	return s.withCString(endpoint, func(cstr *C.char) error {
+	return s.withEndpointCString(endpoint, func(cstr *C.char) error {
 		nativeResult2, nativeErr2 := C.zlink_unbind(s.raw(), cstr)
 		return connectErrorFromCall(nativeResult2, nativeErr2)
 	})
 }
 
 func (s *socketCore) Disconnect(endpoint string) error {
-	return s.withCString(endpoint, func(cstr *C.char) error {
+	return s.withEndpointCString(endpoint, func(cstr *C.char) error {
 		nativeResult3, nativeErr3 := C.zlink_disconnect(s.raw(), cstr)
 		return connectErrorFromCall(nativeResult3, nativeErr3)
 	})
@@ -209,10 +209,18 @@ func (s *socketCore) getDurationOption(option C.zlink_option_t) (time.Duration, 
 }
 
 func (s *socketCore) withCString(value string, fn func(*C.char) error) error {
+	return s.withValidatedCString(value, validateCString, fn)
+}
+
+func (s *socketCore) withEndpointCString(endpoint string, fn func(*C.char) error) error {
+	return s.withValidatedCString(endpoint, validateEndpointString, fn)
+}
+
+func (s *socketCore) withValidatedCString(value string, validate func(string) error, fn func(*C.char) error) error {
 	if s.isClosed() {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	if err := validateEndpointString(value); err != nil {
+	if err := validate(value); err != nil {
 		return err
 	}
 	cstr := C.CString(value)

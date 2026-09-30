@@ -292,7 +292,7 @@ Orderly close and transport disconnect don't wait 15 seconds. A late ACK or fram
 
 One peer's failure doesn't turn the whole host `Error`. Other ready peers and the local
 [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or
-Spot on this host and manages its application queue — keep processing. Without a ready peer, a Channel call ends with `NotFound` or `Unavailable`.
+Spot on this host and manages its application queue — keep processing. Without a ready peer, the result of a Channel call follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).
 The framework doesn't hide a failure by extending the timeout.
 
 ## 6. Connection Loss and Reconnect

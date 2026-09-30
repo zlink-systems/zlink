@@ -78,24 +78,27 @@ class raw_client_server_server_t
     void close () noexcept;
     std::string endpoint () const;
     protocol::client_server_server_admission_t descriptor () const;
+    task_t<protocol::client_server_server_admission_t> descriptor_task () const;
     void update_descriptor (protocol::client_server_server_admission_t descriptor);
+    task_t<void> update_descriptor_task (protocol::client_server_server_admission_t descriptor);
     mesh::service_mailbox_t &mailbox () noexcept;
 
     std::size_t drain_monitor_events (mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<std::size_t>
+    drain_monitor_events_task (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t>
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
               std::shared_ptr<application_job_queue_t::permit_t> application_permit = {});
-    std::size_t last_pump_bytes () const;
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
-    std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
-    next_liveness_activity () const;
+    task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
+    next_liveness_activity_task () const;
     bool reply (const mesh::service_mailbox_record_t &request,
                 const protocol::application_payload_t &payload);
     bool reply (const mesh::service_mailbox_record_t &request, const framework_exception_t &error);
 
   private:
-    client_server_pump_result_t enqueue_application_record (
+    task_t<client_server_pump_result_t> enqueue_application_record (
       detail::backend::raw_received_t received,
       std::shared_ptr<application_job_queue_t::permit_t> application_permit);
 
@@ -145,18 +148,24 @@ class raw_client_server_client_t
     ~raw_client_server_client_t () noexcept;
 
     void start ();
+    task_t<void> start_task ();
     void close () noexcept;
+    task_t<void> close_task ();
     bool ready () const;
+    task_t<bool> ready_task () const;
+    struct pump_status_t
+    {
+        bool ready;
+        std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
+    };
+    task_t<pump_status_t> pump_status_task () const;
     task_t<std::size_t>
     drain_monitor_events (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t>
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now);
-    std::size_t last_pump_bytes () const;
+    task_t<std::size_t> last_pump_bytes_task () const;
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
-    std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
-    next_liveness_activity () const;
-
     task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload,
                                          std::chrono::milliseconds timeout);
     task_t<client_server_request_completion_t>
@@ -166,11 +175,14 @@ class raw_client_server_client_t
   private:
     struct control_reply_state_t;
 
-    void begin_admission_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port);
-    void begin_probe_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
-                              std::uint64_t probe_id);
-    bool apply_pending_control_replies (mesh::service_liveness_registry_t::clock_t::time_point now);
-    client_server_pump_result_t
+    task_t<void>
+    begin_admission_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port);
+    task_t<void>
+    begin_probe_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
+                         std::uint64_t probe_id);
+    task_t<bool>
+    apply_pending_control_replies (mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<client_server_pump_result_t>
     accept_server_admission (const detail::backend::raw_bytes_t &frame,
                              protocol::command kind,
                              mesh::service_liveness_registry_t::clock_t::time_point now);

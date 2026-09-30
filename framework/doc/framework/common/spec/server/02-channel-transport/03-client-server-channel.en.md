@@ -67,8 +67,8 @@ A ClientServer send or request can start only when the local process
 registered the Client role for that `ChannelName`. Even if the ChannelName and
 a Server role exist, absence of the Client role ends the call with a
 `NotConfigured` framework error and never directly invokes a local handler.
-`NotFound` is used when the ChannelName itself, or the target to select, does
-not exist.
+Target selection and waiting results follow
+[the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).
 
 ```csharp
 public interface IZLinkFrameworkOptions

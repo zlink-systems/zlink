@@ -57,7 +57,7 @@ configuration exception. Neither of these is turned into a remote error reply.
 
 A Framework failure discovered while waiting on outbound queue acceptance, route resolution,
 or a remote reply is delivered as a per-language Framework exception or as a `result`'s
-`ErrorKind`. A binding `NOT_FOUND` maps to `NotFound` when a named target is absent, and to `Unavailable` when channel selection has no eligible member. Other results are classified by the meaning of the Core result on that call path.
+`ErrorKind`. A binding `NOT_FOUND` maps to `NotFound` when a named target is absent. Channel selection results follow [the Framework API channel selection result](06-framework-api.en.md#channel-selection-result). Other results are classified by the meaning of the Core result on that call path.
 
 ## 4. `Send` Completion and Failure
 

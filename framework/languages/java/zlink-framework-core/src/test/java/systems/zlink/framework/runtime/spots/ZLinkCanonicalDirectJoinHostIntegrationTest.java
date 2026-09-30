@@ -432,7 +432,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     sourceQueue.enqueueRelocatable(
                             actorRecord("B1"),
                             () -> fail("B1 must transfer instead of executing at source"),
-                            released::incrementAndGet);
+                            released::incrementAndGet,
+                            null);
 
             UUID relocationId = UUID.randomUUID();
             ZLinkActorJoinOperationId operationId = new ZLinkActorJoinOperationId(0x1111L, 0x2222L);
@@ -559,7 +560,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 fail(
                                                         "B2 must transfer instead of executing at"
                                                                 + " source"),
-                                        released::incrementAndGet);
+                                        released::incrementAndGet,
+                                        null);
                         link.b2Accepted.set(b2);
                         injectD1(endpoint, sourceDescriptor, targetDescriptor, sourceAuthority);
                     });

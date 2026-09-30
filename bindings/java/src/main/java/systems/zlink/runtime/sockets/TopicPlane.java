@@ -44,7 +44,7 @@ final class TopicPlane {
 
     void publish(String topicId, Message part, SendFlag flags) {
         Objects.requireNonNull(part, "part");
-        validateTopicUtf8(topicId, "topicId");
+        Objects.requireNonNull(topicId, "topicId");
         socket.publishMessageFrame(topicId, part, flags);
     }
 
@@ -56,20 +56,18 @@ final class TopicPlane {
         Objects.requireNonNull(topicId, "topicId");
         Objects.requireNonNull(parts, "parts");
         Objects.requireNonNull(flags, "flags");
-        validateTopicUtf8(topicId, "topicId");
         socket.publishParts(topicId, parts, flags);
     }
 
     SendResult publishNoWaitResult(String topicId, Message part) {
         Objects.requireNonNull(part, "part");
-        validateTopicUtf8(topicId, "topicId");
+        Objects.requireNonNull(topicId, "topicId");
         return socket.publishMessageFrameNoWaitResult(topicId, part);
     }
 
     SendResult publishNoWaitResult(String topicId, List<Message> parts) {
         Objects.requireNonNull(topicId, "topicId");
         Objects.requireNonNull(parts, "parts");
-        validateTopicUtf8(topicId, "topicId");
         return socket.publishNoWaitPartsResult(topicId, parts);
     }
 
@@ -110,9 +108,8 @@ final class TopicPlane {
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
         resetSubscriptionScratch(scratch);
-        int rc = Native.subscriptionEvent(socket.handle(),
-            scratch.routingIdOut, scratch.subscribedOut,
-            scratch.topicOut, scratch.topicLenOut, flags.getValue());
+        int rc = Native.subscriptionEvent(socket.handle(), scratch,
+            flags.getValue());
         if (rc != RecvResult.OK.value())
             throw new ZlinkRecvException(RecvResult.fromValue(rc), Native.errno());
         return subscriptionEventFromNative(scratch);
@@ -123,9 +120,8 @@ final class TopicPlane {
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
         resetSubscriptionScratch(scratch);
-        int rc = Native.subscriptionEvent(socket.handle(),
-            scratch.routingIdOut, scratch.subscribedOut, scratch.topicOut,
-            scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
+        int rc = Native.subscriptionEvent(socket.handle(), scratch,
+            ReceiveFlag.DONTWAIT.getValue());
         if (rc == 0) {
             return Optional.of(subscriptionEventFromNative(scratch));
         }
@@ -142,11 +138,7 @@ final class TopicPlane {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
-        scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
-            RecvScratch.TOPIC_CAPACITY);
-        int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
-            scratch.partsOut, scratch.partCountOut, scratch.topicOut,
-            scratch.topicLenOut, flags.getValue());
+        int rc = Native.subscribe(socket.handle(), scratch, flags.getValue());
         if (rc == RecvResult.OK.value()) {
             Message[] parts =
                 InternalAccess.messageFromOwnedMessageVector(
@@ -158,7 +150,7 @@ final class TopicPlane {
                     scratch.sourceRidOut);
                 int topicLength =
                     NativeSocketRuntime.normalizeTopicLength(
-                        scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                        scratch.topicOut,
                         scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
                 TopicMessage result = ContractAccess.topicMessage(
                     routingId, decodeReceivedTopicString(
@@ -195,11 +187,8 @@ final class TopicPlane {
             topicMessageAccess = access;
         }
         RecvScratch scratch = socket.recvScratch();
-        scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
-            RecvScratch.TOPIC_CAPACITY);
-        int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
-            scratch.partsOut, scratch.partCountOut, scratch.topicOut,
-            scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
+        int rc = Native.subscribe(socket.handle(), scratch,
+            ReceiveFlag.DONTWAIT.getValue());
         int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
         if (rc == RecvResult.OK.value()) {
             Message[] parts =
@@ -211,7 +200,7 @@ final class TopicPlane {
                 RoutingId routingId = NativeRoutingIds.readOut(
                     scratch.sourceRidOut);
                 int topicLength = NativeSocketRuntime.normalizeTopicLength(
-                    scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                    scratch.topicOut,
                     scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
                 String topicId = decodeReceivedTopicString(
                     scratch.topicOut, topicLength);
@@ -278,26 +267,22 @@ final class TopicPlane {
     void setSubscription(String filter) {
         Objects.requireNonNull(filter, "filter");
         byte[] bytes = filter.getBytes(StandardCharsets.UTF_8);
-        validateFilterBytes(bytes.length, "filter");
         socket.setSubscriptionBytes(bytes, 0, bytes.length, true);
     }
 
     void setSubscription(byte[] filter) {
         Objects.requireNonNull(filter, "filter");
-        validateFilterBytes(filter.length, "filter");
         socket.setSubscriptionBytes(filter, 0, filter.length, true);
     }
 
     void unsetSubscription(String filter) {
         Objects.requireNonNull(filter, "filter");
         byte[] bytes = filter.getBytes(StandardCharsets.UTF_8);
-        validateFilterBytes(bytes.length, "filter");
         socket.setSubscriptionBytes(bytes, 0, bytes.length, false);
     }
 
     void unsetSubscription(byte[] filter) {
         Objects.requireNonNull(filter, "filter");
-        validateFilterBytes(filter.length, "filter");
         socket.setSubscriptionBytes(filter, 0, filter.length, false);
     }
 
@@ -326,7 +311,7 @@ final class TopicPlane {
     private static SubscriptionEvent subscriptionEventFromNative(
         RecvScratch scratch) {
         int topicLength = NativeSocketRuntime.normalizeTopicLength(
-            scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+            scratch.topicOut,
             scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
         String filter = decodeTopicString(scratch.topicOut,
             topicLength);
@@ -340,27 +325,6 @@ final class TopicPlane {
             NativeLayouts.ROUTING_ID_SIZE_OFFSET,
             (byte) 0);
         scratch.subscribedOut.set(ValueLayout.JAVA_INT, 0, 0);
-        scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
-            RecvScratch.TOPIC_CAPACITY);
     }
 
-    private static void validateTopicUtf8(String topicId, String name) {
-        int chars = topicId.length();
-        if ((long) chars * 3L < NativeSocketRuntime.TOPIC_CAPACITY) {
-            return;
-        }
-        int bytes = topicId.getBytes(StandardCharsets.UTF_8).length;
-        validateFilterBytes(bytes, name);
-    }
-
-    private static void validateFilterBytes(int bytes, String name) {
-        if (bytes >= NativeSocketRuntime.TOPIC_CAPACITY) {
-            throw new IllegalArgumentException(name + " too long: " + bytes
-                + " >= " + NativeSocketRuntime.TOPIC_CAPACITY);
-        }
-        if (bytes < 0) {
-            throw new IllegalArgumentException(
-                name + " length must be non-negative");
-        }
-    }
 }

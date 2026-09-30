@@ -633,7 +633,10 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
   `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
   leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.
-  capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다(과도기 폴백).
+  다른 node의 target에서 capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다
+  (과도기 폴백). 같은 node의 Actor Join 경로와 commit 순서는
+  [Spot과 Actor membership §4](../03-spot-actor/05-spot-actor-membership.ko.md#4-actor-join과-commit-순서)가
+  정한다.
   수신측은 stable type을 wire가 아니라 §9대로 Store Actor Authority row에서 해석한다.
   (이전 개정에서 C++·.NET은 originate하지 않는다고 명시했으나, 네 runtime의 Store-backed
   canonical 수신자가 완성되어 네 runtime 모두 originate로 통일한다.)

@@ -136,7 +136,8 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                         "handle",
                                                         new Object[0],
                                                         List.of())
-                                                .thenApply(ignoredReply -> null));
+                                                .thenApply(ignoredReply -> null),
+                                null);
             } finally {
                 permit.abandonReservation();
             }

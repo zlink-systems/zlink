@@ -51,7 +51,7 @@ spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->spot_mesh_senders.find (mesh_name);
           return found == state->spot_mesh_senders.end ()
                    ? std::nullopt
@@ -65,7 +65,7 @@ mesh_node_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->mesh_node_senders.find (mesh_name);
           return found == state->mesh_node_senders.end ()
                    ? std::nullopt
@@ -79,7 +79,7 @@ mesh_node_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &mesh_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->mesh_node_requesters.find (mesh_name);
           return found == state->mesh_node_requesters.end ()
                    ? std::nullopt
@@ -93,7 +93,7 @@ mesh_channel_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &channel_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->mesh_channel_senders.find (channel_name);
           return found == state->mesh_channel_senders.end ()
                    ? std::nullopt
@@ -107,7 +107,7 @@ mesh_channel_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->mesh_channel_requesters.find (channel_name);
           return found == state->mesh_channel_requesters.end ()
                    ? std::nullopt
@@ -121,7 +121,7 @@ spot_mesh_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                      const std::string &mesh_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->spot_mesh_requesters.find (mesh_name);
           return found == state->spot_mesh_requesters.end ()
                    ? std::nullopt
@@ -134,7 +134,7 @@ bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
     return state->lane
-      .run (
+      .run_checked (
         [&] { return state->route_channels.find (channel_name) != state->route_channels.end (); })
       .get ();
 }
@@ -182,7 +182,8 @@ route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_stat
       static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
     executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (
       0, hardware_workers, std::chrono::milliseconds (100), "zlink-route-cli");
-    this->runtime->lane.run ([&] { this->runtime->route_client_executors.push_back (executor); })
+    this->runtime->lane
+      .run_checked ([&] { this->runtime->route_client_executors.push_back (executor); })
       .get ();
 }
 
@@ -244,6 +245,16 @@ const channel_capability_snapshot_t *publisher_capability (const channel_runtime
 bool is_enabled (const channel_capability_snapshot_t *capability)
 {
     return capability != nullptr && capability->enabled;
+}
+
+std::optional<result_t<zlink::message_t>>
+request_capability_failure (const channel_runtime_state_t &state, const std::string &channel_name)
+{
+    if (is_enabled (server_capability (state, channel_name))) {
+        return std::nullopt;
+    }
+    return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
+                                                "channel server capability is not enabled");
 }
 
 bool has_connection (const channel_capability_snapshot_t *capability)
@@ -373,7 +384,7 @@ void drain_route_client_executors (channel_runtime_state_t &state) noexcept
 {
     std::vector<std::shared_ptr<runtime::offload_executor_t>> route_client_executors;
     state.lane
-      .run ([&] {
+      .run_checked ([&] {
           for (auto it = state.route_client_executors.begin ();
                it != state.route_client_executors.end ();) {
               if (auto executor = it->lock ()) {
@@ -486,12 +497,34 @@ channel_runtime_t::dispatch_request (std::string channel_name,
                                      const zlink::message_t &message,
                                      const detail::inbound_message_context_t &inbound) const
 {
-    if (!is_enabled (server_capability (*_state, channel_name))) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
-                                                    "channel server capability is not enabled");
+    if (auto failure = request_capability_failure (*_state, channel_name)) {
+        return std::move (*failure);
     }
     return handlers.invoke (channel_name, topic, packet_name, services, serializers, message,
                             inbound);
+}
+
+task_t<result_t<zlink::message_t>>
+channel_runtime_t::dispatch_request_async (std::string channel_name,
+                                           std::string topic,
+                                           std::string packet_name,
+                                           service_provider_t &services,
+                                           serializer_registry_t &serializers,
+                                           const handler_registry_t &handlers,
+                                           zlink::message_t message,
+                                           detail::inbound_message_context_t inbound) const
+{
+    if (auto failure = request_capability_failure (*_state, channel_name)) {
+        co_return std::move (*failure);
+    }
+    try {
+        auto reply = co_await handlers.invoke_async (channel_name, topic, packet_name, services,
+                                                     serializers, message, inbound);
+        co_return result_t<zlink::message_t>::success (std::move (reply));
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
 }
 
 result_t<void>
@@ -532,7 +565,7 @@ channel_runtime_t::dispatch_send_async (std::string channel_name,
 result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string channel_name)
 {
     return _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto *client = client_capability (*_state, channel_name);
           if (client == nullptr || !client->enabled) {
               return result_t<std::uint64_t>::failure (
@@ -551,20 +584,22 @@ result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string
 result_t<void> channel_runtime_t::complete_outbound_reply (std::uint64_t request_seq)
 {
     return _state->lane
-      .run ([&] { return outbound_request_controller_t (*_state).complete_request (request_seq); })
+      .run_checked (
+        [&] { return outbound_request_controller_t (*_state).complete_request (request_seq); })
       .get ();
 }
 
 result_t<void> channel_runtime_t::cancel_outbound_request (std::uint64_t request_seq)
 {
     return _state->lane
-      .run ([&] { return outbound_request_controller_t (*_state).cancel_request (request_seq); })
+      .run_checked (
+        [&] { return outbound_request_controller_t (*_state).cancel_request (request_seq); })
       .get ();
 }
 
 void channel_runtime_t::close () noexcept
 {
-    _state->lane.run ([&] { _state->closed = true; }).get ();
+    _state->lane.run_checked ([&] { _state->closed = true; }).get ();
     close_native_channel_transports (_state);
     drain ();
 }
@@ -573,7 +608,7 @@ void channel_runtime_t::shutdown () noexcept
 {
     std::vector<std::shared_ptr<route_channel_runtime_t>> route_channels;
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           _state->shutdown = true;
           for (auto &[_, route_channel] : _state->route_channels) {
               if (route_channel) {
@@ -592,13 +627,13 @@ void channel_runtime_t::shutdown () noexcept
 
 std::size_t channel_runtime_t::pending_count () const noexcept
 {
-    return _state->lane.run ([&] { return _state->pending; }).get ();
+    return _state->lane.run_checked ([&] { return _state->pending; }).get ();
 }
 
 std::vector<channel_runtime_state_t::outbound_call_record_t>
 channel_runtime_t::outbound_calls () const
 {
-    return _state->lane.run ([&] { return _state->outbound_calls; }).get ();
+    return _state->lane.run_checked ([&] { return _state->outbound_calls; }).get ();
 }
 
 void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) noexcept
@@ -609,7 +644,7 @@ void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) no
 void channel_runtime_t::bind_listener_statuses (
   std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept
 {
-    _state->lane.run ([&] { _state->listener_statuses = std::move (statuses); }).get ();
+    _state->lane.run_checked ([&] { _state->listener_statuses = std::move (statuses); }).get ();
 }
 
 void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> context)
@@ -618,7 +653,7 @@ void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> con
         throw std::invalid_argument ("shared Core context is required");
     }
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_state->core_context && _state->core_context != context) {
               throw std::logic_error ("shared Core context is already configured");
           }
@@ -629,13 +664,14 @@ void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> con
 
 std::shared_ptr<zlink::context_t> channel_runtime_t::core_context () const
 {
-    return _state->lane.run ([&] { return _state->core_context; }).get ();
+    return _state->lane.run_checked ([&] { return _state->core_context; }).get ();
 }
 
 void channel_runtime_t::bind_fanout_advertise_hosts (
   std::map<std::string, std::string> hosts) noexcept
 {
-    _state->lane.run ([&] { _state->fanout_publisher_advertise_hosts = std::move (hosts); }).get ();
+    _state->lane.run_checked ([&] { _state->fanout_publisher_advertise_hosts = std::move (hosts); })
+      .get ();
 }
 
 void channel_runtime_t::initialize_manual_channel_publishers ()
@@ -654,7 +690,7 @@ void channel_runtime_t::bind_spot_mesh_transport (
   channel_runtime_state_t::spot_mesh_request_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           _state->spot_mesh_senders.insert_or_assign (mesh_name, std::move (send));
           _state->spot_mesh_requesters.insert_or_assign (std::move (mesh_name),
                                                          std::move (request));
@@ -665,7 +701,7 @@ void channel_runtime_t::bind_spot_mesh_transport (
 void channel_runtime_t::bind_spot_address_resolver (
   runtime::spot_address_resolver_t &resolver) noexcept
 {
-    _state->lane.run ([&] { _state->spot_resolver = &resolver; }).get ();
+    _state->lane.run_checked ([&] { _state->spot_resolver = &resolver; }).get ();
 }
 
 void channel_runtime_t::bind_instance_spot_activator (
@@ -673,7 +709,7 @@ void channel_runtime_t::bind_instance_spot_activator (
   channel_runtime_state_t::instance_spot_request_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           _state->instance_spot_sender = std::move (send);
           _state->instance_spot_requester = std::move (request);
       })
@@ -686,7 +722,7 @@ void channel_runtime_t::bind_mesh_node_transport (
   channel_runtime_state_t::mesh_node_request_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           _state->mesh_node_senders.insert_or_assign (mesh_name, std::move (send));
           _state->mesh_node_requesters.insert_or_assign (std::move (mesh_name),
                                                          std::move (request));
@@ -700,7 +736,7 @@ void channel_runtime_t::bind_mesh_channel_transport (
   channel_runtime_state_t::mesh_channel_request_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_state->client_server_senders.contains (channel_name)) {
               throw framework_exception_t (
                 framework_error_kind_t::protocol_error,
@@ -723,7 +759,7 @@ void channel_runtime_t::bind_client_server_transport (
   channel_runtime_state_t::client_server_request_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_state->mesh_channel_senders.contains (channel_name)) {
               throw framework_exception_t (
                 framework_error_kind_t::protocol_error,
@@ -743,7 +779,7 @@ void channel_runtime_t::bind_client_server_transport (
 void channel_runtime_t::unbind_client_server_transport (const std::string &channel_name) noexcept
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           _state->client_server_senders.erase (channel_name);
           _state->client_server_requesters.erase (channel_name);
       })
@@ -754,7 +790,7 @@ void channel_runtime_t::bind_fanout_transport (std::string channel_name,
                                                channel_runtime_state_t::fanout_publish_t publish)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_state->fanout_publishers.contains (channel_name)) {
               throw framework_exception_t (framework_error_kind_t::protocol_error,
                                            "fanout ChannelName is registered more than once: "
@@ -767,7 +803,7 @@ void channel_runtime_t::bind_fanout_transport (std::string channel_name,
 
 void channel_runtime_t::unbind_fanout_transport (const std::string &channel_name) noexcept
 {
-    _state->lane.run ([&] { _state->fanout_publishers.erase (channel_name); }).get ();
+    _state->lane.run_checked ([&] { _state->fanout_publishers.erase (channel_name); }).get ();
 }
 
 dispatch_options_t channel_runtime_t::dispatch_options () const
@@ -777,17 +813,17 @@ dispatch_options_t channel_runtime_t::dispatch_options () const
 
 void channel_runtime_t::mark_auto_connect_active ()
 {
-    _state->lane.run ([&] { _state->auto_connect_active = true; }).get ();
+    _state->lane.run_checked ([&] { _state->auto_connect_active = true; }).get ();
 }
 
 bool channel_runtime_t::auto_connect_active () const
 {
-    return _state->lane.run ([&] { return _state->auto_connect_active; }).get ();
+    return _state->lane.run_checked ([&] { return _state->auto_connect_active; }).get ();
 }
 
 void channel_runtime_t::drain () noexcept
 {
-    _state->lane.run ([&] { outbound_request_controller_t (*_state).drain (); }).get ();
+    _state->lane.run_checked ([&] { outbound_request_controller_t (*_state).drain (); }).get ();
 }
 
 void channel_runtime_t::publish_socket_event (const std::string &channel_name,
@@ -809,22 +845,26 @@ void channel_runtime_t::set_server_weight (const std::string &channel_name, int 
     if (value < 0 || value > 10000)
         throw std::invalid_argument ("service weight must be in range 0..10000");
     _state->lane
-      .run ([&] { _state->server_peer_weight_overrides.insert_or_assign (channel_name, value); })
+      .run_checked (
+        [&] { _state->server_peer_weight_overrides.insert_or_assign (channel_name, value); })
       .get ();
 }
 
 std::optional<int>
 channel_runtime_t::server_peer_weight_override (const std::string &channel_name) const
 {
-    return _state->lane
-      .run ([&] {
-          const auto found = _state->server_peer_weight_overrides.find (channel_name);
-          if (found == _state->server_peer_weight_overrides.end ()) {
-              return std::optional<int>{};
-          }
-          return std::optional<int>{found->second};
-      })
-      .get ();
+    return server_peer_weight_override_task (channel_name).result ().value ();
+}
+
+task_t<std::optional<int>>
+channel_runtime_t::server_peer_weight_override_task (std::string channel_name) const
+{
+    return _state->lane.run_task ([state = _state, channel_name = std::move (channel_name)] {
+        const auto found = state->server_peer_weight_overrides.find (channel_name);
+        if (found == state->server_peer_weight_overrides.end ())
+            return std::optional<int>{};
+        return std::optional<int>{found->second};
+    });
 }
 
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)
@@ -1129,7 +1169,7 @@ std::chrono::milliseconds
 message_bus_t::default_request_timeout (const std::string &channel_name) const
 {
     return _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = _state->channels.find (channel_name);
           if (found != _state->channels.end () && found->second.default_request_timeout) {
               return *found->second.default_request_timeout;
@@ -2129,7 +2169,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_send_t activate;
         activate = state->runtime->lane
-                     .run ([&] {
+                     .run_checked ([&] {
                          activate = state->runtime->instance_spot_sender;
                          return activate;
                      })
@@ -2192,7 +2232,7 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_request_t activate;
         activate = state->runtime->lane
-                     .run ([&] {
+                     .run_checked ([&] {
                          activate = state->runtime->instance_spot_requester;
                          return activate;
                      })
@@ -2314,7 +2354,7 @@ mesh_node_builder_t zlink_framework_options_t::add_route_mesh (std::string mesh_
     builder._state->handler_groups = _handler_groups;
     std::weak_ptr<detail::framework_options_state_t> options = _options;
     builder._state->lane
-      .run ([&] {
+      .run_checked ([&] {
           builder._state->channel_name_observer = [options] (const std::string &channel_name) {
               if (const auto state = options.lock ()) {
                   state->mesh_node_channel_names.insert (channel_name);
