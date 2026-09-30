@@ -179,6 +179,47 @@ fn repeated_multipart_recv_preserves_shape() {
 }
 
 #[test]
+#[ignore = "requires the B-3 LD_PRELOAD precondition fault-injection shim"]
+fn multipart_recv_adopts_parts_into_uninitialized_message_slots() {
+    const FAIL_ON_INITIALIZED_DEST: &str = "ZLINK_AUDIT_FAIL_INITIALIZED_ADOPT";
+    const MARKER_ENV: &str = "ZLINK_AUDIT_MARKER";
+
+    let ctx = Context::new().unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://own-adopt-uninitialized").unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender.connect("inproc://own-adopt-uninitialized").unwrap()
+    });
+
+    sender
+        .send()
+        .message(Message::try_from(b"first").unwrap())
+        .message(Message::try_from(b"second").unwrap())
+        .submit_sync()
+        .unwrap();
+
+    let mut received = Received::empty();
+    unsafe { std::env::set_var(FAIL_ON_INITIALIZED_DEST, "1") };
+    let result = receiver.recv(&mut received, zlink::RecvFlags::NONE);
+    unsafe { std::env::remove_var(FAIL_ON_INITIALIZED_DEST) };
+    let marker_path = std::env::var_os(MARKER_ENV).expect("fault-injection marker path");
+    let marker = std::fs::read_to_string(marker_path).expect("fault-injection shim did not run");
+    assert!(
+        marker.lines().next() == Some("adopt-accepted-uninitialized-destination")
+            && marker
+                .lines()
+                .all(|line| line == "adopt-accepted-uninitialized-destination"),
+        "unexpected fault-injection marker: {marker:?}"
+    );
+    result.unwrap();
+
+    assert_eq!(received.parts().len(), 2);
+    assert_eq!(received.parts()[0].as_bytes(), b"first");
+    assert_eq!(received.parts()[1].as_bytes(), b"second");
+}
+
+#[test]
 fn pull_receive_owns_parts() {
     let ctx = Context::new().unwrap();
     let server = ctx.pair_socket().unwrap();
