@@ -30,19 +30,32 @@ class completion_guard_t
 int request_errno (request_result_t result_) noexcept
 {
     switch (result_) {
-        case request_result_t::timed_out: return ETIMEDOUT;
-        case request_result_t::not_found: return ENOENT;
-        case request_result_t::terminated: return ETERM;
-        case request_result_t::protocol_error: return EPROTO;
-        case request_result_t::rejected: return EACCES;
-        case request_result_t::conflict: return ESTALE;
-        case request_result_t::busy: return EBUSY;
-        case request_result_t::not_connected: return ENOTCONN;
-        case request_result_t::invalid_argument: return EINVAL;
-        case request_result_t::invalid_state: return EFSM;
-        case request_result_t::not_supported: return ENOTSUP;
-        case request_result_t::backpressured: return EAGAIN;
-        default: return EIO;
+        case request_result_t::timed_out:
+            return ETIMEDOUT;
+        case request_result_t::not_found:
+            return ENOENT;
+        case request_result_t::terminated:
+            return ETERM;
+        case request_result_t::protocol_error:
+            return EPROTO;
+        case request_result_t::rejected:
+            return EACCES;
+        case request_result_t::conflict:
+            return EEXIST;
+        case request_result_t::busy:
+            return EBUSY;
+        case request_result_t::not_connected:
+            return ENOTCONN;
+        case request_result_t::invalid_argument:
+            return EINVAL;
+        case request_result_t::invalid_state:
+            return EFSM;
+        case request_result_t::not_supported:
+            return ENOTSUP;
+        case request_result_t::backpressured:
+            return EAGAIN;
+        default:
+            return EIO;
     }
 }
 
@@ -58,11 +71,9 @@ submit_error_t send_completion_error (zlink_send_complete_result_t result_,
 {
     switch (result_) {
         case ZLINK_SEND_NOT_FOUND:
-            return submit_error_t (submit_result_t::not_found,
-                                   terminal_errno_);
+            return submit_error_t (submit_result_t::not_found, terminal_errno_);
         case ZLINK_SEND_NOT_CONNECTED:
-            return submit_error_t (submit_result_t::not_connected,
-                                   terminal_errno_);
+            return submit_error_t (submit_result_t::not_connected, terminal_errno_);
         case ZLINK_SEND_TIMED_OUT:
             return submit_error_t (submit_result_t::backpressured, EAGAIN);
         default:
@@ -77,28 +88,31 @@ bool is_lifecycle_errno (int err_) noexcept
 
 } // namespace
 
-completion_entry_t::completion_entry_t (
-  async_operation_state_t<void> *send_result_,
-  std::unique_ptr<operation_state_t> send_operation_,
-  void *submit_context_, uint64_t wait_token_) :
-    _kind (kind_t::send_retry), _context (submit_context_),
+completion_entry_t::completion_entry_t (async_operation_state_t<void> *send_result_,
+                                        std::unique_ptr<operation_state_t> send_operation_,
+                                        void *submit_context_,
+                                        uint64_t wait_token_) :
+    _kind (kind_t::send_retry),
+    _context (submit_context_),
     _send_result (send_result_),
     _send_operation (std::move (send_operation_)),
-    _completion_id (wait_token_), _published (true)
+    _completion_id (wait_token_),
+    _published (true)
 {
 }
 
 completion_entry_t::completion_entry_t (
   async_operation_state_t<std::vector<message_t>> *request_result_,
   async_operation_state_t<void> *request_admitted_result_) :
-    _kind (kind_t::request), _context (this), _request_result (request_result_),
+    _kind (kind_t::request),
+    _context (this),
+    _request_result (request_result_),
     _request_admitted_result (request_admitted_result_)
 {
 }
 
 completion_entry_t::completion_entry_t (
-  const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &
-    request_result_) :
+  const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &request_result_) :
     completion_entry_t (request_result_.get ())
 {
 }
@@ -107,7 +121,9 @@ completion_entry_t::completion_entry_t (
   async_operation_state_t<std::vector<message_t>> *request_result_,
   async_operation_state_t<void> *request_admitted_result_,
   std::unique_ptr<operation_state_t> request_operation_) :
-    _kind (kind_t::request), _context (this), _request_result (request_result_),
+    _kind (kind_t::request),
+    _context (this),
+    _request_result (request_result_),
     _request_admitted_result (request_admitted_result_),
     _request_operation (std::move (request_operation_))
 {
@@ -180,8 +196,7 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
         _send_submitting = true;
     }
     try {
-        admitted = submit_raw_send_state (*_send_operation, _context,
-                                          &completion_id, false);
+        admitted = submit_raw_send_state (*_send_operation, _context, &completion_id, false);
         submit_errno = zlink_errno ();
     }
     catch (...) {
@@ -205,11 +220,11 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
     }
 
     if (!failure && admitted != (completion_id == 0)) {
-        failure = std::make_exception_ptr (
-          submit_error_t (submit_result_t::internal_error, EPROTO));
+        failure =
+          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
     } else if (!failure && !admitted && submit_errno != EAGAIN) {
-        failure = std::make_exception_ptr (
-          submit_error_t (submit_result_t::internal_error, EPROTO));
+        failure =
+          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
     }
 
     if (failure) {
@@ -263,8 +278,7 @@ void completion_entry_t::abandon_send () noexcept
     _changed.notify_all ();
 }
 
-bool completion_entry_t::submit_request_attempt (bool initial_,
-                                                 bool *admitted_out_)
+bool completion_entry_t::submit_request_attempt (bool initial_, bool *admitted_out_)
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -278,8 +292,7 @@ bool completion_entry_t::submit_request_attempt (bool initial_,
     bool admitted = false;
     std::exception_ptr failure;
     try {
-        admitted = submit_raw_request_state (*_request_operation, _context,
-                                             &completion_id, false);
+        admitted = submit_raw_request_state (*_request_operation, _context, &completion_id, false);
     }
     catch (...) {
         failure = std::current_exception ();
@@ -386,14 +399,14 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
 
         if (completion_kind != ZLINK_COMPLETION_WRITABLE) {
-            fail_send (std::make_exception_ptr (
-              submit_error_t (submit_result_t::internal_error, EPROTO)));
+            fail_send (
+              std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO)));
             return capture_result_t::terminal;
         }
 
         if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
-            fail_send (std::make_exception_ptr (
-              send_completion_error (send_result, terminal_errno)));
+            fail_send (
+              std::make_exception_ptr (send_completion_error (send_result, terminal_errno)));
             return capture_result_t::terminal;
         }
 
@@ -406,8 +419,7 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         _changed.wait (lock, [this] { return _published || _settled; });
         if (_settled)
             return capture_result_t::terminal;
-        if (completion_.completion_id != _completion_id
-            || completion_.user_context != this)
+        if (completion_.completion_id != _completion_id || completion_.user_context != this)
             return capture_result_t::pending;
         waiting_writable = _request_waiting_writable;
         if (waiting_writable) {
@@ -418,15 +430,14 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 
     if (waiting_writable) {
         if (completion_.kind != ZLINK_COMPLETION_WRITABLE) {
-            fail_request (std::make_exception_ptr (
-              submit_error_t (submit_result_t::internal_error, EPROTO)));
+            fail_request (
+              std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO)));
             return capture_result_t::terminal;
         }
         if (completion_.send_result != ZLINK_SEND_ADMITTED
             || completion_.send_terminal_errno != 0) {
             fail_request (std::make_exception_ptr (
-              send_completion_error (completion_.send_result,
-                                     completion_.send_terminal_errno)));
+              send_completion_error (completion_.send_result, completion_.send_terminal_errno)));
             return capture_result_t::terminal;
         }
 
@@ -437,8 +448,8 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
     std::exception_ptr failure;
     try {
         if (completion_.kind != ZLINK_COMPLETION_REQUEST) {
-            failure = std::make_exception_ptr (
-              request_error_t (request_result_t::internal_error, EPROTO));
+            failure =
+              std::make_exception_ptr (request_error_t (request_result_t::internal_error, EPROTO));
         } else if (completion_.request_result != ZLINK_REQUEST_OK) {
             const request_result_t result =
               static_cast<request_result_t> (completion_.request_result);
@@ -468,7 +479,7 @@ bool completion_entry_t::retry () noexcept
 {
     try {
         return _kind == kind_t::send_retry ? resubmit_send_attempt ()
-                                          : submit_request_attempt (false);
+                                           : submit_request_attempt (false);
     }
     catch (...) {
         if (_kind == kind_t::send_retry)
@@ -483,8 +494,7 @@ void completion_entry_t::terminate (int terminal_errno_) noexcept
 {
     if (_kind == kind_t::send_retry) {
         const int error = terminal_errno_ != 0 ? terminal_errno_ : EIO;
-        fail_send (std::make_exception_ptr (
-          submit_error_t (send_terminal_result (error), error)));
+        fail_send (std::make_exception_ptr (submit_error_t (send_terminal_result (error), error)));
         return;
     }
 
@@ -495,15 +505,14 @@ void completion_entry_t::terminate (int terminal_errno_) noexcept
     }
     if (before_request_admission) {
         const int error = terminal_errno_ != 0 ? terminal_errno_ : EIO;
-        fail_request (std::make_exception_ptr (
-          submit_error_t (send_terminal_result (error), error)));
+        fail_request (
+          std::make_exception_ptr (submit_error_t (send_terminal_result (error), error)));
         return;
     }
 
     const int error = terminal_errno_ != 0 ? terminal_errno_ : EIO;
-    const request_result_t result = is_lifecycle_errno (error)
-      ? request_result_t::terminated
-      : request_result_t::internal_error;
+    const request_result_t result =
+      is_lifecycle_errno (error) ? request_result_t::terminated : request_result_t::internal_error;
     fail_request (std::make_exception_ptr (request_error_t (result, error)));
 }
 
@@ -513,8 +522,7 @@ void completion_entry_t::settle_if_joined (std::unique_lock<std::mutex> &lock_) 
         return;
     _settled = true;
     const std::exception_ptr failure = _failure;
-    async_operation_state_t<std::vector<message_t>> *const request_result =
-      _request_result;
+    async_operation_state_t<std::vector<message_t>> *const request_result = _request_result;
     std::vector<message_t> parts;
     if (request_result)
         parts = std::move (_reply_parts);
@@ -554,15 +562,16 @@ bool completion_entry_t::settled () noexcept
 }
 
 completion_owner_t::completion_owner_t (void *socket_) :
-    _socket (socket_), _entries (&_entry_map_pool),
-    _early_send_completions (&_entry_map_pool)
+    _socket (socket_), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
 {
 }
 
-completion_owner_t::~completion_owner_t () { shutdown (); }
+completion_owner_t::~completion_owner_t ()
+{
+    shutdown ();
+}
 
-void completion_owner_t::insert_entry_locked (
-  const std::shared_ptr<completion_entry_t> &entry_)
+void completion_owner_t::insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_)
 {
     if (_inline_entry.get () == entry_.get ())
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
@@ -575,8 +584,7 @@ void completion_owner_t::insert_entry_locked (
     }
 }
 
-bool completion_owner_t::start_async_request (
-  const std::shared_ptr<completion_entry_t> &entry_)
+bool completion_owner_t::start_async_request (const std::shared_ptr<completion_entry_t> &entry_)
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -589,8 +597,7 @@ bool completion_owner_t::start_async_request (
     return entry_->start_request ();
 }
 
-void completion_owner_t::register_blocking_entry (
-  const std::shared_ptr<completion_entry_t> &entry_)
+void completion_owner_t::register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_)
 {
     std::lock_guard<std::mutex> lock (_mutex);
     if (_shutdown)
@@ -598,8 +605,7 @@ void completion_owner_t::register_blocking_entry (
     insert_entry_locked (entry_);
 }
 
-void completion_owner_t::register_send_entry (
-  const std::shared_ptr<completion_entry_t> &entry_)
+void completion_owner_t::register_send_entry (const std::shared_ptr<completion_entry_t> &entry_)
 {
     if (!entry_ || entry_->kind () != completion_entry_t::kind_t::send_retry)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
@@ -637,8 +643,7 @@ size_t completion_owner_t::drain ()
     return drain_impl (nullptr);
 }
 
-void completion_owner_t::drain_inline (
-  const std::shared_ptr<completion_entry_t> &entry_)
+void completion_owner_t::drain_inline (const std::shared_ptr<completion_entry_t> &entry_)
 {
     std::lock_guard<std::mutex> inline_drain (_inline_drain_mutex);
     {
@@ -683,7 +688,7 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
         const zlink_recv_result_t rc = zlink_completion_recv (
           _socket, &completion,
           static_cast<zlink_recv_flags_t> (blocking_receive ? ZLINK_RECV_FLAGS_NONE
-                                                           : ZLINK_RECV_FLAGS_DONTWAIT));
+                                                            : ZLINK_RECV_FLAGS_DONTWAIT));
         blocking_receive = false;
         if (rc == ZLINK_RECV_NO_DATA) {
             for (const auto &entry : retries) {
@@ -722,21 +727,20 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
                     entry = found->second;
             }
             if (!entry && !_shutdown && completion.user_context
-                     && completion.kind == ZLINK_COMPLETION_WRITABLE) {
+                && completion.kind == ZLINK_COMPLETION_WRITABLE) {
                 // SEND's immediate-admission path skips registry locks. Join
                 // an early token with registration here so the same owner
                 // captures it and reaches NO_DATA before any resubmission.
-                const auto inserted = _early_send_completions.emplace (
-                  completion.user_context, completion);
+                const auto inserted =
+                  _early_send_completions.emplace (completion.user_context, completion);
                 if (inserted.second) {
                     _send_registered.wait (lock, [&] {
                         return _shutdown
-                          || _early_send_completions.find (completion.user_context)
-                               == _early_send_completions.end ();
+                               || _early_send_completions.find (completion.user_context)
+                                    == _early_send_completions.end ();
                     });
                     _early_send_completions.erase (completion.user_context);
-                    if (_inline_entry
-                        && _inline_entry->context () == completion.user_context)
+                    if (_inline_entry && _inline_entry->context () == completion.user_context)
                         entry = _inline_entry;
                     else {
                         const auto found = _entries.find (completion.user_context);

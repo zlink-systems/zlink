@@ -198,6 +198,7 @@ export interface ZLinkClientCapabilityOptions {
 }
 
 export interface ZLinkPublisherCapabilityOptions {
+  readonly sendTimeoutMs?: number;
   readonly bind?: string;
   readonly bindHost?: string;
   readonly advertiseHost?: string;

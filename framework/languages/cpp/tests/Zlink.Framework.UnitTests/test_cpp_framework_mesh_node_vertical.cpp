@@ -1620,6 +1620,73 @@ void verify_public_runtime_surface ()
     node->stop ();
 }
 
+void verify_manual_peer_public_status ()
+{
+    auto local_registration = make_node ("tcp://127.0.0.1:0", "manual-status-local");
+    local_registration->channels.emplace (
+      "manual-channel",
+      zlink::framework::detail::mesh_channel_registration_t{100, {}, true, false});
+    auto remote_registration = make_node ("tcp://127.0.0.1:0", "manual-status-remote");
+    remote_registration->channels.emplace (
+      "manual-channel", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
+    auto local =
+      std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (local_registration);
+    auto remote =
+      std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (remote_registration);
+    local->start ();
+    remote->start ();
+    const auto remote_endpoint = remote->listen_endpoint ();
+    const auto remote_status = remote->status ();
+    auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
+      std::vector<std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t>>{local}, nullptr);
+    zlink::framework::route_mesh_runtime_t &public_runtime = *runtime;
+    runtime->start ();
+    local->connect_peer (remote_endpoint);
+
+    const auto dispatch_ready = [] (zlink::framework::detail::mesh_node_runtime_t &node) {
+        (void) std::move (
+          node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
+                                   const zlink::framework::runtime::host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {}))
+          .result ()
+          .value ();
+    };
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    bool admitted = false;
+    while (std::chrono::steady_clock::now () < deadline) {
+        dispatch_ready (*local);
+        dispatch_ready (*remote);
+        admitted = local->has_admitted_peer (remote_status.routing_id (),
+                                             remote_status.lifecycle_generation ());
+        if (admitted)
+            break;
+        std::this_thread::sleep_for (1ms);
+    }
+    if (!admitted)
+        std::fprintf (stderr, "[manual-status] manual endpoint handshake was not admitted\n");
+    assert (admitted);
+
+    const auto status = public_runtime.snapshot ("vertical-mesh");
+    const auto channel =
+      std::find_if (status.channels.begin (), status.channels.end (),
+                    [] (const auto &value) { return value.channel_name == "manual-channel"; });
+    const auto ready_target_count =
+      channel == status.channels.end () ? 0 : channel->ready_target_count;
+    if (status.peers.size () != 1 || status.ready_peer_count != 1 || ready_target_count != 1) {
+        std::fprintf (stderr,
+                      "[manual-status] peerCount=%zu readyPeerCount=%u readyTargetCount=%u\n",
+                      status.peers.size (), status.ready_peer_count, ready_target_count);
+    }
+    assert (status.peers.size () == 1);
+    assert (status.ready_peer_count == 1);
+    assert (ready_target_count == 1);
+
+    runtime->stop ();
+    local->disconnect_peer (remote_endpoint);
+    remote->stop ();
+    local->stop ();
+}
+
 void verify_location_store_blocks_placement ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "placement-store-node");
@@ -2524,12 +2591,17 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--manual-peer-status") {
+        verify_manual_peer_public_status ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--monitor-pump-async") {
         verify_monitor_pump_does_not_wait_for_spot_lane ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--monitor-snapshot") {
         verify_public_runtime_surface ();
+        verify_manual_peer_public_status ();
         verify_location_store_blocks_placement ();
         verify_slow_observer_does_not_block_stop ();
         return 0;
@@ -2546,6 +2618,7 @@ int main (int argc, char **argv)
     verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
+    verify_manual_peer_public_status ();
     verify_location_store_blocks_placement ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();

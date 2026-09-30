@@ -1461,6 +1461,13 @@ recording, relocation changes, and capacity reservation. Once the Store connecti
 recovers, it re-checks owner information and the full descriptor list, then applies only
 the needed connection changes.
 
+A target missing from the first full list re-read after recovery doesn't lose its connection
+intent right away, because a live owner may not have re-published its descriptor yet while
+the Store was empty or its lease had expired. The intent is removed only when the target is
+still absent from a full list re-read after the owner lease TTL
+([§5](#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)) has passed since
+recovery. A connect to a newly visible target is applied right after recovery.
+
 If cancellation happens before starting a provider request, the Store may not be called
 at all. If cancellation, timeout, or a provider error happens after starting the request,
 whether the Store changed is unknown. In this case the Framework re-reads the same key

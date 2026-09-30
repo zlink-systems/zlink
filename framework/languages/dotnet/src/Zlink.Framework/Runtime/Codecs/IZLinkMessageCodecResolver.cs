@@ -15,7 +15,5 @@ internal interface IZLinkMessageCodecResolver
 
 internal interface IZLinkMessageCodecRegistry : IZLinkMessageCodecResolver
 {
-    (string ContentType, IZLinkMessageSerializer Serializer)? SingleCustomSerializer();
-
     IZLinkMessageCodecResolver Snapshot();
 }

@@ -4,6 +4,9 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkFrameworkJsonPayloadCodec
 {
+    internal static IZLinkMessageSerializer ReceiveSerializer { get; } =
+        new JsonMessageSerializer();
+
     internal static T? Deserialize<T>(ReadOnlySpan<byte> payload)
     {
         ValidateDocument(payload);
@@ -29,6 +32,20 @@ internal static class ZLinkFrameworkJsonPayloadCodec
             type,
             ZLinkJsonSerializerOptions.FrameworkPayload
         );
+
+    private sealed class JsonMessageSerializer
+        : IZLinkMessageSerializer,
+            IZLinkMessageSpanDeserializer
+    {
+        ZLinkEncodedPayload IZLinkMessageSerializer.Serialize(object value, Type type) =>
+            ZLinkEncodedPayload.FromOwned(Serialize(value, type));
+
+        object? IZLinkMessageSerializer.Deserialize(ZLinkEncodedPayload payload, Type type) =>
+            Deserialize(payload.Bytes.Span, type);
+
+        object? IZLinkMessageSpanDeserializer.Deserialize(ReadOnlySpan<byte> payload, Type type) =>
+            Deserialize(payload, type);
+    }
 
     private static void ValidateDocument(ReadOnlySpan<byte> payload)
     {

@@ -8,6 +8,7 @@ using Zlink.Framework.Codecs.MessagePack;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Messaging;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -52,16 +53,114 @@ public sealed class CustomSerializerEnvelopeTests
     }
 
     [Fact]
+    public void Custom_Json_Serializer_Decodes_Envelope_Body()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/json", new MarkerSerializer());
+        using var body = Message.From("AVRO:hello");
+
+        var decoded = ZLinkEnvelopeCodec.DecodeBody(
+            body,
+            typeof(Probe),
+            "application/json",
+            codecs
+        );
+
+        Assert.Equal(new Probe("hello"), decoded);
+    }
+
+    [Fact]
+    public void Custom_Json_Serializer_Decodes_Multipart_Envelope_Body()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/json", new MarkerSerializer());
+        using var frame = Message.From("AVRO:hello");
+        var parts = new ZLinkMultipartPayloadView(frame, [0, 0, 0, checked((int)frame.Size)]);
+
+        var decoded = ZLinkEnvelopeCodec.DecodeBody(
+            parts,
+            typeof(Probe),
+            "application/json",
+            codecs
+        );
+
+        Assert.Equal(new Probe("hello"), decoded);
+    }
+
+    [Fact]
+    public void Custom_Json_Serializer_Decodes_Lazy_Envelope_Body()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/json", new MarkerSerializer());
+        using var body = Message.From("AVRO:hello");
+
+        var message = ZLinkMessage.FromEnvelopePayload("application/json", body, codecs);
+
+        Assert.Equal(new Probe("hello"), message.Decode<Probe>());
+    }
+
+    [Fact]
+    public void DecodeBody_Rejects_Noncanonical_Json_ContentType_Message()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        using var body = Message.From("{\"Text\":\"wire\"}");
+
+        var messageException = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeCodec.DecodeBody(body, typeof(Probe), "Application/Json", codecs)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, messageException.Kind);
+    }
+
+    [Fact]
+    public void Lazy_Envelope_Message_Rejects_Noncanonical_Json_ContentType()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        using var body = Message.From("{\"Text\":\"wire\"}");
+        var message = ZLinkMessage.FromEnvelopePayload("Application/Json", body, codecs);
+
+        var exception = Assert.Throws<ZLinkFrameworkException>(() => message.Decode<Probe>());
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
+    }
+
+    [Fact]
+    public void Actor_Join_Declared_Type_Recovery_Rejects_Noncanonical_ContentType()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/json", new MarkerSerializer());
+
+        var message = ZLinkMessage.FromCanonicalActorJoinReply(
+            "Application/Json",
+            "AVRO:hello"u8.ToArray(),
+            codecs
+        );
+
+        var exception = Assert.Throws<ZLinkFrameworkException>(() => message.Decode<Probe>());
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
+    }
+
+    [Fact]
+    public void DecodeBody_Rejects_Noncanonical_Json_ContentType_Multipart()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        using var frame = Message.From("{\"Text\":\"wire\"}");
+        var parts = new ZLinkMultipartPayloadView(frame, [0, 0, 0, checked((int)frame.Size)]);
+        var multipartException = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), "Application/Json", codecs)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, multipartException.Kind);
+    }
+
+    [Fact]
     public void CodecExtension_Can_Register_Custom_Serializer()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.Use(new MarkerCodecExtension());
 
-        var custom = codecs.SingleCustomSerializer();
-
-        Assert.NotNull(custom);
-        Assert.Equal("application/avro", custom.Value.ContentType);
-        Assert.IsType<MarkerSerializer>(custom.Value.Serializer);
+        Assert.True(
+            codecs.TryResolveSerializer(typeof(Probe), out var contentType, out var serializer)
+        );
+        Assert.Equal("application/avro", contentType);
+        Assert.IsType<MarkerSerializer>(serializer);
     }
 
     [Fact]
@@ -574,17 +673,74 @@ public sealed class CustomSerializerEnvelopeTests
     }
 
     [Fact]
-    public void Later_Fallback_Serializer_Wins()
+    public void Later_Unconditional_Serializer_Wins_In_TryResolve()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.AddSerializer("application/avro", new MarkerSerializer());
         var selected = new ReplacementSerializer();
         codecs.AddSerializer("application/thrift", selected);
 
-        var fallback = codecs.SingleCustomSerializer();
-        Assert.NotNull(fallback);
-        Assert.Equal("application/thrift", fallback.Value.ContentType);
-        Assert.Same(selected, fallback.Value.Serializer);
+        Assert.True(
+            codecs.TryResolveSerializer(typeof(Probe), out var contentType, out var serializer)
+        );
+        Assert.Equal("application/thrift", contentType);
+        Assert.Same(selected, serializer);
+    }
+
+    [Fact]
+    public void Envelope_Uses_Json_When_No_Registered_Serializer_Matches()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/avro", new MarkerSerializer(), static _ => false);
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Request,
+            "orders",
+            nameof(Probe),
+            ZLinkEnvelopeCodec.DefaultContentType,
+            "request-1",
+            null,
+            null,
+            null,
+            null
+        );
+
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            header,
+            new Probe("hello"),
+            typeof(Probe),
+            codecs
+        );
+        try
+        {
+            Assert.Equal(
+                ZLinkEnvelopeCodec.DefaultContentType,
+                ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType
+            );
+            Assert.Equal(
+                new Probe("hello"),
+                ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), codecs)
+            );
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void ZLinkMessage_Uses_Json_When_No_Registered_Serializer_Matches()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/avro", new MarkerSerializer(), static _ => false);
+
+        var encoded = ZLinkMessage.From(new Probe("hello")).Encode(codecs);
+
+        Assert.Equal(ZLinkEnvelopeCodec.DefaultContentType, encoded.ContentType);
+        using var payload = Message.From(encoded.Payload.Bytes.Span);
+        Assert.Equal(
+            new Probe("hello"),
+            ZLinkFrameworkJsonPayloadCodec.Deserialize(payload.AsReadOnlySpan(), typeof(Probe))
+        );
     }
 
     [Fact]

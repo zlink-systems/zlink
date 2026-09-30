@@ -78,7 +78,6 @@ export class ZLinkRemoteActorJoinReceiver {
         request,
         (spot) => {
           state.setJoinedSpot(join.spotId as RoutingId, spot);
-          return () => state.clearJoinedSpot();
         },
         undefined,
         undefined,

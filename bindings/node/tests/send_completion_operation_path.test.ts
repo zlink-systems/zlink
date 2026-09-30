@@ -15,7 +15,11 @@ const {
   SubmitResult,
 } = require('../../dist/zlink/contracts/errors/errors');
 
-function requestCompletion(completionId: bigint, userContext: bigint) {
+function requestCompletion(
+  completionId: bigint,
+  userContext: bigint,
+  requestResult: number = RequestResult.Ok
+) {
   return {
     kind: 2,
     completionId,
@@ -23,7 +27,7 @@ function requestCompletion(completionId: bigint, userContext: bigint) {
     peerRoutingId: null,
     sendResult: 0,
     terminalErrno: 0,
-    requestResult: 0,
+    requestResult,
     parts: [],
   };
 }
@@ -91,6 +95,36 @@ test('async request rejects a completion whose known token has a different id', 
   assert.equal(entry.settled, true);
   owner.close();
 });
+
+for (const [requestResult, expectedErrno] of [
+  [RequestResult.TimedOut, constants.errno.ETIMEDOUT],
+  [RequestResult.NotFound, constants.errno.ENOENT],
+  [RequestResult.Terminated, 156384765],
+  [RequestResult.ProtocolError, constants.errno.EPROTO],
+  [RequestResult.InternalError, constants.errno.EIO],
+  [RequestResult.Rejected, constants.errno.EACCES],
+  [RequestResult.Conflict, constants.errno.EEXIST],
+  [RequestResult.Busy, constants.errno.EBUSY],
+  [RequestResult.NotConnected, constants.errno.ENOTCONN],
+  [RequestResult.InvalidArgument, constants.errno.EINVAL],
+  [RequestResult.InvalidState, 156384763],
+  [RequestResult.NotSupported, constants.errno.ENOTSUP],
+  [RequestResult.Backpressured, constants.errno.EAGAIN],
+] as const) {
+  test(`REQUEST result ${requestResult} projects its Core representative errno`, async () => {
+    assert.equal(new RequestError(requestResult).nativeErrno, expectedErrno);
+    const entry = new CompletionEntry(602n, 'request');
+    entry.publish(602n);
+    entry.capture(requestCompletion(602n, entry.token, requestResult));
+
+    await assert.rejects(entry.promise, (error: unknown) => {
+      const requestError = error as { result: number; nativeErrno: number };
+      return error instanceof RequestError
+        && requestError.result === requestResult
+        && requestError.nativeErrno === expectedErrno;
+    });
+  });
+}
 
 test('zero-context synchronous request completion still correlates by id', async () => {
   const owner = new CompletionOwner(null) as any;
