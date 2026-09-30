@@ -126,26 +126,26 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   }
 });
 
-test('ClientServer channel with no eligible member reports Unavailable', async () => {
+test('ClientServer channel without a ready target reports DeadlineExceeded', async () => {
   const registration = framework.createFrameworkRegistration({
-    channels: { empty: { client: { manualConnections: ['tcp://127.0.0.1:1'] }, requestTimeoutMs: 30 } }
+    channels: { empty: { client: { manualConnections: ['tcp://127.0.0.1:1'], sendTimeoutMs: 30 }, requestTimeoutMs: 30 } }
   });
   const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
   const client = new framework.DefaultZLinkChannelClient(registration, runtime.channelTransport);
   try {
     await runtime.start();
-    const unavailable = (error) =>
+    const deadlineExceeded = (error) =>
       error instanceof framework.ZLinkFrameworkException &&
-      error.kind === framework.ZLinkFrameworkErrorKind.Unavailable;
+      error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
     await assert.rejects(
       () => client.sendToChannel('empty', typedPacket('Notice', { id: 1 })).submit(),
-      unavailable
+      deadlineExceeded
     );
     await assert.rejects(
       () => client.requestToChannel('empty', typedPacket('Question', { id: 2 }))
         .timeout(30)
         .submit(),
-      unavailable
+      deadlineExceeded
     );
   } finally {
     await runtime.stop();
@@ -943,6 +943,54 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
     { meshName: 'mesh', channelName: 'api', packetName: undefined, request: { id: 7 }, timeoutMs: 2000 }
   ]);
 });
+
+test('RouteMesh ready weight-zero channel reports Unavailable for send and request', async () => {
+  class NoticeHandler { handle() {} }
+  const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
+    builder.addRouteMesh('zero-mesh').listen('tcp://127.0.0.1:0').routingId('zero-node')
+      .channel('zero-channel').server().setWeight(0).addSendHandler(NoticeHandler);
+  });
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const client = new framework.DefaultZLinkRouteClient(registration, runtime.routeTransport, runtime.spotRouterChannelIdForMesh);
+  try {
+    await runtime.start();
+    await assert.rejects(() => client.sendToChannel('zero-channel', typedPacket('Notice', { id: 1 })).submit(),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    await assert.rejects(() => client.requestToChannel('zero-channel', typedPacket('Question', { id: 2 })).submit(),
+      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
+  test(`RouteMesh ${state} channel snapshot reports its selection result without waiting`, async () => {
+    const runtime = new RawServiceMeshRuntime({
+      descriptor: {
+        meshName: 'selection-states', nodeRoutingId: 'local-selection', lifecycleGeneration: 1n,
+        descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:0',
+        channels: [{ name: 'api', weight: 100 }], state: 'serving', securityIdentity: 'test',
+        applicationVersion: 1n, protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+        placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+        activeCapacityUsed: 0, pendingCapacityUsed: 0
+      },
+      bindingPort: new ZLinkNodeRawBindingPort(),
+      applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
+    });
+    runtime.start();
+    try {
+      const current = runtime.topology.localDescriptor();
+      runtime.topology.publishLocal({ ...current, state, descriptorRevision: current.descriptorRevision + 1n });
+      const unavailable = state === 'retiring' || state === 'draining';
+      const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
+      assert.equal(await runtime.sendToChannel('api', payload), unavailable ? zlink.SubmitResult.NotConnected : zlink.SubmitResult.NotFound);
+      const reply = await runtime.requestToChannel('api', payload, 100).promise;
+      assert.equal(reply.terminalResult, unavailable ? zlink.RequestResult.NotConnected : zlink.RequestResult.NotFound);
+    } finally {
+      runtime.close();
+    }
+  });
+}
 
 test('RouteMesh channel send with no selectable target reports NotFound', async () => {
   const meshName = `route-mesh-no-target-${process.pid}`;

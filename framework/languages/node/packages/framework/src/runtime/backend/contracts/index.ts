@@ -563,6 +563,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
 }
 
 export interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
+  sendTimeoutMs: number;
   sendHighWaterMark: number;
   noDrop: boolean;
   publish(topic: string, message: Message | readonly Message[]): void;
