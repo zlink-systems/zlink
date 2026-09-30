@@ -34,46 +34,32 @@ pub(crate) fn recv_stream_packet(
 ) -> Result<bool, RecvError> {
     out.reset();
     let mut rid = ptr::null();
-    let mut header = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
-    let mut body = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
-    unsafe {
-        ffi::zlink_msg_init(header.as_mut_ptr());
-        ffi::zlink_msg_init(body.as_mut_ptr());
-    }
+    let mut header = Message::new()
+        .map_err(|error| RecvError::new(RecvResult::InternalError, error.native_errno()))?;
+    let mut body = Message::new()
+        .map_err(|error| RecvError::new(RecvResult::InternalError, error.native_errno()))?;
     let rc = unsafe {
         ffi::zlink_stream_recv_packet(
             handle,
             &mut rid,
-            header.as_mut_ptr(),
-            body.as_mut_ptr(),
+            header.raw_mut(),
+            body.raw_mut(),
             flags,
         )
     };
     if rc == RecvResult::NoData as i32 {
-        unsafe {
-            ffi::zlink_msg_close(header.as_mut_ptr());
-            ffi::zlink_msg_close(body.as_mut_ptr());
-        }
         return Ok(false);
     }
     if rc != 0 {
-        unsafe {
-            ffi::zlink_msg_close(header.as_mut_ptr());
-            ffi::zlink_msg_close(body.as_mut_ptr());
-        }
         return Err(check_recv_rc(rc).expect_err("failed packet receive"));
     }
     if rid.is_null() {
-        unsafe {
-            ffi::zlink_msg_close(header.as_mut_ptr());
-            ffi::zlink_msg_close(body.as_mut_ptr());
-        }
         return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
     }
     out.replace(
         unsafe { RoutingId::from_raw(*rid) },
-        unsafe { Message::from_raw(header.assume_init()) },
-        unsafe { Message::from_raw(body.assume_init()) },
+        header,
+        body,
     );
     Ok(true)
 }
