@@ -627,8 +627,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
-- Requests and pushes arriving after the seal are held by the Session owner until route
-  change or abort. No relocation-specific record-count or byte bound is added.
+- The Session owner's seal handling and the scope of held messages follow
+  [Session–Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). No relocation-specific record-count or byte bound is added.
 - Ordinary server messages arriving on the source object route keep being relayed to the
   target temporary queue. This uses ordering and retransmission of the same TCP
   connection, without a per-message ACK or durable journal.
