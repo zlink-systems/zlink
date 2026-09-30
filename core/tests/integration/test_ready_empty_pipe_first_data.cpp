@@ -143,6 +143,11 @@ void run_first_data (int sender_type_, bool inproc_, bool reader_first_)
     receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
     configure_socket (sender, "d118-sender-0001");
     configure_socket (receiver, "d118-reader-0001");
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (sender, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     zlink_routing_id_t target = {};
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_get_routing_id (receiver, &target));

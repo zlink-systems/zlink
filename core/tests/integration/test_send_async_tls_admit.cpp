@@ -97,6 +97,10 @@ void run_case (const char *transport_)
     void *client = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+      sizeof (no_token_deadline)));
 
     tls_test_files_t tls_files;
     if (is_tls) {

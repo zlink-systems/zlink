@@ -1075,6 +1075,11 @@ void test_dontwait_connect_before_bind_is_not_retained_and_can_be_retried ()
     void *receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (sender);
     TEST_ASSERT_NOT_NULL (receiver);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (sender, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     const int zero_linger = 0;
     const int immediate = 1;
     const int receive_timeout = 5000;
@@ -1172,6 +1177,11 @@ void test_dealer_writable_completion_uses_any_open_candidate ()
     TEST_ASSERT_NOT_NULL (routers[0]);
     TEST_ASSERT_NOT_NULL (routers[1]);
 
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     const int zero_linger = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -1325,6 +1335,11 @@ void test_dontwait_hwm_is_immediate_atomic_and_pending_options_do_not_apply ()
     void *receiver = NULL;
     setup_pair ("inproc://phase3-dontwait-hwm-multipart", &sender,
                 &receiver, true);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (sender, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
 
     const uint64_t one = 1;
     TEST_ASSERT_EQUAL_INT (
@@ -1438,6 +1453,11 @@ void test_router_directed_multipart_hwm_atomic_retry ()
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
 
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     const int zero_linger = 0;
     const int mandatory = 1;
     TEST_ASSERT_EQUAL_INT (
@@ -1596,6 +1616,11 @@ void test_router_writable_completion_is_scoped_to_the_drained_rid ()
     TEST_ASSERT_NOT_NULL (dealers[0]);
     TEST_ASSERT_NOT_NULL (dealers[1]);
 
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     const int zero_linger = 0;
     const int mandatory = 1;
     TEST_ASSERT_EQUAL_INT (

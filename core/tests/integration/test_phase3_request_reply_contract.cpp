@@ -789,6 +789,11 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_routing_id_text (router, "zero-weight-router");
     const int zero_weight = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -817,11 +822,6 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     assert_part_consumed (&request);
     assert_no_completion_for (dealer, 20);
 
-    const int send_timeout_ms = 2000;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
-                        sizeof (send_timeout_ms)));
     zlink_msg_t blocking_request;
     init_part (&blocking_request, "reject-known-zero-weight");
     zlink_completion_id_t blocking_id = UINT64_MAX;

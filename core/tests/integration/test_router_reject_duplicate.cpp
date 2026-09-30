@@ -287,6 +287,11 @@ void run_transient_disconnect (bool tcp_)
     char endpoint[MAX_SOCKET_STRING];
     bind_server (server, tcp_, endpoint);
     void *dealer = new_socket (ZLINK_SOCKET_DEALER);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     void *monitor = open_monitor (dealer);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
     wait_event (monitor, ZLINK_EVENT_CONNECTION_READY);
@@ -394,6 +399,11 @@ void test_rejected_pending_request_inproc ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
       zlink_ctx_set (get_test_context (), ZLINK_IO_THREADS, 0));
     void *server = new_socket (ZLINK_SOCKET_ROUTER);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (server, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     char endpoint[MAX_SOCKET_STRING];
     bind_server (server, false, endpoint);
     void *first = new_socket (ZLINK_SOCKET_DEALER);

@@ -306,6 +306,11 @@ void test_dealer_router_hwm_request_uses_writable_retry ()
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (router);
     set_zero_linger (dealer);
     set_small_hwm (router);
@@ -329,6 +334,11 @@ void test_router_router_hwm_request_preserves_rid ()
     void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (server);
     set_zero_linger (client);
     set_small_hwm (server);
@@ -359,6 +369,11 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (dealer);
     TEST_ASSERT_NOT_NULL (router);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (dealer);
     set_zero_linger (router);
     const int immediate = 1;
