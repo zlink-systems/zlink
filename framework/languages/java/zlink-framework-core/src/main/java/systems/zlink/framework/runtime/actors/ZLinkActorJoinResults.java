@@ -12,6 +12,17 @@ final class ZLinkActorJoinResults {
     private ZLinkActorJoinResults() {}
 
     static ZLinkActorJoinOutcome decode(
+            systems.zlink.framework.spots.ZLinkSpotActorJoinResult result,
+            ZLinkBackendActorRef actor,
+            String meshName) {
+        ZLinkMessage reply = result.reply() == null ? ZLinkMessage.empty() : result.reply();
+        return result.accepted()
+                ? new ZLinkActorJoinOutcome.Accepted(
+                        ZLinkActorRuntime.toPublicActorRef(actor, meshName), reply)
+                : new ZLinkActorJoinOutcome.Rejected(reply);
+    }
+
+    static ZLinkActorJoinOutcome decode(
             ZLinkMessageSerializer serializer,
             int joinResultCode,
             ZLinkBackendActorRef actor,

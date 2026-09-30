@@ -164,10 +164,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         CompletionStage<Optional<Message>> restore(ZLinkActor actor, TransferBacklogPacket packet);
     }
 
-    public interface LocalJoinCompleter {
-        CompletionStage<Void> complete(ZLinkActor actor);
-
-        void cancel(ZLinkActor actor);
+    @FunctionalInterface
+    public interface LocalActorJoiner {
+        CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> join(
+                ZLinkActor actor, String spotId, Message request);
     }
 
     @FunctionalInterface
@@ -232,7 +232,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     CompletableFuture.failedFuture(
                             new ZLinkConfigurationException(
                                     "remote Actor move backlog restorer is not configured"));
-    private LocalJoinCompleter localJoinCompleter = unavailableLocalJoinCompleter();
+    private LocalActorJoiner localActorJoiner =
+            (actor, spotId, request) ->
+                    CompletableFuture.failedFuture(
+                            new ZLinkConfigurationException("local Actor Join is unavailable"));
     private Function<String, ZLinkSpot<?>> spotResolver = ignored -> null;
     private SpotTransportAddressResolver remoteAddressResolver;
     private final ZLinkActorLocationCoordinator locations =
@@ -1963,22 +1966,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return sourceActorLeaver.leave(actor, source);
     }
 
-    /**
-     * Sends the source lifecycle notification for a local Join without making the target Join
-     * completion wait for the notification to finish.
-     */
-    public void notifySourceForLocalMove(ZLinkActor actor, LocalMoveSource source) {
-        try {
-            CompletionStage<Void> cleanup = cleanupSourceForLocalMove(actor, source);
-            if (cleanup != null) {
-                cleanup.exceptionally(ignored -> null);
-            }
-        } catch (Throwable ignored) {
-            // Source OnLeaveActor is a one-way notification. Its failure must
-            // not turn an already committed target Join into a failed Join.
-        }
-    }
-
     CompletionStage<Void> leaveSourceForRemoteMove(ZLinkActor actor) {
         DefaultActorContext context = requireContext(actor);
         String currentSpotId = context.joinedSpotId();
@@ -2267,11 +2254,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(ignored -> renewActorJoinedLocation(actor, spotId));
     }
 
-    public CompletionStage<Void> commitEntryLocation(ZLinkActor actor, RoutingId entryNodeRid) {
+    public CompletionStage<Void> commitEntryLocation(
+            ZLinkActor actor,
+            RoutingId entryNodeRid,
+            String entrySpotId,
+            long entrySpotGeneration) {
         DefaultActorContext context = requireContext(actor);
-        context.setEntrySpotNodeRid(entryNodeRid);
-        context.markMovedToEntrySpot(
-                context.actorRef(), new EntrySpotTarget(entryNodeRid, context.entrySpotId()));
         String actorType = actorRegistry.actorType(actor.context().actorId());
         CompletionStage<Void> ownership =
                 actorRegistry.clearPendingTransfer(actor.context().actorId())
@@ -2287,7 +2275,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         ignored ->
                                 locations.setActorRef(
                                         actorType, actor.context().actorId(), publicRefFor(actor)))
-                .thenCompose(ignored -> renewActorMovedToEntrySpotLocation(actor, entryNodeRid));
+                .thenCompose(
+                        ignored ->
+                                locations.actorMovedToEntrySpot(
+                                        actor, entryNodeRid, entrySpotId, entrySpotGeneration))
+                .thenRun(() -> markJoinedEntrySpot(actor, context.actorRef(), entryNodeRid));
     }
 
     public void markJoinedEntrySpot(
@@ -4377,31 +4369,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         : transferBacklogRestorer;
     }
 
-    public void setLocalJoinCompleter(LocalJoinCompleter localJoinCompleter) {
-        this.localJoinCompleter =
-                localJoinCompleter == null ? unavailableLocalJoinCompleter() : localJoinCompleter;
+    public void setLocalActorJoiner(LocalActorJoiner joiner) {
+        localActorJoiner = Objects.requireNonNull(joiner, "joiner");
     }
 
-    public CompletionStage<Void> completeLocalJoinFromCaller(ZLinkActor actor) {
-        return localJoinCompleter.complete(actor);
-    }
-
-    public void cancelLocalJoin(ZLinkActor actor) {
-        localJoinCompleter.cancel(actor);
-    }
-
-    private static LocalJoinCompleter unavailableLocalJoinCompleter() {
-        return new LocalJoinCompleter() {
-            @Override
-            public CompletionStage<Void> complete(ZLinkActor actor) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                "local actor Spot join completion is unavailable"));
-            }
-
-            @Override
-            public void cancel(ZLinkActor actor) {}
-        };
+    public CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> joinLocalActor(
+            ZLinkActor actor, String spotId, Message request) {
+        return localActorJoiner.join(actor, spotId, request);
     }
 
     public void setCreatedNotifier(CreatedNotifier createdNotifier) {

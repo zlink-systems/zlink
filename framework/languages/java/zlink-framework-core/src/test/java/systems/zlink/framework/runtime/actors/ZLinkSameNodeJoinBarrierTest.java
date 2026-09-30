@@ -14,20 +14,16 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
-import systems.zlink.framework.locationprovider.ZLinkStoreKey;
-import systems.zlink.framework.locationprovider.ZLinkStorePut;
-import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
@@ -37,13 +33,19 @@ import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 /**
  * Spec 05-spot-actor-membership §4: after a same-node {@code JoinSpot}, the target Actor processes
@@ -56,18 +58,16 @@ final class ZLinkSameNodeJoinBarrierTest {
     private static final String ACTOR_ID = "player-1";
     private static final String TARGET_SPOT_ID = "target-room";
     private static final CountDownLatch TARGET_JOINED = new CountDownLatch(1);
-    private static final CountDownLatch RENEWAL_HELD = new CountDownLatch(1);
-    private static final CompletableFuture<Void> RENEWAL_RELEASE = new CompletableFuture<>();
-    private static final AtomicBoolean HOLD_ARMED = new AtomicBoolean();
+    private static final CountDownLatch LIFECYCLE_HELD = new CountDownLatch(1);
+    private static final CompletableFuture<Void> LIFECYCLE_RELEASE = new CompletableFuture<>();
     private static final AtomicBoolean JOIN_COMPLETED = new AtomicBoolean();
 
     @Test
     void arrivalDuringSameNodeJoinWaitsForCompletionCallback() throws Exception {
+        AtomicInteger meshJoinSubmissions = new AtomicInteger();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        //  The Location Store write that the Join makes after OnJoinedActor is
-        //  held, so the window between OnJoinedActor and the completion
-        //  callback is open for as long as the test needs.
-        options.addLocationStore(new HoldingLocationStore(new ZLinkInMemoryLocationStore()));
+        // OnJoinedActor의 완료를 보류하여 Join completion 전 수신을 확인한다.
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
         var node = options.addRouteMesh("game");
         node.listen("inproc://same-node-join-barrier-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("same-node-join-barrier"));
@@ -82,7 +82,7 @@ final class ZLinkSameNodeJoinBarrierTest {
 
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+                        options, observeMeshJoins(meshJoinSubmissions))) {
             var targetCreated =
                     runtime.spotManager()
                             .getOrCreate(TARGET_SPOT_ID, "target")
@@ -108,10 +108,9 @@ final class ZLinkSameNodeJoinBarrierTest {
                             .get(3, TimeUnit.SECONDS);
             assertEquals("scheduled", scheduled);
 
-            //  The Join is now between OnJoinedActor (ran) and the completion
-            //  callback (blocked behind the held Location Store write).
+            // OnJoinedActor가 아직 완료되지 않은 동안 Actor 수신을 제출한다.
             assertTrue(TARGET_JOINED.await(3, TimeUnit.SECONDS));
-            assertTrue(RENEWAL_HELD.await(3, TimeUnit.SECONDS));
+            assertTrue(LIFECYCLE_HELD.await(3, TimeUnit.SECONDS));
             CompletableFuture<Boolean> close =
                     runtime.spotManager().close(targetCreated.spot()).toCompletableFuture();
 
@@ -131,7 +130,7 @@ final class ZLinkSameNodeJoinBarrierTest {
             } catch (TimeoutException heldBehindJoin) {
                 early = null;
             }
-            RENEWAL_RELEASE.complete(null);
+            LIFECYCLE_RELEASE.complete(null);
             assertFalse(close.get(5, TimeUnit.SECONDS));
             String reply = early != null ? early : probe.get(5, TimeUnit.SECONDS);
             assertEquals(
@@ -139,43 +138,91 @@ final class ZLinkSameNodeJoinBarrierTest {
                     reply,
                     "an arrival during a same-node Join must dispatch only after "
                             + "the Join completion callback ended");
+            assertEquals(
+                    0,
+                    meshJoinSubmissions.get(),
+                    "same-node public Actor Join must use one Framework local path without Mesh Join records");
         }
     }
 
-    /** Delegates to the in-memory store, holding the Actor row write once armed. */
-    private static final class HoldingLocationStore implements ZLinkLocationStore {
-        private final ZLinkLocationStore inner;
+    static ZLinkBackendAdapterProvider observeMeshJoins(AtomicInteger submissions) {
+        var delegate = new ZLinkJavaBackendAdapterFactory();
+        Map<ZLinkBackendObject, ZLinkBackendObject> originals =
+                java.util.Collections.synchronizedMap(new IdentityHashMap<>());
+        return (ZLinkBackendAdapterProvider)
+                Proxy.newProxyInstance(
+                        ZLinkBackendAdapterProvider.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendAdapterProvider.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("admissionTimeout")) {
+                                return (Function<ZLinkBackendObject, Duration>)
+                                        backend ->
+                                                delegate.admissionTimeout()
+                                                        .apply(
+                                                                originals.getOrDefault(
+                                                                        backend, backend));
+                            }
+                            if (method.getName().equals("createMeshAdapter")) {
+                                ZLinkMeshBackendAdapter adapter =
+                                        (ZLinkMeshBackendAdapter)
+                                                invoke(method, delegate, arguments);
+                                return (ZLinkMeshBackendAdapter)
+                                        (context, name) -> {
+                                            ZLinkInternalMeshNode mesh =
+                                                    adapter.createMeshNode(context, name);
+                                            ZLinkInternalSpotNode spot =
+                                                    (ZLinkInternalSpotNode)
+                                                            Proxy.newProxyInstance(
+                                                                    ZLinkInternalSpotNode.class
+                                                                            .getClassLoader(),
+                                                                    new Class<?>[] {
+                                                                        ZLinkInternalSpotNode.class
+                                                                    },
+                                                                    (p, m, a) -> {
+                                                                        if (m.getName()
+                                                                                        .equals(
+                                                                                                "joinActor")
+                                                                                || m.getName()
+                                                                                        .equals(
+                                                                                                "joinActorEntrySpot")) {
+                                                                            submissions
+                                                                                    .incrementAndGet();
+                                                                        }
+                                                                        return invoke(
+                                                                                m,
+                                                                                mesh.spotNode(),
+                                                                                a);
+                                                                    });
+                                            ZLinkInternalMeshNode observed =
+                                                    (ZLinkInternalMeshNode)
+                                                            Proxy.newProxyInstance(
+                                                                    ZLinkInternalMeshNode.class
+                                                                            .getClassLoader(),
+                                                                    new Class<?>[] {
+                                                                        ZLinkInternalMeshNode.class
+                                                                    },
+                                                                    (p, m, a) ->
+                                                                            m.getName()
+                                                                                            .equals(
+                                                                                                    "spotNode")
+                                                                                    ? spot
+                                                                                    : invoke(
+                                                                                            m, mesh,
+                                                                                            a));
+                                            originals.put(observed, mesh);
+                                            return observed;
+                                        };
+                            }
+                            return invoke(method, delegate, arguments);
+                        });
+    }
 
-        HoldingLocationStore(ZLinkLocationStore inner) {
-            this.inner = inner;
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreReadResult> read(
-                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
-            return inner.read(key, cancellation);
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreWriteResult> write(
-                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
-            boolean actorRow =
-                    request.mutations().stream()
-                            .anyMatch(
-                                    mutation ->
-                                            mutation instanceof ZLinkStorePut put
-                                                    && put.key().value().contains(ACTOR_ID));
-            if (!actorRow || !HOLD_ARMED.compareAndSet(true, false)) {
-                return inner.write(request, cancellation);
-            }
-            RENEWAL_HELD.countDown();
-            return RENEWAL_RELEASE.thenCompose(ignored -> inner.write(request, cancellation));
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreScanResult> scan(
-                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
-            return inner.scan(request, cancellation);
+    private static Object invoke(java.lang.reflect.Method method, Object target, Object[] arguments)
+            throws Throwable {
+        try {
+            return method.invoke(target, arguments);
+        } catch (InvocationTargetException failure) {
+            throw failure.getCause();
         }
     }
 
@@ -259,11 +306,10 @@ final class ZLinkSameNodeJoinBarrierTest {
 
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
-            //  From here on the next Actor row write belongs to this Join's
-            //  location renewal; hold it to keep the completion callback open.
-            HOLD_ARMED.set(true);
+            // target lifecycle 완료 전에는 Join completion과 Actor 수신을 진행하지 않는다.
             TARGET_JOINED.countDown();
-            return CompletableFuture.completedFuture(null);
+            LIFECYCLE_HELD.countDown();
+            return LIFECYCLE_RELEASE;
         }
 
         @Override
