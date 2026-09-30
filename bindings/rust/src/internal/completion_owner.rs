@@ -519,6 +519,7 @@ impl CompletionOwner {
             );
             processed += 1;
         }
+        drop(_completion);
         for waker in wakers {
             waker.wake();
         }
