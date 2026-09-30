@@ -412,6 +412,12 @@ final class ZLinkActorDispatchSerials {
         return trackedTarget(actorId).abortActorRelocation(actorId, seal);
     }
 
+    CompletionStage<Boolean> abortAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return trackedTargetAsync(actorId)
+                .thenCompose(owner -> owner.abortActorRelocationAsync(actorId, seal));
+    }
+
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commit(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return trackedTarget(actorId).commitActorRelocation(actorId, seal);
@@ -420,6 +426,28 @@ final class ZLinkActorDispatchSerials {
     Optional<ZLinkRetainedSerialQueueCommit.Commit> retainCommit(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return trackedTarget(actorId).retainActorRelocationCommit(actorId, seal);
+    }
+
+    CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>> retainCommitAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return trackedTargetAsync(actorId)
+                .thenCompose(owner -> owner.retainActorRelocationCommitAsync(actorId, seal));
+    }
+
+    private CompletionStage<ZLinkActorDispatchTarget> trackedTargetAsync(String actorId) {
+        return stateLane
+                .runNowOrQueue(() -> actorTargets.get(actorId))
+                .thenCompose(
+                        tracked -> {
+                            if (tracked != null) {
+                                return CompletableFuture.completedFuture(tracked);
+                            }
+                            ZLinkActorDispatchTarget resolved = target(actorId);
+                            return stateLane.runNowOrQueue(
+                                    () ->
+                                            actorTargets.computeIfAbsent(
+                                                    actorId, ignored -> resolved));
+                        });
     }
 
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeIngress(
@@ -529,21 +557,47 @@ final class ZLinkActorDispatchSerials {
     }
 
     private void completeTeardown(String actorId, TeardownSetup setup, Throwable error) {
-        inStateLane(
-                () -> {
-                    teardowns.remove(actorId, setup.terminal());
-                    if (error == null) {
-                        actorTargets.remove(actorId, setup.target());
-                        setup.target().removeActorQueue(actorId);
-                        activeActorIds.remove(actorId);
-                    }
-                    return null;
-                });
-        if (error == null) {
-            setup.terminal().complete(null);
-        } else {
-            setup.terminal().completeExceptionally(error);
+        CompletionStage<Void> removed;
+        try {
+            removed =
+                    error == null
+                            ? setup.target().removeActorQueueAsync(actorId)
+                            : CompletableFuture.completedFuture(null);
+        } catch (RuntimeException | Error failure) {
+            removed = CompletableFuture.failedFuture(failure);
         }
+        removed.whenComplete(
+                (ignored, removalFailure) -> {
+                    CompletionStage<Void> registration;
+                    try {
+                        registration =
+                                stateLane.runNowOrQueue(
+                                        () -> {
+                                            teardowns.remove(actorId, setup.terminal());
+                                            if (error == null && removalFailure == null) {
+                                                actorTargets.remove(actorId, setup.target());
+                                                activeActorIds.remove(actorId);
+                                            }
+                                            return null;
+                                        });
+                    } catch (RuntimeException | Error failure) {
+                        registration = CompletableFuture.failedFuture(failure);
+                    }
+                    registration.whenComplete(
+                            (nothing, registrationFailure) -> {
+                                Throwable terminalFailure = error == null ? removalFailure : error;
+                                if (terminalFailure == null) {
+                                    terminalFailure = registrationFailure;
+                                } else if (registrationFailure != null) {
+                                    terminalFailure.addSuppressed(registrationFailure);
+                                }
+                                if (terminalFailure == null) {
+                                    setup.terminal().complete(null);
+                                } else {
+                                    setup.terminal().completeExceptionally(terminalFailure);
+                                }
+                            });
+                });
     }
 
     record QueuedTurn(String actorId, ZLinkActorDispatchTarget target) {}

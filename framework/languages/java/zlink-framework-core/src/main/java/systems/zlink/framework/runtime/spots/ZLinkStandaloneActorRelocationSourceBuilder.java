@@ -958,8 +958,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final String targetSpotId;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private List<ZLinkSerialExecutionQueue.QueuedRecord> finalJournal = List.of();
-        private systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
-                        .Commit
+        private CompletionStage<
+                        systems.zlink.framework.runtime.internal.relocation
+                                .ZLinkRetainedSerialQueueCommit.Commit>
                 relocationCommit;
         private boolean captureFinished;
         private boolean committed;
@@ -1081,52 +1082,103 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 ZLinkRelocationTransitionClient client, Duration timeout) {
             Objects.requireNonNull(client, "client");
             Objects.requireNonNull(timeout, "timeout");
-            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
-                            .Commit
-                    retained;
             try {
-                retained =
-                        inStateLane(
+                return stateLane
+                        .runNowOrQueue(
                                 () -> {
                                     if (terminal || committed) {
                                         throw new IllegalStateException(
                                                 "Actor relocation relay boundary is terminal");
                                     }
-                                    if (relocationCommit == null) {
-                                        relocationCommit =
-                                                actors.retainActorRelocationCommit(
-                                                                owned.actorId(), seal)
-                                                        .orElseThrow(
-                                                                () ->
-                                                                        new IllegalStateException(
-                                                                                "Actor relocation"
-                                                                                        + " source"
-                                                                                        + " queue was"
-                                                                                        + " lost"));
-                                        installExpectedRelocationForward();
-                                    }
-                                    return relocationCommit;
-                                });
+                                    return retainCommitOnLane();
+                                })
+                        .thenCompose(stage -> stage)
+                        .thenCompose(retained -> relayRetained(retained, client, timeout));
             } catch (RuntimeException failure) {
                 return failed(failure);
             }
-            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit.Cut
-                    cut;
-            do {
-                cut = retained.cut();
-            } while (!retained.tryEstablishAndFinishCapture(cut));
-            List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
-                    cut.records().stream()
-                            .sorted(
-                                    (left, right) ->
-                                            Long.compareUnsigned(left.sequence(), right.sequence()))
-                            .toList();
-            inStateLane(
-                    () -> {
-                        finalJournal = relayed;
-                        captureFinished = true;
-                        return null;
-                    });
+        }
+
+        private CompletionStage<
+                        systems.zlink.framework.runtime.internal.relocation
+                                .ZLinkRetainedSerialQueueCommit.Commit>
+                retainCommitOnLane() {
+            if (relocationCommit == null) {
+                relocationCommit =
+                        actors.retainActorRelocationCommitAsync(owned.actorId(), seal)
+                                .thenApply(
+                                        retained ->
+                                                retained.orElseThrow(
+                                                        () ->
+                                                                new IllegalStateException(
+                                                                        "Actor relocation source"
+                                                                                + " queue was lost")));
+            }
+            return relocationCommit;
+        }
+
+        private CompletionStage<Void> relayRetained(
+                systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
+                                .Commit
+                        retained,
+                ZLinkRelocationTransitionClient client,
+                Duration timeout) {
+            return stateLane
+                    .runNowOrQueue(
+                            () -> {
+                                if (terminal || committed) {
+                                    throw new IllegalStateException(
+                                            "Actor relocation relay boundary is terminal");
+                                }
+                                boolean first = !captureFinished;
+                                List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
+                                        finishCaptureOnLane(retained);
+                                return first
+                                        ? installExpectedRelocationForward()
+                                                .thenApply(ignored -> relayed)
+                                        : CompletableFuture.completedFuture(relayed);
+                            })
+                    .thenCompose(stage -> stage)
+                    .thenCompose(
+                            relayed ->
+                                    stateLane.runNowOrQueue(
+                                            () -> {
+                                                if (terminal || committed) {
+                                                    throw new IllegalStateException(
+                                                            "Actor relocation relay boundary is terminal");
+                                                }
+                                                return relayed;
+                                            }))
+                    .thenCompose(relayed -> relayJournal(relayed, client, timeout));
+        }
+
+        private List<ZLinkSerialExecutionQueue.QueuedRecord> finishCaptureOnLane(
+                systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
+                                .Commit
+                        retained) {
+            if (!captureFinished) {
+                systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
+                                .Cut
+                        cut;
+                do {
+                    cut = retained.cut();
+                } while (!retained.tryEstablishAndFinishCapture(cut));
+                finalJournal =
+                        cut.records().stream()
+                                .sorted(
+                                        (left, right) ->
+                                                Long.compareUnsigned(
+                                                        left.sequence(), right.sequence()))
+                                .toList();
+                captureFinished = true;
+            }
+            return finalJournal;
+        }
+
+        private CompletionStage<Void> relayJournal(
+                List<ZLinkSerialExecutionQueue.QueuedRecord> relayed,
+                ZLinkRelocationTransitionClient client,
+                Duration timeout) {
             CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
             if (sealedSessionRoute.isPresent()) {
                 byte[] sealedResult = sealedSessionRoute.orElseThrow().sealedAck();
@@ -1152,11 +1204,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return chain;
         }
 
-        private void installExpectedRelocationForward() {
+        private CompletionStage<Void> installExpectedRelocationForward() {
             long targetOwnerGeneration =
                     Math.addExact(owned.snapshot().authorityOwnerGeneration(), 1);
-            actors.stageRelocationMessageFollow(sourceRoute(), targetRoute(targetOwnerGeneration));
-            bindCommittedReplies(Map.of(owned.authorityKey(), targetOwnerGeneration));
+            return actors.stageRelocationMessageFollowAsync(
+                            sourceRoute(), targetRoute(targetOwnerGeneration))
+                    .thenCompose(ignored -> bindCommittedReplies());
         }
 
         private ZLinkServiceM6BWireCodec.ActorRouteFence sourceRoute() {
@@ -1182,7 +1235,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     stageRequest.targetOwnerLeaseGeneration());
         }
 
-        private void bindCommittedReplies(Map<String, Long> targetOwnerGenerations) {
+        private CompletionStage<Void> bindCommittedReplies() {
             ZLinkSpotRetireControl.ParticipantFence participant =
                     stageRequest.participants().stream()
                             .filter(value -> value.objectId().equals(owned.actorId()))
@@ -1191,7 +1244,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     () ->
                                             new IllegalStateException(
                                                     "Actor relocation participant is missing"));
-            relocationReplies.bindCanonicalRelocationReplies(
+            return relocationReplies.bindCanonicalRelocationRepliesAsync(
                     Map.of("actor:" + owned.actorId(), finalJournal),
                     stageRequest.targetNodeRid(),
                     stageRequest.targetNodeGeneration(),
@@ -1203,23 +1256,26 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     stageRequest.fence().aggregateGeneration())));
         }
 
-        void completeSourceQueueCommit() {
-            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
-                            .Commit
-                    retained =
-                            inStateLane(
-                                    () -> {
-                                        if (relocationCommit == null
-                                                || !committed && !captureFinished) {
-                                            throw new IllegalStateException(
-                                                    "Actor relocation source queue is not durably"
-                                                            + " committed");
-                                        }
-                                        committed = true;
-                                        actors.commitRelocationMessageFollow(sourceRoute());
-                                        return relocationCommit;
-                                    });
-            retained.complete();
+        CompletionStage<Void> completeSourceQueueCommit() {
+            return stateLane
+                    .runNowOrQueue(
+                            () -> {
+                                if (relocationCommit == null || !committed && !captureFinished) {
+                                    throw new IllegalStateException(
+                                            "Actor relocation source queue is not durably committed");
+                                }
+                                committed = true;
+                                return relocationCommit;
+                            })
+                    .thenCompose(stage -> stage)
+                    .thenCompose(
+                            retained ->
+                                    actors.commitRelocationMessageFollowAsync(sourceRoute())
+                                            .thenApply(ignored -> retained))
+                    .thenAccept(
+                            systems.zlink.framework.runtime.internal.relocation
+                                            .ZLinkRetainedSerialQueueCommit.Commit
+                                    ::complete);
         }
 
         boolean relayBoundaryCommitted() {
@@ -1266,73 +1322,110 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
          * Message Follow and discards its retained work.
          */
         CompletionStage<Void> discardAfterSourceLeaseExpiry() {
-            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
-                            .Commit
-                    retained;
             try {
-                retained =
-                        inStateLane(
+                return stateLane
+                        .runNowOrQueue(
                                 () -> {
                                     if (terminal || committed) {
                                         throw new IllegalStateException(
                                                 "Actor relocation source is already settled");
                                     }
                                     committed = true;
-                                    if (relocationCommit == null) {
-                                        relocationCommit =
-                                                actors.retainActorRelocationCommit(
-                                                                owned.actorId(), seal)
-                                                        .orElseThrow(
-                                                                () ->
-                                                                        new IllegalStateException(
-                                                                                "Actor relocation"
-                                                                                        + " source"
-                                                                                        + " queue was"
-                                                                                        + " lost"));
-                                    }
-                                    return relocationCommit;
-                                });
+                                    return retainCommitOnLane();
+                                })
+                        .thenCompose(stage -> stage)
+                        .thenCompose(
+                                retained ->
+                                        stateLane.runNowOrQueue(
+                                                () -> {
+                                                    finishCaptureOnLane(retained);
+                                                    return retained;
+                                                }))
+                        .thenCompose(
+                                retained ->
+                                        actors.abortRelocationMessageFollowAsync(sourceRoute())
+                                                .thenCompose(
+                                                        routeFinished -> {
+                                                            retained.complete();
+                                                            return relocationReplies
+                                                                    .failRelocationRepliesUnavailable(
+                                                                            true,
+                                                                            owned.actorId(),
+                                                                            owned.snapshot()
+                                                                                    .objectGeneration())
+                                                                    .thenCompose(
+                                                                            repliesFailed ->
+                                                                                    cleanupLocal())
+                                                                    .thenCompose(
+                                                                            cleaned ->
+                                                                                    discardInitialAfterCommit());
+                                                        }));
             } catch (RuntimeException failure) {
                 return failed(failure);
             }
-            actors.abortRelocationMessageFollow(sourceRoute());
-            retained.complete();
-            return relocationReplies
-                    .failRelocationRepliesUnavailable(
-                            true, owned.actorId(), owned.snapshot().objectGeneration())
-                    .thenCompose(ignored -> cleanupLocal())
-                    .thenCompose(ignored -> discardInitialAfterCommit());
         }
 
         CompletionStage<Void> abort() {
             try {
-                inStateLane(
-                        () -> {
-                            if (terminal || committed) {
-                                throw new IllegalStateException(
-                                        "committed Actor relocation cannot be aborted");
-                            }
-                            return null;
-                        });
+                return stateLane
+                        .runNowOrQueue(
+                                () -> {
+                                    if (terminal || committed) {
+                                        throw new IllegalStateException(
+                                                "committed Actor relocation cannot be aborted");
+                                    }
+                                    return relocationCommit;
+                                })
+                        .thenCompose(
+                                retained ->
+                                        abortSessionRoute(sessionSealer, sealedSessionRoute)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                actors
+                                                                        .abortRelocationMessageFollowAsync(
+                                                                                sourceRoute()))
+                                                .thenCompose(
+                                                        ignored ->
+                                                                retained == null
+                                                                        ? actors
+                                                                                .abortActorRelocationAsync(
+                                                                                        owned
+                                                                                                .actorId(),
+                                                                                        seal)
+                                                                        : retained.handle(
+                                                                                        (commit,
+                                                                                                failure) ->
+                                                                                                failure
+                                                                                                                == null
+                                                                                                        ? CompletableFuture
+                                                                                                                .completedFuture(
+                                                                                                                        commit
+                                                                                                                                .abort())
+                                                                                                        : actors
+                                                                                                                .abortActorRelocationAsync(
+                                                                                                                        owned
+                                                                                                                                .actorId(),
+                                                                                                                        seal))
+                                                                                .thenCompose(
+                                                                                        stage ->
+                                                                                                stage)))
+                        .thenCompose(
+                                restored -> {
+                                    if (!restored) {
+                                        throw new IllegalStateException(
+                                                "Actor relocation source queue was lost");
+                                    }
+                                    relocationReplies.resumeActorTimersAfterRelocationAbort(
+                                            owned.actorId());
+                                    return stateLane.runNowOrQueue(
+                                            () -> {
+                                                terminal = true;
+                                                return null;
+                                            });
+                                });
             } catch (RuntimeException failure) {
                 return failed(failure);
             }
-            return abortSessionRoute(sessionSealer, sealedSessionRoute)
-                    .thenRun(
-                            () -> {
-                                actors.abortRelocationMessageFollow(sourceRoute());
-                                boolean restored =
-                                        relocationCommit == null
-                                                ? actors.abortActorRelocation(owned.actorId(), seal)
-                                                : relocationCommit.abort();
-                                if (!restored) {
-                                    throw new IllegalStateException(
-                                            "Actor relocation source queue was lost");
-                                }
-                                relocationReplies.resumeActorTimersAfterRelocationAbort(
-                                        owned.actorId());
-                                finish();
-                            });
         }
 
         private void finish() {

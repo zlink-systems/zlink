@@ -176,6 +176,17 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     @Override
+    public CompletionStage<Boolean> abortActorRelocationAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        Objects.requireNonNull(actorId, "actorId");
+        return stateLane.runNowOrQueue(
+                () ->
+                        Optional.ofNullable(actorQueues.get(actorId))
+                                .map(queue -> queue.abortRelocation(seal))
+                                .orElse(false));
+    }
+
+    @Override
     public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return actorQueueIfPresent(actorId).flatMap(queue -> queue.commitRelocation(seal));
@@ -185,6 +196,17 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     public Optional<ZLinkRetainedSerialQueueCommit.Commit> retainActorRelocationCommit(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return actorQueueIfPresent(actorId).flatMap(queue -> queue.retainRelocationCommit(seal));
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>>
+            retainActorRelocationCommitAsync(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        Objects.requireNonNull(actorId, "actorId");
+        return stateLane.runNowOrQueue(
+                () ->
+                        Optional.ofNullable(actorQueues.get(actorId))
+                                .flatMap(queue -> queue.retainRelocationCommit(seal)));
     }
 
     @Override
@@ -203,6 +225,15 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     @Override
     public void removeActorQueue(String actorId) {
         inStateLane(
+                () -> {
+                    actorQueues.remove(actorId);
+                    return null;
+                });
+    }
+
+    @Override
+    public CompletionStage<Void> removeActorQueueAsync(String actorId) {
+        return stateLane.runNowOrQueue(
                 () -> {
                     actorQueues.remove(actorId);
                     return null;

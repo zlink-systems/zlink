@@ -121,15 +121,17 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared = attempt.prepared();
         return switch (settlement) {
             case TARGET_COMMITTED -> {
-                prepared.completeSourceQueueCommit();
-                attempt.committed().complete(null);
-                armAuthorityLossCleanup(attempt);
-                yield CompletableFuture.completedFuture(
-                        new Submission(
-                                new ZLinkBackendActorRef(
-                                        goal.targetNodeRid(),
-                                        goal.sourceActor().actorId(),
-                                        goal.sourceActor().generation())));
+                yield prepared.completeSourceQueueCommit()
+                        .thenApply(
+                                ignored -> {
+                                    attempt.committed().complete(null);
+                                    armAuthorityLossCleanup(attempt);
+                                    return new Submission(
+                                            new ZLinkBackendActorRef(
+                                                    goal.targetNodeRid(),
+                                                    goal.sourceActor().actorId(),
+                                                    goal.sourceActor().generation()));
+                                });
             }
             //  The source Preserve fence won at the Join deadline: the Actor stays on
             //  the source and the location change missed its deadline (spec 15).

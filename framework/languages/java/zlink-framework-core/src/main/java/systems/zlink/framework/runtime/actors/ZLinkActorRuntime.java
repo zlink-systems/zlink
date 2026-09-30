@@ -2040,8 +2040,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 messageFollowRoute(source), messageFollowRoute(target), target);
     }
 
+    public CompletionStage<Void> stageRelocationMessageFollowAsync(
+            ZLinkServiceM6BWireCodec.ActorRouteFence source,
+            ZLinkServiceM6BWireCodec.ActorRouteFence target) {
+        return handoff.stageRelocationRouteAsync(
+                messageFollowRoute(source), messageFollowRoute(target), target);
+    }
+
     public void commitRelocationMessageFollow(ZLinkServiceM6BWireCodec.ActorRouteFence source) {
         handoff.commitRelocationRoute(messageFollowRoute(source), messageFollowDuration);
+    }
+
+    public CompletionStage<Void> commitRelocationMessageFollowAsync(
+            ZLinkServiceM6BWireCodec.ActorRouteFence source) {
+        return handoff.commitRelocationRouteAsync(
+                messageFollowRoute(source), messageFollowDuration);
     }
 
     public void refreshRelocationMessageFollow(
@@ -2053,6 +2066,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void abortRelocationMessageFollow(ZLinkServiceM6BWireCodec.ActorRouteFence source) {
         handoff.abortRelocationRoute(messageFollowRoute(source));
+    }
+
+    public CompletionStage<Void> abortRelocationMessageFollowAsync(
+            ZLinkServiceM6BWireCodec.ActorRouteFence source) {
+        return handoff.abortRelocationRouteAsync(messageFollowRoute(source));
     }
 
     CompletionStage<Optional<ZLinkStoreLocationResolvers.ActorRoute>>
@@ -4170,6 +4188,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches.abort(actorId, seal);
     }
 
+    public CompletionStage<Boolean> abortActorRelocationAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return dispatches.abortAsync(actorId, seal);
+    }
+
     public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.commit(actorId, seal);
@@ -4181,6 +4204,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             retainActorRelocationCommit(
                     String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.retainCommit(actorId, seal);
+    }
+
+    public CompletionStage<
+                    Optional<
+                            systems.zlink.framework.runtime.internal.relocation
+                                    .ZLinkRetainedSerialQueueCommit.Commit>>
+            retainActorRelocationCommitAsync(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return dispatches.retainCommitAsync(actorId, seal);
     }
 
     public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(

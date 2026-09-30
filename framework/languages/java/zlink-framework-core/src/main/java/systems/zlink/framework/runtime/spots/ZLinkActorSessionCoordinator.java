@@ -90,6 +90,20 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().retainActorRelocationCommit(actorId, seal);
     }
 
+    CompletionStage<
+                    Optional<
+                            systems.zlink.framework.runtime.internal.relocation
+                                    .ZLinkRetainedSerialQueueCommit.Commit>>
+            retainActorRelocationCommitAsync(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return requireActors().retainActorRelocationCommitAsync(actorId, seal);
+    }
+
+    CompletionStage<Boolean> abortActorRelocationAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return requireActors().abortActorRelocationAsync(actorId, seal);
+    }
+
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return requireActors().freezeActorRelocationIngress(actorId, seal);
@@ -109,11 +123,28 @@ final class ZLinkActorSessionCoordinator {
         requireActors().stageRelocationMessageFollow(source, target);
     }
 
+    CompletionStage<Void> stageRelocationMessageFollowAsync(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    target) {
+        return requireActors().stageRelocationMessageFollowAsync(source, target);
+    }
+
     void commitRelocationMessageFollow(
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
                     source) {
         requireActors().commitRelocationMessageFollow(source);
+    }
+
+    CompletionStage<Void> commitRelocationMessageFollowAsync(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source) {
+        return requireActors().commitRelocationMessageFollowAsync(source);
     }
 
     void refreshRelocationMessageFollow(
@@ -131,6 +162,13 @@ final class ZLinkActorSessionCoordinator {
                             .ActorRouteFence
                     source) {
         requireActors().abortRelocationMessageFollow(source);
+    }
+
+    CompletionStage<Void> abortRelocationMessageFollowAsync(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source) {
+        return requireActors().abortRelocationMessageFollowAsync(source);
     }
 
     String actorType(String actorId) {

@@ -46,11 +46,18 @@ public interface ZLinkActorDispatchTarget {
 
     boolean abortActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
+    CompletionStage<Boolean> abortActorRelocationAsync(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
+
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
     Optional<ZLinkRetainedSerialQueueCommit.Commit> retainActorRelocationCommit(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
+
+    CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>>
+            retainActorRelocationCommitAsync(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
@@ -58,4 +65,6 @@ public interface ZLinkActorDispatchTarget {
     CompletionStage<Void> awaitActorQuiescence(String actorId);
 
     void removeActorQueue(String actorId);
+
+    CompletionStage<Void> removeActorQueueAsync(String actorId);
 }

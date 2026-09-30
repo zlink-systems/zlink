@@ -300,76 +300,125 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
                     rawTargetRoute) {
-        inStateLane(
-                () -> {
-                    requireOpen();
-                    MessageFollowSource previous = exactSource(sourceRoute);
-                    if (previous != null) {
-                        if (previous.committed()) {
-                            throw new IllegalStateException(
-                                    "committed Message Follow source route cannot be staged again");
-                        }
-                        messageFollowSources.remove(previous.token(), previous);
-                    }
-                    MessageFollowSource staged =
-                            new MessageFollowSource(
-                                    actorRef(sourceRoute),
-                                    actorRef(targetRoute),
-                                    null,
-                                    sourceRoute,
-                                    targetRoute,
-                                    rawTargetRoute,
-                                    ++messageFollowToken,
-                                    false,
-                                    messageFollowSuppression);
-                    messageFollowSources.put(staged.token(), staged);
-                    return null;
-                });
+        inStateLane(() -> stageRelocationRouteOnLane(sourceRoute, targetRoute, rawTargetRoute));
+    }
+
+    CompletionStage<Void> stageRelocationRouteAsync(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+            ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    rawTargetRoute) {
+        return stateLane.runNowOrQueue(
+                () -> stageRelocationRouteOnLane(sourceRoute, targetRoute, rawTargetRoute));
+    }
+
+    private Void stageRelocationRouteOnLane(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+            ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    rawTargetRoute) {
+        requireOpen();
+        MessageFollowSource previous = exactSource(sourceRoute);
+        if (previous != null) {
+            if (previous.committed()) {
+                throw new IllegalStateException(
+                        "committed Message Follow source route cannot be staged again");
+            }
+            messageFollowSources.remove(previous.token(), previous);
+        }
+        MessageFollowSource staged =
+                new MessageFollowSource(
+                        actorRef(sourceRoute),
+                        actorRef(targetRoute),
+                        null,
+                        sourceRoute,
+                        targetRoute,
+                        rawTargetRoute,
+                        ++messageFollowToken,
+                        false,
+                        messageFollowSuppression);
+        messageFollowSources.put(staged.token(), staged);
+        return null;
     }
 
     void commitRelocationRoute(
             ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute, Duration duration) {
-        Objects.requireNonNull(duration, "duration");
-        if (duration.isNegative()) {
-            throw new IllegalArgumentException("Message Follow duration must not be negative");
-        }
+        requireMessageFollowDuration(duration);
         CommitRouteState state =
-                inStateLane(
-                        () -> {
-                            MessageFollowSource source = exactSource(sourceRoute);
-                            if (source == null) {
-                                throw new IllegalStateException(
-                                        "pre-commit Message Follow source route is unavailable");
-                            }
-                            source.commit();
-                            if (duration.isZero()) {
-                                messageFollowSources.remove(source.token(), source);
-                                source.expireMessageFollowNotices();
-                                return null;
-                            }
-                            Retention retained =
-                                    new Retention(sourceRoute.actorId(), source, ignored -> {});
-                            retirements.add(retained);
-                            return new CommitRouteState(source, retained);
-                        });
+                inStateLane(() -> commitRelocationRouteOnLane(sourceRoute, duration));
         if (state == null) {
             return;
         }
         ScheduledFuture<?> future =
                 retirementsExecutor.schedule(
                         () -> retire(state.retained()), duration.toMillis(), TimeUnit.MILLISECONDS);
-        boolean retained =
-                inStateLane(
-                        () -> {
-                            if (!retirements.contains(state.retained())) {
-                                return false;
-                            }
-                            state.retained().future(future);
-                            return true;
-                        });
+        boolean retained = inStateLane(() -> finishCommitRelocationRouteOnLane(state, future));
         if (!retained) {
             future.cancel(false);
         }
+    }
+
+    CompletionStage<Void> commitRelocationRouteAsync(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute, Duration duration) {
+        requireMessageFollowDuration(duration);
+        return stateLane
+                .runNowOrQueue(() -> commitRelocationRouteOnLane(sourceRoute, duration))
+                .thenCompose(
+                        state -> {
+                            if (state == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            ScheduledFuture<?> future =
+                                    retirementsExecutor.schedule(
+                                            () -> retire(state.retained()),
+                                            duration.toMillis(),
+                                            TimeUnit.MILLISECONDS);
+                            return stateLane
+                                    .runNowOrQueue(
+                                            () -> finishCommitRelocationRouteOnLane(state, future))
+                                    .thenAccept(
+                                            retained -> {
+                                                if (!retained) {
+                                                    future.cancel(false);
+                                                }
+                                            });
+                        });
+    }
+
+    private static void requireMessageFollowDuration(Duration duration) {
+        Objects.requireNonNull(duration, "duration");
+        if (duration.isNegative()) {
+            throw new IllegalArgumentException("Message Follow duration must not be negative");
+        }
+    }
+
+    private CommitRouteState commitRelocationRouteOnLane(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute, Duration duration) {
+        MessageFollowSource source = exactSource(sourceRoute);
+        if (source == null) {
+            throw new IllegalStateException(
+                    "pre-commit Message Follow source route is unavailable");
+        }
+        source.commit();
+        if (duration.isZero()) {
+            messageFollowSources.remove(source.token(), source);
+            source.expireMessageFollowNotices();
+            return null;
+        }
+        Retention retained = new Retention(sourceRoute.actorId(), source, ignored -> {});
+        retirements.add(retained);
+        return new CommitRouteState(source, retained);
+    }
+
+    private boolean finishCommitRelocationRouteOnLane(
+            CommitRouteState state, ScheduledFuture<?> future) {
+        if (!retirements.contains(state.retained())) {
+            return false;
+        }
+        state.retained().future(future);
+        return true;
     }
 
     void refreshRelocationRoute(
@@ -390,19 +439,32 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     void abortRelocationRoute(ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
-        MessageFollowSource removed =
-                inStateLane(
-                        () -> {
-                            MessageFollowSource source = exactSource(sourceRoute);
-                            if (source == null || source.committed()) {
-                                return null;
-                            }
-                            messageFollowSources.remove(source.token(), source);
-                            return source;
-                        });
+        MessageFollowSource removed = inStateLane(() -> abortRelocationRouteOnLane(sourceRoute));
         if (removed != null) {
             removed.expireMessageFollowNotices();
         }
+    }
+
+    CompletionStage<Void> abortRelocationRouteAsync(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
+        return stateLane
+                .runNowOrQueue(() -> abortRelocationRouteOnLane(sourceRoute))
+                .thenAccept(
+                        removed -> {
+                            if (removed != null) {
+                                removed.expireMessageFollowNotices();
+                            }
+                        });
+    }
+
+    private MessageFollowSource abortRelocationRouteOnLane(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
+        MessageFollowSource source = exactSource(sourceRoute);
+        if (source == null || source.committed()) {
+            return null;
+        }
+        messageFollowSources.remove(source.token(), source);
+        return source;
     }
 
     Optional<MessageFollowSource> takeMessageFollowSource(String actorId) {
