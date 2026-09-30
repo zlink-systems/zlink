@@ -701,8 +701,11 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   `actorJoin`(28) as `[request]` — wiring `receiveChunkLimitBytes` into the command 20
   reply, this request's `[reply]` leg — once the
   target's canonical capability is observed (an authority fence plus a peer admitted at
-  that generation); when it is not, each runtime keeps its language-internal admission path
-  (a transitional fallback). The receiver resolves the stable type from the Store Actor
+  that generation); when it is not observed for a target on a different node, each runtime
+  keeps its language-internal admission path (a transitional fallback).
+  [Spot and Actor membership §4](../03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order)
+  defines the path and commit order for same-node Actor Join.
+  The receiver resolves the stable type from the Store Actor
   Authority row per §9, never from the wire. (An earlier revision stated C++ and .NET did
   not originate; now that the Store-backed canonical receiver exists in all four runtimes,
   origination is unified across all four.)
