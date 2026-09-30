@@ -238,9 +238,13 @@ func fallbackRequestErrno(result RequestResult) int {
 	case RequestInternalError:
 		return int(C.EIO)
 	case RequestRejected:
-		return int(C.ECONNREFUSED)
-	case RequestConflict, RequestInvalidArgument, RequestInvalidState:
+		return int(C.EACCES)
+	case RequestConflict:
+		return int(C.EEXIST)
+	case RequestInvalidArgument:
 		return int(C.EINVAL)
+	case RequestInvalidState:
+		return int(C.EFSM)
 	case RequestBusy:
 		return int(C.EBUSY)
 	case RequestNotConnected:

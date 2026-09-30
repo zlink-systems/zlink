@@ -6,7 +6,7 @@ namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal sealed partial class SocketKernel : IDisposable
 {
-    private const int TopicBufferSize = 4096;
+    private const int InitialTopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
     private readonly SocketHandle _handle;
     private readonly SocketOptionAccessor _options;

@@ -358,7 +358,8 @@ fd_t connect_socket (const char *endpoint_, const int af_, const int protocol_)
 }
 
 fd_t bind_socket_resolve_port (
-  const char *address_, const char *port_, char *my_endpoint_, const int af_, const int protocol_)
+  const char *address_, const char *port_, char *my_endpoint_, const int af_,
+  const int protocol_, const bool listen_)
 {
     struct sockaddr_storage addr;
     //  OSX is very opinionated and wants the size to match the AF family type
@@ -408,7 +409,8 @@ fd_t bind_socket_resolve_port (
     }
 
     TEST_ASSERT_SUCCESS_RAW_ERRNO (bind (s_pre, (struct sockaddr *) &addr, addr_len));
-    TEST_ASSERT_SUCCESS_RAW_ERRNO (listen (s_pre, SOMAXCONN));
+    if (listen_)
+        TEST_ASSERT_SUCCESS_RAW_ERRNO (listen (s_pre, SOMAXCONN));
 
     if (af_ == AF_INET || af_ == AF_INET6) {
         addr_len = sizeof (struct sockaddr_storage);

@@ -45,7 +45,7 @@ internal sealed partial class SocketKernel
         parts = null;
         try
         {
-            var topicBuffer = subscription?.GetWritableTopicBuffer(TopicBufferSize);
+            var topicBuffer = subscription?.GetWritableTopicBuffer(InitialTopicBufferSize);
             while (true)
             {
                 IntPtr sourceRoutingId;
@@ -85,7 +85,7 @@ internal sealed partial class SocketKernel
                     // lengths. None of the native slots are owned on this path.
                     var growParts = count > (nuint)nativeParts.Length;
                     var growTopic = subscription != null
-                        && nativeTopicLength > (nuint)topicBuffer!.Length;
+                        && TopicBufferNeedsGrowth(topicBuffer!, nativeTopicLength);
                     if (!growParts && !growTopic)
                         throw new ZlinkRecvException(RecvResult.InternalError);
                     if (growParts)
@@ -183,5 +183,11 @@ internal sealed partial class SocketKernel
         return boundedLength == 0
             ? string.Empty
             : Encoding.UTF8.GetString(topicBuffer, 0, boundedLength);
+    }
+
+    private static bool TopicBufferNeedsGrowth(byte[] topicBuffer,
+        nuint requiredLength)
+    {
+        return requiredLength > (nuint)topicBuffer.Length;
     }
 }

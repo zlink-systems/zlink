@@ -47,6 +47,9 @@ void *new_router (const char *rid_, int policy_, int reconnect_ivl_ = -1)
       socket, ZLINK_OPT_RID_DUPLICATE_POLICY, &policy_, sizeof policy_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket, ZLINK_OPT_RCVTIMEO, &setup_ms, sizeof setup_ms));
+    const int no_token_deadline = -1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      socket, ZLINK_OPT_SNDTIMEO, &no_token_deadline, sizeof no_token_deadline));
     return socket;
 }
 

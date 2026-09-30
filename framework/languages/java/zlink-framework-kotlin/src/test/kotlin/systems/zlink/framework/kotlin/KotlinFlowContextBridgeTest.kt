@@ -33,16 +33,19 @@ class KotlinFlowContextBridgeTest {
 
         val dispatch =
             queue
-                .enqueue {
-                    val completed = CompletableFuture<Void>()
-                    CoroutineScope(ZLinkCoroutineInvocationContext.capture(Dispatchers.Default))
-                        .launch {
-                            yielded.complete(null)
-                            ZLinkSerialExecutionQueue.yieldCurrent(remote).await()
-                            completed.complete(null)
-                        }
-                    completed
-                }
+                .enqueue(
+                    {
+                        val completed = CompletableFuture<Void>()
+                        CoroutineScope(ZLinkCoroutineInvocationContext.capture(Dispatchers.Default))
+                            .launch {
+                                yielded.complete(null)
+                                ZLinkSerialExecutionQueue.yieldCurrent(remote).await()
+                                completed.complete(null)
+                            }
+                        completed
+                    },
+                    null,
+                )
                 .toCompletableFuture()
 
         yielded.get(3, TimeUnit.SECONDS)
@@ -70,39 +73,46 @@ class KotlinFlowContextBridgeTest {
 
         val first =
             queue
-                .enqueue {
-                    ZLinkSuspendInvocationContext.enterApplicationExecution(execution).use {
-                        beforeTurn.set(ZLinkSuspendInvocationContext.currentSerialExecutionTurn())
-                        val completed = CompletableFuture<Void>()
-                        CoroutineScope(ZLinkCoroutineInvocationContext.capture(Dispatchers.Default))
-                            .launch {
-                                firstYieldStarted.complete(null)
-                                ZLinkSerialExecutionQueue.yieldCurrent(firstRemote).await()
-                                assertSame(
-                                    execution,
-                                    ZLinkSuspendInvocationContext.currentApplicationExecution(),
+                .enqueue(
+                    {
+                        ZLinkSuspendInvocationContext.enterApplicationExecution(execution).use {
+                            beforeTurn.set(
+                                ZLinkSuspendInvocationContext.currentSerialExecutionTurn()
+                            )
+                            val completed = CompletableFuture<Void>()
+                            CoroutineScope(
+                                    ZLinkCoroutineInvocationContext.capture(Dispatchers.Default)
                                 )
-                                afterTurn.set(
-                                    ZLinkSuspendInvocationContext.currentSerialExecutionTurn()
-                                )
-                                secondYieldStarted.complete(null)
-                                ZLinkSerialExecutionQueue.yieldCurrent(secondRemote).await()
-                                completed.complete(null)
-                            }
-                        completed
-                    }
-                }
+                                .launch {
+                                    firstYieldStarted.complete(null)
+                                    ZLinkSerialExecutionQueue.yieldCurrent(firstRemote).await()
+                                    assertSame(
+                                        execution,
+                                        ZLinkSuspendInvocationContext.currentApplicationExecution(),
+                                    )
+                                    afterTurn.set(
+                                        ZLinkSuspendInvocationContext.currentSerialExecutionTurn()
+                                    )
+                                    secondYieldStarted.complete(null)
+                                    ZLinkSerialExecutionQueue.yieldCurrent(secondRemote).await()
+                                    completed.complete(null)
+                                }
+                            completed
+                        }
+                    },
+                    null,
+                )
                 .toCompletableFuture()
 
         firstYieldStarted.get(3, TimeUnit.SECONDS)
         queue
-            .enqueue { CompletableFuture.completedFuture(null) }
+            .enqueue({ CompletableFuture.completedFuture(null) }, null)
             .toCompletableFuture()
             .get(3, TimeUnit.SECONDS)
         firstRemote.complete(null)
         secondYieldStarted.get(3, TimeUnit.SECONDS)
         queue
-            .enqueue { CompletableFuture.completedFuture(null) }
+            .enqueue({ CompletableFuture.completedFuture(null) }, null)
             .toCompletableFuture()
             .get(3, TimeUnit.SECONDS)
         secondRemote.complete(null)

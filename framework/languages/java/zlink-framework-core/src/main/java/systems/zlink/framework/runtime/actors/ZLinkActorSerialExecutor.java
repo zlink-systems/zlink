@@ -6,6 +6,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQu
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
@@ -22,39 +23,50 @@ public final class ZLinkActorSerialExecutor {
                                 executor, ZLinkExecutionLanePolicy.actorDelivery());
     }
 
-    public CompletionStage<Void> executeActor(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation);
+    public CompletionStage<Void> executeActor(
+            Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
+        return queue.enqueue(operation, admission);
     }
 
     public CompletionStage<Void> executeActor(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueueWithPayloadBytes(payloadBytes, operation);
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return queue.enqueueWithPayloadBytes(payloadBytes, operation, admission);
     }
 
     public CompletionStage<Void> executeActor(
             byte[] acceptedJournalRecord,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return acceptedJournalRecord == null || acceptedJournalRecord.length == 0
-                ? executeActor(operation)
-                : queue.enqueueRelocatable(acceptedJournalRecord, operation, relocationRelease);
+                ? executeActor(operation, admission)
+                : queue.enqueueRelocatable(
+                        acceptedJournalRecord, operation, relocationRelease, admission);
     }
 
     public CompletionStage<Void> executeActorLazyRecord(
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return queue.enqueueRelocatableLazyRecord(
-                acceptedJournalRecord, acceptedJournalRecordSizeHint, operation, relocationRelease);
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                admission);
     }
 
     public CompletionStage<Void> executeLifecycle(Supplier<CompletionStage<Void>> operation) {
         return queue.enqueueLifecycleBarrier(operation);
     }
 
-    public CompletionStage<Void> executeLifecycleNext(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueueBarrierNext(operation);
+    public CompletionStage<Void> executeLifecycleNext(
+            Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
+        return queue.enqueueBarrierNext(operation, admission);
     }
 
     public boolean isCurrent() {

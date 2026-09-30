@@ -496,7 +496,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                             }
                                             closeRecord(record, claim);
                                         });
-                            });
+                            },
+                            null);
             queued.whenComplete(
                     (ignored, error) -> {
                         if (error != null) {
@@ -611,7 +612,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                         } catch (RuntimeException failure) {
                                             return CompletableFuture.<Void>failedFuture(failure);
                                         }
-                                    })
+                                    },
+                                    null)
                             .whenComplete((ignored, error) -> closeRecord(record, claim));
             queued.whenComplete(
                     (ignored, error) -> {

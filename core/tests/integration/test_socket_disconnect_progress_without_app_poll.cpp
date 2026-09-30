@@ -435,6 +435,11 @@ void run_immediate_reconnect_request_case (transport_t transport_,
     bind_endpoint (server, transport_, endpoint, sizeof (endpoint),
                    "immediate");
     void *client = new_socket (ZLINK_SOCKET_DEALER);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_int_option (client, ZLINK_OPT_RECONNECT_IVL, reconnect_ivl_ms);
     void *monitor = open_client_monitor (client);
 

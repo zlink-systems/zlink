@@ -132,6 +132,69 @@ public sealed class test_pubsub
         Assert.Equal(topic, secondTopic);
     }
 
+    [Theory]
+    [InlineData(300)]
+    [InlineData(70_000)]
+    public void pubsub_long_topic_is_received_without_truncation(int topicLength)
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        if (!CoreTestSupport.IsTransportSupported("inproc"))
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var publisher = ctx.CreateXPubSocket();
+        using var subscriber = ctx.CreateSubSocket();
+        var topic = new string('t', topicLength);
+        var endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "pubsub-long-topic");
+        publisher.Bind(endpoint);
+        subscriber.Connect(endpoint);
+        subscriber.SetSubscription(topic);
+
+        var subscription = new SubscriptionEvent();
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => publisher.ReceiveSubscriptionEvent(subscription,
+                RecvFlags.DontWait), 2000));
+        Assert.True(subscription.Subscribed);
+        Assert.Equal(topic, subscription.Topic);
+
+        CoreTestSupport.PublishWithRetry(publisher, topic, "payload"u8, 2000);
+        using var received = new TopicMessage();
+        Assert.True(SubscribeWithTimeout(subscriber, received, 2000));
+        Assert.Equal(topic, received.Topic);
+        Assert.Equal("payload", received.SinglePartOrThrow().GetString());
+    }
+
+    [Theory]
+    [InlineData(300)]
+    [InlineData(70_000)]
+    public void xpub_long_subscription_event_is_received_without_truncation(
+        int topicLength)
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        if (!CoreTestSupport.IsTransportSupported("inproc"))
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var xpub = ctx.CreateXPubSocket();
+        using var xsub = ctx.CreateXSubSocket();
+        var topic = new string('t', topicLength);
+        var endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "xpub-long-subscription-event");
+        xpub.Bind(endpoint);
+        xsub.Connect(endpoint);
+        xsub.SetSubscription(topic);
+
+        var subscription = new SubscriptionEvent();
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => xpub.ReceiveSubscriptionEvent(subscription,
+                RecvFlags.DontWait), 2000));
+        Assert.True(subscription.Subscribed);
+        Assert.Equal(topic, subscription.Topic);
+    }
+
     [Fact]
     public void pubsub_topic_message_can_be_released_for_reuse()
     {

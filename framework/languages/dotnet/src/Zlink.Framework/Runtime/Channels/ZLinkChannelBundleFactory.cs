@@ -16,7 +16,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             dealer = state.Context.CreateDealerSocket();
-            ApplySocketConfig(dealer.Options, channel.Client!.SocketConfig);
+            ApplySocketConfig(
+                dealer.Options,
+                channel.Client!.SocketConfig,
+                registration.DefaultSocketSendTimeout
+            );
             dealer.Options.Probe = true;
             bundle = new ZLinkChannelRuntimeBundle(
                 dealer,
@@ -177,7 +181,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             publisher = state.Context.CreatePublisherSocket();
-            ApplyPublisherSocketConfig(publisher.Options, channel);
+            ApplyPublisherSocketConfig(
+                publisher.Options,
+                channel,
+                registration.DefaultSocketSendTimeout
+            );
             var publisherRegistration =
                 channel.Publisher
                 ?? throw new InvalidOperationException(
@@ -235,17 +243,22 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             registration.NetworkOptions
         );
 
-    internal static void ApplySocketConfig(CommonSocketOptions socket, IZLinkSocketConfig config)
+    internal static void ApplySocketConfig(
+        CommonSocketOptions socket,
+        IZLinkSocketConfig config,
+        TimeSpan? defaultSendTimeout = null
+    )
     {
-        ZLinkBackendSocketOptionsMapper.Apply(socket, config);
+        ZLinkBackendSocketOptionsMapper.Apply(socket, config, defaultSendTimeout);
     }
 
     internal static void ApplyPublisherSocketConfig(
         PubSocketOptions socket,
-        ZLinkChannelRegistration channel
+        ZLinkChannelRegistration channel,
+        TimeSpan? defaultSendTimeout = null
     )
     {
-        ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
+        ApplySocketConfig(socket, channel.Publisher!.SocketConfig, defaultSendTimeout);
         socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
     }
 

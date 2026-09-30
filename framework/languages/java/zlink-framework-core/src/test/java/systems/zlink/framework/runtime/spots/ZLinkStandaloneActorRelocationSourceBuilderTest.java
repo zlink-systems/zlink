@@ -15,6 +15,8 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -125,9 +127,180 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .applicationVersion());
             assertEquals(1, prepared.stageRequest().fence().aggregateGeneration());
 
+            byte[] acceptedRecord =
+                    ZLinkAcceptedJournalTestRecords.actor(
+                            "actor-a", 51, "accepted-reply", Map.of(), new byte[] {7});
+            var replyRoutes =
+                    (ZLinkSpotRelocationReplyRoutes) readField(runtime, "relocationReplyRoutes");
+            AtomicInteger replies = new AtomicInteger();
+            replyRoutes.registerActor(
+                    acceptedRecord,
+                    "actor-a",
+                    prepared.targetRequest().objectGeneration(),
+                    parts -> {
+                        replies.incrementAndGet();
+                        return CompletableFuture.completedFuture(null);
+                    },
+                    CompletableFuture::failedFuture,
+                    () -> {});
+            runtime.actorSessions()
+                    .actorRelocationLane("actor-a")
+                    .enqueueRelocatable(
+                            acceptedRecord,
+                            () -> fail("source must not execute transferred ingress"),
+                            () -> {},
+                            null)
+                    .toCompletableFuture();
+            AtomicInteger relays = new AtomicInteger();
+            AtomicInteger acceptedRelays = new AtomicInteger();
+            ZLinkRelocationTransitionClient relayClient =
+                    (ZLinkRelocationTransitionClient)
+                            Proxy.newProxyInstance(
+                                    ZLinkRelocationTransitionClient.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkRelocationTransitionClient.class},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("relay")) {
+                                            relays.incrementAndGet();
+                                            if (java.util.Arrays.equals(
+                                                    (byte[]) args[2], acceptedRecord)) {
+                                                acceptedRelays.incrementAndGet();
+                                            }
+                                            return CompletableFuture.completedFuture(null);
+                                        }
+                                        throw new AssertionError("unexpected control request");
+                                    });
+            prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
+                    .toCompletableFuture()
+                    .get();
+            int firstRelayCount = relays.get();
+            assertEquals(1, acceptedRelays.get());
+            prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
+                    .toCompletableFuture()
+                    .get();
+            assertEquals(firstRelayCount, relays.get());
+            assertEquals(
+                    ZLinkSpotRelocationReplyRoutes.Ack.TERMINAL_RECEIVED,
+                    replyRoutes
+                            .relay(
+                                    new ZLinkSpotRelocationReplyRoutes.Relay(
+                                            new ZLinkSpotRelocationReplyRoutes.OperationId(1, 2),
+                                            51,
+                                            "actor-a",
+                                            prepared.targetRequest().objectGeneration(),
+                                            "journal-owner",
+                                            1,
+                                            RoutingId.from("journal-node"),
+                                            1,
+                                            9,
+                                            1,
+                                            0,
+                                            List.of(new byte[] {7})),
+                                    TARGET_RID)
+                            .toCompletableFuture()
+                            .get());
+            assertEquals(1, replies.get());
+
             prepared.abort().toCompletableFuture().get();
 
             assertTrue(runtime.actorSessions().localActor("actor-a").isPresent());
+        }
+    }
+
+    @Test
+    void sourceLeaseExpirySharesPendingRetainClaim() throws Exception {
+        SnapshotAdapter.captured.set(null);
+        var locations = new ZLinkInMemoryLocationStore();
+        var repository = new ZLinkProviderLocationRepository(locations);
+        var relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    host.actorManager()
+                            .create("actor-b", ACTOR_TYPE)
+                            .submit()
+                            .toCompletableFuture()
+                            .get());
+            ZLinkMeshNodeDescriptor source =
+                    repository
+                            .listMeshNodes(MESH, ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .get()
+                            .items()
+                            .getFirst();
+            ZLinkLocationOwnerToken targetOwner =
+                    assertInstanceOf(
+                                    ZLinkOwnerLeaseClaimed.class,
+                                    repository
+                                            .claimOwnerLease(
+                                                    "actor-target-owner", Duration.ofSeconds(30))
+                                            .toCompletableFuture()
+                                            .get())
+                            .token();
+            repository
+                    .updateMeshNode(descriptor(targetOwner), ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .get();
+            var builder =
+                    new ZLinkStandaloneActorRelocationSourceBuilder(
+                            MESH,
+                            nodeRegistration.routingId(),
+                            source.lifecycleGeneration(),
+                            repository,
+                            systems.zlink.framework.testing.ZLinkDescriptorLeaseTestFixture
+                                    .resolver(repository),
+                            new ZLinkAggregateRelocationCoordinator(repository),
+                            runtime.actorSessions(),
+                            new ZLinkRelocationAdapterRegistry(
+                                    registration, ZLinkHandlerActivator.reflection()),
+                            nodeRegistration.relocatableActorFactories(),
+                            runtime,
+                            null);
+            var prepared =
+                    builder.prepare("actor-b", rollingToVersionOne(), NEVER)
+                            .toCompletableFuture()
+                            .get();
+            Object actorRuntime = readField(runtime.actorSessions(), "actors");
+            Object dispatches = readField(actorRuntime, "dispatches");
+            Object spot = ((Map<?, ?>) readField(dispatches, "actorTargets")).get("actor-b");
+            ZLinkStateLane lane = (ZLinkStateLane) readField(spot, "stateLane");
+            CompletableFuture<Void> entered = new CompletableFuture<>();
+            CompletableFuture<Void> release = new CompletableFuture<>();
+            assertTrue(
+                    lane.tryPost(
+                            () -> {
+                                entered.complete(null);
+                                return release;
+                            }));
+            entered.join();
+            try {
+                ZLinkRelocationTransitionClient client =
+                        (ZLinkRelocationTransitionClient)
+                                java.lang.reflect.Proxy.newProxyInstance(
+                                        ZLinkRelocationTransitionClient.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkRelocationTransitionClient.class},
+                                        (proxy, method, args) -> {
+                                            if (method.getName().equals("relay")) {
+                                                return CompletableFuture.completedFuture(null);
+                                            }
+                                            throw new AssertionError("unexpected control request");
+                                        });
+                CompletableFuture<Void> relay =
+                        prepared.relayCapturedIngress(client, Duration.ofSeconds(5))
+                                .toCompletableFuture();
+                assertFalse(relay.isDone());
+                CompletableFuture<Void> expired =
+                        prepared.discardAfterSourceLeaseExpiry().toCompletableFuture();
+                assertFalse(expired.isDone());
+                release.complete(null);
+                expired.get();
+                assertTrue(relay.isCompletedExceptionally());
+            } finally {
+                release.complete(null);
+            }
         }
     }
 
@@ -290,7 +463,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                 .enqueueRelocatable(
                                         suffixRecord,
                                         () -> fail("source must not execute transferred ingress"),
-                                        released::incrementAndGet)
+                                        released::incrementAndGet,
+                                        null)
                                 .toCompletableFuture());
             }
             byte[] lateRecord =
@@ -303,13 +477,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .enqueueRelocatable(
                                     lateRecord,
                                     () -> fail("late source ingress must remain held"),
-                                    () -> lateReleased.set(true))
+                                    () -> lateReleased.set(true),
+                                    null)
                             .toCompletableFuture();
             assertTrue(accepted.stream().noneMatch(CompletableFuture::isDone));
             assertFalse(lateAccepted.isDone());
             assertEquals(0, released.get());
             assertFalse(lateReleased.get());
             prepared.relayCapturedIngress(sourceMachine.get(), timeout).toCompletableFuture().get();
+            assertTrue(relayProbe(prepared).pending().isEmpty());
 
             byte[] stagedTargetRecord =
                     ZLinkAcceptedJournalTestRecords.actor(
@@ -367,7 +543,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals("post-freeze-late", targetBackend.replayedPackets.get(1_025));
             assertEquals("target-staged", targetBackend.replayedPackets.getLast());
             assertEquals(List.of("target-staged-reply"), targetIngressReplies);
-            prepared.completeSourceQueueCommit();
+            prepared.completeSourceQueueCommit().toCompletableFuture().get();
             CompletableFuture.allOf(accepted.toArray(CompletableFuture[]::new))
                     .get(3, TimeUnit.SECONDS);
             lateAccepted.get();
@@ -389,6 +565,16 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                     .get());
             assertEquals(objectGeneration, authority.objectGeneration());
             assertEquals(sourceOwnerGeneration + 1, authority.authorityOwnerGeneration());
+        }
+    }
+
+    private static AsyncDrainProbe relayProbe(Object prepared) {
+        try {
+            var field = prepared.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return (AsyncDrainProbe) field.get(prepared);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
         }
     }
 
@@ -684,5 +870,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 TestActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
         }
+    }
+
+    private static Object readField(Object owner, String name) throws Exception {
+        java.lang.reflect.Field field = owner.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(owner);
     }
 }

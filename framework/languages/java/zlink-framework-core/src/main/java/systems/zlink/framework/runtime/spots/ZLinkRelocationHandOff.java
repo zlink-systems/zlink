@@ -5,6 +5,7 @@ import systems.zlink.contracts.core.RoutingId;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -49,21 +50,74 @@ final class ZLinkRelocationHandOff {
                             } catch (RuntimeException failure) {
                                 relay = CompletableFuture.failedFuture(failure);
                             }
-                            relay.thenCompose(
-                                            ignored ->
-                                                    client.publish(
-                                                            targetRid, request.fence(), timeout))
-                                    .whenComplete(
-                                            (ignored, failure) -> {
-                                                if (failure != null) {
-                                                    LOGGER.warning(
-                                                            "Relocation relay or CUTOVER submit"
-                                                                    + " failed; authority settlement"
-                                                                    + " decides the unit: "
-                                                                    + unwrap(failure));
+                            CompletionStage<Void> capturedRelay = relay;
+                            CompletionStage<ZLinkRelocationTransitionClient.Settlement> settlement =
+                                    client.settle(targetRid, request.fence(), restoreDeadline)
+                                            .whenComplete(
+                                                    (result, failure) -> {
+                                                        if (failure != null
+                                                                || result
+                                                                        != ZLinkRelocationTransitionClient
+                                                                                .Settlement
+                                                                                .TARGET_COMMITTED) {
+                                                            capturedRelay
+                                                                    .toCompletableFuture()
+                                                                    .cancel(false);
+                                                        }
+                                                    });
+                            CompletionStage<Void> boundary =
+                                    capturedRelay.thenCompose(
+                                            ignored -> {
+                                                if (settlement
+                                                        .handle(
+                                                                (result, failure) ->
+                                                                        failure != null
+                                                                                || result
+                                                                                        != ZLinkRelocationTransitionClient
+                                                                                                .Settlement
+                                                                                                .TARGET_COMMITTED)
+                                                        .toCompletableFuture()
+                                                        .getNow(false)) {
+                                                    return CompletableFuture.completedFuture(null);
                                                 }
+                                                CompletionStage<Void> submitted =
+                                                        client.publish(
+                                                                targetRid,
+                                                                request.fence(),
+                                                                timeout);
+                                                settlement.whenComplete(
+                                                        (result, failure) -> {
+                                                            if (failure != null
+                                                                    || result
+                                                                            != ZLinkRelocationTransitionClient
+                                                                                    .Settlement
+                                                                                    .TARGET_COMMITTED) {
+                                                                submitted
+                                                                        .toCompletableFuture()
+                                                                        .cancel(false);
+                                                            }
+                                                        });
+                                                return submitted;
                                             });
-                            return client.settle(targetRid, request.fence(), restoreDeadline);
+                            boundary.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null
+                                                && !(unwrap(failure)
+                                                        instanceof CancellationException)) {
+                                            LOGGER.warning(
+                                                    "Relocation relay or CUTOVER submit"
+                                                            + " failed; authority settlement"
+                                                            + " decides the unit: "
+                                                            + unwrap(failure));
+                                        }
+                                    });
+                            return settlement.thenCompose(
+                                    result ->
+                                            result
+                                                            == ZLinkRelocationTransitionClient
+                                                                    .Settlement.TARGET_COMMITTED
+                                                    ? boundary.handle((ignored, failure) -> result)
+                                                    : CompletableFuture.completedFuture(result));
                         });
     }
 

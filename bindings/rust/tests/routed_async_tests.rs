@@ -869,10 +869,80 @@ fn request_timeout_is_owned_by_core() {
         Err(error) => error,
     };
     assert!(started.elapsed() < Duration::from_secs(2));
-    assert!(matches!(
-        error,
-        ZlinkError::Request(request) if request.code() == RequestResult::TimedOut
-    ));
+    let request_error = match error {
+        ZlinkError::Request(request) => request,
+        error => panic!("request failed with the wrong error type: {error}"),
+    };
+    assert_eq!(request_error.code(), RequestResult::TimedOut);
+    assert_eq!(request_error.native_errno(), libc::ETIMEDOUT);
+}
+
+#[test]
+fn request_not_found_uses_core_errno_mapping() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let endpoint = "inproc://rust-routed-async-request-not-found";
+    router.bind(endpoint).unwrap();
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect(endpoint).unwrap()
+    });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+
+    let submission = dealer
+        .request()
+        .message(Message::try_from(b"remove-target").unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .unwrap();
+    test_support::block_on(submission.admitted).unwrap();
+
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    dealer.disconnect(endpoint).unwrap();
+
+    let error = match test_support::block_on(submission.reply) {
+        Ok(_) => panic!("request unexpectedly received a reply after endpoint removal"),
+        Err(ZlinkError::Request(error)) => error,
+        Err(error) => panic!("request failed with the wrong error type: {error}"),
+    };
+    assert_eq!(error.code(), RequestResult::NotFound);
+    assert_eq!(error.native_errno(), libc::ENOENT);
+}
+
+#[test]
+fn request_not_connected_uses_core_errno_mapping() {
+    let ctx = Context::new().unwrap();
+    let mut router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let endpoint = "inproc://rust-routed-async-request-not-connected";
+    router.bind(endpoint).unwrap();
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect(endpoint).unwrap()
+    });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+
+    let submission = dealer
+        .request()
+        .message(Message::try_from(b"close-target").unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .unwrap();
+    test_support::block_on(submission.admitted).unwrap();
+
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes(), b"close-target");
+    drop(received);
+    router.close().unwrap();
+
+    let error = match test_support::block_on(submission.reply) {
+        Ok(_) => panic!("request unexpectedly received a reply after target close"),
+        Err(ZlinkError::Request(error)) => error,
+        Err(error) => panic!("request failed with the wrong error type: {error}"),
+    };
+    assert_eq!(error.code(), RequestResult::NotConnected);
+    assert_eq!(error.native_errno(), libc::ENOTCONN);
 }
 
 #[test]

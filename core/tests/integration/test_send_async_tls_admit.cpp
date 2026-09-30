@@ -97,6 +97,10 @@ void run_case (const char *transport_)
     void *client = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+      sizeof (no_token_deadline)));
 
     tls_test_files_t tls_files;
     if (is_tls) {
@@ -109,8 +113,8 @@ void run_case (const char *transport_)
       client, ZLINK_OPT_IMMEDIATE, &immediate, sizeof (immediate)));
 
     char endpoint[MAX_SOCKET_STRING];
-    fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
-    close (reserved);
+    fd_t reserved = bind_socket_resolve_port (
+      "127.0.0.1", "0", endpoint, AF_INET, IPPROTO_TCP, false);
     if (is_tls)
         memcpy (endpoint, "tls", 3);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
@@ -133,6 +137,7 @@ void run_case (const char *transport_)
     TEST_ASSERT_EQUAL_UINT64 (payload_size, payload.size ());
     assert_no_completion (client);
 
+    close (reserved);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
     receive_writable_completion (client, wait_token, &wait_context);
 

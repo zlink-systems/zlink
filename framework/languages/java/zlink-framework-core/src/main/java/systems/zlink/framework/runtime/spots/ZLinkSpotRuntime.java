@@ -1989,13 +1989,54 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             RoutingId targetNodeRid,
             long targetNodeGeneration,
             Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences) {
+        forEachCanonicalReplyBinding(
+                journal,
+                fences,
+                (records, fence) ->
+                        relocationReplyRoutes.bindCommitted(
+                                records, targetNodeRid, targetNodeGeneration, fence),
+                (records, fence) ->
+                        relocationReplyRoutes.bindActorCommitted(
+                                records, targetNodeRid, targetNodeGeneration, fence));
+    }
+
+    CompletionStage<Void> bindCanonicalRelocationRepliesAsync(
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences) {
+        List<CompletionStage<Void>> pending = new ArrayList<>();
+        forEachCanonicalReplyBinding(
+                journal,
+                fences,
+                (records, fence) ->
+                        pending.add(
+                                relocationReplyRoutes.bindCommittedAsync(
+                                        records, targetNodeRid, targetNodeGeneration, fence)),
+                (records, fence) ->
+                        pending.add(
+                                relocationReplyRoutes.bindActorCommittedAsync(
+                                        records, targetNodeRid, targetNodeGeneration, fence)));
+        return CompletableFuture.allOf(
+                pending.stream()
+                        .map(CompletionStage::toCompletableFuture)
+                        .toArray(CompletableFuture[]::new));
+    }
+
+    private void forEachCanonicalReplyBinding(
+            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
+            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> fences,
+            java.util.function.BiConsumer<
+                            List<byte[]>, ZLinkSpotRelocationReplyRoutes.CommittedFence>
+                    spotBinding,
+            java.util.function.BiConsumer<
+                            List<byte[]>, ZLinkSpotRelocationReplyRoutes.CommittedFence>
+                    actorBinding) {
         if (journal.containsKey("spot")) {
-            relocationReplyRoutes.bindCommitted(
+            spotBinding.accept(
                     journal.get("spot").stream()
                             .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
                             .toList(),
-                    targetNodeRid,
-                    targetNodeGeneration,
                     Objects.requireNonNull(fences.get("spot"), "Spot canonical reply fence"));
         }
         journal.forEach(
@@ -2004,12 +2045,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         return;
                     }
                     String actorId = lane.substring("actor:".length());
-                    relocationReplyRoutes.bindActorCommitted(
+                    actorBinding.accept(
                             queued.stream()
                                     .map(ZLinkSerialExecutionQueue.QueuedRecord::payload)
                                     .toList(),
-                            targetNodeRid,
-                            targetNodeGeneration,
                             Objects.requireNonNull(
                                     fences.get(actorId), "Actor canonical reply fence"));
                 });
@@ -4927,7 +4966,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    Optional<ZLinkUserSpotRelocationBarrier.Seal> trySealUserSpotRelocation(String spotId) {
+    CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> trySealUserSpotRelocation(
+            String spotId) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).trySeal();
     }
 
@@ -4938,11 +4978,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.relocationBarrier(spotId, actorSessions).runCapture(seal, capture);
     }
 
-    boolean abortUserSpotRelocation(String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
+    CompletionStage<Boolean> abortUserSpotRelocation(
+            String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).abort(seal);
     }
 
-    Optional<ZLinkUserSpotRelocationBarrier.Committed> commitUserSpotRelocation(
+    CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Committed>> commitUserSpotRelocation(
             String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).commit(seal);
     }

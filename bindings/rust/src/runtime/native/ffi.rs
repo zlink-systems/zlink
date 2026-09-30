@@ -450,7 +450,7 @@ pub struct zlink_monitor_event_t {
 #[cfg(test)]
 mod monitor_event_layout_tests {
     use super::zlink_monitor_event_t;
-    use std::mem::{size_of, MaybeUninit};
+    use std::mem::{MaybeUninit, size_of};
 
     #[test]
     fn monitor_event_layout_matches_c_abi() {

@@ -20,7 +20,7 @@ from ..._native.ffi import (
     ZlinkMsg,
     lib,
 )
-from ...contracts.errors.codes import ConfigResult
+from ...contracts.errors.codes import ConfigResult, ErrorCode
 from ...contracts.errors.errors import (
     ConfigError,
     RecvError,
@@ -53,14 +53,14 @@ def _request_errno(result):
     return {
         RequestResult.TIMED_OUT: errno.ETIMEDOUT,
         RequestResult.NOT_FOUND: errno.ENOENT,
-        RequestResult.TERMINATED: getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+        RequestResult.TERMINATED: ErrorCode.ETERM,
         RequestResult.PROTOCOL_ERROR: errno.EPROTO,
         RequestResult.REJECTED: errno.EACCES,
-        RequestResult.CONFLICT: getattr(errno, "ESTALE", errno.EIO),
+        RequestResult.CONFLICT: errno.EEXIST,
         RequestResult.BUSY: errno.EBUSY,
         RequestResult.NOT_CONNECTED: errno.ENOTCONN,
         RequestResult.INVALID_ARGUMENT: errno.EINVAL,
-        RequestResult.INVALID_STATE: errno.EBUSY,
+        RequestResult.INVALID_STATE: ErrorCode.EFSM,
         RequestResult.NOT_SUPPORTED: errno.ENOTSUP,
         RequestResult.BACKPRESSURED: errno.EAGAIN,
     }.get(result, errno.EIO)

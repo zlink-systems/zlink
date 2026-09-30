@@ -116,6 +116,49 @@ public sealed class FanoutNoDropTests
         Assert.Equal(noDrop, publisher.Options.NoDrop);
     }
 
+    [Fact]
+    public void PublisherSendTimeout_UsesFrameworkDefaultWhenUnconfigured()
+    {
+        var registration = CreateRegistration(noDrop: false);
+        var defaultSendTimeout = TimeSpan.FromMilliseconds(700);
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var publisher = context.CreatePubSocket();
+
+        ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
+            publisher.Options,
+            registration.Channels["events"],
+            defaultSendTimeout
+        );
+
+        Assert.Equal(defaultSendTimeout, publisher.Options.SendTimeout);
+    }
+
+    [Fact]
+    public void ClientDealerSendTimeout_UsesConfiguredValueOrFrameworkDefault()
+    {
+        var defaultSendTimeout = TimeSpan.FromMilliseconds(700);
+        var configuredSendTimeout = TimeSpan.FromMilliseconds(250);
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var defaultDealer = context.CreateDealerSocket();
+        using var configuredDealer = context.CreateDealerSocket();
+        var defaultConfig = new ZLinkSocketConfig();
+        var configuredConfig = new ZLinkSocketConfig { SendTimeout = configuredSendTimeout };
+
+        ZLinkChannelBundleFactory.ApplySocketConfig(
+            defaultDealer.Options,
+            defaultConfig,
+            defaultSendTimeout
+        );
+        ZLinkChannelBundleFactory.ApplySocketConfig(
+            configuredDealer.Options,
+            configuredConfig,
+            defaultSendTimeout
+        );
+
+        Assert.Equal(defaultSendTimeout, defaultDealer.Options.SendTimeout);
+        Assert.Equal(configuredSendTimeout, configuredDealer.Options.SendTimeout);
+    }
+
     private static ZLinkFrameworkRegistration CreateRegistration(bool? noDrop)
     {
         var registration = new ZLinkFrameworkRegistration();

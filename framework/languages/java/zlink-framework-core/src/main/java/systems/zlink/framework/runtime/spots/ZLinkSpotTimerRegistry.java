@@ -233,6 +233,24 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         current.forEach(ManagedTimer::close);
     }
 
+    CompletionStage<Void> closeAsync() {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            List<ManagedTimer> active = List.copyOf(timers.values());
+                            timers.clear();
+                            frozen = false;
+                            return active;
+                        })
+                .thenComposeAsync(
+                        current ->
+                                CompletableFuture.allOf(
+                                        current.stream()
+                                                .map(ManagedTimer::getOrStartFinalizationAsync)
+                                                .map(CompletionStage::toCompletableFuture)
+                                                .toArray(CompletableFuture[]::new)));
+    }
+
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<Void> invokeHandler(
             Object handlerSpot, Class<?> handlerType, ZLinkTimerTick tick) {
@@ -541,25 +559,37 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private CompletableFuture<Void> getOrStartFinalization() {
-            FinalizationPlan plan =
-                    inStateLane(
-                            () -> {
-                                if (finalization != null) {
-                                    return new FinalizationPlan(finalization, null, null, false);
-                                }
-                                finalization = new CompletableFuture<>();
-                                timers.remove(name, this);
-                                Optional<ScheduledFuture<?>> task = disposeCore();
-                                return new FinalizationPlan(
-                                        finalization,
-                                        task.orElse(null),
-                                        activeDispatch == null ? null : activeDispatch.completion(),
-                                        true);
-                            });
+            FinalizationPlan plan = inStateLane(this::finalizationPlanOnLane);
             if (plan.start()) {
                 completeFinalization(plan);
             }
             return plan.finalization();
+        }
+
+        private CompletionStage<Void> getOrStartFinalizationAsync() {
+            return stateLane
+                    .runAsync(this::finalizationPlanOnLane)
+                    .thenCompose(
+                            plan -> {
+                                if (plan.start()) {
+                                    completeFinalization(plan);
+                                }
+                                return plan.finalization();
+                            });
+        }
+
+        private FinalizationPlan finalizationPlanOnLane() {
+            if (finalization != null) {
+                return new FinalizationPlan(finalization, null, null, false);
+            }
+            finalization = new CompletableFuture<>();
+            timers.remove(name, this);
+            Optional<ScheduledFuture<?>> task = disposeCore();
+            return new FinalizationPlan(
+                    finalization,
+                    task.orElse(null),
+                    activeDispatch == null ? null : activeDispatch.completion(),
+                    true);
         }
 
         private void completeFinalization(FinalizationPlan plan) {
