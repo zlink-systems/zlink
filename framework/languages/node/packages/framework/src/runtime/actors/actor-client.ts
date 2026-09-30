@@ -23,6 +23,7 @@ import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contract
 import {
   requireOneWayCompletion,
   throwAlreadySubmitted,
+  classifySubmitResult,
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
@@ -163,7 +164,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           if (duplicate !== undefined) submissions.push(duplicate);
         }
         await awaitWithAbort(Promise.all(submissions), signal);
-        return submitted();
+        return { status: ZLinkSubmitStatus.Submitted };
       }
       const node = this.requireNode(meshName);
       if (
@@ -183,7 +184,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           }),
           { packetName: '__zlink.actor.packet.relay' }
         );
-        return submitted();
+        return { status: ZLinkSubmitStatus.Submitted };
       }
       return await this.submitActorSend(meshName, toBackendActorRef(actor), parts);
     } catch (error) {
@@ -390,7 +391,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   ): Promise<ZLinkSubmitResult> {
     const node = this.requireNode(meshName);
     try {
-      return mapSubmitResult(
+      return classifySubmitResult(
         await node.sendToActor(actor, toMessageLikeParts(parts), {
           flags: ZLINK_BACKEND_SEND_NONE
         }),
@@ -398,11 +399,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       );
     } catch (error) {
       if (isZLinkBackendResultError(error)) {
-        return mapSubmitResult(error.result, 'Actor send');
+        return classifySubmitResult(error.result, 'Actor send');
       }
-      throw isZLinkBackendResultError(error)
-        ? mapRequestError(error, 'Actor send')
-        : mapSubmitError(error, 'Actor send');
+      throw mapSubmitError(error, 'Actor send');
     }
   }
 
@@ -871,60 +870,12 @@ function mapSubmitError(error: unknown, operationName: string): Error {
   if (error instanceof ZLinkFrameworkException) {
     return error;
   }
-  if (isZLinkBackendResultError(error)) {
-    switch (error.result) {
-      case SubmitResult.NotConnected:
-        return routeNotConnected(
-          `${operationName} failed because the target route is not connected.`,
-          error
-        );
-      case SubmitResult.NotFound:
-        return createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-          `${operationName} failed because the actor route was not found.`,
-          false,
-          error
-        );
-      default:
-        return createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestFailed,
-          `${operationName} failed with submit result ${error.result}.`,
-          false,
-          error
-        );
-    }
-  }
   return createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.RouteNotConnected,
     `${operationName} failed before a reply was received.`,
     true,
     error
   );
-}
-
-function mapSubmitResult(result: number, operationName: string): ZLinkSubmitResult {
-  switch (result) {
-    case SubmitResult.Ok:
-      return submitted();
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return { status: ZLinkSubmitStatus.Backpressured };
-    case SubmitResult.NotConnected:
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
-    case SubmitResult.NotFound:
-      return { status: ZLinkSubmitStatus.TargetNotFound };
-    case SubmitResult.Terminated:
-      return { status: ZLinkSubmitStatus.Shutdown };
-    default:
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        `${operationName} failed with submit result ${result}.`
-      );
-  }
-}
-
-function submitted(): ZLinkSubmitResult {
-  return { status: ZLinkSubmitStatus.Submitted };
 }
 
 //  Ownership-aware Actor remote-reply translator (spec 32:81-118, 99-103):
@@ -1006,13 +957,6 @@ function mapRequestResult(result: number, failureErrno: number, operationName: s
     `${operationName} failed with request result ${result}` +
       (failureErrno !== 0 ? ` (failure code ${failureErrno}).` : '.')
   );
-}
-
-function mapRequestError(
-  error: { readonly result: number; readonly failureErrno?: number },
-  operationName: string
-): Error {
-  return mapRequestResult(error.result, error.failureErrno ?? 0, operationName);
 }
 
 function routeNotConnected(message: string, cause?: unknown): ZLinkFrameworkException {

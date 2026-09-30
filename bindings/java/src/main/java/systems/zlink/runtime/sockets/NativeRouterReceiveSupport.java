@@ -164,8 +164,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         }
         int errno = Native.errno();
         RecvResult result = RecvResult.fromValue(rc);
-        if (nullOnNoData && (result == RecvResult.NO_DATA
-            || result == RecvResult.BUSY)) {
+        if (nullOnNoData && result == RecvResult.NO_DATA) {
             return null;
         }
         throw new ZlinkRecvException(result, errno);

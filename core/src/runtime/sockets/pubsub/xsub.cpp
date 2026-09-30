@@ -66,14 +66,8 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     errno_assert (rc == 0);
 }
 
-bool zlink::xsub_t::compute_delivery_ready_state () const
-{
-    return compute_delivery_ready_count () > 0;
-}
-
 uint32_t zlink::xsub_t::compute_delivery_ready_count () const
 {
-    std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
     const bool has_filters = _subscriptions.num_prefixes () > 0;
     if (!has_filters)
         return 0;
@@ -104,8 +98,24 @@ void zlink::xsub_t::snapshot_subscriptions (std::vector<subscription_descriptor_
         return;
 
     xsub_snapshot_arg_t arg (out_);
-    std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
     _subscriptions.apply (&snapshot_subscription, &arg);
+}
+
+int zlink::xsub_t::snapshot_subscriptions_for_public_api (
+  std::vector<subscription_descriptor_t> *out_) const
+{
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    socket_public_api_scope_t admission (lifecycle);
+    if (!admission.acquired ())
+        return -1;
+    if (is_ctx_terminated ()) {
+        errno = ETERM;
+        return -1;
+    }
+
+    socket_public_api_lock_scope_t turn (lifecycle);
+    snapshot_subscriptions (out_);
+    return 0;
 }
 
 void zlink::xsub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -175,9 +185,6 @@ int zlink::xsub_t::xsetsockopt (int option_, const void *optval_, size_t optvall
 int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
 {
     if (option_ == ZLINK_INTERNAL_OPT_TOPICS_COUNT) {
-        // make sure to use a multi-thread safe function to avoid race conditions with I/O threads
-        // where subscriptions are processed:
-        std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
         uint64_t num_subscriptions = _subscriptions.num_prefixes ();
 
         return do_getsockopt<int> (optval_, optvallen_, (int) num_subscriptions);
@@ -189,8 +196,7 @@ int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
     return -1;
 }
 
-int zlink::xsub_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -217,12 +223,9 @@ int zlink::xsub_t::xsend (
             data = data + 1;
             size = size - 1;
         }
-        {
-            std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
-            _subscriptions.add (data, size);
-            if (size == 0)
-                _has_empty_subscription.store (true, std::memory_order_release);
-        }
+        _subscriptions.add (data, size);
+        if (size == 0)
+            _has_empty_subscription = true;
         _process_subscribe = true;
         const int rc = _dist.send_to_all (msg_);
         refresh_delivery_ready_state (endpoint_uri_pair_t ());
@@ -235,13 +238,9 @@ int zlink::xsub_t::xsend (
             size = size - 1;
         }
         _process_subscribe = true;
-        bool rm_result = false;
-        {
-            std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
-            rm_result = _subscriptions.rm (data, size);
-            if (size == 0 && rm_result)
-                _has_empty_subscription.store (false, std::memory_order_release);
-        }
+        const bool rm_result = _subscriptions.rm (data, size);
+        if (size == 0 && rm_result)
+            _has_empty_subscription = false;
         if (rm_result || _verbose_unsubs) {
             const int rc = _dist.send_to_all (msg_);
             refresh_delivery_ready_state (endpoint_uri_pair_t ());
@@ -314,10 +313,8 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         unsigned char request_reply_kind = 0;
         uint64_t request_reply_sequence = 0;
         if (part_index > 0
-            && msg_->get_request_reply_metadata (
-              &request_reply_kind, &request_reply_sequence)) {
-            pipe_t *const malformed_pipe =
-              pipe && pipe->retain_lifetime_ref () ? pipe : NULL;
+            && msg_->get_request_reply_metadata (&request_reply_kind, &request_reply_sequence)) {
+            pipe_t *const malformed_pipe = pipe && pipe->retain_lifetime_ref () ? pipe : NULL;
             bool more = (msg_->flags () & msg_t::more) != 0;
             while (more) {
                 rc = _fq.recvpipe (msg_, &pipe);
@@ -441,8 +438,7 @@ bool zlink::xsub_t::xhas_in ()
 
 int zlink::xsub_t::discard_filtered_message (msg_t *msg_, pipe_t *pipe_)
 {
-    pipe_t *const source_pipe =
-      pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
+    pipe_t *const source_pipe = pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
     bool malformed = false;
     int rc = 0;
     while ((msg_->flags () & msg_t::more) != 0) {
@@ -451,8 +447,7 @@ int zlink::xsub_t::discard_filtered_message (msg_t *msg_, pipe_t *pipe_)
             break;
         unsigned char request_reply_kind = 0;
         uint64_t request_reply_sequence = 0;
-        if (msg_->get_request_reply_metadata (
-              &request_reply_kind, &request_reply_sequence))
+        if (msg_->get_request_reply_metadata (&request_reply_kind, &request_reply_sequence))
             malformed = true;
     }
 
@@ -469,11 +464,7 @@ int zlink::xsub_t::discard_filtered_message (msg_t *msg_, pipe_t *pipe_)
 
 bool zlink::xsub_t::match (msg_t *msg_)
 {
-    if (!options.invert_matching && _has_empty_subscription.load (std::memory_order_acquire))
-        return true;
-
-    std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
-    if (!options.invert_matching && _has_empty_subscription.load (std::memory_order_relaxed))
+    if (!options.invert_matching && _has_empty_subscription)
         return true;
 
     const bool matching =

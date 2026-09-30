@@ -9,7 +9,6 @@
 #include "sockets/internal/fq.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
 #include <atomic>
-#include <mutex>
 #include <string>
 #include <vector>
 #include "utils/trie.hpp"
@@ -35,7 +34,7 @@ class xsub_t : public socket_base_t
 
     xsub_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~xsub_t () ZLINK_OVERRIDE;
-    void snapshot_subscriptions (std::vector<subscription_descriptor_t> *out_) const;
+    int snapshot_subscriptions_for_public_api (std::vector<subscription_descriptor_t> *out_) const;
 
   protected:
     //  Overrides of functions from socket_base_t.
@@ -44,8 +43,7 @@ class xsub_t : public socket_base_t
                        bool locally_initiated_) ZLINK_FINAL;
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_FINAL;
-    int xsend (zlink::msg_t *msg_,
-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xsend (zlink::msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_FINAL;
     bool xhas_in () ZLINK_FINAL;
@@ -65,7 +63,7 @@ class xsub_t : public socket_base_t
     int discard_filtered_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
     uint32_t compute_delivery_ready_count () const;
-    bool compute_delivery_ready_state () const;
+    void snapshot_subscriptions (std::vector<subscription_descriptor_t> *out_) const;
 
     //  Fair queueing object for inbound pipes.
     fq_t _fq;
@@ -75,7 +73,6 @@ class xsub_t : public socket_base_t
 
     //  The repository of subscriptions.
     trie_with_size_t _subscriptions;
-    mutable std::mutex _subscriptions_mu;
 
     // If true, send all unsubscription messages upstream, not just
     // unique ones
@@ -107,7 +104,7 @@ class xsub_t : public socket_base_t
 
     //  Bench-aligned SUB steady state subscribes to the empty prefix. In that
     //  state every first frame matches, so we can skip trie lookup on recv.
-    std::atomic<bool> _has_empty_subscription;
+    bool _has_empty_subscription;
 
     std::atomic<uint32_t> _delivery_ready_count;
 

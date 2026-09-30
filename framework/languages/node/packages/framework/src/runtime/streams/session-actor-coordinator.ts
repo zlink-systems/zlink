@@ -13,6 +13,7 @@ import {
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import { ZLinkManagedStream } from './managed-stream';
 import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
+import type { ZLinkSessionBindingConfirmationOptions } from './stream-binding-runtime-ports';
 
 export interface ZLinkSessionActorCoordinatorOptions {
   readonly actorBindTimeoutMs?: number;
@@ -31,7 +32,7 @@ export interface ZLinkSessionActorCoordinatorOptions {
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
     signal?: AbortSignal,
-    options?: { readonly waitForAcknowledgement?: boolean }
+    options?: ZLinkSessionBindingConfirmationOptions
   ) => Promise<void>;
   readonly errorSink?: () =>
     | {
@@ -181,7 +182,13 @@ export class ZLinkSessionActorCoordinator {
         boundActorRef,
         this.actorBindingRoutingId(context),
         undefined,
-        { waitForAcknowledgement }
+        {
+          waitForAcknowledgement,
+          binding:
+            context.stream instanceof ZLinkManagedStream
+              ? context.stream.actorBinding(actorRef.actorId)
+              : undefined
+        }
       );
       const reportFailure = (error: unknown) => {
         // A fire-and-forget route update retains the already-current binding;
@@ -354,7 +361,11 @@ export class ZLinkSessionActorCoordinator {
             true
           );
         }
-        route.actor.updateRef(normalizedActorRef);
+        // A location refresh never changes the route's Session binding
+        // generation; the native bind owns it.
+        route.actor.updateRef(
+          withBindingGeneration(normalizedActorRef, bindingGenerationOf(route.actor.ref), undefined)
+        );
         if (authorityFence !== undefined) {
           await this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
         }

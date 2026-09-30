@@ -80,14 +80,8 @@ fn adopt_native_parts(
     parts.reserve(count);
 
     for index in 0..count {
-        let mut part = Message::new().map_err(|error| {
-            unsafe {
-                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), count);
-            }
-            parts.clear();
-            RecvError::new(RecvResult::InternalError, error.native_errno())
-        })?;
-        let rc = unsafe { ffi::zlink_msg_adopt(part.raw_mut(), &mut native_parts[index]) };
+        let mut part = ffi::zlink_msg_t::recv_slot();
+        let rc = unsafe { ffi::zlink_msg_adopt(&mut part, &mut native_parts[index]) };
         if rc != 0 {
             let errno = unsafe { ffi::zlink_errno() };
             unsafe {
@@ -99,7 +93,7 @@ fn adopt_native_parts(
                 if errno == 0 { libc::EIO } else { errno },
             ));
         }
-        parts.push(part);
+        parts.push(unsafe { Message::from_raw(part) });
     }
 
     unsafe {

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { trackDiagnosticCompletion } from '../execution/state-lane';
 import { SubmitResult } from '../backend/runtime-values';
 import type {
   RoutingId,
@@ -671,6 +672,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         ready: () => true,
         relocate: (relocationSignal) => {
           const run = unit.relocate(relocationSignal);
+          if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+            trackDiagnosticCompletion(run, `relocation ${unit.id}`);
+          }
           started.push(run);
           return run;
         }
@@ -1420,7 +1424,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
-    await activation.serial.executeLifecycleOperation(() =>
+    await activation.serial.executeControlLifecycleOperation(() =>
       this.relocateSpotAggregateCore(
         meshName,
         activation,
@@ -1828,7 +1832,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
-    await activation.serial.executeLifecycleOperation(() =>
+    await activation.serial.executeControlLifecycleOperation(() =>
       this.relocatePerActorSpotShellCore(
         meshName,
         activation,
@@ -3464,10 +3468,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private async publishSessionRoutes(
     staging: ServiceObjectRelocationStaging<LocalHidden>
   ): Promise<void> {
-    for (const hidden of staging.hidden.values()) {
-      if (hidden.actor !== undefined) {
-        await this.options.actorTransfer.publishRoutedActorOwnership(hidden.actor);
-      }
+    for (const [key, hidden] of staging.hidden) {
+      if (hidden.actor === undefined) continue;
+      // The Session seal travels with the relocation envelope, not the Actor.
+      const carried = staging.envelope.participants.find((value) => value.key === key);
+      await this.options.actorTransfer.publishRoutedActorOwnership(
+        hidden.actor,
+        carried === undefined ? undefined : decodeActorSession(carried.boundSessionState)
+      );
     }
   }
 
@@ -4597,14 +4605,13 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   }
 
   async restoreBoundSession(hidden: LocalHidden, payload: Uint8Array): Promise<void> {
-    if (hidden.actor === undefined || payload.byteLength === 0) return;
-    const target = decodeActorSession(payload);
-    const state = this.requireActorManager().getState(hidden.actor.context.actorId)!;
-    state.setRemoteBoundSessionTarget(target);
-    state.setBoundSessionTransferTarget(target);
-    if (target.bindingGeneration !== undefined) {
-      state.setBoundSessionBindingGeneration(target.bindingGeneration);
-    }
+    const carried = decodeActorSession(payload);
+    if (hidden.actor === undefined || carried === undefined) return;
+    // The relocation delivers the binding it carried; the target installs it
+    // through the one install rule (Session–Actor binding §6, §8).
+    this.requireActorManager()
+      .getState(hidden.actor.context.actorId)!
+      .installBoundSessionBinding(carried);
   }
 
   async replayQueuedMessage(
@@ -5988,6 +5995,9 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
       sessionNodeRid:
         target.sessionNodeRid === undefined ? undefined : String(target.sessionNodeRid),
       sessionRid: target.sessionRid === undefined ? undefined : String(target.sessionRid),
+      sessionOwnerNodeGeneration: target.sessionOwnerNodeGeneration?.toString(),
+      sessionOwnerId: target.sessionOwnerId,
+      sessionOwnerLeaseGeneration: target.sessionOwnerLeaseGeneration?.toString(),
       bindingGeneration: target.bindingGeneration?.toString(),
       previousAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration?.toString(),
       previousOwnerLeaseGeneration: target.previousOwnerLeaseGeneration?.toString(),
@@ -6020,7 +6030,8 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
   );
 }
 
-function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget {
+function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget | undefined {
+  if (payload.byteLength === 0) return undefined;
   const value = JSON.parse(Buffer.from(payload).toString('utf8')) as Record<string, unknown>;
   const optionalBigInt = (field: string) =>
     typeof value[field] === 'string' ? BigInt(value[field] as string) : undefined;
@@ -6041,6 +6052,13 @@ function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget 
       ? { sessionNodeRid: value.sessionNodeRid as RoutingId }
       : {}),
     ...(typeof value.sessionRid === 'string' ? { sessionRid: value.sessionRid as RoutingId } : {}),
+    ...(optionalBigInt('sessionOwnerNodeGeneration') === undefined
+      ? {}
+      : { sessionOwnerNodeGeneration: optionalBigInt('sessionOwnerNodeGeneration') }),
+    ...(typeof value.sessionOwnerId === 'string' ? { sessionOwnerId: value.sessionOwnerId } : {}),
+    ...(optionalBigInt('sessionOwnerLeaseGeneration') === undefined
+      ? {}
+      : { sessionOwnerLeaseGeneration: optionalBigInt('sessionOwnerLeaseGeneration') }),
     ...(optionalBigInt('bindingGeneration') === undefined
       ? {}
       : { bindingGeneration: optionalBigInt('bindingGeneration') }),
@@ -6151,5 +6169,18 @@ function addCapacity(left: ZLinkCapacityVector, right: ZLinkCapacityVector): ZLi
             count: (left.spotType?.count ?? 0) + (right.spotType?.count ?? 0)
           }
         })
+  };
+}
+
+if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+  const relocateActorJoin = ZLinkHostServiceRelocationRuntime.prototype.relocateActorJoin;
+  ZLinkHostServiceRelocationRuntime.prototype.relocateActorJoin = function (
+    this: ZLinkHostServiceRelocationRuntime,
+    input: Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]
+  ): ReturnType<ZLinkActorJoinRelocation['relocateActorJoin']> {
+    return trackDiagnosticCompletion(
+      relocateActorJoin.call(this, input),
+      `relocation join actor:${input.state.actorId}`
+    );
   };
 }

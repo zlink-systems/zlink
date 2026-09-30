@@ -8,7 +8,7 @@ use crate::ffi;
 use crate::message::RoutingId;
 use crate::messaging_operations::{Empty, MessageParts, ReplyOp, ReplyOpStorage};
 
-use super::send_ops::{check_submit_result, submit_shared_message};
+use super::send_ops::{check_submit_result, submit_owned_message};
 
 pub(crate) fn router_reply_op(
     routed: Arc<crate::internal::RoutedHandle>,
@@ -44,7 +44,7 @@ pub(crate) fn submit_reply(mut op: ReplyOpStorage) -> Result<(), SubmitError> {
     }
     let target = op.target.as_raw() as *const _;
     let value = op.token.value();
-    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+    let (rc, errno) = submit_owned_message(&mut op.parts, |parts, count| unsafe {
         ffi::zlink_reply(handle, target, value, parts, count)
     })?;
     check_submit_result(rc, errno)

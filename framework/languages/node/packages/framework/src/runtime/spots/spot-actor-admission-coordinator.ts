@@ -34,7 +34,6 @@ type AdmissionOptions = Pick<
   | 'providerResolver'
   | 'runtimeEventPublisher'
   | 'routeToActorJoinPrewarm'
-  | 'isSpotClosing'
 >;
 
 export class ZLinkSpotActorAdmissionCoordinator {
@@ -97,7 +96,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
         'TopicMessage'
       ),
       serial: activation.serial,
-      isSpotClosing: () => this.options.isSpotClosing(activation),
       actors: {
         resolveActor: (actorId) =>
           activation.hasDepartedActor(actorId)
@@ -114,8 +112,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
               },
         commitNativeActor: (actor) => this.commitNativeActorTransaction(activation, actor),
         commitActorDeparture: (actorId) => activation.commitActorDeparture(actorId),
-        commitTransferredActor: (actor, backlog) =>
-          this.commitTransferredActorTransaction(activation, actor, backlog)
+        commitTransferredActor: (actor, backlog, sealedSession) =>
+          this.commitTransferredActorTransaction(activation, actor, backlog, sealedSession)
       },
       packets: {
         handle: (delivery) =>
@@ -130,16 +128,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
         bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid) => {
           const node = this.options.nativeSpotNodeProvider?.(activation.meshName);
           if (node === undefined || routingIdsEqual(sourceNodeRid, node.routingId)) return;
-          const target = this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(
-            sourceNodeRid,
-            sourceSessionRid
-          );
-          if (target !== undefined) {
-            this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(
-              actor.actorId,
-              target
-            );
-          }
           node.bindRemoteActorSession(actor, sourceNodeRid, sourceSessionRid);
         },
         replyNoBind: (info, parts, result) =>
@@ -251,8 +239,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
           : (activation.resolveJoinedActor(targetActorId) ??
             this.options.actorResolver?.(targetActorId)),
       actorLeft: (targetActorId) => activation.hasDepartedActor(targetActorId),
-      onRemoteBoundSessionTarget: (targetActorId, target) =>
-        this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
       onDisconnectActor: (actor) =>
         activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
@@ -294,7 +280,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       activation.beginActorTransfer(actor.context.actorId);
       await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
       routeSwitchStarted = true;
-      await transfer?.publishRoutedActorOwnership(actor);
+      await transfer?.publishRoutedActorOwnership(actor, undefined);
       await transfer?.openRoutedActorSession(actor);
       activation.cancelActorTransfer(actor.context.actorId);
     } catch (error) {
@@ -315,7 +301,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
   private async commitTransferredActorTransaction(
     activation: ZLinkSpotActivation,
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ): Promise<readonly ZLinkActorHandoffResult[]> {
     const transfer = this.options.actorTransferRuntime;
     let routeSwitchStarted = false;
@@ -328,7 +315,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
         backlog.length === 0 ? [] : await this.replayActorBacklog(activation, actor, backlog);
       await transfer?.claimRoutedActorLocation(actor, activation.spotId, activation.meshName);
       routeSwitchStarted = true;
-      await transfer?.publishRoutedActorOwnership(actor);
+      await transfer?.publishRoutedActorOwnership(actor, sealedSession);
       await transfer?.openRoutedActorSession(actor);
       activation.cancelActorTransfer(actor.context.actorId);
       return results;

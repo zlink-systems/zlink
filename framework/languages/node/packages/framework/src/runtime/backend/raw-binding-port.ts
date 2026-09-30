@@ -26,7 +26,7 @@ export interface ZLinkRawMonitorRecord {
 }
 
 export interface ZLinkRawSocketPort {
-  setReadableHandler(handler: () => void): void;
+  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void;
   bind(endpoint: string): void;
   unbind(endpoint: string): void;
   connect(endpoint: string): void;

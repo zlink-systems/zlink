@@ -46,7 +46,7 @@ interface ZLinkBindingRequestSubmitOperation {
 }
 
 export function isBindingNotFound(error: unknown): boolean {
-  return error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.NotFound;
+  return error instanceof zlink.ConnectError && error.result === zlink.ConnectResult.NotFound;
 }
 
 function isNonBlockingRecvEmpty(error: unknown): boolean {

@@ -130,6 +130,7 @@ Session callback이 사용하는 transport-facing stream write(동기 `bool` 반
 |---|---|
 | Remote target | local transport queue |
 | Local target | 해당 mailbox 또는 relay queue |
+| Relocation seal 중인 binding으로 가는 one-way session Actor relay | Session owner의 seal 보관소([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)) |
 | [Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout) — 연결·구독이 끝난 대상에게만 event를 보내는 별도 PUB/SUB 경로 — ·STREAM | 해당 socket queue |
 
 Global Spot·Actor send는 current [Ready](../00-foundation/02-glossary.ko.md#ready) authority

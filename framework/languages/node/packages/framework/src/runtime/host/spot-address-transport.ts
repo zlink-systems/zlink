@@ -7,11 +7,14 @@ import {
 } from '../framework-errors-internal';
 import {
   RequestResult,
-  SubmitResult,
   type ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
 import { ZLinkFrameworkException, type RoutingId } from '../../contracts';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  ZLinkSubmitStatus,
+  classifySubmitResult,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import { ZLinkSpotKind } from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
@@ -226,7 +229,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
       const sourceSpotId =
         call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId);
-      const mapped = mapSubmitResult(
+      const mapped = classifySubmitResult(
         await awaitWithAbort(
           selected.node.sendToMissingInstanceSpot(
             selected.target,
@@ -236,7 +239,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
             call.metadata
           ),
           deadline.signal
-        )
+        ),
+        'Instance Spot submission'
       );
       this.traceInstanceAddress(
         submitResultFlowOutcome(mapped.status),
@@ -817,27 +821,6 @@ function missingInstanceRequestFailure(
     kind,
     `Instance Spot request failed with result ${result} and errno ${nativeErrno}.`
   );
-}
-
-function mapSubmitResult(result: number): ZLinkSubmitResult {
-  switch (result) {
-    case SubmitResult.Ok:
-      return { status: ZLinkSubmitStatus.Submitted };
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return { status: ZLinkSubmitStatus.Backpressured };
-    case SubmitResult.NotFound:
-      return { status: ZLinkSubmitStatus.TargetNotFound };
-    case SubmitResult.NotConnected:
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
-    case SubmitResult.Terminated:
-      return { status: ZLinkSubmitStatus.Shutdown };
-    default:
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        `Instance Spot submission failed with result ${result}.`
-      );
-  }
 }
 
 function missingInstancePlacementCapacity(

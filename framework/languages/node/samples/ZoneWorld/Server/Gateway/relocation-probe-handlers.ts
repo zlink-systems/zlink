@@ -41,7 +41,7 @@ class CreateFreshActorProbeHandler {
       .inMesh(ZoneWorldNames.zoneMesh)
       .request(new PlayerActorCreateReq(request.actorId))
       .submit();
-    context.client
+    await context.client
       .reply(
         result.status === 'rejected'
           ? new CreateFreshActorProbeRes(request.actorId, '', '', ZoneWorldErrors.actorUnavailable)
@@ -80,7 +80,7 @@ class ActorLocationProbeHandler {
             actor.objectGeneration.toString(),
             String(actor.nodeRid)
           );
-    context.client.reply(response).submit();
+    await context.client.reply(response).submit();
   }
 }
 
@@ -102,7 +102,7 @@ class MessageFollowProbeRequestSessionHandler {
     const request = payload.decode(MessageFollowProbeReq);
     const actor = context.actors.bound.find((candidate) => candidate.actorId === request.actorId);
     if (actor === undefined) {
-      context.client
+      await context.client
         .reply(new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable))
         .submit();
       return;
@@ -114,7 +114,7 @@ class MessageFollowProbeRequestSessionHandler {
         `message-follow probe terminal actor=${request.actorId} probe=${request.probeId}`,
         error instanceof Error ? error.message : String(error)
       );
-      context.client
+      await context.client
         .reply(new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable))
         .submit();
     }

@@ -40,7 +40,7 @@ interface ZLinkSpotNativeActorJoinAdmissionOptions {
 export class ZLinkSpotNativeActorJoinAdmission {
   constructor(private readonly options: ZLinkSpotNativeActorJoinAdmissionOptions) {}
 
-  async admit(request: ZLinkBackendActorJoinRequest, rejectClosing = false): Promise<void> {
+  async admit(request: ZLinkBackendActorJoinRequest): Promise<void> {
     const actorId = request.info.targetActor.actorId;
     let accepted = false;
     let acceptedActor: ZLinkActor | undefined;
@@ -51,7 +51,7 @@ export class ZLinkSpotNativeActorJoinAdmission {
         throw new Error('Remote actor join requires the two-phase routed transfer protocol.');
       }
       const actor = this.options.resolveActor(actorId);
-      if (!rejectClosing && actor !== undefined) {
+      if (actor !== undefined) {
         const target = this.options.getTarget();
         const joinRequest = request.message;
         const joinPayload = wrapFrameworkPayloadMessage(

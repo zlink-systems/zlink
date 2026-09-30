@@ -48,6 +48,7 @@ export function encodeRemoteActorPacketRelayPayload(input: {
   readonly header: Uint8Array;
   readonly payload: Uint8Array;
   readonly bindingActorRef?: ActorRef;
+  readonly bindingGeneration?: bigint;
   /** The actor reference used to preserve relocation context at the target Spot. */
   readonly actorRef?: ActorRef;
   readonly returnResponse?: boolean;
@@ -70,13 +71,15 @@ export function encodeRemoteActorPacketRelayPayload(input: {
         ? undefined
         : routingIdWireHex(input.bindingActorRef.nodeRid),
     bindingActorGeneration: input.bindingActorRef?.objectGeneration.toString(),
-    bindingGeneration: (
-      input.bindingActorRef as
-        | (ActorRef & {
-            readonly bindingGeneration?: bigint;
-          })
-        | undefined
-    )?.bindingGeneration?.toString(),
+    bindingGeneration:
+      input.bindingGeneration?.toString() ??
+      (
+        input.bindingActorRef as
+          | (ActorRef & {
+              readonly bindingGeneration?: bigint;
+            })
+          | undefined
+      )?.bindingGeneration?.toString(),
     returnResponse: input.returnResponse,
     messageFollowContext: input.messageFollowContext,
     header: Buffer.from(input.header).toString('base64'),

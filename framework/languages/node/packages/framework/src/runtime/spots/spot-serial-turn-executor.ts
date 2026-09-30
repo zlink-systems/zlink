@@ -62,13 +62,9 @@ export class ZLinkSpotSerialTurnExecutor {
     return captureZLinkSpotSerialTurn(this);
   }
 
-  /** Stops new turns while allowing turns accepted before close to complete. */
+  /** Waits for turns admitted through the execution barrier to complete. */
   close(): Promise<void> {
-    return this.scheduler.close();
-  }
-
-  closeAdmission(): void {
-    this.scheduler.closeAdmission();
+    return this.scheduler.whenIdle();
   }
 
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
@@ -161,9 +157,33 @@ export class ZLinkSpotSerialTurnExecutor {
     return this.enqueueFrameworkTurn(operation, workOptions);
   }
 
-  /** Holds this Spot's lifecycle FIFO until the full operation result settles. */
+  /** Admits membership work and holds the lifecycle FIFO until its result settles. */
   executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
-    return this.scheduler.submitLifecycleOperation(operation);
+    let entry: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> | undefined;
+    try {
+      entry = this.executionBarrier?.enter();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const submit = (claim?: ZLinkExecutionBarrierClaim): Promise<T> => {
+      try {
+        return this.scheduler.submitLifecycleOperation(operation);
+      } catch (error) {
+        return Promise.reject(error);
+      } finally {
+        claim?.release();
+      }
+    };
+    return entry instanceof Promise ? entry.then(submit) : submit(entry);
+  }
+
+  /** Runs owner control work that establishes or completes its own admission seal. */
+  executeControlLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
+    try {
+      return this.scheduler.submitLifecycleOperation(operation);
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   private async enqueueApplicationTurn<T>(
