@@ -84,12 +84,11 @@ pub(crate) fn connect_pair_and_confirm(
     connect: impl FnOnce(),
 ) {
     connect();
-    let submission = connecting
+    connecting
         .send()
         .message(Message::try_from(b"connection-ready").unwrap())
-        .submit()
+        .submit_sync()
         .expect("connection barrier submit failed");
-    block_on(submission.admitted).expect("connection barrier admission failed");
     let mut received = Received::empty();
     assert!(bound.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
@@ -105,12 +104,11 @@ pub(crate) fn connect_dealer_router_and_confirm(
     connect: impl FnOnce(),
 ) {
     connect();
-    let submission = dealer
+    dealer
         .send()
         .message(Message::try_from(b"connection-ready").unwrap())
-        .submit()
+        .submit_sync()
         .expect("connection barrier submit failed");
-    block_on(submission.admitted).expect("connection barrier admission failed");
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
