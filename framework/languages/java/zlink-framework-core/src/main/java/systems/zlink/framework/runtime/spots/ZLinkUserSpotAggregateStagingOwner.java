@@ -126,10 +126,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                         .thenApply(ignored -> preparedSpot)
                                         .exceptionallyCompose(
                                                 failure -> {
-                                                    backend.discardSpot(preparedSpot);
                                                     Throwable cause = unwrap(failure);
-                                                    return CompletableFuture.failedFuture(
-                                                            relocationInternalFailure(cause));
+                                                    return SpotActivationBase.finishCleanup(
+                                                                    relocationInternalFailure(
+                                                                            cause),
+                                                                    backend.discardSpot(
+                                                                            preparedSpot))
+                                                            .thenApply(ignored -> (Object) null);
                                                 }));
     }
 
@@ -177,7 +180,11 @@ final class ZLinkUserSpotAggregateStagingOwner {
             var actor = actorsToDiscard.get(index);
             chain = chain.thenCompose(ignored -> backend.discardActor(actor));
         }
-        return chain.whenComplete((ignored, failure) -> backend.discardSpot(spot));
+        return chain.handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(
+                                        failure, backend.discardSpot(spot)))
+                .thenCompose(stage -> stage);
     }
 
     CompletionStage<Void> publishAndReplay(Staged staged, JournalReplayer replayer) {
@@ -189,9 +196,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
         return closeDurableBacklog(staged, finalRequest, replayer)
                 .thenCompose(
                         backlog -> {
-                            publishHidden(backlog, Map.of());
-                            openAdmission(staged);
-                            return drainDurableBacklog(backlog);
+                            return publishHidden(backlog, Map.of())
+                                    .thenCompose(
+                                            ignored -> {
+                                                openAdmission(staged);
+                                                return drainDurableBacklog(backlog);
+                                            });
                         });
     }
 
@@ -235,7 +245,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                         }));
     }
 
-    void publishHidden(DurableBacklog backlog, Map<String, Long> actorOwnerGenerations) {
+    CompletionStage<Void> publishHidden(
+            DurableBacklog backlog, Map<String, Long> actorOwnerGenerations) {
         Objects.requireNonNull(backlog, "backlog");
         if (backlog.owner != this) {
             throw new IllegalStateException("aggregate durable backlog belongs to another owner");
@@ -257,9 +268,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 backend.publishActor(actor, backlog.finalRequest.spotId(), ownerGeneration);
             }
         }
-        backend.publishSpot(staged.spot);
-        staged.published = true;
-        staged.restorePermit.close();
+        return backend.publishSpot(staged.spot)
+                .thenRun(
+                        () -> {
+                            staged.published = true;
+                            staged.restorePermit.close();
+                        });
     }
 
     void openAdmission(Staged staged) {
@@ -760,7 +774,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     new IllegalStateException("staged Actor timer runtime is unavailable"));
         }
 
-        void publishSpot(Object preparedSpot);
+        CompletionStage<Void> publishSpot(Object preparedSpot);
 
         void publishActor(Object preparedActor);
 
@@ -802,7 +816,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         CompletionStage<Void> discardActor(Object preparedActor);
 
-        void discardSpot(Object preparedSpot);
+        CompletionStage<Void> discardSpot(Object preparedSpot);
     }
 
     record ActorParticipant(
@@ -1073,8 +1087,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public void publishSpot(Object value) {
-            spots.publishReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
+        public CompletionStage<Void> publishSpot(Object value) {
+            return spots.publishReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
         }
 
         @Override
@@ -1137,8 +1151,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public void discardSpot(Object value) {
-            spots.discardReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
+        public CompletionStage<Void> discardSpot(Object value) {
+            return spots.discardReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
         }
     }
 

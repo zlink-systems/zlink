@@ -220,7 +220,6 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             var locationResolvers = new ZLinkStoreLocationResolvers(
                 store,
                 new ZLinkOwnerLeaseTracker(store, locationOptions),
-                new ZLinkObservedLocationGenerations(),
                 options: locationOptions
             );
             var locationLifecycle = new ZLinkLocationLifecycle(locationRuntime, locationResolvers);

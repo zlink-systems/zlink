@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Source from the repository checkout; package content selects an isolated NuGet cache.
-PERF_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PERF_REPO_ROOT="$(cd "${PERF_SCRIPT_DIR}/../../../../.." && pwd)"
+# Source from the perf entry scripts. Packages restore from nuget.org into the default NuGet cache.
 export TMPDIR=/dev/shm/zlink-tmp-dotnet
-export ZLINK_LIBRARY_PATH="${PERF_REPO_ROOT}/core/build-dev/lib"
 export UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
-pkg_hash="$(sha256sum "${PERF_REPO_ROOT}/.artifacts/wsl/nuget/Zlink.0.17.3.nupkg" | awk '{print $1}')"
-export NUGET_PACKAGES="/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}"
-mkdir -p "${TMPDIR}" "${NUGET_PACKAGES}"
+mkdir -p "${TMPDIR}"

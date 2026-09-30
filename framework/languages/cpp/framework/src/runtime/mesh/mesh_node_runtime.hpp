@@ -385,7 +385,8 @@ class mesh_node_runtime_t
       const zlink::message_t &payload,
       std::chrono::milliseconds timeout,
       bool await_remote_admission = false,
-      std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
+      std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt,
+      runtime::protocol::actor_route_fence_t stale_route = {});
     task_t<std::optional<zlink::message_t>>
     relay_application_actor (const actor_ref_t &actor,
                              const runtime::messaging::envelope_header_t &header,

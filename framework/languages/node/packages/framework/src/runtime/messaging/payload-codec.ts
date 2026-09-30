@@ -50,6 +50,11 @@ interface ZLinkSerializerSelectionPlan {
 
 const noSerializer = Symbol('noSerializer');
 const JSON_CONTENT_TYPE = 'application/json';
+const frameworkJsonReceiveCodec = Symbol('frameworkJsonReceiveCodec');
+const defaultReceiveCodecs: ReadonlyMap<string, typeof frameworkJsonReceiveCodec> = new Map<
+  string,
+  typeof frameworkJsonReceiveCodec
+>([[JSON_CONTENT_TYPE, frameworkJsonReceiveCodec]]);
 
 // Registration maps are created during host configuration and are immutable
 // for the runtime lifetime. Compile the candidate list and reverse content
@@ -167,17 +172,10 @@ function decodeFrameworkPayload<T>(
   packetName: string | undefined,
   contractPart: 'payload' | 'reply'
 ): T {
-  if (!isCanonicalCodecContentType(contentType)) {
-    throw unsupportedContentType(contentType);
-  }
-  if (contentType !== JSON_CONTENT_TYPE) {
-    const serializer = serializerMapOf(registry)?.get(contentType);
-    if (serializer === undefined) throw unsupportedContentType(contentType);
+  const codec = receiveCodecFor(contentType, registry);
+  if (codec !== frameworkJsonReceiveCodec) {
     if (message.isEmpty()) return undefined as T;
-    return serializer.deserialize(
-      encodedPayloadFromOwned(message.data()),
-      (type ?? Object) as Type<T>
-    );
+    return codec.deserialize(encodedPayloadFromOwned(message.data()), (type ?? Object) as Type<T>);
   }
 
   if (message.isEmpty()) return undefined as T;
@@ -215,14 +213,10 @@ function decodeFrameworkEncodedPayload<T>(
   packetName: string | undefined,
   contractPart: 'payload' | 'reply'
 ): T {
-  if (!isCanonicalCodecContentType(contentType)) {
-    throw unsupportedContentType(contentType);
-  }
-  if (contentType !== JSON_CONTENT_TYPE) {
-    const serializer = serializerMapOf(registry)?.get(contentType);
-    if (serializer === undefined) throw unsupportedContentType(contentType);
+  const codec = receiveCodecFor(contentType, registry);
+  if (codec !== frameworkJsonReceiveCodec) {
     if (payload.isEmpty()) return undefined as T;
-    return serializer.deserialize(payload, (type ?? Object) as Type<T>);
+    return codec.deserialize(payload, (type ?? Object) as Type<T>);
   }
   if (payload.isEmpty()) return undefined as T;
   const text = payload.getString('utf8');
@@ -239,6 +233,20 @@ function decodeFrameworkEncodedPayload<T>(
       error
     );
   }
+}
+
+function receiveCodecFor(
+  contentType: string,
+  registry: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer> | undefined
+): ZLinkMessageSerializer | typeof frameworkJsonReceiveCodec {
+  if (!isCanonicalCodecContentType(contentType)) {
+    throw unsupportedContentType(contentType);
+  }
+  const registeredCodec = serializerMapOf(registry)?.get(contentType);
+  if (registeredCodec !== undefined) return registeredCodec;
+  const defaultCodec = defaultReceiveCodecs.get(contentType);
+  if (defaultCodec !== undefined) return defaultCodec;
+  throw unsupportedContentType(contentType);
 }
 
 function schemaForDecode(

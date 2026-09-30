@@ -9,7 +9,6 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
@@ -508,49 +507,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
             long targetSpotGeneration,
             List<Message> parts,
             Duration timeout) {
-        ZLinkJavaRawSpot target = localSpot(targetNodeRid, targetSpotId, targetSpotGeneration);
-        if (target == null || !actors.containsKey(actor.actorId())) {
-            return CompletableFuture.completedFuture(
-                    new ZLinkBackendActorJoinResult(
-                            systems.zlink.framework.runtime.internal.backend
-                                    .ZLinkBackendRequestResult.NOT_FOUND,
-                            1,
-                            actor,
-                            targetSpotId,
-                            actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
-                            0,
-                            List.of()));
-        }
-        ZLinkJavaRawSpot.PendingJoin pending = new ZLinkJavaRawSpot.PendingJoin();
-        ZLinkBackendActorJoinRequest request =
-                new ZLinkBackendActorJoinRequest(
-                        actor, actor, ZLinkJavaRawSpot.copy(parts), pending);
-        target.enqueueJoin(request)
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure != null) {
-                                pending.fail(failure);
-                            }
-                        });
-        return pending.completion()
-                .thenApply(
-                        reply -> {
-                            long epoch = actorMembershipEpochs.getOrDefault(actor.actorId(), 1L);
-                            if (reply.resultCode() == 0) {
-                                epoch = epoch == Long.MAX_VALUE ? Long.MAX_VALUE : epoch + 1;
-                                actorSpots.put(actor.actorId(), targetSpotId);
-                                actorMembershipEpochs.put(actor.actorId(), epoch);
-                            }
-                            return new ZLinkBackendActorJoinResult(
-                                    systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendRequestResult.OK,
-                                    reply.resultCode(),
-                                    actor,
-                                    targetSpotId,
-                                    epoch,
-                                    0,
-                                    reply.parts());
-                        });
+        return CompletableFuture.completedFuture(
+                new ZLinkBackendActorJoinResult(
+                        ZLinkBackendRequestResult.NOT_FOUND,
+                        1,
+                        actor,
+                        targetSpotId,
+                        actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
+                        0,
+                        List.of()));
     }
 
     @Override
@@ -559,51 +524,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
             RoutingId targetNodeRid,
             Message request,
             Duration timeout) {
-        if (!routingId().equals(targetNodeRid) || !actors.containsKey(actor.actorId())) {
-            return CompletableFuture.completedFuture(
-                    new ZLinkBackendActorJoinEntrySpotResult(
-                            systems.zlink.framework.runtime.internal.backend
-                                    .ZLinkBackendRequestResult.NOT_FOUND,
-                            1,
-                            actor,
-                            targetNodeRid,
-                            entrySpot().spotId(),
-                            actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
-                            0,
-                            List.of()));
-        }
-        ZLinkJavaRawSpot target = (ZLinkJavaRawSpot) entrySpot();
-        ZLinkJavaRawSpot.PendingJoin pending = new ZLinkJavaRawSpot.PendingJoin();
-        ZLinkBackendActorJoinRequest join =
-                new ZLinkBackendActorJoinRequest(
-                        actor, actor, List.of(Message.from(request.dataBuffer())), pending);
-        target.enqueueJoin(join)
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure != null) {
-                                pending.fail(failure);
-                            }
-                        });
-        return pending.completion()
-                .thenApply(
-                        reply -> {
-                            long epoch = actorMembershipEpochs.getOrDefault(actor.actorId(), 1L);
-                            if (reply.resultCode() == 0) {
-                                epoch = epoch == Long.MAX_VALUE ? Long.MAX_VALUE : epoch + 1;
-                                actorSpots.put(actor.actorId(), target.spotId());
-                                actorMembershipEpochs.put(actor.actorId(), epoch);
-                            }
-                            return new ZLinkBackendActorJoinEntrySpotResult(
-                                    systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendRequestResult.OK,
-                                    reply.resultCode(),
-                                    actor,
-                                    targetNodeRid,
-                                    target.spotId(),
-                                    epoch,
-                                    0,
-                                    reply.parts());
-                        });
+        return CompletableFuture.completedFuture(
+                new ZLinkBackendActorJoinEntrySpotResult(
+                        ZLinkBackendRequestResult.NOT_FOUND,
+                        1,
+                        actor,
+                        targetNodeRid,
+                        entrySpot().spotId(),
+                        actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
+                        0,
+                        List.of()));
     }
 
     @Override

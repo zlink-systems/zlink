@@ -382,6 +382,18 @@ request와 별도의 요청·응답 연결 정보를 사용한다.
 원래 request는 ClientServer handler가 반환한 reply로만 한 번 완료한다. Downstream
 reply의 연결 정보를 원래 ClientServer request의 값으로 바꾸지 않는다.
 
+### 5.3 Application record 계약
+
+ClientServer application record의 내부 wire 계약은 JSON header의 `metadata` 필드에
+[application metadata](02-channel-messaging.ko.md#9-metadata와-관측)를 string→string 객체로
+담는 것이다. 필드가 없으면 빈 metadata로 해석한다. 문자·크기 상한·오류·reply 규칙은 channel
+messaging §9를 따른다. 그 절의 전체 크기는 key와 value 및 구조 overhead를 포함한 metadata 객체
+전체의 UTF-8 JSON encoding 길이다. Header의 `metadata` field 이름과 다른 field는 이 크기에 포함하지
+않는다. 이 길이는 최소 escape 표현으로 잰다 — key와 value 문자열에서 `"`, `\`와 U+0001–U+001F만
+escape하고(제어 문자는 `\b` `\f` `\n` `\r` `\t`가 있으면 그것을, 없으면 소문자 `\u00xx`를 쓴다) 나머지
+문자는 UTF-8 그대로 쓰며, 구조 문자 사이에 공백을 두지 않는다. 송신은 이 표현으로 쓰고, 수신은 받은 값을
+이 표현으로 다시 잰 길이로 판정한다. 업무 payload frame에는 metadata를 넣지 않는다.
+
 ## 6. Drain
 
 Server drain은 새 요청을 막고 이미 받은 요청을 끝내는 절차이며 다음 순서로

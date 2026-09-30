@@ -26,6 +26,7 @@ public sealed partial class ZlinkRequestException
             RequestResult.NotFound => (int)global::Systems.Zlink.ErrorCode.ENoent,
             RequestResult.Terminated => (int)global::Systems.Zlink.ErrorCode.Eterm,
             RequestResult.ProtocolError => (int)global::Systems.Zlink.ErrorCode.EProto,
+            RequestResult.InternalError => (int)global::Systems.Zlink.ErrorCode.EIo,
             RequestResult.Rejected => (int)global::Systems.Zlink.ErrorCode.EAccess,
             RequestResult.Conflict => (int)global::Systems.Zlink.ErrorCode.EExist,
             RequestResult.Busy => (int)global::Systems.Zlink.ErrorCode.EBusy,

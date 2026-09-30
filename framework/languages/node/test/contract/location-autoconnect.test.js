@@ -739,6 +739,187 @@ test('auto-connect reconciler removes a disconnected endpoint until a fresh stor
   assert.equal(reconciler.activeTargets.length, 1);
 });
 
+test('auto-connect reconciler defers a missing descriptor until owner lease TTL after recovery', async () => {
+  let nowMs = 0;
+  let storeFailed = false;
+  let rows = [
+    peer(
+      'owner-remote',
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-remote',
+      'tcp://remote'
+    )
+  ];
+  const calls = [];
+  const reconciler = new internal.ZLinkAutoConnectReconciler({
+    local: local(
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-local',
+      'tcp://dealer'
+    ),
+    runtime: {},
+    peerResolver: {
+      async listLivePeers() {
+        if (storeFailed) throw new Error('store unavailable');
+        return rows;
+      }
+    },
+    executor: {
+      connect(target) {
+        calls.push(`connect:${target.endpoint}`);
+        return true;
+      },
+      disconnect(target) {
+        calls.push(`disconnect:${target.endpoint}`);
+      },
+      disconnectStalePeers(targets) {
+        calls.push(`stale:${targets.length}`);
+      }
+    },
+    options: { ownerLeaseTtlMs: 1000, storeFailureGraceMs: 3000 },
+    monotonicNowMs: () => nowMs
+  });
+
+  await reconciler.tick();
+  storeFailed = true;
+  await reconciler.tick();
+  assert.equal(reconciler.storeFailed, true);
+  assert.equal(reconciler.activeTargets.length, 1);
+
+  storeFailed = false;
+  rows = [];
+  await reconciler.tick();
+
+  assert.deepEqual(calls, ['connect:tcp://remote', 'stale:1', 'stale:1']);
+  assert.equal(reconciler.activeTargets.length, 1);
+
+  nowMs = 999;
+  await reconciler.tick();
+  assert.equal(reconciler.activeTargets.length, 1);
+
+  nowMs = 1000;
+  await reconciler.tick();
+  assert.deepEqual(calls, [
+    'connect:tcp://remote',
+    'stale:1',
+    'stale:1',
+    'stale:1',
+    'stale:0',
+    'disconnect:tcp://remote'
+  ]);
+  assert.equal(reconciler.activeTargets.length, 0);
+});
+
+test('auto-connect reconciler connects a new target on the first recovered snapshot', async () => {
+  let storeFailed = false;
+  let rows = [
+    peer(
+      'owner-old',
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-old',
+      'tcp://old'
+    )
+  ];
+  const calls = [];
+  const reconciler = new internal.ZLinkAutoConnectReconciler({
+    local: local(
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-local',
+      'tcp://dealer'
+    ),
+    runtime: {},
+    peerResolver: {
+      async listLivePeers() {
+        if (storeFailed) throw new Error('store unavailable');
+        return rows;
+      }
+    },
+    executor: {
+      connect(target) {
+        calls.push(`connect:${target.endpoint}`);
+        return true;
+      },
+      disconnect(target) {
+        calls.push(`disconnect:${target.endpoint}`);
+      }
+    },
+    options: { ownerLeaseTtlMs: 1000 },
+    monotonicNowMs: () => 0
+  });
+
+  await reconciler.tick();
+  storeFailed = true;
+  await reconciler.tick();
+  rows = [
+    peer(
+      'owner-new',
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-new',
+      'tcp://new'
+    )
+  ];
+  storeFailed = false;
+  await reconciler.tick();
+
+  assert.deepEqual(calls, ['connect:tcp://old', 'connect:tcp://new']);
+  assert.equal(reconciler.activeTargets.length, 2);
+});
+
+test('auto-connect reconciler preserves unconnected intent through the recovery window', async () => {
+  let storeFailed = false;
+  let rows = [
+    peer(
+      'owner-remote',
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-remote',
+      'tcp://remote'
+    )
+  ];
+  let connectSucceeds = false;
+  let connects = 0;
+  const reconciler = new internal.ZLinkAutoConnectReconciler({
+    local: local(
+      internal.ZLinkLocationAutoConnectType.RouteMesh,
+      internal.ZLinkLocationRole.Router,
+      'node-local',
+      'tcp://dealer'
+    ),
+    runtime: {},
+    peerResolver: {
+      async listLivePeers() {
+        if (storeFailed) throw new Error('store unavailable');
+        return rows;
+      }
+    },
+    executor: {
+      connect() {
+        connects += 1;
+        return connectSucceeds;
+      },
+      disconnect() {}
+    },
+    options: { ownerLeaseTtlMs: 1000, storeFailureGraceMs: 0 },
+    monotonicNowMs: () => 0
+  });
+
+  await reconciler.tick();
+  storeFailed = true;
+  await reconciler.tick();
+  rows = [];
+  storeFailed = false;
+  connectSucceeds = true;
+  await reconciler.tick();
+
+  assert.equal(connects, 2);
+  assert.equal(reconciler.activeTargets.length, 1);
+});
+
 test('auto-connect reconciler treats a successful empty candidate scan as authoritative', async () => {
   const nowMs = 0;
   let rows = [peer(

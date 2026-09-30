@@ -20,6 +20,7 @@ func TestFallbackRequestErrnoMatchesCoreRepresentative(t *testing.T) {
 		{RequestTimedOut, int(syscall.ETIMEDOUT)},
 		{RequestNotFound, int(syscall.ENOENT)},
 		{RequestTerminated, eterm},
+		{RequestInternalError, int(syscall.EIO)},
 		{RequestRejected, int(syscall.EACCES)},
 		{RequestConflict, int(syscall.EEXIST)},
 		{RequestBusy, int(syscall.EBUSY)},

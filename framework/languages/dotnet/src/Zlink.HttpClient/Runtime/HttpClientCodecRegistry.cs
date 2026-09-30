@@ -29,7 +29,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
 
     public void AddSerializer(string contentType, IZLinkMessageSerializer serializer)
     {
-        AddSerializer(contentType, serializer, _ => true, true);
+        RegisterSerializer(contentType, serializer, _ => true);
     }
 
     public void AddSerializer(
@@ -38,7 +38,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
         Func<Type, bool> canSerialize
     )
     {
-        AddSerializer(contentType, serializer, canSerialize, false);
+        RegisterSerializer(contentType, serializer, canSerialize);
     }
 
     public HttpClientCodecRegistry Snapshot()
@@ -110,16 +110,15 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
         }
     }
 
-    private void AddSerializer(
+    private void RegisterSerializer(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize,
-        bool isFallbackSerializer
+        Func<Type, bool> canSerialize
     )
     {
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        _serializerSelections.Add(contentType, serializer, canSerialize, isFallbackSerializer);
+        _serializerSelections.Add(contentType, serializer, canSerialize);
     }
 
     private static ZLinkFrameworkException InvalidResponseContentType(string contentType) =>
