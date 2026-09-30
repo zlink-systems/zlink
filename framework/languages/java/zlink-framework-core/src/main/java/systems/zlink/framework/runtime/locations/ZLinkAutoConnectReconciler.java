@@ -91,14 +91,13 @@ final class ZLinkAutoConnectReconciler {
         if (storeFailed) {
             storeFailed = false;
             storeFailureStartedNanos = -1;
-            recoveryDeferUntilNanos =
-                    nanoTime.getAsLong()
-                            + Math.max(
-                                    options.ownerLeaseRenewInterval().toNanos(),
-                                    options.ownerLeaseTtl().toNanos());
+            recoveryDeferUntilNanos = nanoTime.getAsLong() + options.ownerLeaseTtl().toNanos();
         }
         Map<String, ZLinkAutoConnectPlanner.Target> desired =
                 ZLinkAutoConnectPlanner.computeDesired(local, rows);
+        if (nanoTime.getAsLong() < recoveryDeferUntilNanos) {
+            lastDesired.forEach(desired::putIfAbsent);
+        }
         Map<String, ZLinkAutoConnectPlanner.Target> nextNotRequired =
                 ZLinkAutoConnectPlanner.computeNotRequired(local, rows);
         Map<String, ZLinkAutoConnectPlanner.Target> nextExpectations = new HashMap<>();
@@ -177,16 +176,12 @@ final class ZLinkAutoConnectReconciler {
                 executor.ensureConnected(target);
             }
         }
-        if (nanoTime.getAsLong() >= recoveryDeferUntilNanos) {
-            active.keySet().stream()
-                    .filter(key -> !desired.containsKey(key))
-                    .forEach(toRemove::add);
-            toRemove.forEach(
-                    key -> {
-                        ZLinkAutoConnectPlanner.Target target = active.get(key);
-                        if (executor.disconnect(target)) active.remove(key);
-                    });
-        }
+        active.keySet().stream().filter(key -> !desired.containsKey(key)).forEach(toRemove::add);
+        toRemove.forEach(
+                key -> {
+                    ZLinkAutoConnectPlanner.Target target = active.get(key);
+                    if (executor.disconnect(target)) active.remove(key);
+                });
     }
 
     private static boolean samePeerIdentity(
