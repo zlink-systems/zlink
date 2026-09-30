@@ -5954,6 +5954,77 @@ test('actor packet target keeps a Ready snapshot across equivalent routing-id in
   assert.strictEqual(store.targetForState('actor-ready-fence'), target);
 });
 
+test('remote actor packet route failure is submitted once and stays Unavailable', async () => {
+  const actorId = 'actor-incomplete-ready-fence';
+  const routeFailure = framework.createInternalFrameworkException(
+    framework.ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+    "Spot 'spot-incomplete-ready-fence' has no complete Ready authority fence."
+  );
+  let submitCalls = 0;
+  const relay = new ZLinkActorPacketRelay({
+    routeTransport: {
+      async sendToSpot() {
+        submitCalls += 1;
+        if (submitCalls === 1) throw routeFailure;
+      }
+    },
+    streamBindingRuntime: () => ({
+      async captureBoundSessionResponseTarget() { return undefined; },
+      async sessionRouteFence() { return undefined; },
+      async find() { return undefined; }
+    }),
+    meshRouters: {},
+    actorManager: () => ({
+      getState() {
+        return {
+          remoteActorPacketTarget: {
+            routerChannelId: 'actor.route',
+            targetNodeRid: 'actor-node',
+            spotId: 'spot-incomplete-ready-fence',
+            spotKind: framework.ZLinkSpotKind.User
+          }
+        };
+      }
+    }),
+    spotManager: () => undefined,
+    spotNodeRuntime: () => undefined,
+    detachedTaskRunner: { runDetached() {} },
+    errorSink: () => ({ reportRuntimeTaskException() {} })
+  });
+  const actor = {
+    actorId,
+    ref: { nodeRid: 'actor-node', actorId, objectGeneration: 1n, meshName: 'actor.route' }
+  };
+  const payload = zlink.Message.from(Buffer.from('{"value":"ping"}'));
+
+  try {
+    const terminal = await relay.relayActorPacket(
+      actor,
+      {
+        kind: streamProtocol.ZLinkStreamMessageKind.Send,
+        codec: streamProtocol.ZLinkStreamCodec.Json,
+        flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+        name: 'ActorPacket',
+        metadata: new Map()
+      },
+      payload
+    ).then(
+      value => ({ value }),
+      error => ({ error })
+    );
+
+    assert.equal(submitCalls, 1);
+    assert.strictEqual(terminal.error, routeFailure);
+    assert.equal(terminal.error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+    assert.equal(
+      framework.internalFrameworkErrorKind(terminal.error),
+      framework.ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable
+    );
+  } finally {
+    payload.close();
+  }
+});
+
 //  Spec 12 — a direct payload to an existing Ready Spot uses the Location
 //  Store's CURRENT owner route. A cached packet target that still points at
 //  the previous Entry membership must not be combined with the new room
