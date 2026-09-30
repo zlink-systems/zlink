@@ -204,6 +204,7 @@ def test_request_errno_matches_core_representative():
         zlink.RequestResult.NOT_FOUND: errno.ENOENT,
         zlink.RequestResult.TERMINATED: ErrorCode.ETERM,
         zlink.RequestResult.PROTOCOL_ERROR: errno.EPROTO,
+        zlink.RequestResult.INTERNAL_ERROR: errno.EIO,
         zlink.RequestResult.REJECTED: errno.EACCES,
         zlink.RequestResult.CONFLICT: errno.EEXIST,
         zlink.RequestResult.BUSY: errno.EBUSY,
