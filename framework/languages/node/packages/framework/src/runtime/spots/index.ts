@@ -133,7 +133,7 @@ export { ZLinkRuntimeSpotPublisherTransport } from './spot-publisher-transport';
 import { ZLinkSpotActivationRegistry } from './spot-activation-registry';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActivationLifecycle, type ZLinkNativeSpotAuthority } from './spot-activation';
-import { ZLinkSpotActorMembership, type ZLinkActorJoinRollback } from './spot-actor-membership';
+import { ZLinkSpotActorMembership } from './spot-actor-membership';
 import { ZLinkFormalRemoteActorTransferRegistry } from './formal-remote-actor-transfer-registry';
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
@@ -1299,9 +1299,7 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     actor: ZLinkActor,
     request: Message,
-    commit: (
-      spot: ZLinkSpot
-    ) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
+    commit: (spot: ZLinkSpot) => Promise<void> | void,
     signal?: AbortSignal,
     leaveSource?: () => Promise<void>,
     contentType = 'application/json'

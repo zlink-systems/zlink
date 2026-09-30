@@ -2,6 +2,5 @@
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ZLink.Framework.Perf.Shared/ZLink.Framework.Perf.Shared.csproj" />
-    <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
   </ItemGroup>
 </Project>

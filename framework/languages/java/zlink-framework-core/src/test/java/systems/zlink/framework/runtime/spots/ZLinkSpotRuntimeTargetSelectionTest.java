@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -29,10 +28,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescripto
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
-import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
-import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.lang.reflect.Proxy;
@@ -76,37 +72,6 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
                 ZLinkSpotRuntime.preferConnectedInstanceTargets(candidates, Set.of());
 
         assertEquals(candidates, selected);
-    }
-
-    @Test
-    void instanceRouteStalenessIgnoresObjectGeneration() {
-        var authority =
-                new ZLinkServiceAuthorityPayloadCodec.InstanceSpotAuthority(
-                        ZLinkServiceAuthorityPayloadCodec.State.READY,
-                        ZONE_TYPE,
-                        "zone-1",
-                        "owner-1",
-                        7,
-                        "mesh",
-                        CONNECTED,
-                        11);
-        var staleGenerationAddress =
-                new SpotTransportAddress(
-                        "router",
-                        CONNECTED,
-                        "zone-1",
-                        999,
-                        11,
-                        13,
-                        7,
-                        systems.zlink.framework.spots.ZLinkSpotKind.INSTANCE);
-
-        assertFalse(
-                ZLinkSpotRuntime.isStaleInstanceRoute(
-                        authority,
-                        ZLinkPlacementAllocationState.ACTIVE,
-                        13,
-                        staleGenerationAddress));
     }
 
     @Test

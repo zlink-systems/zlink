@@ -507,7 +507,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
             await serialTurn.WaitAsync();
             try
             {
-                ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+                await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
                 var nowActive = Interlocked.Increment(ref active);
                 maxActive = Math.Max(maxActive, nowActive);
                 order.Enqueue(item);

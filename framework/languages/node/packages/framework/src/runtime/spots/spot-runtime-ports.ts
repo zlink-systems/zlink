@@ -72,11 +72,6 @@ export interface ZLinkSpotActorTransferRuntime {
     deadlineAtMs: number,
     signal?: AbortSignal
   ): Promise<import('../locations/internal-location-contracts').ZLinkAuthoritySnapshot>;
-  claimNativeActorLocation(
-    actor: ZLinkActor,
-    spotId: RoutingId,
-    spotMeshName: string
-  ): Promise<ZLinkNativeActorJoinSnapshot>;
   claimRoutedActorLocation(
     actor: ZLinkActor,
     spotId: RoutingId,
@@ -94,21 +89,9 @@ export interface ZLinkSpotActorTransferRuntime {
   bindRoutedActorRef(actor: ZLinkActor, actorRef: ActorRef): void;
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void;
   clearRoutedActor(actor: ZLinkActor): void;
-  rollbackNativeActorJoin(actor: ZLinkActor, snapshot: ZLinkNativeActorJoinSnapshot): Promise<void>;
   rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void>;
   notifyCoreSourceLeave(actor: ZLinkActor, callback: () => Promise<void>): Promise<void>;
   actorEntryNodeRid(actor: ZLinkActor): RoutingId | undefined;
-}
-
-export interface ZLinkNativeActorJoinSnapshot {
-  readonly spotId?: RoutingId;
-  readonly spot?: ZLinkSpot;
-  readonly locationSpotId?: RoutingId;
-  readonly spotMeshName?: string;
-  readonly actorRef?: ActorRef;
-  readonly spotGeneration?: bigint;
-  readonly membershipEpoch?: bigint;
-  readonly ownerNodeGeneration?: bigint;
 }
 
 export interface ZLinkSpotBoundSessionRuntime {

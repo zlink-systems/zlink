@@ -286,12 +286,16 @@ void verify_topology_metrics_and_selection_reasons ()
 
     const protocol::application_payload_t payload{"MetricProbe", "application/json",
                                                   bytes ("payload")};
-    require (!await_task (source.send_to_channel ("empty", payload)),
-             "empty channel unexpectedly selected a member");
-    require (!await_task (source.request_to_channel ("zero", payload, 2s, [] (auto, auto) {})),
-             "zero-weight channel unexpectedly started a request");
-    require (!await_task (source.send_to_channel ("not-registered", payload)),
-             "unregistered channel unexpectedly selected a member");
+    const auto empty = source.send_to_channel ("empty", payload).result ();
+    require (!empty && empty.error_kind () == zlink::framework::framework_error_kind_t::not_found,
+             "empty channel must return NotFound");
+    const auto zero = source.request_to_channel ("zero", payload, 2s, [] (auto, auto) {}).result ();
+    require (!zero && zero.error_kind () == zlink::framework::framework_error_kind_t::unavailable,
+             "zero-weight channel must return Unavailable");
+    const auto missing = source.send_to_channel ("not-registered", payload).result ();
+    require (!missing
+               && missing.error_kind () == zlink::framework::framework_error_kind_t::not_found,
+             "unregistered channel must return NotFound");
     require_metric (
       provider, "zlink.mesh_node.channel.selection_failures", "counter", "{failure}",
       {{"channel_name", "empty"}, {"mesh_name", std::string (mesh_name)}, {"reason", "no_member"}},
@@ -328,8 +332,10 @@ void verify_topology_metrics_and_selection_reasons ()
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
     require_metric (provider, "zlink.mesh_node.channels.ready_members", "gauge", "{member}",
                     channel_labels ("alpha"), 0);
-    require (!await_task (source.send_to_channel ("alpha", payload)),
-             "draining channel unexpectedly selected a member");
+    const auto draining = source.send_to_channel ("alpha", payload).result ();
+    require (!draining
+               && draining.error_kind () == zlink::framework::framework_error_kind_t::unavailable,
+             "draining channel must return Unavailable");
     require_metric (
       provider, "zlink.mesh_node.channel.selection_failures", "counter", "{failure}",
       {{"channel_name", "alpha"}, {"mesh_name", std::string (mesh_name)}, {"reason", "draining"}},

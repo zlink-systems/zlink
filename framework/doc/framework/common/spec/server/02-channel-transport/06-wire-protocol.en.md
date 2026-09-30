@@ -364,6 +364,7 @@ owns physical pipe selection and replacement.
 - A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a client-to-server direction.
 - The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
 - Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections.
+- [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the internal wire representation of ClientServer application metadata.
 - Reusing a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service Liveness

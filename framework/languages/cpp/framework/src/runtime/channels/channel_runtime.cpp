@@ -31,6 +31,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -88,30 +89,29 @@ mesh_node_requester (const std::shared_ptr<channel_runtime_state_t> &state,
       .get ();
 }
 
-std::optional<channel_runtime_state_t::mesh_channel_send_t>
-mesh_channel_sender (const std::shared_ptr<channel_runtime_state_t> &state,
-                     const std::string &channel_name)
+template <typename TClientServerTransports, typename TRouteMeshTransports>
+auto resolve_route_client_channel_transport (
+  const std::shared_ptr<channel_runtime_state_t> &state,
+  const std::string &channel_name,
+  const TClientServerTransports &client_server_transports,
+  const TRouteMeshTransports &route_mesh_transports)
 {
+    using route_client_channel_transport_t =
+      std::variant<typename TClientServerTransports::mapped_type,
+                   typename TRouteMeshTransports::mapped_type>;
     return state->lane
-      .run_checked ([&] {
-          const auto found = state->mesh_channel_senders.find (channel_name);
-          return found == state->mesh_channel_senders.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::mesh_channel_send_t> (found->second);
-      })
-      .get ();
-}
-
-std::optional<channel_runtime_state_t::mesh_channel_request_t>
-mesh_channel_requester (const std::shared_ptr<channel_runtime_state_t> &state,
-                        const std::string &channel_name)
-{
-    return state->lane
-      .run_checked ([&] {
-          const auto found = state->mesh_channel_requesters.find (channel_name);
-          return found == state->mesh_channel_requesters.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::mesh_channel_request_t> (found->second);
+      .run_checked ([&] () -> std::optional<route_client_channel_transport_t> {
+          const auto client_server_transport = client_server_transports.find (channel_name);
+          if (client_server_transport != client_server_transports.end ()) {
+              return route_client_channel_transport_t (std::in_place_index<0>,
+                                                       client_server_transport->second);
+          }
+          const auto route_mesh_transport = route_mesh_transports.find (channel_name);
+          if (route_mesh_transport != route_mesh_transports.end ()) {
+              return route_client_channel_transport_t (std::in_place_index<1>,
+                                                       route_mesh_transport->second);
+          }
+          return std::nullopt;
       })
       .get ();
 }
@@ -996,6 +996,14 @@ capability_builder_t &capability_builder_t::set_no_drop (bool no_drop)
     return *this;
 }
 
+capability_builder_t &capability_builder_t::set_send_timeout (std::chrono::milliseconds timeout)
+{
+    auto &snapshot = capability_snapshot (*_state);
+    snapshot.enabled = true;
+    snapshot.send_timeout = timeout;
+    return *this;
+}
+
 channel_capability_snapshot_t capability_builder_t::snapshot () const
 {
     return capability_snapshot (*_state);
@@ -1485,13 +1493,31 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
         co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                            "route client is not configured");
     }
-    const auto sender = detail::mesh_channel_sender (state->runtime, channel_name);
-    if (!sender) {
-        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                           "RouteMesh channel '" + channel_name
-                                             + "' is not registered");
+    const auto channel_transport = detail::resolve_route_client_channel_transport (
+      state->runtime, channel_name, state->runtime->client_server_senders,
+      state->runtime->mesh_channel_senders);
+    if (!channel_transport) {
+        co_return result_t<void>::failure (framework_error_kind_t::not_found,
+                                           "ChannelName '" + channel_name + "' is not registered");
     }
     try {
+        if (const auto *client_server = std::get_if<0> (&*channel_transport)) {
+            auto serialized = encode_payload (*state->serializers);
+            co_await (*client_server) (packet_name, std::move (serialized.content_type),
+                                       detail::encoded_payload_to_raw (serialized.payload),
+                                       std::chrono::milliseconds::zero ());
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                              .surface = dispatch_error_surface_t::channel,
+                                              .message_kind = dispatch_message_kind_t::send,
+                                              .packet_name = packet_name,
+                                              .channel_name = channel_name,
+                                              .channel_route_kind = std::string ("client_server")};
+              });
+            co_return result_t<void>::success ();
+        }
+        const auto &sender = std::get<1> (*channel_transport);
         runtime::messaging::client_call_codec_t codec;
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
                                              channel_name, packet_name);
@@ -1512,7 +1538,7 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
           });
         auto parts = encode_route_payload_parts (std::move (header), message_type,
                                                  std::move (encode_payload), *state->serializers);
-        co_return co_await (*sender) (std::move (parts));
+        co_return co_await sender (std::move (parts));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<void> (error);
@@ -1876,15 +1902,43 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
                                                        "route client is not configured");
     }
-    const auto requester = detail::mesh_channel_requester (state->runtime, channel_name);
-    if (!requester) {
-        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
-                                                       "RouteMesh channel '" + channel_name
+    const auto channel_transport = detail::resolve_route_client_channel_transport (
+      state->runtime, channel_name, state->runtime->client_server_requesters,
+      state->runtime->mesh_channel_requesters);
+    if (!channel_transport) {
+        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
+                                                       "ChannelName '" + channel_name
                                                          + "' is not registered");
     }
     const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                      ? timeout
                                      : state->runtime->default_request_timeout;
+    if (const auto *client_server = std::get_if<0> (&*channel_transport)) {
+        try {
+            auto serialized = encode_payload (*state->serializers);
+            const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                              .surface = dispatch_error_surface_t::channel,
+                                              .message_kind = dispatch_message_kind_t::request,
+                                              .packet_name = packet_name,
+                                              .channel_name = channel_name,
+                                              .channel_route_kind = std::string ("client_server")};
+              });
+            co_return co_await (*client_server) (
+              packet_name, std::move (serialized.content_type),
+              detail::encoded_payload_to_raw (serialized.payload), effective_timeout);
+        }
+        catch (const framework_exception_t &error) {
+            co_return detail::result_access_t::failure<zlink::message_t> (error);
+        }
+        catch (const std::exception &error) {
+            co_return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                           error.what ());
+        }
+    }
+    const auto &requester = std::get<1> (*channel_transport);
     runtime::messaging::message_parts_t parts;
     try {
         runtime::messaging::client_call_codec_t codec;
@@ -1915,7 +1969,7 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         runtime::messaging::envelope_codec_t envelope;
-        auto reply = co_await (*requester) (std::move (parts), effective_timeout);
+        auto reply = co_await requester (std::move (parts), effective_timeout);
         if (!reply) {
             co_return detail::propagate_failure<zlink::message_t> (
               reply, "RouteMesh channel request failed");

@@ -676,6 +676,70 @@ public sealed class HttpClientContractTests
     }
 
     [Fact]
+    public async Task Max_response_body_size_is_enforced_before_chunked_body_finishes()
+    {
+        const int maxResponseBodySize = 1024;
+        var chunkFlushed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var finishResponse = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var server = new TestHttpServer(async ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentType = "application/octet-stream";
+            await ctx.Response.Body.WriteAsync(new byte[maxResponseBodySize + 1]);
+            await ctx.Response.Body.FlushAsync();
+            chunkFlushed.TrySetResult(true);
+            await finishResponse.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        });
+        using var client = ZLinkHttpClient
+            .Create(server.BaseUrl)
+            .MaxResponseBodySize(maxResponseBodySize)
+            .Build();
+        var responseTask = client.Get("/big").AsyncRaw().AsTask();
+        var completedBeforeResponseFinished = false;
+
+        try
+        {
+            await chunkFlushed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            completedBeforeResponseFinished =
+                await Task.WhenAny(responseTask, Task.Delay(TimeSpan.FromSeconds(2)))
+                == responseTask;
+        }
+        finally
+        {
+            finishResponse.TrySetResult(true);
+        }
+
+        var ex = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await responseTask);
+
+        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, ex.Kind);
+        Assert.True(
+            completedBeforeResponseFinished,
+            "The response size limit was not enforced before the chunked body finished."
+        );
+    }
+
+    [Fact]
+    public async Task Max_response_body_size_preserves_bytes_at_the_limit()
+    {
+        var expected = new byte[] { 0x00, 0x7F, 0x80, 0xFF };
+        using var server = new TestHttpServer(async ctx =>
+            await ctx.Response.WriteBytesAsync(200, expected, "application/octet-stream")
+        );
+        using var client = ZLinkHttpClient
+            .Create(server.BaseUrl)
+            .MaxResponseBodySize(expected.Length)
+            .Build();
+
+        var response = await client.Get("/bytes").AsyncRaw();
+
+        Assert.Equal(expected, response.BodyBytes);
+    }
+
+    [Fact]
     public async Task Non_blocking_concurrency_does_not_serialize_requests()
     {
         using var server = new TestHttpServer(async ctx =>

@@ -6,14 +6,8 @@
     <TargetFramework Condition="'$(TargetFramework)' == '' and '$(TargetFrameworks)' == ''">net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ZLinkSampleRepositoryDetected Condition="Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">true</ZLinkSampleRepositoryDetected>
-    <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
-    <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../VERSION'))</ZLinkSampleFrameworkVersionFile>
-    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
-    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.26.0</ZLinkSampleFrameworkVersion>
-    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true'">true</ZLinkSampleUseLocalSource>
-    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
-    <ZLinkSampleDotnetRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</ZLinkSampleDotnetRoot>
+    <ZLinkPropsDir Condition="Exists('$(MSBuildThisFileDirectory)props/ZLink.FrameworkReference.props')">$(MSBuildThisFileDirectory)props/</ZLinkPropsDir>
+    <ZLinkPropsDir Condition="'$(ZLinkPropsDir)' == ''">$(MSBuildThisFileDirectory)../props/</ZLinkPropsDir>
 
     <_ZLinkSampleStreamConnectorProjects>;Bingo.Client;DeliveryDispatch.Client;DeliveryDispatch.Server.CourierSession;DeliveryDispatch.Server.CustomerGateway;GameQuest.Client;GameQuest.GameApi;ShoppingMall.Client;SupportChat.Client;SupportChat.Server.Session;TicTacToe.Client;TicTacToe.Server.Configuration;ZoneWorld.Client;</_ZLinkSampleStreamConnectorProjects>
     <_ZLinkSampleFrameworkProjects>;Bingo.Server.Api;Bingo.Server.Configuration;Bingo.Server.Matchmaking;Bingo.Server.Play;Bingo.Server.Session;DeliveryDispatch.Client;DeliveryDispatch.Server.Configuration;DeliveryDispatch.Server.CourierActorNode;DeliveryDispatch.Server.CourierSession;DeliveryDispatch.Server.CustomerGateway;DeliveryDispatch.Server.Dispatch;DeliveryDispatch.Server.Tracking;DeliveryDispatch.Shared;GameQuest.Client;GameQuest.GameApi;GameQuest.QuestMission;GameQuest.Server.Configuration;ShoppingMall.Client;ShoppingMall.CommerceApi;ShoppingMall.OrderWorkflow;ShoppingMall.Server.Configuration;SupportChat.Server.Api;SupportChat.Server.Configuration;SupportChat.Server.Session;SupportChat.Server.Support;TicTacToe.Client;TicTacToe.Server.Configuration;ZoneWorld.Server.Gateway;ZoneWorld.Server.Ops;ZoneWorld.Server.ZoneNode;</_ZLinkSampleFrameworkProjects>
@@ -23,37 +17,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <_ZLinkSampleFrameworkReference Include="Zlink.Stream.Connector"
-                                    Condition="$(_ZLinkSampleStreamConnectorProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
-    <_ZLinkSampleFrameworkReference Include="Zlink.Framework"
-                                    Condition="$(_ZLinkSampleFrameworkProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Zlink.Framework/Zlink.Framework.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
-    <_ZLinkSampleFrameworkReference Include="Zlink.Framework.AspNetCore"
-                                    Condition="$(_ZLinkSampleServerIntegrationProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
-    <_ZLinkSampleFrameworkReference Include="Zlink.Framework.Locations.Redis"
-                                    Condition="$(_ZLinkSampleServerIntegrationProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
-    <_ZLinkSampleFrameworkReference Include="Zlink.Framework.Codecs.Protobuf"
-                                    Condition="$(_ZLinkSampleProtobufProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
-    <_ZLinkSampleFrameworkReference Include="Zlink.HttpClient"
-                                    Condition="$(_ZLinkSampleHttpClientProjects.Contains(';$(MSBuildProjectName);'))">
-      <ProjectPath>$(ZLinkSampleDotnetRoot)/src/Zlink.HttpClient/Zlink.HttpClient.csproj</ProjectPath>
-    </_ZLinkSampleFrameworkReference>
+    <ZLinkFrameworkReference Include="Zlink.Stream.Connector" Condition="$(_ZLinkSampleStreamConnectorProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework" Condition="$(_ZLinkSampleFrameworkProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.AspNetCore" Condition="$(_ZLinkSampleServerIntegrationProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.Locations.Redis" Condition="$(_ZLinkSampleServerIntegrationProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.Codecs.Protobuf" Condition="$(_ZLinkSampleProtobufProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.HttpClient" Condition="$(_ZLinkSampleHttpClientProjects.Contains(';$(MSBuildProjectName);'))" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' == 'true'">
-    <ProjectReference Include="@(_ZLinkSampleFrameworkReference->'%(ProjectPath)')" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' != 'true'">
-    <PackageReference Include="@(_ZLinkSampleFrameworkReference)" />
-  </ItemGroup>
+  <!-- Package-or-source decision and the published versions: one shared device with perf. -->
+  <Import Project="$(ZLinkPropsDir)ZLink.FrameworkReference.props" />
 </Project>

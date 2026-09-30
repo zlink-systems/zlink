@@ -51,7 +51,10 @@ internal static class ZLinkHandlerInvocationEngine
             }
         }
 
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        var release = ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
+        if (!release.IsCompletedSuccessfully)
+            return InvokeAfterReleaseAsync(release, handler, invoker, arg0, arg1, arg2, arg3, arg4);
+
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
         return ZLinkHandlerResultAwaiter.AwaitAsync(result);
     }
@@ -66,8 +69,27 @@ internal static class ZLinkHandlerInvocationEngine
         object? arg4 = null
     )
     {
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        var release = ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
+        if (!release.IsCompletedSuccessfully)
+            return InvokeAfterReleaseAsync(release, handler, invoker, arg0, arg1, arg2, arg3, arg4);
+
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
         return ZLinkHandlerResultAwaiter.AwaitAsync(result);
+    }
+
+    private static async ValueTask<object?> InvokeAfterReleaseAsync(
+        ValueTask release,
+        object handler,
+        ZLinkHandlerMethodInvoker invoker,
+        object? arg0,
+        object? arg1,
+        object? arg2,
+        object? arg3,
+        object? arg4
+    )
+    {
+        await release.ConfigureAwait(false);
+        var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
+        return await ZLinkHandlerResultAwaiter.AwaitAsync(result).ConfigureAwait(false);
     }
 }

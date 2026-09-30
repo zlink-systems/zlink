@@ -17,7 +17,7 @@ ERROR_PATTERN='^(ERROR|error)[: ]|^codex: |invalid_request_error|not supported w
 usage() {
     cat <<'EOF'
 사용법:
-  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--read-only] [--model <모델>] [--effort xhigh|high|medium|low] [--max-jobs N]
+  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--read-only] [--model <모델>] [--effort max|xhigh|high|medium|low] [--max-jobs N]
   job.sh [--dry-run] status [--all] [<이름>]
   job.sh [--dry-run] watch [--interval 180]
   job.sh [--dry-run] kill <이름>
@@ -202,7 +202,7 @@ load_models() {
     AVAILABLE_MODELS=()
     # config는 TUI가 안내한 모델만 담아서 실제로 쓸 수 있는 id를 다 알지 못한다.
     # 알려진 id를 먼저 넣고, 새 id는 ZLINK_JOB_MODELS로 더한다(공백 구분).
-    for model in ${ZLINK_JOB_MODELS:-gpt-6-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna}; do
+    for model in ${ZLINK_JOB_MODELS:-gpt-6-astra gpt-6.1-sol gpt-6-sol gpt-6-luna}; do
         [[ -n "$model" && -z "${seen[$model]+present}" ]] || continue
         AVAILABLE_MODELS+=("$model")
         seen["$model"]=1
@@ -323,7 +323,7 @@ start_command() {
     fi
     worktree=$top
     case "$effort" in
-        xhigh|high|medium|low) ;;
+        max|xhigh|high|medium|low) ;;
         *) die 2 "지원하지 않는 effort입니다: $effort" ;;
     esac
     [[ -n "$max_jobs" ]] || max_jobs=${ZLINK_MAX_JOBS:-5}
