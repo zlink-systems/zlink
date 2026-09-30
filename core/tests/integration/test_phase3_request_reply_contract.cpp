@@ -713,12 +713,13 @@ void test_request_reply_timeout_resolution_is_exactly_once_under_race ()
 
 void test_dealer_none_request_waits_for_never_handshaken_router ()
 {
-    // The dealer connects before any router binds. A plain listener holds an
-    // OS-assigned port until just before the router binds it, so a parallel
-    // test cannot be assigned the same port while the dealer waits. The
-    // listener never speaks ZMTP, so the dealer never completes a handshake.
+    // DEALER는 ROUTER bind 전에 endpoint에 연결한다. listen하지 않는 소켓을
+    // ROUTER bind 직전까지 유지해 OS가 할당한 포트를 점유한다. 이 동안 다른
+    // 테스트에 같은 포트가 할당되지 않으며, 연결이 거절되어 ZMTP 핸드셰이크가
+    // 완료되지 않는다.
     char endpoint[MAX_SOCKET_STRING];
-    const fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
+    const fd_t reserved = bind_socket_resolve_port (
+      "127.0.0.1", "0", endpoint, AF_INET, IPPROTO_TCP, false);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (dealer);
     const int send_timeout_ms = 3000;
@@ -789,6 +790,11 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_routing_id_text (router, "zero-weight-router");
     const int zero_weight = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -817,11 +823,6 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     assert_part_consumed (&request);
     assert_no_completion_for (dealer, 20);
 
-    const int send_timeout_ms = 2000;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
-                        sizeof (send_timeout_ms)));
     zlink_msg_t blocking_request;
     init_part (&blocking_request, "reject-known-zero-weight");
     zlink_completion_id_t blocking_id = UINT64_MAX;

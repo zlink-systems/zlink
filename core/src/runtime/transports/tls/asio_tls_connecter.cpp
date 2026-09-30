@@ -383,15 +383,15 @@ void zlink::asio_tls_connecter_t::create_engine (fd_t fd_, const std::string &lo
       std::move (_ssl_context));
     alloc_assert (engine);
 
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
+
     //  Attach the engine to the session
     send_attach (_session, engine);
 
     //  Shut down the connecter
     terminate ();
-
-    _socket_ptr->event_connected (
-      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
-      options.transport_pair_generation);
 }
 
 bool zlink::asio_tls_connecter_t::tune_socket (fd_t fd_)

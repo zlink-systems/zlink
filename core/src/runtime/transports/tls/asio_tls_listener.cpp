@@ -298,9 +298,8 @@ void zlink::asio_tls_listener_t::create_engine (
     errno_assert (session);
     session->inc_seqnum ();
     launch_child (session);
-    send_attach (session, engine, false);
-
     _socket->event_accepted (endpoint_pair, fd_);
+    send_attach (session, engine, false);
 }
 
 void zlink::asio_tls_listener_t::process_release_endpoint ()

@@ -832,6 +832,7 @@ void test_router_selection_change_discards_every_standby_record ()
           zlink::pipepair (parents, pairs[i], hwms, conflates, options));
         pairs[i][0]->set_peer_routing_id (
           reinterpret_cast<const unsigned char *> ("S"), 1);
+        pairs[i][0]->set_transport_connection_id (101 + i);
         pairs[i][0]->set_transport_pair (
           zlink::transport_lane_application, 101 + i, 1);
         pairs[i][1]->set_transport_pair (
@@ -932,6 +933,7 @@ void test_unrelated_handover_preserves_prefetched_multipart_source ()
           zlink::pipepair (parents, pairs[i], hwms, conflates, options));
         pairs[i][0]->set_peer_routing_id (
           reinterpret_cast<const unsigned char *> (ids[i]), 1);
+        pairs[i][0]->set_transport_connection_id (201 + i);
         pairs[i][0]->set_transport_pair (
           zlink::transport_lane_application, 201 + i, 1);
         pairs[i][1]->set_transport_pair (
