@@ -373,7 +373,7 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_NOT_FOUND` | `ENOENT` | Terminal target is absent |
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | Owner lifecycle ended |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | Malformed or incompatible reply |
-| `ZLINK_REQUEST_INTERNAL_ERROR` | preserved errno | Internal failure without another terminal category |
+| `ZLINK_REQUEST_INTERNAL_ERROR` | `EIO` | Internal failure without another terminal category |
 | `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED`, `EPROTOTYPE` | Peer, admission, or peer socket type rejection |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | Request correlation conflict (`EEXIST`) or transport pair [generation](glossary.en.md#generation) mismatch (`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | An active request lifecycle exists |
@@ -384,7 +384,9 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | Nonblocking admission or reservation failed |
 
 After a successful request submit, exactly one terminal result is delivered by
-`zlink_completion_recv()` for each nonzero completion ID.
+`zlink_completion_recv()` for each nonzero completion ID. A completion record doesn't carry
+an errno. When a binding expresses a result as an errno, it uses that result's first errno in
+this table.
 
 ### 4. Receive result
 
