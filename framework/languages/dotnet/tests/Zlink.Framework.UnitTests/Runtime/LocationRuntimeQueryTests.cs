@@ -183,8 +183,7 @@ public sealed class LocationRuntimeQueryTests
             store,
             RegisteredMeshes,
             tracker,
-            runtime,
-            new ZLinkObservedLocationGenerations()
+            runtime
         );
 
         var exact = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -212,8 +211,7 @@ public sealed class LocationRuntimeQueryTests
             store,
             RegisteredMeshes,
             new ZLinkOwnerLeaseTracker(store, options),
-            new ZLinkLocationRuntime(options, store),
-            new ZLinkObservedLocationGenerations()
+            new ZLinkLocationRuntime(options, store)
         );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -229,7 +227,7 @@ public sealed class LocationRuntimeQueryTests
     }
 
     [Fact]
-    public async Task Actor_Resolve_Accepts_Views_Without_An_Observed_Membership_Epoch_Floor()
+    public async Task Actor_Resolve_Accepts_Each_Live_Authority_Snapshot()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -240,9 +238,6 @@ public sealed class LocationRuntimeQueryTests
             RouteCacheMaxAge = TimeSpan.Zero,
         };
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-
-        // A replica that first serves membership epoch 2 and then lags back
-        // to epoch 1.
         var lease = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
             await store.ReadOwnerLeaseAsync(LiveOwner)
         );
@@ -250,11 +245,9 @@ public sealed class LocationRuntimeQueryTests
             ActorAuthorityRead(ActorLocation(LiveOwner, "1"), lease.Token, 2, time),
             ActorAuthorityRead(ActorLocation(LiveOwner, "1"), lease.Token, 1, time)
         );
-        var observed = new ZLinkObservedLocationGenerations();
         var resolvers = new ZLinkStoreLocationResolvers(
             lagging,
             tracker,
-            observed,
             options: options,
             timeProvider: time
         );
@@ -263,7 +256,7 @@ public sealed class LocationRuntimeQueryTests
         var first = await resolvers.ResolveActorRowAsync(key);
         Assert.Equal(2UL, first!.MembershipEpoch);
 
-        // A prior observation is not authority for rejecting a later store read.
+        // owner lease가 유효하므로 resolver는 각 권한 조회 결과를 반환합니다.
         time.Advance(TimeSpan.FromTicks(1));
         var second = await resolvers.ResolveActorRowAsync(key);
         Assert.Equal(1UL, second!.MembershipEpoch);
@@ -287,15 +280,13 @@ public sealed class LocationRuntimeQueryTests
             RouteCacheMaxAge = TimeSpan.Zero,
         };
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var observed = new ZLinkObservedLocationGenerations();
         var runtime = new ZLinkLocationRuntime(options, store, time);
         var query = new ZLinkLocationRuntimeQueryService(
             options,
             peers,
             RegisteredMeshes,
             tracker,
-            runtime,
-            observed
+            runtime
         );
 
         var topology = await query.ListTopologyAsync(new ZLinkLocationTopologyFilter());
@@ -364,7 +355,6 @@ public sealed class LocationRuntimeQueryTests
             RegisteredMeshes,
             tracker,
             runtime,
-            new ZLinkObservedLocationGenerations(),
             storeHealth: health
         );
         health.ReportFailure(
@@ -411,7 +401,6 @@ public sealed class LocationRuntimeQueryTests
             RegisteredMeshes,
             tracker,
             runtime,
-            new ZLinkObservedLocationGenerations(),
             storeHealth: health
         );
         health.ReportSuccess("mesh-node-query-read");
@@ -724,11 +713,9 @@ public sealed class LocationRuntimeQueryTests
             RouteCacheMaxAge = TimeSpan.Zero,
         };
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var observed = new ZLinkObservedLocationGenerations();
         var resolvers = new ZLinkStoreLocationResolvers(
             store,
             tracker,
-            observed,
             options: options,
             timeProvider: time
         );
@@ -738,8 +725,7 @@ public sealed class LocationRuntimeQueryTests
             store,
             RegisteredMeshes,
             tracker,
-            runtime,
-            observed
+            runtime
         );
         return new QueryFixture(store, resolvers, query, time);
     }

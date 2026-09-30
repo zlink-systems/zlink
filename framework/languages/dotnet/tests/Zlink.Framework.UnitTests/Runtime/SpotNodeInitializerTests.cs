@@ -97,7 +97,6 @@ public sealed class SpotNodeInitializerTests
             new ZLinkStoreLocationResolvers(
                 repository,
                 leaseTracker,
-                new ZLinkObservedLocationGenerations(),
                 options: options,
                 timeProvider: time
             )

@@ -83,6 +83,7 @@ class tictactoe_client_scenario_t
             }
 
             zlink::stream_connector::connector_options_t connector_options;
+            connector_options.typed_codec = zlink::stream_connector::json_typed_codec ();
             connector_options.endpoint = host_endpoint;
             connector_options.connect_timeout = options.stream_timeout;
             connector_options.request_timeout = options.stream_timeout;
@@ -93,16 +94,12 @@ class tictactoe_client_scenario_t
             // --8<-- [start:doc-e2e-multi-client]
             auto core_client1 = zlink::stream_connector::connector_factory_t::create (
               connector_options);
-            use_json_codec (core_client1);
             auto core_client2 = zlink::stream_connector::connector_factory_t::create (
               guest_connector_options);
-            use_json_codec (core_client2);
             auto core_observer = zlink::stream_connector::connector_factory_t::create (
               guest_connector_options);
-            use_json_codec (core_observer);
             auto core_reconnected_client = zlink::stream_connector::connector_factory_t::create (
               connector_options);
-            use_json_codec (core_reconnected_client);
             auto client1 = zlink::stream_e2e_client::use (core_client1);
             auto client2 = zlink::stream_e2e_client::use (core_client2);
             auto observer = zlink::stream_e2e_client::use (core_observer);
@@ -463,13 +460,6 @@ class tictactoe_client_scenario_t
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
         }
         throw std::runtime_error ("timed out waiting for runner lifecycle completion");
-    }
-
-    static void use_json_codec (zlink::stream_connector::connector_t &connector)
-    {
-        connector.codecs ()
-          .enable_codec (zlink::stream_connector::codec_t::json)
-          .use_default_codec (zlink::stream_connector::codec_t::json);
     }
 
     static std::string guest_endpoint (const create_game_http_res_t &room)

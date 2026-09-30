@@ -687,24 +687,14 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                                                                                 .serializerForSpot())))));
     }
 
-    @Override
-    public void close() {
-        close(ZLinkSpotCloseReason.EXPLICIT_CLOSE, Instant.now());
+    CompletionStage<Void> closeAsync() {
+        return closeAsync(ZLinkSpotCloseReason.EXPLICIT_CLOSE, Instant.now());
     }
 
-    void close(ZLinkSpotCloseReason reason, Instant deadline) {
-        try {
-            notifyClosing(reason, deadline);
-        } finally {
-            closeResources();
-        }
-    }
-
-    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
-        if (spot == null) {
-            return;
-        }
-        host.awaitClosing(closingStage(reason, deadline));
+    CompletionStage<Void> closeAsync(ZLinkSpotCloseReason reason, Instant deadline) {
+        return closingStage(reason, deadline)
+                .handle((ignored, failure) -> finishCleanup(failure, closeResourcesAsync()))
+                .thenCompose(stage -> stage);
     }
 
     CompletionStage<Void> closingStage(ZLinkSpotCloseReason reason, Instant deadline) {
@@ -730,11 +720,9 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                 });
     }
 
-    private void closeResources() {
+    private CompletionStage<Void> closeResourcesAsync() {
         closePendingActorMessage();
         closeActiveRouteReceives();
-        context.closeTimers();
-        context.closeHandlerInstances();
-        backendSpot.close();
+        return context.closeResourcesAsync();
     }
 }

@@ -181,12 +181,8 @@ template <typename TMessage> class coroutine_wait_call_t
         _inner.submit ([promise, failure_message = std::move (failure_message)] (
                          result_t<message_t<TMessage>> result) mutable {
             try {
-                if (!result) {
-                    promise->set_exception (
-                      std::make_exception_ptr (std::runtime_error (failure_message)));
-                    return;
-                }
-                promise->set_value (std::move (result.value ()));
+                promise->set_value (zlink::stream_connector_throwing::detail::value_or_throw (
+                  std::move (result), &failure_message));
             }
             catch (...) {
                 promise->set_exception (std::current_exception ());

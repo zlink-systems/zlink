@@ -20,11 +20,9 @@ public sealed class LocationResolverTests
             PollingInterval = TimeSpan.Zero,
             RouteCacheMaxAge = TimeSpan.FromSeconds(10),
         };
-        var observed = new ZLinkObservedLocationGenerations();
         var resolvers = new ZLinkStoreLocationResolvers(
             fixture.Store,
             new ZLinkOwnerLeaseTracker(fixture.Store, options, fixture.Time),
-            observed,
             options: options
         );
         await AuthorityLocationTestFixture.PublishActorAsync(
@@ -62,7 +60,6 @@ public sealed class LocationResolverTests
         var resolvers = new ZLinkStoreLocationResolvers(
             fixture.Store,
             new ZLinkOwnerLeaseTracker(fixture.Store, options, fixture.Time),
-            new ZLinkObservedLocationGenerations(),
             options: options
         );
         await AuthorityLocationTestFixture.PublishActorAsync(
@@ -356,52 +353,6 @@ public sealed class LocationResolverTests
         var resolved = Assert.Single(await fixture.Resolvers.ListLiveMeshNodesAsync("play"));
         Assert.Equal(OwnerB, resolved.OwnerId);
         Assert.Equal(10UL, resolved.LifecycleGeneration);
-
-        // A live row is authoritative even when a prior read observed another
-        // owner for the same key.
-        var observed = new ZLinkObservedLocationGenerations();
-        Assert.True(observed.AcceptDescriptor(predecessor));
-        Assert.True(observed.AcceptDescriptor(successor));
-        Assert.True(observed.AcceptDescriptor(predecessor));
-    }
-
-    [Fact]
-    public async Task MeshNode_List_Accepts_The_Current_Live_Snapshot_Without_A_Revision_Floor()
-    {
-        var time = new ManualTimeProvider();
-        var inner = new ZLinkInMemoryLocationStore(time);
-        var owner = await inner.ClaimLiveOwnerAsync(OwnerA, LeaseTtl);
-        var initial = InMemoryLocationStoreTests.MeshNode(
-            OwnerA,
-            leaseGeneration: owner.LeaseGeneration
-        );
-        Assert.Equal(
-            ZLinkLocationWriteStatus.Stored,
-            (await inner.UpdateMeshNodeAsync(initial, ZLinkLocationWriteIntent.NewClaim)).Status
-        );
-        var current = initial with { DescriptorRevision = 2 };
-        Assert.Equal(
-            ZLinkLocationWriteStatus.Stored,
-            (await inner.UpdateMeshNodeAsync(current, ZLinkLocationWriteIntent.Renew)).Status
-        );
-
-        var store = new StaleFirstMeshNodeListStore(inner, initial);
-        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
-        var observed = new ZLinkObservedLocationGenerations();
-        observed.ObserveDescriptor(current);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            new ZLinkOwnerLeaseTracker(store, options, time),
-            observed,
-            options: options,
-            timeProvider: time
-        );
-
-        var live = await resolvers.ListLiveMeshNodesAsync("play");
-
-        var row = Assert.Single(live);
-        Assert.Equal(1UL, row.DescriptorRevision);
-        Assert.Equal(1, store.ListCalls);
     }
 
     [Fact]
@@ -1093,19 +1044,6 @@ public sealed class LocationResolverTests
             await Task.Delay(10, cancellation.Token);
     }
 
-    [Fact]
-    public async Task Live_Actor_Row_Is_Not_Vetoed_By_A_Previous_Membership_Epoch()
-    {
-        await Task.Yield();
-        var observed = new ZLinkObservedLocationGenerations();
-        var epoch2 = InMemoryLocationStoreTests.Actor(OwnerA) with { MembershipEpoch = 2 };
-        var epoch1 = epoch2 with { MembershipEpoch = 1 };
-
-        Assert.True(observed.AcceptActor(epoch2));
-        Assert.True(observed.AcceptActor(epoch1));
-        Assert.True(observed.AcceptActor(epoch2));
-    }
-
     private static ZLinkFrameworkRegistration PlayRegistration()
     {
         var registration = new ZLinkFrameworkRegistration();
@@ -1131,8 +1069,7 @@ public sealed class LocationResolverTests
         };
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var observed = new ZLinkObservedLocationGenerations();
-        var resolvers = new ZLinkStoreLocationResolvers(store, tracker, observed);
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         return new ResolverFixture(store, resolvers, time, ownerA, ownerB);
     }
 
@@ -1143,34 +1080,4 @@ public sealed class LocationResolverTests
         ZLinkLocationOwnerToken OwnerA,
         ZLinkLocationOwnerToken OwnerB
     );
-
-    private sealed class StaleFirstMeshNodeListStore(
-        ZLinkInMemoryLocationStore inner,
-        ZLinkMeshNodeDescriptor staleRow
-    ) : ZLinkLocationStoreTestDouble
-    {
-        internal int ListCalls { get; private set; }
-
-        public override ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodesAsync(
-            string meshName,
-            ZLinkPageRequest page,
-            CancellationToken cancellationToken = default
-        )
-        {
-            ListCalls++;
-            if (ListCalls == 1)
-            {
-                return ValueTask.FromResult(
-                    new ZLinkLocationPage<ZLinkMeshNodeDescriptor>([staleRow], null)
-                );
-            }
-
-            return inner.ListMeshNodesAsync(meshName, page, cancellationToken);
-        }
-
-        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
-            string ownerId,
-            CancellationToken cancellationToken = default
-        ) => inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
-    }
 }

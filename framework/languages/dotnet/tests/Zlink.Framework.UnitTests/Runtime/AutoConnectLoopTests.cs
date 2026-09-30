@@ -17,11 +17,7 @@ public sealed class AutoConnectLoopTests
         var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
         var runtime = new ZLinkLocationRuntime(options, store, time);
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
             Mesh("dispose"),
@@ -58,11 +54,7 @@ public sealed class AutoConnectLoopTests
         await store.ClaimLiveOwnerAsync("peer-owner", TimeSpan.FromMinutes(10));
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var countingResolver = new CountingPeerResolver(resolvers);
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
@@ -120,11 +112,7 @@ public sealed class AutoConnectLoopTests
         await runtime.RenewOwnerLeaseOnceAsync();
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
@@ -195,11 +183,7 @@ public sealed class AutoConnectLoopTests
             ZLinkLocationWriteIntent.NewClaim
         );
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var executor = new RetryExecutor();
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
@@ -234,7 +218,7 @@ public sealed class AutoConnectLoopTests
     }
 
     [Fact]
-    public async Task Failed_Stamp_Preflight_Defers_Disconnect_From_The_Recovery_List()
+    public async Task Failed_Stamp_Preflight_Defers_Missing_Target_Until_Owner_Lease_Ttl()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -270,9 +254,7 @@ public sealed class AutoConnectLoopTests
         await loop.TickAsync();
         Assert.Single(reconciler.ActiveTargets);
 
-        // The optimization read observes the outage, but the fallback list
-        // succeeds just after recovery with a temporarily incomplete view.
-        // That list must not immediately tear down the admitted transport.
+        // The failed stamp read marks recovery before the complete list read succeeds.
         stamps.FailNext = true;
         resolver.Rows = [];
         await loop.TickAsync();
@@ -280,9 +262,13 @@ public sealed class AutoConnectLoopTests
         Assert.Empty(executor.Disconnected);
         Assert.Single(reconciler.ActiveTargets);
 
-        time.Advance(options.OwnerLeaseRenewInterval + TimeSpan.FromMilliseconds(1));
+        time.Advance(TimeSpan.FromSeconds(14));
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        time.Advance(TimeSpan.FromSeconds(1));
         await loop.TickAsync();
+
         Assert.Single(executor.Disconnected);
+        Assert.Empty(reconciler.ActiveTargets);
     }
 
     private sealed class CountingPeerResolver(IZLinkMeshNodeLocationResolver inner)

@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
@@ -28,7 +29,10 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private final ExecutorService executor =
             Executors.newCachedThreadPool(
                     task -> {
-                        Thread thread = new Thread(task, "zlink-java-channel-runtime");
+                        Thread thread =
+                                new Thread(
+                                        ZLinkBlockingCalls.infrastructureTask(task),
+                                        "zlink-java-channel-runtime");
                         thread.setDaemon(true);
                         return thread;
                     });

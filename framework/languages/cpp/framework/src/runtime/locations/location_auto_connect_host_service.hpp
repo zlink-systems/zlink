@@ -274,6 +274,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         std::function<void (const target_t &)> disconnect_target;
         bool recovering_from_store_failure = false;
         std::optional<std::chrono::steady_clock::time_point> failure_started_at;
+        std::optional<std::chrono::steady_clock::time_point> recovery_started_at;
         std::thread thread;
     };
 
@@ -387,9 +388,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (was_recovering) {
             loop.recovering_from_store_failure = false;
             loop.failure_started_at.reset ();
+            loop.recovery_started_at = std::chrono::steady_clock::now ();
             if (_route_cache)
                 _route_cache->invalidate_all_routes_after_store_recovery ();
-            return;
         }
 
         auto desired = select_endpoint_winners (compute_desired (loop, descriptors));
@@ -399,9 +400,17 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 loop.last_desired.emplace (key, target);
         }
         _runtime->observe_discovered_peers (loop.last_desired.size ());
+        const bool defer_missing_target_removal =
+          loop.recovery_started_at
+          && std::chrono::steady_clock::now () - *loop.recovery_started_at
+               < _runtime->options ().owner_lease_ttl;
         std::set<std::string> released_endpoints;
         for (auto it = loop.active.begin (); it != loop.active.end ();) {
             if (!desired.contains (it->first)) {
+                if (defer_missing_target_removal) {
+                    ++it;
+                    continue;
+                }
                 released_endpoints.insert (it->second.endpoint);
                 disconnect (loop, it->second);
                 it = loop.active.erase (it);

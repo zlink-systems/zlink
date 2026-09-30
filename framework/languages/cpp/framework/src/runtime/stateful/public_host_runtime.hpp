@@ -903,9 +903,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<void (const ready_record_t &,
                                 const receive_record_t &,
                                 std::vector<zlink::message_t>)> &dispatch);
-    bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record,
-                                      std::function<void ()> retain_mailbox_reservation = {},
-                                      std::function<void ()> release_mailbox_reservation = {});
+    bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
     std::function<bool ()> _flow_capture;

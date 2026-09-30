@@ -129,93 +129,97 @@ template <typename T> constexpr bool has_static_packet_name () noexcept
 }
 
 template <typename TMessage>
-auto to_packet_payload (const TMessage &message, int) -> decltype (to_stream_payload (message),
-                                                                   std::vector<std::uint8_t>{})
+auto to_packet_payload (const TMessage &message,
+                        int) -> decltype (to_stream_payload (message),
+                                          result_t<std::vector<std::uint8_t>>::success ({}))
 {
-    return to_stream_payload (message);
+    return result_t<std::vector<std::uint8_t>>::success (to_stream_payload (message));
 }
 
 template <typename TMessage>
     requires requires (const TMessage &message, std::string *bytes) {
         { message.SerializeToString (bytes) } -> std::same_as<bool>;
     }
-std::vector<std::uint8_t> to_packet_payload (const TMessage &message, long)
+result_t<std::vector<std::uint8_t>> to_packet_payload (const TMessage &message, long)
 {
     std::string bytes;
     if (!message.SerializeToString (&bytes)) {
-#if ZLINK_HAS_EXCEPTIONS
-        throw std::runtime_error ("typed protobuf payload serialization failed");
-#else
-        bytes.clear ();
-#endif
+        return result_t<std::vector<std::uint8_t>>::failure (
+          error_code_t::send_failed, "typed protobuf payload serialization failed");
     }
-    return {bytes.begin (), bytes.end ()};
+    return result_t<std::vector<std::uint8_t>>::success ({bytes.begin (), bytes.end ()});
 }
 
 template <typename TMessage>
-std::vector<std::uint8_t> to_packet_payload (const TMessage &message, ...)
+result_t<std::vector<std::uint8_t>> to_packet_payload (const TMessage &message, ...)
 {
     const auto bytes = zlink::detail::json_profile::dump (nlohmann::json (message));
-    return {bytes.begin (), bytes.end ()};
+    return result_t<std::vector<std::uint8_t>>::success ({bytes.begin (), bytes.end ()});
 }
 
 template <typename TMessage>
 auto apply_packet_payload (TMessage &message,
                            const std::vector<std::uint8_t> &payload,
-                           int) -> decltype (from_stream_payload (payload, message), void ());
+                           int) -> decltype (from_stream_payload (payload, message), bool ());
 
 template <typename TMessage>
-void apply_packet_payload (TMessage &, const std::vector<std::uint8_t> &, ...);
+bool apply_packet_payload (TMessage &, const std::vector<std::uint8_t> &, ...);
 
 template <typename TMessage>
     requires requires (TMessage &message, const std::string &bytes) {
         { message.ParseFromString (bytes) } -> std::same_as<bool>;
     }
-void apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, long)
+bool apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, long)
 {
-    if (!message.ParseFromString (std::string (payload.begin (), payload.end ()))) {
-#if ZLINK_HAS_EXCEPTIONS
-        throw std::runtime_error ("typed protobuf payload parse failed");
-#endif
-    }
+    return message.ParseFromString (std::string (payload.begin (), payload.end ()));
 }
 
 template <typename TMessage>
 auto apply_packet_payload (TMessage &message,
                            zlink::stream_connector::codec_t codec,
                            const std::vector<std::uint8_t> &payload,
-                           int) -> decltype (from_stream_payload (codec, payload, message), void ())
+                           int) -> decltype (from_stream_payload (codec, payload, message), bool ())
 {
+#if !ZLINK_HAS_EXCEPTIONS
+    if (codec == codec_t::json
+        && !zlink::detail::json_profile::try_parse (payload.begin (), payload.end ()))
+        return false;
+#endif
     from_stream_payload (codec, payload, message);
+    return true;
 }
 
 template <typename TMessage>
-void apply_packet_payload (TMessage &message,
+bool apply_packet_payload (TMessage &message,
                            zlink::stream_connector::codec_t,
                            const std::vector<std::uint8_t> &payload,
                            ...)
 {
-    apply_packet_payload (message, payload, 0);
+    return apply_packet_payload (message, payload, 0);
 }
 
 template <typename TMessage>
 auto apply_packet_payload (TMessage &message,
                            const std::vector<std::uint8_t> &payload,
-                           int) -> decltype (from_stream_payload (payload, message), void ())
+                           int) -> decltype (from_stream_payload (payload, message), bool ())
 {
     from_stream_payload (payload, message);
+    return true;
 }
 
 template <typename TMessage>
-void apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, ...)
+bool apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, ...)
 {
 #if ZLINK_HAS_EXCEPTIONS
     message = zlink::detail::json_profile::parse (payload.begin (), payload.end ())
                 .template get<TMessage> ();
+    return true;
 #else
     const auto parsed = zlink::detail::json_profile::try_parse (payload.begin (), payload.end ());
-    if (parsed)
-        message = parsed->template get<TMessage> ();
+    if (!parsed)
+        return false;
+    message = parsed->template get<TMessage> ();
+    return true;
 #endif
 }
 
@@ -228,9 +232,14 @@ result_t<TMessage> decode_typed_message (codec_t codec, const std::vector<std::u
 {
 #if ZLINK_HAS_EXCEPTIONS
     try {
+#endif
         TMessage message{};
-        apply_packet_payload (message, codec, payload, 0);
+        if (!apply_packet_payload (message, codec, payload, 0)) {
+            return result_t<TMessage>::failure (error_code_t::frame_decode_failed,
+                                                "stream connector payload decode failed");
+        }
         return result_t<TMessage>::success (std::move (message));
+#if ZLINK_HAS_EXCEPTIONS
     }
     catch (const std::exception &error) {
         return result_t<TMessage>::failure (error_code_t::frame_decode_failed, error.what ());
@@ -239,15 +248,6 @@ result_t<TMessage> decode_typed_message (codec_t codec, const std::vector<std::u
         return result_t<TMessage>::failure (error_code_t::frame_decode_failed,
                                             "stream connector payload decode failed");
     }
-#else
-    if (codec == codec_t::json
-        && !zlink::detail::json_profile::try_parse (payload.begin (), payload.end ())) {
-        return result_t<TMessage>::failure (error_code_t::frame_decode_failed,
-                                            "stream connector JSON payload decode failed");
-    }
-    TMessage message{};
-    apply_packet_payload (message, codec, payload, 0);
-    return result_t<TMessage>::success (std::move (message));
 #endif
 }
 

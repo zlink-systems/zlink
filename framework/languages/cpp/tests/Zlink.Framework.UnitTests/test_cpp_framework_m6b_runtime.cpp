@@ -4068,14 +4068,22 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
 
     std::atomic_int held_settlement_count{0};
     std::atomic_bool held_delivered{true};
-    const auto held = local->sessions ().admit_outbound (
-      actor_object->key, actor_object->object_generation, binding.binding_generation,
-      [&held_settlement_count, &held_delivered] (bool delivered) {
-          held_delivered.store (delivered, std::memory_order_release);
-          held_settlement_count.fetch_add (1, std::memory_order_acq_rel);
+    const auto [held_error, held_dispatch] = local->sessions ().admit_inbound (
+      binding.connection.connection_id, binding.binding_generation, actor_object->key,
+      ingress->inbound_sequence + 1, 0ms, [&] {
+          return
+            [&held_settlement_count, &held_delivered] (
+              std::optional<stateful::stream_dispatch_t> delivered,
+              zlink::framework::message_flow_reason_t reason,
+              std::optional<zlink::framework::result_t<void>>) -> zlink::framework::task_t<void> {
+                assert (reason == zlink::framework::message_flow_reason_t::target_closed);
+                held_delivered.store (delivered.has_value (), std::memory_order_release);
+                held_settlement_count.fetch_add (1, std::memory_order_acq_rel);
+                co_return;
+            };
       });
-    assert (held.error == stateful::stateful_error_t::none);
-    assert (held.kind == stateful::stream_outbound_admission_kind_t::retained);
+    assert (held_error == stateful::stateful_error_t::none);
+    assert (!held_dispatch);
 
     const auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                               std::vector<zlink::message_t>) {};

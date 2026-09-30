@@ -4,7 +4,6 @@
 namespace zlink::stream_connector
 {
 
-class codec_registry_t;
 class connector_t;
 class actor_t;
 class connector_factory_t;

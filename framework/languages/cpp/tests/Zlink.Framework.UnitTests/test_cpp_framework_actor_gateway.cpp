@@ -925,7 +925,7 @@ int route_update_preserves_object_generation ()
     std::vector<actor_ref_t> relay_routes;
     gateway.on_relay ([&] (const actor_ref_t &actor, const actor_context_t &,
                            const stream_header_t &, const zlink::message_t &,
-                           std::optional<bound_session_relay_source_t>) {
+                           std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
         relay_routes.push_back (actor);
         return task_t<std::optional<zlink::message_t>> (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
@@ -2117,7 +2117,8 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     std::vector<std::pair<std::string, std::uint64_t>> sources;
     gateway.on_relay ([&] (const actor_ref_t &actor, actor_context_t, const stream_header_t &header,
                            const zlink::message_t &,
-                           std::optional<bound_session_relay_source_t> source) {
+                           std::optional<bound_session_relay_source_t> source,
+                           std::chrono::milliseconds) {
         const auto marker = std::string (header.packet_name ());
         {
             const std::lock_guard lock (mutex);
@@ -2177,7 +2178,8 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
     const auto session_thread = std::this_thread::get_id ();
     std::thread::id actor_dispatch_thread;
     gateway.on_relay ([&] (const actor_ref_t &, actor_context_t, const stream_header_t &,
-                           const zlink::message_t &, std::optional<bound_session_relay_source_t>) {
+                           const zlink::message_t &, std::optional<bound_session_relay_source_t>,
+                           std::chrono::milliseconds) {
         actor_dispatch_thread = std::this_thread::get_id ();
         return task_t<std::optional<zlink::message_t>> (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
@@ -2285,7 +2287,7 @@ int relay_request_survives_pending_dispatcher_completion ()
     gateway.on_relay ([pending, relay_started, actor_id, packet_name, payload_text] (
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
-                        std::optional<bound_session_relay_source_t>) {
+                        std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
         return inspect_pending_relay_arguments (relayed_actor, header, payload, pending,
                                                 relay_started, actor_id, packet_name, payload_text);
     });
@@ -2324,7 +2326,7 @@ int relay_send_survives_pending_dispatcher_completion ()
     gateway.on_relay ([pending, relay_started, actor_id, packet_name, payload_text] (
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
-                        std::optional<bound_session_relay_source_t>) {
+                        std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
         return inspect_pending_relay_arguments (relayed_actor, header, payload, pending,
                                                 relay_started, actor_id, packet_name, payload_text);
     });
@@ -2411,6 +2413,12 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     std::atomic_int admitted{0};
     spot_inbound_message_t request_metadata;
     request_metadata.values.emplace ("__zlink.actorRequestId", "relocating-join-request");
+    const auto operation_owner = zlink::routing_id_t::from ("actor-send-admission-node").to_hex ();
+    request_metadata.values.emplace (std::string (actor_handoff_source_node_key), operation_owner);
+    request_metadata.values.emplace (std::string (actor_handoff_parking_node_key), operation_owner);
+    request_metadata.values.emplace (std::string (actor_handoff_operation_high_key), "83");
+    request_metadata.values.emplace (std::string (actor_handoff_operation_low_key), "91");
+    request_metadata.values.emplace (std::string (actor_handoff_reply_route_key), "91");
     // The temporary runtime wrapper has already unwound when handler_terminal
     // resumes this coroutine. The terminal path must still complete the node
     // owned exactly-once map, rather than dereferencing the dead wrapper.
@@ -2439,8 +2447,7 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     handler_terminal->complete (result_t<void>::success ());
     if (!relayed.result ())
         return 3;
-    const auto dedup =
-      node->dispatched_request_replies.claim ("23:player:reconnect-playerrelocating-join-request");
+    const auto dedup = node->dispatched_request_replies.claim ("23:player:reconnect-player83:91");
     if (dedup.state != runtime::exactly_once_claim_state::completed || !dedup.value)
         return 4;
     if (disconnected.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
@@ -4101,58 +4108,6 @@ int rebound_session_keeps_prior_ingress_exact_fence ()
     return sessions.abort_barrier (seal.barrier) == stateful_error_t::none ? 0 : 6;
 }
 
-int reconnect_binding_publish_holds_new_route_push ()
-{
-    using namespace zlink::framework::runtime::stateful;
-
-    const object_ref_t actor{object_kind_t::actor, "reconnect-route-actor", 7, 11, "player",
-                             "actor-owner"};
-    stream_session_registry_t sessions (
-      [actor] (const std::string &actor_id) -> std::optional<object_ref_t> {
-          return actor_id == actor.key ? std::make_optional (actor) : std::nullopt;
-      });
-    const auto old_connection = sessions.open ("old-session-rid");
-    const auto [old_error, old_binding] = sessions.bind_remote (old_connection, actor, 13, 17);
-    if (old_error != stateful_error_t::none)
-        return 1;
-
-    const auto new_connection = sessions.open ("new-session-rid");
-    const auto [new_error, new_binding] =
-      sessions.bind_remote (new_connection, actor, 13, 17, true);
-    if (new_error != stateful_error_t::none
-        || new_binding.binding_generation <= old_binding.binding_generation)
-        return 2;
-
-    std::atomic_int settled{0};
-    std::atomic_bool delivered{false};
-    const auto held = sessions.admit_outbound (
-      actor.key, actor.object_generation, new_binding.binding_generation, [&] (bool accepted) {
-          delivered.store (accepted, std::memory_order_release);
-          settled.fetch_add (1, std::memory_order_acq_rel);
-      });
-    if (held.error != stateful_error_t::none
-        || held.kind != stream_outbound_admission_kind_t::retained
-        || settled.load (std::memory_order_acquire) != 0)
-        return 3;
-
-    auto retained = sessions.complete_route_publish (new_binding);
-    if (!retained)
-        return 4;
-    for (auto &settle : *retained)
-        settle (true);
-    if (settled.load (std::memory_order_acquire) != 1
-        || !delivered.load (std::memory_order_acquire))
-        return 5;
-
-    return sessions
-                 .admit_outbound (actor.key, actor.object_generation,
-                                  old_binding.binding_generation, [] (bool) {})
-                 .error
-               == stateful_error_t::conflict
-             ? 0
-             : 6;
-}
-
 int reconnect_push_reaches_new_session_across_two_hosts ()
 {
     using namespace zlink::framework;
@@ -4184,7 +4139,7 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
       stream_sessions.bind_remote (old_connection, session_actor, 11, 17);
     const auto new_connection = stream_sessions.open ("same-session-rid");
     const auto [new_bind_error, new_binding] =
-      stream_sessions.bind_remote (new_connection, session_actor, 11, 17, true);
+      stream_sessions.bind_remote (new_connection, session_actor, 11, 17, {});
     if (old_bind_error != zlink::framework::runtime::stateful::stateful_error_t::none
         || new_bind_error != zlink::framework::runtime::stateful::stateful_error_t::none
         || new_binding.binding_generation <= old_binding.binding_generation) {
@@ -4287,9 +4242,6 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
         || !actor_owner.replace_session_route (actor, make_remote_sink (new_route), new_route)) {
         return 4;
     }
-    if (!stream_sessions.complete_route_publish (new_binding))
-        return 5;
-
     const auto stale_capability_push =
       (*staged_old_sink) ("reconnected-push", stream_codec_t::message_pack,
                           zlink::message_t::from ("payload"))
@@ -4418,7 +4370,7 @@ int command_38_rebind_is_owned_only_by_new_connection ()
       [&] (const stateful::stream_connection_t &connection, const zlink::routing_id_t &session_rid,
            std::uint64_t binding_generation) -> std::optional<stateful::stream_binding_t> {
         auto [error, binding] =
-          sessions.bind_remote (connection, native_actor, 11, 17, true, binding_generation);
+          sessions.bind_remote (connection, native_actor, 11, 17, {}, binding_generation);
         if (error != stateful::stateful_error_t::none)
             return std::nullopt;
         const protocol::bound_session_bind_t command_38{
@@ -4430,8 +4382,6 @@ int command_38_rebind_is_owned_only_by_new_connection ()
           session_rid.to_bytes (),
           {protocol::bound_session_binding_state_t::active, binding.binding_generation}};
         if (!receive_command_38 (command_38))
-            return std::nullopt;
-        if (!sessions.complete_route_publish (binding))
             return std::nullopt;
         return binding;
     };
@@ -4520,10 +4470,10 @@ int late_lower_generation_bind_and_publish_are_ignored ()
       });
     const auto current_connection = sessions.open ("current-stream-rid");
     const auto [current_error, current_binding] =
-      sessions.bind_remote (current_connection, native_actor, 11, 17, false, 22);
+      sessions.bind_remote (current_connection, native_actor, 11, 17, {}, 22);
     const auto stale_connection = sessions.open ("stale-stream-rid");
     const auto [stale_error, stale_binding] =
-      sessions.bind_remote (stale_connection, native_actor, 11, 17, false, 21);
+      sessions.bind_remote (stale_connection, native_actor, 11, 17, {}, 21);
     const auto registry_current = sessions.current_binding (native_actor.key);
     if (current_error != stateful_error_t::none || stale_error != stateful_error_t::conflict
         || stale_binding.binding_generation != 0 || !registry_current
@@ -4584,10 +4534,10 @@ int same_rid_same_generation_defensively_replaces_stream_capability ()
       });
     const auto old_connection = sessions.open ("reused-session-rid");
     const auto [old_error, old_binding] =
-      sessions.bind_remote (old_connection, native_actor, 11, 17, false, 41);
+      sessions.bind_remote (old_connection, native_actor, 11, 17, {}, 41);
     const auto new_connection = sessions.open ("reused-session-rid");
     const auto [new_error, new_binding] =
-      sessions.bind_remote (new_connection, native_actor, 11, 17, false, 41);
+      sessions.bind_remote (new_connection, native_actor, 11, 17, {}, 41);
     const auto current = sessions.current_binding (native_actor.key);
     if (old_error != stateful_error_t::none || new_error != stateful_error_t::none || !current
         || current->connection != new_connection || current->binding_generation != 41)
@@ -5426,7 +5376,8 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
       dispatched;
     gateway.on_relay ([&dispatched] (const actor_ref_t &, const actor_context_t &,
                                      const stream_header_t &, const zlink::message_t &,
-                                     std::optional<bound_session_relay_source_t>) {
+                                     std::optional<bound_session_relay_source_t>,
+                                     std::chrono::milliseconds) {
         auto source =
           std::make_shared<task_completion_source_t<std::optional<zlink::message_t>>> ();
         dispatched.push_back (source);
@@ -5823,9 +5774,6 @@ int main (int argc, char **argv)
     if (const auto reconnect = reconnect_push_reaches_new_session_across_two_hosts ();
         reconnect != 0) {
         return 240 + reconnect;
-    }
-    if (const auto reconnect = reconnect_binding_publish_holds_new_route_push (); reconnect != 0) {
-        return 230 + reconnect;
     }
     if (const auto detached = bound_session_push_detaches_before_direct_sink_entry ();
         detached != 0) {

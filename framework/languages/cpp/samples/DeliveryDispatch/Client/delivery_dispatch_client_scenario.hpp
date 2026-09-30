@@ -31,13 +31,13 @@ class delivery_dispatch_client_scenario_t
     {
         try {
             zlink::stream_connector::connector_options_t connector_options;
+            connector_options.typed_codec = zlink::stream_connector::json_typed_codec ();
             connector_options.endpoint = customer_stream_endpoint;
             connector_options.connect_timeout = std::chrono::seconds (5);
             connector_options.request_timeout = std::chrono::seconds (12);
             connector_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
             auto core_customer = zlink::stream_connector::connector_factory_t::create (
               connector_options);
-            use_json_codec (core_customer);
             auto customer = zlink::stream_e2e_client::use (core_customer);
             auto customer_connected = customer.connect ().submit ();
             ensure (static_cast<bool> (customer_connected), "customer stream connect failed");
@@ -45,14 +45,12 @@ class delivery_dispatch_client_scenario_t
             connector_options.endpoint = courier_stream_endpoint;
             auto core_courier_a = zlink::stream_connector::connector_factory_t::create (
               connector_options);
-            use_json_codec (core_courier_a);
             auto courier_a = zlink::stream_e2e_client::use (core_courier_a);
             auto courier_a_connected = courier_a.connect ().submit ();
             ensure (static_cast<bool> (courier_a_connected), "courier-a stream connect failed");
 
             auto core_courier_b = zlink::stream_connector::connector_factory_t::create (
               connector_options);
-            use_json_codec (core_courier_b);
             auto courier_b = zlink::stream_e2e_client::use (core_courier_b);
             auto courier_b_connected = courier_b.connect ().submit ();
             ensure (static_cast<bool> (courier_b_connected), "courier-b stream connect failed");
@@ -79,13 +77,6 @@ class delivery_dispatch_client_scenario_t
 
   private:
     using connector_t = zlink::stream_e2e_client::coroutine_connector_t;
-
-    static void use_json_codec (zlink::stream_connector::connector_t &connector)
-    {
-        connector.codecs ()
-          .enable_codec (zlink::stream_connector::codec_t::json)
-          .use_default_codec (zlink::stream_connector::codec_t::json);
-    }
 
     /* Actor placement는 Location Store가 결정한다. Scenario는 global CourierId와 bind 성공만
      * 검증하며 current owner NodeRid를 성공 조건으로 사용하지 않는다. */

@@ -285,7 +285,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 Executors.newFixedThreadPool(
                         Math.max(1, registration.streamNodes().size()),
                         task -> {
-                            Thread thread = new Thread(task, "zlink-stream-recv");
+                            Thread thread =
+                                    new Thread(
+                                            systems.zlink.framework.runtime.internal.calls
+                                                    .ZLinkBlockingCalls.infrastructureTask(task),
+                                            "zlink-stream-recv");
                             thread.setDaemon(true);
                             return thread;
                         });

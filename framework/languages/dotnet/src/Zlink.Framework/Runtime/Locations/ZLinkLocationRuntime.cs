@@ -25,7 +25,6 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 {
     private readonly ZLinkLocationOptions _options;
     private readonly IZLinkLocationRepository _store;
-    private readonly ZLinkObservedLocationGenerations? _observed;
     private readonly TimeProvider _time;
     private readonly IReadOnlyList<KeyValuePair<string, string>> _metricScopes;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
@@ -46,13 +45,11 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         ZLinkLocationOptions options,
         IZLinkLocationRepository store,
         TimeProvider? timeProvider = null,
-        ZLinkObservedLocationGenerations? observed = null,
         IReadOnlyList<KeyValuePair<string, string>>? metricScopes = null
     )
     {
         _options = options;
         _store = store;
-        _observed = observed;
         _time = timeProvider ?? TimeProvider.System;
         _metricScopes = metricScopes ?? [];
     }
@@ -442,10 +439,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         {
             OwnerId = ownerToken.OwnerId,
             LeaseGeneration = ownerToken.LeaseGeneration,
-            // The canonical opaque descriptor stores the timestamp of this
-            // write. Stamp the payload before the provider persists it;
-            // updating only the local observation from result.UpdatedAt
-            // leaves DateTimeOffset's default value in Redis.
+            // Stamp the canonical descriptor before the provider persists it
+            // so Redis receives the write timestamp.
             UpdatedAt = _time.GetUtcNow(),
         };
         var result = await ExecuteLocationWriteAsync(
@@ -456,8 +451,6 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 )
             )
             .ConfigureAwait(false);
-        if (result.Status == ZLinkLocationWriteStatus.Stored)
-            _observed?.ObserveDescriptor(stamped with { UpdatedAt = result.UpdatedAt });
         return result;
     }
 

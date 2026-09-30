@@ -22,7 +22,10 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -48,6 +51,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueu
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -71,6 +75,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -95,6 +100,52 @@ final class ZLinkStreamRuntimeIngressTest {
     private static final String MESH = "replacement-mesh";
     private final List<ZLinkStreamRuntime> runtimes = new ArrayList<>();
     private ZLinkFrameworkRegistration lastRegistration;
+
+    @Test
+    void receiveThreadRejectsPublicBlockingSubmitAndLaterCompletionStillRuns() throws Exception {
+        FakeStream stream = new FakeStream();
+        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> checked = new CompletableFuture<>();
+        AtomicInteger submissions = new AtomicInteger();
+        ZLinkSendCall call =
+                () -> {
+                    submissions.incrementAndGet();
+                    return admission;
+                };
+        stream.readabilityObserver =
+                () -> {
+                    try {
+                        assertEquals(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                assertThrows(ZLinkFrameworkException.class, call::submit_sync)
+                                        .kind());
+                        assertEquals(0, submissions.get());
+                        checked.complete(null);
+                    } catch (Throwable failure) {
+                        checked.completeExceptionally(failure);
+                    }
+                };
+        runtimes.add(start(stream, 0));
+        try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+                var completions = new ZLinkServiceOperationRegistry(scheduler)) {
+            try {
+                checked.get(3, TimeUnit.SECONDS);
+                CompletableFuture<Void> terminal = new CompletableFuture<>();
+                ZLinkSendCall following =
+                        () ->
+                                completions.submit(
+                                        UUID.randomUUID(),
+                                        Duration.ofSeconds(3),
+                                        () -> terminal,
+                                        ignored -> {});
+                var stage = following.submit().toCompletableFuture();
+                terminal.complete(null);
+                stage.get(3, TimeUnit.SECONDS);
+            } finally {
+                admission.complete(null);
+            }
+        }
+    }
 
     @AfterEach
     void resetSessionProbe() {
@@ -1420,6 +1471,7 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
+        private Runnable readabilityObserver = () -> {};
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
         private final AtomicInteger readinessWaits = new AtomicInteger();
@@ -1535,6 +1587,9 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public boolean waitForReadable(Duration timeout) {
+            Runnable observer = readabilityObserver;
+            readabilityObserver = () -> {};
+            observer.run();
             readinessWaits.incrementAndGet();
             if (timeout.isZero()) {
                 zeroReadinessWaits.incrementAndGet();
