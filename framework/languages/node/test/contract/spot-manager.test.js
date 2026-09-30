@@ -2711,7 +2711,7 @@ test('ZLinkSpotManager rejects unregistered spot factories', async () => {
   );
 });
 
-test('spot manager local actor join awaits entry leave before commit and joined callback', async () => {
+test('spot manager local actor join commits and runs target lifecycle before one-way source leave', async () => {
   const events = [];
   let finishLeave;
   class StageSpot {
@@ -2753,7 +2753,7 @@ test('spot manager local actor join awaits entry leave before commit and joined 
     events.push('commit');
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events, ['join:alice:hello', 'entry-left:alice']);
+  assert.deepEqual(events, ['join:alice:hello', 'commit', 'joined:alice', 'entry-left:alice']);
   finishLeave();
   const result = await pending;
 
@@ -2761,9 +2761,9 @@ test('spot manager local actor join awaits entry leave before commit and joined 
   assert.equal(JSON.parse(result.reply.getString()), 'joined');
   assert.deepEqual(events, [
     'join:alice:hello',
-    'entry-left:alice',
     'commit',
-    'joined:alice'
+    'joined:alice',
+    'entry-left:alice'
   ]);
   request.close();
   result.reply.close();
@@ -2801,8 +2801,9 @@ test('formal Entry Spot LEFT control invokes the Entry Spot lifecycle callback',
   assert.deepEqual(events, ['entry-left:alice']);
 });
 
-test('user Spot join rejects a public operation that waits for its current Spot gate', async () => {
+test('source leave gate error is reported after target commit without blocking accepted Join', async () => {
   const events = [];
+  const errors = [];
   class RoomSpot {
     constructor(context) {
       this.context = context;
@@ -2825,6 +2826,7 @@ test('user Spot join rejects a public operation that waits for its current Spot 
   let manager;
   manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [RoomSpot],
+    dispatchErrors: { report(event) { errors.push(event.error); } },
     entrySpotCallbacks: {
       onLeaveActor(actor) {
         return manager.executeOnSpot(RoomSpot, actor.sourceSpotId, (source) =>
@@ -2854,15 +2856,16 @@ test('user Spot join rejects a public operation that waits for its current Spot 
     manager.admitActorJoin('room-b', actor, request, () => {
       events.push('commit:room-b:alice');
     }));
-  await assert.rejects(move, (error) => {
-    assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
-    return true;
-  });
-  assert.deepEqual(events, ['admit:room-b:alice']);
+  const result = await move;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(result.accepted, true);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  assert.deepEqual(events, ['admit:room-b:alice', 'commit:room-b:alice', 'joined:room-b:alice']);
   request.close();
 });
 
-test('spot manager rolls local membership back when joined callback fails', async () => {
+test('spot manager retains committed membership when target joined callback fails', async () => {
   const events = [];
   let committed = false;
   class StageSpot {
@@ -2908,8 +2911,8 @@ test('spot manager rolls local membership back when joined callback fails', asyn
     /joined failed/
   );
 
-  assert.equal(committed, false);
-  assert.deepEqual(events, ['admission', 'entry-left', 'commit', 'joined', 'rollback']);
+  assert.equal(committed, true);
+  assert.deepEqual(events, ['admission', 'commit', 'joined', 'entry-left']);
   await closeUserSpot(manager, 'test.mesh', 'stage-rollback');
   request.close();
 });
