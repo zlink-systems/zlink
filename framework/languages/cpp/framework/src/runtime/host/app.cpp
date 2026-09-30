@@ -65,6 +65,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <typeindex>
 #include <typeinfo>
 #include <utility>
@@ -2386,7 +2387,9 @@ void app_t::_apply_zlink_framework ()
                           ? std::chrono::milliseconds::zero ()
                           : std::chrono::duration_cast<std::chrono::milliseconds> (
                               deadline - std::chrono::steady_clock::now ());
-                      auto execute = std::make_shared<decltype (deliver_relay)> (deliver_relay);
+                      auto execute =
+                        std::make_shared<std::remove_cvref_t<decltype (deliver_relay)>> (
+                          deliver_relay);
                       auto delivery = std::make_shared<task_t<reply_t>> (
                         (*execute) (actor, header, payload, source, dispatch,
                                     request ? remaining : budget, session_owner_runtime));
