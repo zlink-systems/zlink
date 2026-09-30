@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -32,9 +33,41 @@ import systems.zlink.contracts.sockets.RouterSocket;
 
 /** Exercises public request failures and their Core representative errnos. */
 public class RequestFailureErrnoContractTest {
+    private static final int EIO = 5;
+    private static final int EACCES = 13;
+    private static final int EBUSY = 16;
+    private static final int EINVAL = 22;
+    private static final int EPROTO = 71;
+    private static final int ENOTSUP = 95;
+    private static final int EAGAIN = 11;
+    private static final int EEXIST = 17;
     private static final int ENOENT = 2;
     private static final int ENOTCONN = 107;
     private static final int ETIMEDOUT = 110;
+    private static final int EFSM = 156384763;
+    private static final int ETERM = 156384765;
+
+    @Test
+    public void requestExceptionProjectsCoreRepresentativeErrno() {
+        Map<RequestResult, Integer> expected = Map.ofEntries(
+            Map.entry(RequestResult.TIMED_OUT, ETIMEDOUT),
+            Map.entry(RequestResult.NOT_FOUND, ENOENT),
+            Map.entry(RequestResult.TERMINATED, ETERM),
+            Map.entry(RequestResult.PROTOCOL_ERROR, EPROTO),
+            Map.entry(RequestResult.INTERNAL_ERROR, EIO),
+            Map.entry(RequestResult.REJECTED, EACCES),
+            Map.entry(RequestResult.CONFLICT, EEXIST),
+            Map.entry(RequestResult.BUSY, EBUSY),
+            Map.entry(RequestResult.NOT_CONNECTED, ENOTCONN),
+            Map.entry(RequestResult.INVALID_ARGUMENT, EINVAL),
+            Map.entry(RequestResult.INVALID_STATE, EFSM),
+            Map.entry(RequestResult.NOT_SUPPORTED, ENOTSUP),
+            Map.entry(RequestResult.BACKPRESSURED, EAGAIN));
+
+        expected.forEach((result, errno) -> assertEquals(errno.intValue(),
+            new ZlinkRequestException(result).getNativeErrno(),
+            "REQUEST result " + result));
+    }
 
     @Test
     public void requestTimeoutPreservesRepresentativeErrno() throws Exception {

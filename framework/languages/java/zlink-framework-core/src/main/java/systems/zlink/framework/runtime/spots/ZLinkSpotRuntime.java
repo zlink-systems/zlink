@@ -69,7 +69,6 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -94,7 +93,6 @@ import systems.zlink.framework.spots.ZLinkSpotCreateCall;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotCreateState;
 import systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall;
-import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
@@ -120,7 +118,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -128,7 +125,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -716,10 +712,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         for (EntrySpotInitialization initialization : entrySpotInitializations) {
             for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : initialization.entrySpots()) {
                 spotLifecycle.addEntrySpot(
-                        activationFactory.activateEntry(
-                                initialization.nodeRid(),
-                                initialization.backendSpot(),
-                                entrySpotType));
+                        systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls.submit(
+                                () ->
+                                        activationFactory.activateEntry(
+                                                initialization.nodeRid(),
+                                                initialization.backendSpot(),
+                                                entrySpotType)));
             }
         }
     }
@@ -1802,24 +1800,34 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .closeAllAsync()
                 .handle(
                         (ignored, failure) -> {
+                            CompletionStage<Void> closing = CompletableFuture.completedFuture(null);
+                            for (ZLinkInstanceSpotActivation activation :
+                                    instanceSpotActivations.values()) {
+                                closing =
+                                        closing.handle(
+                                                        (nothing, closeFailure) ->
+                                                                SpotActivationBase.finishCleanup(
+                                                                        closeFailure,
+                                                                        activation.closeAsync(
+                                                                                systems.zlink
+                                                                                        .framework
+                                                                                        .spots
+                                                                                        .ZLinkSpotCloseReason
+                                                                                        .HOST_SHUTDOWN,
+                                                                                Instant.now())))
+                                                .thenCompose(stage -> stage);
+                            }
+                            return SpotActivationBase.finishCleanup(failure, closing);
+                        })
+                .thenCompose(stage -> stage)
+                .handle(
+                        (ignored, failure) -> {
                             RuntimeException firstFailure =
                                     failure == null
                                             ? null
                                             : failure instanceof RuntimeException runtime
                                                     ? runtime
                                                     : new RuntimeException(failure);
-                            for (ZLinkInstanceSpotActivation activation :
-                                    instanceSpotActivations.values()) {
-                                firstFailure =
-                                        closeRuntimeComponent(
-                                                () ->
-                                                        activation.close(
-                                                                systems.zlink.framework.spots
-                                                                        .ZLinkSpotCloseReason
-                                                                        .HOST_SHUTDOWN,
-                                                                Instant.now()),
-                                                firstFailure);
-                            }
                             instanceSpotActivations.clear();
                             firstFailure = closeRuntimeComponent(publishers::close, firstFailure);
                             for (ZLinkInternalSpotNode node : nodes) {
@@ -1883,12 +1891,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> notifyClosing(Instant deadline) {
-        spotLifecycle.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+        List<CompletableFuture<Void>> closing = new ArrayList<>();
+        closing.add(
+                spotLifecycle
+                        .notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline)
+                        .toCompletableFuture());
         for (ZLinkInstanceSpotActivation activation :
                 List.copyOf(instanceSpotActivations.values())) {
-            activation.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+            closing.add(
+                    activation
+                            .closingStage(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline)
+                            .toCompletableFuture());
         }
-        return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new));
     }
 
     public CompletionStage<Void> continueDrain(ZLinkSpotCloseReason reason, Instant deadline) {
@@ -2250,18 +2265,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         //  The same peer client also carries command 42 from the relocation
         //  source to the bound Session owner (spec 20 §5 step 1).
         actorRuntime.setSessionRelocationSealer(sessionRelocationPeer);
-        actorRuntime.setLocalJoinCompleter(
-                new ZLinkActorRuntime.LocalJoinCompleter() {
-                    @Override
-                    public CompletionStage<Void> complete(ZLinkActor actor) {
-                        return actorAdmissions.completeLocalJoinFromCaller(actor);
-                    }
-
-                    @Override
-                    public void cancel(ZLinkActor actor) {
-                        actorAdmissions.cancelLocalJoin(actor);
-                    }
-                });
+        actorRuntime.setLocalActorJoiner(this::joinLocalActor);
     }
 
     /** The activation admission record of the named MeshNode (MeshNode §5.1). */
@@ -2345,35 +2349,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 return requestedMesh != null && nodesByName.containsKey(requestedMesh)
                         ? requestedMesh
                         : callerMesh;
-            }
-
-            @Override
-            public CompletionStage<Boolean> isStaleRoute(
-                    String spotId, SpotTransportAddress address) {
-                var store = requireUserSpotLocationStore();
-                String key =
-                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                                spotId);
-                return store.read(key, () -> false)
-                        .thenApply(
-                                read -> {
-                                    if (!(read
-                                            instanceof
-                                            systems.zlink.framework.runtime.internal.locations
-                                                            .ZLinkAuthoritySnapshot
-                                                    snapshot)) {
-                                        return true;
-                                    }
-                                    var authority =
-                                            userSpotAuthorities
-                                                    .decode(snapshot.payload())
-                                                    .orElse(null);
-                                    return isStaleInstanceRoute(
-                                            authority,
-                                            snapshot.allocation().state(),
-                                            snapshot.authorityOwnerGeneration(),
-                                            address);
-                                });
             }
 
             @Override
@@ -2475,28 +2450,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 });
             }
         };
-    }
-
-    static boolean isStaleInstanceRoute(
-            systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec
-                            .SpotAuthority
-                    authority,
-            systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState
-                    allocationState,
-            long authorityOwnerGeneration,
-            SpotTransportAddress address) {
-        return authority == null
-                || authority.instance().isEmpty()
-                || authority.state()
-                        != systems.zlink.framework.runtime.locations
-                                .ZLinkServiceAuthorityPayloadCodec.State.READY
-                || allocationState
-                        != systems.zlink.framework.runtime.internal.locations
-                                .ZLinkPlacementAllocationState.ACTIVE
-                || authorityOwnerGeneration != address.authorityOwnerGeneration()
-                || !authority.spotId().equals(address.spotId())
-                || !authority.nodeRid().equals(address.targetNodeRid())
-                || address.spotKind() != ZLinkSpotKind.INSTANCE;
     }
 
     private CompletionStage<InstanceActivation> activateInstanceSpot(
@@ -3051,22 +3004,27 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                             .locations
                                                                                             .ZLinkObjectCommitResult
                                                                                             .ALREADY_COMMITTED) {
-                                                                        activation.close(
-                                                                                systems.zlink
-                                                                                        .framework
-                                                                                        .spots
-                                                                                        .ZLinkSpotCloseReason
-                                                                                        .EXPLICIT_CLOSE,
-                                                                                Instant.now());
-                                                                        return CompletableFuture
-                                                                                .failedFuture(
-                                                                                        new IllegalStateException(
-                                                                                                "Instance"
-                                                                                                        + " Spot"
-                                                                                                        + " Ready"
-                                                                                                        + " commit"
-                                                                                                        + " lost"
-                                                                                                        + " its reservation"));
+                                                                        return activation
+                                                                                .closeAsync(
+                                                                                        systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .spots
+                                                                                                .ZLinkSpotCloseReason
+                                                                                                .EXPLICIT_CLOSE,
+                                                                                        Instant
+                                                                                                .now())
+                                                                                .thenCompose(
+                                                                                        ignored ->
+                                                                                                CompletableFuture
+                                                                                                        .failedFuture(
+                                                                                                                new IllegalStateException(
+                                                                                                                        "Instance"
+                                                                                                                                + " Spot"
+                                                                                                                                + " Ready"
+                                                                                                                                + " commit"
+                                                                                                                                + " lost"
+                                                                                                                                + " its reservation")));
                                                                     }
                                                                     activation.setAuthorityFence(
                                                                             route.ownerId(),
@@ -3899,17 +3857,41 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private CompletionStage<Void> notifySourceActorLeftForLocalMove(
             ZLinkActor actor, ZLinkActorRuntime.LocalMoveSource source) {
         Object spotSurface = source.spotSurface();
-        if (spotSurface == null) {
-            return notifySourceActorLeftForRemoteMove(actor);
-        }
-        String spotId = source.spotId();
-        if (spotId == null || spotId.isBlank()) {
-            spotId =
-                    spotSurface instanceof ZLinkSpot<?> spot
-                            ? spot.context().spotId()
-                            : ((ZLinkEntrySpot<?>) spotSurface).context().spotId();
-        }
-        return notifySpotActorLifecycleAndSuppressBackendEvent(spotSurface, actor, spotId, false);
+        ZLinkHandlerStages.fromStageSupplier(
+                        () -> {
+                            if (spotSurface == null) {
+                                return notifySourceActorLeftForRemoteMove(actor);
+                            }
+                            if (spotSurface instanceof ZLinkEntrySpot<?> entry) {
+                                return entrySpotActivationFor(entry.context().spotId())
+                                        .context
+                                        .enqueueLifecycle(
+                                                () ->
+                                                        notifySpotActorLifecycle(
+                                                                entry, actor, false));
+                            }
+                            return spotLifecycle
+                                    .contextFor((ZLinkSpot<?>) spotSurface)
+                                    .enqueueLifecycle(
+                                            () ->
+                                                    notifySpotActorLifecycle(
+                                                            spotSurface, actor, false));
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                reportDispatchError(
+                                        DispatchFailureReport.of(
+                                                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                                                ZLinkDispatchMessageKind.CONTROL,
+                                                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                                                                ZLinkDispatchErrorAction.DROP)
+                                                .spotId(source.spotId())
+                                                .actorId(actor.context().actorId())
+                                                .error(failure));
+                            }
+                        });
+        return CompletableFuture.completedFuture(null);
     }
 
     private CompletionStage<ZLinkActorCreateResponse> notifyEntrySpotActorCreated(
@@ -3940,6 +3922,136 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private EntrySpotActivation entrySpotActivationFor(String spotId) {
         return spotLifecycle.entrySpotActivationFor(spotId);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private CompletionStage<ZLinkSpotActorJoinResult> joinLocalActor(
+            ZLinkActor actor, String targetSpotId, Message requestPart) {
+        Object targetSurface = spotSurfaceFor(targetSpotId);
+        Object sourceSurface = localActorSpotSurface(actor);
+        if (targetSurface == null) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            "local Join target is unavailable: " + targetSpotId));
+        }
+        if (sourceSurface == targetSurface) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+        ZLinkMessage request =
+                ZLinkMessage.fromEncoded(
+                        systems.zlink.framework.ZLinkEncodedPayload.from(requestPart.toByteArray()),
+                        serializerForSpot());
+        ZLinkActorRuntime runtime = actorSessions.runtime();
+        String sourceSpotId =
+                sourceSurface instanceof ZLinkSpot<?> source
+                        ? source.context().spotId()
+                        : ((ZLinkEntrySpot<?>) sourceSurface).context().spotId();
+        ZLinkActorRuntime.LocalMoveSource source =
+                new ZLinkActorRuntime.LocalMoveSource(sourceSurface, sourceSpotId);
+        Supplier<CompletionStage<ZLinkSpotActorJoinResult>> operation =
+                () -> {
+                    CompletionStage<ZLinkSpotActorJoinResult> admission;
+                    if (targetSurface instanceof ZLinkSpot<?> target) {
+                        var activation = spotLifecycle.spotActivationFor(targetSpotId);
+                        admission =
+                                runWithOutbound(
+                                        activation.context.dispatchOutbound(),
+                                        () ->
+                                                ZLinkHandlerStages.fromStageSupplier(
+                                                        () ->
+                                                                target.onActorJoin(
+                                                                        actor.context().actorId(),
+                                                                        request)));
+                    } else {
+                        admission =
+                                CompletableFuture.completedFuture(
+                                        ZLinkSpotActorJoinResult.accept());
+                    }
+                    return admission.thenCompose(
+                            response -> {
+                                ZLinkSpotActorJoinResult result =
+                                        response == null
+                                                ? ZLinkSpotActorJoinResult.reject()
+                                                : response;
+                                if (!result.accepted()) {
+                                    return CompletableFuture.completedFuture(result);
+                                }
+                                runtime.beginLocalMove(actor);
+                                ZLinkBackendActorRef actorRef = runtime.currentRef(actor);
+                                CompletionStage<Void> commit;
+                                if (targetSurface instanceof ZLinkSpot<?> target) {
+                                    commit =
+                                            runtime.commitJoinedLocation(
+                                                            actor, actorRef, targetSpotId)
+                                                    .thenRun(
+                                                            () ->
+                                                                    runtime
+                                                                            .markRelocatedActorJoined(
+                                                                                    actor,
+                                                                                    actorRef,
+                                                                                    targetSpotId,
+                                                                                    target));
+                                } else {
+                                    var entry = ((ZLinkEntrySpot<?>) targetSurface).context();
+                                    commit =
+                                            runtime.commitEntryLocation(
+                                                    actor,
+                                                    entry.nodeRid(),
+                                                    entry.spotId(),
+                                                    routeMeshNodesByName
+                                                            .get(actor.context().meshName())
+                                                            .lifecycleGeneration());
+                                }
+                                return commit.thenRun(
+                                                () -> {
+                                                    ZLinkInternalSpotNode node =
+                                                            routeMeshNodesByName
+                                                                    .get(actor.context().meshName())
+                                                                    .spotNode();
+                                                    long epoch =
+                                                            node.actorMembershipEpoch(
+                                                                    actor.context().actorId());
+                                                    node.registerTransferredActor(
+                                                            actorRef,
+                                                            targetSpotId,
+                                                            epoch == Long.MAX_VALUE
+                                                                    ? Long.MAX_VALUE
+                                                                    : Math.max(1L, epoch + 1L));
+                                                })
+                                        .thenCompose(
+                                                ignored ->
+                                                        notifySpotActorLifecycle(
+                                                                targetSurface, actor, true))
+                                        .thenApply(ignored -> result);
+                            });
+                };
+        CompletionStage<ZLinkSpotActorJoinResult> targetStage;
+        if (targetSurface instanceof ZLinkSpot<?>) {
+            targetStage =
+                    spotLifecycle.spotActivationFor(targetSpotId).admitLocalActorJoin(operation);
+        } else {
+            CompletableFuture<ZLinkSpotActorJoinResult> response = new CompletableFuture<>();
+            targetStage =
+                    entrySpotActivationFor(targetSpotId)
+                            .context
+                            .enqueueDispatch(() -> operation.get().thenAccept(response::complete))
+                            .thenCompose(ignored -> response);
+        }
+        return targetStage
+                .thenCompose(
+                        result -> {
+                            if (!result.accepted()) {
+                                return CompletableFuture.completedFuture(result);
+                            }
+                            return runtime.cleanupSourceForLocalMove(actor, source)
+                                    .thenRun(() -> runtime.completeRemoteMove(actor))
+                                    .thenApply(ignored -> result);
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) runtime.failRemoteMove(actor, failure);
+                        });
     }
 
     /**
@@ -4507,6 +4619,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 return actorAdmissions.leaveRoutedActorToLocalEntry(
                         actor,
                         primaryNode.routingId(),
+                        entry.context.spotId(),
+                        routeMeshNodesByName.get(actor.context().meshName()).lifecycleGeneration(),
                         actorId ->
                                 CompletableFuture.completedFuture(
                                         ZLinkSpotActorJoinResult.accept()),
@@ -4846,13 +4960,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
     }
 
-    void discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
+    CompletionStage<Void> discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
         instanceSpotActivations.remove(activation.context.spotId(), activation);
-        activation.closeResources();
-        ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(activation.context.meshName());
-        if (routeNode != null) {
-            routeNode.forgetInstanceIntent(activation.authorityRouteFence());
-        }
+        return activation
+                .closeResourcesAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            ZLinkInternalMeshNode routeNode =
+                                    routeMeshNodesByName.get(activation.context.meshName());
+                            if (routeNode != null) {
+                                routeNode.forgetInstanceIntent(activation.authorityRouteFence());
+                            }
+                        });
     }
 
     CompletionStage<Boolean> discardStaleInstanceSpotActivation(
@@ -4862,7 +4981,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                                 activation.context.spotId()),
                         () -> false)
-                .thenApply(
+                .thenCompose(
                         read -> {
                             if (read instanceof ZLinkAuthoritySnapshot snapshot) {
                                 var authority = userSpotAuthorities.decode(snapshot.payload());
@@ -4882,11 +5001,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 snapshot.ownerId(),
                                                 snapshot.ownerLeaseGeneration(),
                                                 snapshot.authorityOwnerGeneration())) {
-                                    return false;
+                                    return CompletableFuture.completedFuture(false);
                                 }
                             }
-                            discardInstanceSpotActivation(activation);
-                            return false;
+                            return discardInstanceSpotActivation(activation)
+                                    .thenApply(ignored -> false);
                         });
     }
 
@@ -5887,21 +6006,5 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     static boolean isProbeFrame(List<Message> parts) {
         return parts.isEmpty() || parts.get(0).size() == 0;
-    }
-
-    void awaitClosing(CompletionStage<Void> closingStage) {
-        try {
-            closingStage
-                    .toCompletableFuture()
-                    .get(defaultRequestTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException ex) {
-            throw new ZLinkConfigurationException(
-                    "SPOT closing hook did not complete before timeout.", ex);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new ZLinkConfigurationException("SPOT closing hook was interrupted.", ex);
-        } catch (ExecutionException ex) {
-            throw new ZLinkConfigurationException("SPOT closing hook failed.", ex.getCause());
-        }
     }
 }

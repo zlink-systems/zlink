@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
+
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -80,6 +82,7 @@ final class ZLinkServiceCompletionDispatcher {
     }
 
     private void run() {
+        ZLinkBlockingCalls.markInfrastructureThread();
         while (true) {
             WorkItem item = take();
             if (item == null) {

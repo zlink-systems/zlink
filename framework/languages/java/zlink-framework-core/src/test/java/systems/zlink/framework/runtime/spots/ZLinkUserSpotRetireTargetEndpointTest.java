@@ -1000,9 +1000,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public void publishSpot(Object prepared) {
+        public CompletionStage<Void> publishSpot(Object prepared) {
             operations.add("publish");
             live.add((String) prepared);
+
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override
@@ -1045,7 +1047,9 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
 
         @Override
-        public void discardSpot(Object prepared) {}
+        public CompletionStage<Void> discardSpot(Object prepared) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     private static final class RestartActorBackend

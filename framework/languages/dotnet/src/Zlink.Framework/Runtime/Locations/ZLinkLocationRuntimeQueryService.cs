@@ -3,10 +3,9 @@ namespace Zlink.Framework.Runtime.Locations;
 /// <summary>
 /// Operational read surface. Every query reads the registered store
 /// directly — no cache is consulted or written, which is why this surface
-/// takes no freshness. Rows whose owner lease expired and rows older than a
-/// version this runtime already observed are filtered out of success
-/// results everywhere. Spot and Actor rows are resolve-only store records
-/// (06-location-store §5), so topology and summaries project MeshNode
+/// takes no freshness. Rows whose owner lease expired are filtered out of
+/// success results everywhere. Spot and Actor rows are resolve-only store
+/// records (06-location-store §5), so topology and summaries project MeshNode
 /// descriptors only.
 /// </summary>
 internal sealed class ZLinkLocationRuntimeQueryService
@@ -18,7 +17,6 @@ internal sealed class ZLinkLocationRuntimeQueryService
     private readonly IReadOnlyCollection<string> _registeredMeshNames;
     private readonly ZLinkOwnerLeaseTracker _leaseTracker;
     private readonly ZLinkLocationRuntime _runtime;
-    private readonly ZLinkObservedLocationGenerations _observed;
     private readonly ZLinkLiveLocationRows _liveRows;
     private readonly ZLinkLocationStoreHealth? _storeHealth;
     private readonly ZLinkLocationObjectQuery _objects;
@@ -29,7 +27,6 @@ internal sealed class ZLinkLocationRuntimeQueryService
         IReadOnlyCollection<string> registeredMeshNames,
         ZLinkOwnerLeaseTracker leaseTracker,
         ZLinkLocationRuntime runtime,
-        ZLinkObservedLocationGenerations observed,
         ZLinkLocationStoreHealth? storeHealth = null
     )
     {
@@ -38,7 +35,6 @@ internal sealed class ZLinkLocationRuntimeQueryService
         _registeredMeshNames = registeredMeshNames;
         _leaseTracker = leaseTracker;
         _runtime = runtime;
-        _observed = observed;
         _storeHealth = storeHealth;
         _liveRows = new ZLinkLiveLocationRows(leaseTracker);
         _objects = new ZLinkLocationObjectQuery(meshNodeStore, leaseTracker, storeHealth);
@@ -75,10 +71,10 @@ internal sealed class ZLinkLocationRuntimeQueryService
         CancellationToken cancellationToken = default
     )
     {
-        var rows = await ListAcceptedDescriptorsAsync(meshName, cancellationToken)
+        var rows = await ReadMeshNodeDescriptorsAsync(meshName, cancellationToken)
             .ConfigureAwait(false);
         var live = await _liveRows
-            .FilterAsync(rows, static row => row.OwnerId, static _ => true, cancellationToken)
+            .FilterAsync(rows, static row => row.OwnerId, cancellationToken)
             .ConfigureAwait(false);
         return PageInMemory(live, Normalize(page));
     }
@@ -96,7 +92,7 @@ internal sealed class ZLinkLocationRuntimeQueryService
         var entries = new List<ZLinkLocationTopologyEntry>();
         foreach (var meshName in MeshNamesOf(filter.MeshName))
         {
-            var rows = await ListAcceptedDescriptorsAsync(meshName, cancellationToken)
+            var rows = await ReadMeshNodeDescriptorsAsync(meshName, cancellationToken)
                 .ConfigureAwait(false);
             foreach (var row in rows)
             {
@@ -137,7 +133,7 @@ internal sealed class ZLinkLocationRuntimeQueryService
         var summaries = new List<ZLinkLocationServiceSummary>();
         foreach (var meshName in MeshNamesOf(filter.MeshName))
         {
-            var rows = await ListAcceptedDescriptorsAsync(meshName, cancellationToken)
+            var rows = await ReadMeshNodeDescriptorsAsync(meshName, cancellationToken)
                 .ConfigureAwait(false);
             if (rows.Count == 0)
                 continue;
@@ -202,7 +198,7 @@ internal sealed class ZLinkLocationRuntimeQueryService
     private static ZLinkPageRequest Normalize(ZLinkPageRequest page) =>
         ZLinkPageRequestPolicy.Normalize(page);
 
-    private async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListAcceptedDescriptorsAsync(
+    private async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ReadMeshNodeDescriptorsAsync(
         string meshName,
         CancellationToken cancellationToken
     )
@@ -215,8 +211,7 @@ internal sealed class ZLinkLocationRuntimeQueryService
                 storeToken => _meshNodeStore.ListAllMeshNodesAsync(meshName, storeToken)
             )
             .ConfigureAwait(false);
-        _observed.ReconcileDescriptors(meshName, rows);
-        return rows.Where(_observed.AcceptDescriptor).ToArray();
+        return rows;
     }
 
     private static bool Matches(

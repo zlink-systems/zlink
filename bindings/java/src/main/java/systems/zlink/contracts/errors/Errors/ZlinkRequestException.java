@@ -21,11 +21,12 @@ public final class ZlinkRequestException
 
     private static int representativeErrno(RequestResult result) {
         return switch (result) {
-            case OK, INTERNAL_ERROR -> 0;
+            case OK -> 0;
             case TIMED_OUT -> NativeErrorCodes.ETIMEDOUT;
             case NOT_FOUND -> NativeErrorCodes.ENOENT;
             case TERMINATED -> NativeErrorCodes.ETERM;
             case PROTOCOL_ERROR -> NativeErrorCodes.EPROTO;
+            case INTERNAL_ERROR -> NativeErrorCodes.EIO;
             case REJECTED -> NativeErrorCodes.EACCES;
             case CONFLICT -> NativeErrorCodes.EEXIST;
             case BUSY -> NativeErrorCodes.EBUSY;

@@ -14,12 +14,8 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -42,7 +38,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -51,49 +46,146 @@ final class ZLinkActorJoinStoreAdmissionTest {
     private static final RoutingId NODE = RoutingId.from("node-a");
 
     @Test
-    void joinAcceptedOnSpotLifecycleLaneCompletesAfterHostBeginsDraining() throws Exception {
-        AtomicBoolean draining = new AtomicBoolean();
-        ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
-        admission.attach(null, draining::get, null);
-        ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+    void localJoinAcceptedOnSpotLifecycleLaneCompletesAfterHostBeginsDraining() throws Exception {
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.addLocationStore(
+                new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
+        var node = options.addRouteMesh("drain-join");
+        node.listen("inproc://join-drain-" + System.nanoTime()).setRoutingId(NODE);
+        node.objects()
+                .server()
+                .addSpotFactory(
+                        "drain-room", DrainRoom.class, factory -> factory.disableRelocation());
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
-        CompletableFuture<ZLinkSpotActorJoinResult> result = new CompletableFuture<>();
         AtomicInteger callbacks = new AtomicInteger();
-        try {
-            queue.enqueueLifecycleAdmission(
-                    () -> {
-                        entered.complete(null);
-                        return release;
-                    });
-            entered.get(5, TimeUnit.SECONDS);
-            ZLinkBackendActorRef actor = new ZLinkBackendActorRef(NODE, ACTOR_ID, 1L);
-            CompletionStage<Void> accepted =
-                    queue.enqueueLifecycleAdmission(
-                            () ->
-                                    admission
-                                            .admitSpotActor(
-                                                    new ZLinkBackendActorJoinRequest(
-                                                            actor, actor, List.of(), null),
-                                                    "spot",
-                                                    null,
-                                                    ignored -> {
-                                                        callbacks.incrementAndGet();
-                                                        return CompletableFuture.completedFuture(
-                                                                ZLinkSpotActorJoinResult.accept());
-                                                    },
-                                                    ignored ->
-                                                            CompletableFuture.completedFuture(null))
-                                            .thenAccept(result::complete));
-            draining.set(true);
-            release.complete(null);
-            accepted.toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertTrue(result.get(5, TimeUnit.SECONDS).accepted());
-            assertEquals(1, callbacks.get());
-        } finally {
-            release.complete(null);
-            queue.close();
+        try (var framework =
+                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.start(
+                        options,
+                        new systems.zlink.framework.runtime.binding
+                                .ZLinkJavaBackendAdapterFactory())) {
+            framework
+                    .spotManager()
+                    .getOrCreate("drain-room-a", "drain-room")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var field = framework.getClass().getDeclaredField("spots");
+            field.setAccessible(true);
+            ZLinkSpotRuntime host = (ZLinkSpotRuntime) field.get(framework);
+            SpotActivation activation = host.spotLifecycle().spotActivationFor("drain-room-a");
+            var jobsField = host.getClass().getDeclaredField("applicationJobQueue");
+            jobsField.setAccessible(true);
+            var jobs =
+                    (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue)
+                            jobsField.get(host);
+            var permits =
+                    new java.util.ArrayList<
+                            systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobQueue.Permit>();
+            try {
+                for (; ; ) {
+                    var claim = jobs.acquire().toCompletableFuture();
+                    if (!claim.isDone()) {
+                        claim.cancel(false);
+                        break;
+                    }
+                    permits.add(claim.join());
+                }
+                Thread.currentThread().interrupt();
+                var interrupted =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        activation
+                                                .admitLocalActorJoin(
+                                                        () -> {
+                                                            callbacks.incrementAndGet();
+                                                            return CompletableFuture
+                                                                    .completedFuture(
+                                                                            ZLinkSpotActorJoinResult
+                                                                                    .accept());
+                                                        })
+                                                .toCompletableFuture()
+                                                .join());
+                assertTrue(Thread.currentThread().isInterrupted());
+                assertTrue(interrupted.getCause().getMessage().contains("interrupted"));
+                assertEquals(0, callbacks.get());
+            } finally {
+                Thread.interrupted();
+                permits.forEach(
+                        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+                                        .Permit
+                                ::close);
+            }
+            try {
+                activation.context.enqueueJoinLifecycle(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        });
+                entered.get(5, TimeUnit.SECONDS);
+                var accepted =
+                        activation.admitLocalActorJoin(
+                                () -> {
+                                    callbacks.incrementAndGet();
+                                    return CompletableFuture.completedFuture(
+                                            ZLinkSpotActorJoinResult.accept());
+                                });
+                host.beginDrain().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(0, callbacks.get());
+                org.junit.jupiter.api.Assertions.assertFalse(
+                        accepted.toCompletableFuture().isDone());
+                release.complete(null);
+                assertTrue(accepted.toCompletableFuture().get(5, TimeUnit.SECONDS).accepted());
+                assertEquals(1, callbacks.get());
+                var rejected =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        activation
+                                                .admitLocalActorJoin(
+                                                        () -> {
+                                                            callbacks.incrementAndGet();
+                                                            return CompletableFuture
+                                                                    .completedFuture(
+                                                                            ZLinkSpotActorJoinResult
+                                                                                    .accept());
+                                                        })
+                                                .toCompletableFuture()
+                                                .join());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                        ((ZLinkFrameworkException) rejected.getCause()).kind());
+                assertEquals(1, callbacks.get());
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
+
+    public static final class DrainRoom
+            implements systems.zlink.framework.spots.ZLinkSpot<ZLinkActor> {
+        private final systems.zlink.framework.spots.ZLinkSpotContext context;
+
+        public DrainRoom(systems.zlink.framework.spots.ZLinkSpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public systems.zlink.framework.spots.ZLinkSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
         }
     }
 

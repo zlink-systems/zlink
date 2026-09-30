@@ -36,6 +36,14 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public ulong ConnectionFailures { get; set; }
     public object[] SetupEvidence { get; set; } = [];
     public Func<object>? SamplePublicState { get; set; }
+    // A scenario's own counters: cleared with the window at reset, and added to every snapshot (family metrics, §14).
+    public Action? OnReset { get; set; }
+    public Action<PerfMetricsSnapshot>? EnrichSnapshot { get; set; }
+    // True only while the runner reads the final snapshot of a phase (§4.1: the settle ends with that read).
+    public bool FinalSnapshot { get; set; }
+    // The typed messages this scenario's measured path carries, one serializedMessageBytes row each (§15.2).
+    public (string direction, string packetName)[] MessageTypes { get; set; } =
+        [("request", nameof(PerfEchoRequest)), ("reply", nameof(PerfEchoReply))];
 
     public PerfEchoRequest Request(int stream, ulong sequence, bool probe = false) => new()
     {
@@ -46,11 +54,12 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
         returnSpotId = null, returnChannel = null, payload = Pattern.Base64
     };
 
-    public void ValidateRequest(PerfEchoRequest request)
+    // A send/send request names its return address (§10.4, §10.6); an echo request names none.
+    public void ValidateRequest(PerfEchoRequest request, string? returnChannel = null, string? returnSpotId = null)
     {
         if (request.runId != config.runId || request.cellId != config.cellId ||
             request.clientId < 0 || request.phase is not ("warmup" or "measured") ||
-            request.returnSpotId is not null || request.returnChannel is not null ||
+            request.returnSpotId != returnSpotId || request.returnChannel != returnChannel ||
             request.correlationId != $"{request.cellId}/{request.phase}/{request.clientId}/{request.sequence}" ||
             string.IsNullOrEmpty(request.clockDomainId))
             throw new PerfValidationException("IdentityMismatch", "Request identity does not match the cell.");
@@ -150,6 +159,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             publicStateSamples.Clear();
             latency = new(); settleLatency = new(); maxInflight = 0;
             start = end = settledAt = 0; startUnix = endUnix = null; sealedResults = false;
+            OnReset?.Invoke();
             resetSeq = request.resetSeq; phase = "reset";
             var resetAt = PerfClock.UnixMs;
             var epoch = resetCapacity?.Invoke();
@@ -159,7 +169,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 resetSeq, resetAt, epoch.HasValue ? DecimalText.Of(epoch.Value) : null, null, reasons);
         }
     }
-    public bool BeginOperation(out long started)
+    public bool BeginOperation(out long started, string direction = "request")
     {
         lock (gate)
         {
@@ -168,13 +178,14 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             Increment(counts, "sent");
             inflight = checked(inflight + 1);
             maxInflight = Math.Max(maxInflight, inflight);
-            Increment(directional, "request");
+            Increment(directional, direction);
             return true;
         }
     }
-    public void CompleteOperation(long started, Exception? error = null)
+    // completedTicks: a send/send echo keeps the time it was observed even when the first send's terminal comes later (§13).
+    public void CompleteOperation(long started, Exception? error = null, long? completedTicks = null)
     {
-        var completed = PerfClock.Now;
+        var completed = completedTicks ?? PerfClock.Now;
         lock (gate)
         {
             if (sealedResults) return;
@@ -190,11 +201,13 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     }
     public void HandlerEnter() { lock (gate) activeHandlers++; }
     public void HandlerExit() { lock (gate) activeHandlers--; }
-    public void RecordReply(PerfEchoRequest request)
+    public void RecordReply(PerfEchoRequest request) => RecordApplicationCall(request, "reply");
+    // A public call this process starts (send) or a typed reply it returns, counted once inside its own window.
+    public void RecordApplicationCall(PerfEchoRequest request, string direction)
     {
         lock (gate)
             if (request.resetSeq == resetSeq && start != 0 && PerfClock.Now < end &&
-                request.phase == (resetSeq == "0" ? "warmup" : "measured")) Increment(directional, "reply");
+                request.phase == (resetSeq == "0" ? "warmup" : "measured")) Increment(directional, direction);
     }
     public void RecordDiagnostic(Exception error) { lock (gate) RecordError(error, false); }
     private void RecordError(Exception error, bool outcome)
@@ -206,7 +219,11 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             Increment(byKind, framework.Kind.ToString());
             if (framework.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded) category = "timeout";
         }
-        else if (error is PerfValidationException validation) Increment(harness, validation.Kind);
+        else if (error is PerfValidationException validation)
+        {
+            Increment(harness, validation.Kind);
+            if (validation.Kind == "CorrelationExpired") category = "timeout"; // §13: an expired correlation is a timeout
+        }
         else if (error is ZlinkStreamException connector)
         {
             Increment(language, connector.GetType().FullName!);
@@ -248,7 +265,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 foreach (var key in new[] { "latencyMs", "settleLatencyMs" })
                     MetricCatalog.Null(histograms, reasons, "histograms", key, "NOT_APPLICABLE", "RTT belongs to the source process.");
             }
-            var csClient = config.role == "client" && config.scenario == "session-echo-only";
+            var csClient = config.role == "client" && config.workload.connections is not null;
             foreach (var key in new[] { "requested", "connected", "failed" })
                 if (csClient) metrics["connections." + key] = DecimalText.Of(key switch
                 { "requested" => (ulong)(config.workload.connections!.Value / config.workload.clientCount +
@@ -292,8 +309,8 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             foreach (var key in new[] { "alignmentMethod", "maxErrorNs", "validFromTicks", "validThroughTicks" })
                 reasons["/clock/" + key] = new("NOT_APPLICABLE", "RTT uses the caller process clock only.");
             if (publicStatus is null) reasons["/publicStatus"] = new("NOT_APPLICABLE", "The client has no Framework host runtime.");
-            SerializedMessageBytes[] serialized = [new("request", nameof(PerfEchoRequest), DecimalText.Of((ulong)config.workload.payloadSize), null),
-                new("reply", nameof(PerfEchoReply), DecimalText.Of((ulong)config.workload.payloadSize), null)];
+            var serialized = MessageTypes.Select(type => new SerializedMessageBytes(type.direction, type.packetName,
+                DecimalText.Of((ulong)config.workload.payloadSize), null)).ToArray();
             for (var i = 0; i < serialized.Length; i++) reasons[$"/serializedMessageBytes/{i}/observedSerializedBytes"] =
                 new("PUBLIC_OBSERVATION_UNSUPPORTED", "No public per-DTO serialized byte observation; the measured message is serialized once by the Framework.");
             var provenance = new Dictionary<string, object?>(config.provenance)
@@ -306,9 +323,11 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             provenance["executor"] = new { name = ".NET ThreadPool", maxWorkerThreads, maxCompletionThreads,
                 minWorkerThreads, minCompletionThreads, currentThreadCount = ThreadPool.ThreadCount,
                 serverGc = System.Runtime.GCSettings.IsServerGC, gcLatencyMode = System.Runtime.GCSettings.LatencyMode.ToString() };
-            return new(2, config.runId, config.cellId, resetSeq, "dotnet", config.role, config.roleInstance,
+            PerfMetricsSnapshot snapshot = new(2, config.runId, config.cellId, resetSeq, "dotnet", config.role, config.roleInstance,
                 config.configHash, phase, window, PerfClock.Metadata, serialized, metrics, histograms,
                 reasons, publicStatus, [], runtime, provenance);
+            EnrichSnapshot?.Invoke(snapshot);
+            return snapshot;
         }
     }
     public void Dispose() => sampler.Dispose();

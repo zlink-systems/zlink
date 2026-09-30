@@ -3,5 +3,23 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Perf measures what users receive: published packages, unless ZLinkSampleUseLocalSource=true forces source. -->
+    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
+    <ZLinkPropsDir>$(MSBuildThisFileDirectory)../props/</ZLinkPropsDir>
+    <!-- The repository's local package feed must not satisfy a published-package restore. -->
+    <RestoreAdditionalProjectSources Condition="'$(ZLinkSampleUseLocalSource)' != 'true'"></RestoreAdditionalProjectSources>
+    <_ZLinkPerfFrameworkProjects>;ZLink.Framework.Perf.ServerSupport;</_ZLinkPerfFrameworkProjects>
+    <_ZLinkPerfContractsProjects>;ZLink.Framework.Perf.Shared;</_ZLinkPerfContractsProjects>
+    <_ZLinkPerfAspNetCoreProjects>;ZLink.Framework.Perf.ServerSupport;</_ZLinkPerfAspNetCoreProjects>
+    <_ZLinkPerfRedisProjects>;ZLink.Framework.Perf.ServerSupport;</_ZLinkPerfRedisProjects>
+    <_ZLinkPerfConnectorProjects>;ZLink.Framework.Perf.Shared;ZLink.Framework.Perf.Client;</_ZLinkPerfConnectorProjects>
   </PropertyGroup>
+  <ItemGroup>
+    <ZLinkFrameworkReference Include="Zlink.Framework" Condition="$(_ZLinkPerfFrameworkProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.AspNetCore" Condition="$(_ZLinkPerfAspNetCoreProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.Locations.Redis" Condition="$(_ZLinkPerfRedisProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Framework.Contracts" Condition="$(_ZLinkPerfContractsProjects.Contains(';$(MSBuildProjectName);'))" />
+    <ZLinkFrameworkReference Include="Zlink.Stream.Connector" Condition="$(_ZLinkPerfConnectorProjects.Contains(';$(MSBuildProjectName);'))" />
+  </ItemGroup>
+  <Import Project="$(ZLinkPropsDir)ZLink.FrameworkReference.props" />
 </Project>

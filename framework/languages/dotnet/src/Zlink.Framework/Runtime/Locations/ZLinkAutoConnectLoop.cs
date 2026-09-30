@@ -178,10 +178,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             catch (Exception)
             {
                 // The stamp is only an optimization, so still perform the
-                // full correctness read. Record the failed preflight first:
-                // if the store recovers between the two reads, an incomplete
-                // recovery snapshot must get the same disconnect deferral as
-                // any other first successful read after an outage.
+                // full correctness read. Record the failed preflight first
+                // even if that full read succeeds during the same tick.
                 await _reconciler.NoteStoreFailureAsync(cancellationToken).ConfigureAwait(false);
             }
         }

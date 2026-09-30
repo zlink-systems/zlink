@@ -1320,6 +1320,12 @@ state를 바꾸는 message와 timer 시작, factory 완료 기록, relocation �
 막는다. Store 연결이 복구되면 owner 정보와 descriptor 전체 목록을 다시 확인한 뒤 필요한
 connection 변경만 적용한다.
 
+복구 뒤 처음 다시 읽은 전체 목록에서 빠진 target의 connection intent는 곧바로 제거하지 않는다.
+Store가 비거나 lease가 만료된 동안에는 살아 있는 owner도 아직 descriptor를 다시 게시하지 않았을 수
+있기 때문이다. 제거는 복구 시점부터 owner lease TTL([§5](#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다))이
+지난 뒤 다시 읽은 전체 목록에도 그 target이 없을 때 한다. 새로 보인 target의 connect는 복구 직후
+적용한다.
+
 Provider 요청을 시작하기 전에 cancellation되면 Store를 호출하지 않을 수 있다. 요청을 시작한
 뒤 cancellation, timeout 또는 provider error가 발생하면 Store 변경 여부를 알 수 없다. 이때
 Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확인한 뒤 필요한 경우에만
