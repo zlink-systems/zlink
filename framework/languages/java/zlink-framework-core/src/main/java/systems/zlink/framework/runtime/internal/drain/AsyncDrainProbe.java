@@ -16,15 +16,15 @@ public final class AsyncDrainProbe {
         return obligation;
     }
 
-    public boolean completeOn(CompletionStage<?> stage, String name) {
+    public <T> CompletionStage<T> completeOn(CompletionStage<T> stage, String name) {
         return completeOn(stage, obligation(name).terminal());
     }
 
-    public boolean completeOn(CompletionStage<?> stage, CompletableFuture<Void> obligation) {
-        Objects.requireNonNull(stage)
+    public <T> CompletionStage<T> completeOn(
+            CompletionStage<T> stage, CompletableFuture<Void> obligation) {
+        return Objects.requireNonNull(stage)
                 .whenComplete(
                         (ignored, failure) -> Objects.requireNonNull(obligation).complete(null));
-        return true;
     }
 
     public boolean complete(String name) {

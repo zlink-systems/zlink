@@ -284,10 +284,16 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             CompletionStage<Void> admitted =
                     admitBacklogTurn(
                             () -> replayer.replay("actor:" + staged.request().actorId(), queued));
-            assert probe.completeOn(
-                    admitted,
-                    "journal:actor:" + staged.request().actorId() + ":" + queued.sequence());
-            completions.add(admitted.toCompletableFuture());
+            CompletionStage<Void> observed = admitted;
+            assert (observed =
+                            probe.completeOn(
+                                    admitted,
+                                    "journal:actor:"
+                                            + staged.request().actorId()
+                                            + ":"
+                                            + queued.sequence()))
+                    != null;
+            completions.add(observed.toCompletableFuture());
         }
         int relayedIndex = 0;
         for (PendingIngress ingress : relayed) {
@@ -297,20 +303,33 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                     replayer.replayFrozen(
                                             "actor:" + staged.request().actorId(),
                                             ingress.record()));
-            assert probe.completeOn(
-                    admitted, "relayed:actor:" + staged.request().actorId() + ":" + relayedIndex);
+            CompletionStage<Void> observed = admitted;
+            assert (observed =
+                            probe.completeOn(
+                                    admitted,
+                                    "relayed:actor:"
+                                            + staged.request().actorId()
+                                            + ":"
+                                            + relayedIndex))
+                    != null;
             relayedIndex++;
-            completions.add(admitted.toCompletableFuture());
+            completions.add(observed.toCompletableFuture());
         }
         int temporaryIndex = 0;
         for (PendingIngress ingress : temporary) {
             CompletionStage<Void> admitted = admitBacklogTurn(() -> replayIngress(staged, ingress));
-            assert probe.completeOn(
-                    admitted,
-                    "temporary:actor:" + staged.request().actorId() + ":" + temporaryIndex);
+            CompletionStage<Void> observed = admitted;
+            assert (observed =
+                            probe.completeOn(
+                                    admitted,
+                                    "temporary:actor:"
+                                            + staged.request().actorId()
+                                            + ":"
+                                            + temporaryIndex))
+                    != null;
             temporaryIndex++;
             completions.add(
-                    admitted.whenComplete(
+                    observed.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null && ingress.failure() != null) {
                                             ingress.failure().accept(unwrap(failure));

@@ -1210,8 +1210,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     stageRequest.fence(),
                                                     record.payload(),
                                                     timeout);
-                                    assert debugProbe.completeOn(sent, relayObligation);
-                                    return sent;
+                                    CompletionStage<Void> observed = sent;
+                                    assert (observed = debugProbe.completeOn(sent, relayObligation))
+                                            != null;
+                                    return observed;
                                 });
             }
             CompletionStage<Void> result = chain;

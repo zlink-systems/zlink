@@ -412,9 +412,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
             for (ZLinkSerialExecutionQueue.QueuedRecord record : lane.getValue()) {
                 CompletionStage<Void> admitted =
                         admitBacklogTurn(() -> backlog.replayer.replay(lane.getKey(), record));
-                assert backlog.debugProbe.completeOn(
-                        admitted, "journal:" + lane.getKey() + ":" + record.sequence());
-                replay.add(admitted.toCompletableFuture());
+                CompletionStage<Void> observed = admitted;
+                assert (observed =
+                                backlog.debugProbe.completeOn(
+                                        admitted,
+                                        "journal:" + lane.getKey() + ":" + record.sequence()))
+                        != null;
+                replay.add(observed.toCompletableFuture());
             }
         }
         int relayedIndex = 0;
@@ -424,19 +428,26 @@ final class ZLinkUserSpotAggregateStagingOwner {
                             () ->
                                     backlog.replayer.replayFrozen(
                                             ingress.laneId(), ingress.record()));
-            assert backlog.debugProbe.completeOn(
-                    admitted, "relayed:" + ingress.laneId() + ":" + relayedIndex);
+            CompletionStage<Void> observed = admitted;
+            assert (observed =
+                            backlog.debugProbe.completeOn(
+                                    admitted, "relayed:" + ingress.laneId() + ":" + relayedIndex))
+                    != null;
             relayedIndex++;
-            replay.add(admitted.toCompletableFuture());
+            replay.add(observed.toCompletableFuture());
         }
         int temporaryIndex = 0;
         for (PendingIngress ingress : backlog.temporary) {
             CompletionStage<Void> admitted = admitBacklogTurn(() -> replayIngress(staged, ingress));
-            assert backlog.debugProbe.completeOn(
-                    admitted, "temporary:" + ingress.laneId() + ":" + temporaryIndex);
+            CompletionStage<Void> observed = admitted;
+            assert (observed =
+                            backlog.debugProbe.completeOn(
+                                    admitted,
+                                    "temporary:" + ingress.laneId() + ":" + temporaryIndex))
+                    != null;
             temporaryIndex++;
             replay.add(
-                    admitted.whenComplete(
+                    observed.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null) {
                                             notifyIngressFailure(ingress, unwrap(failure));

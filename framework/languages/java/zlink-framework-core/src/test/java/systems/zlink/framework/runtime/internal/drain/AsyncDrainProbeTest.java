@@ -12,7 +12,7 @@ final class AsyncDrainProbeTest {
         var probe = new AsyncDrainProbe();
         var observed = new CompletableFuture<Void>();
         probe.expect("relay:actor:7", "Actor source");
-        probe.completeOn(observed, "relay:actor:7");
+        var observedStage = probe.completeOn(observed, "relay:actor:7");
 
         AssertionError pending = assertThrows(AssertionError.class, probe::assertDrained);
         assertTrue(pending.getMessage().contains("relay:actor:7"));
@@ -23,6 +23,10 @@ final class AsyncDrainProbeTest {
         observed.completeExceptionally(failure);
         probe.assertDrained();
         assertSame(failure, assertThrows(Exception.class, observed::join).getCause());
+        assertSame(
+                failure,
+                assertThrows(Exception.class, () -> observedStage.toCompletableFuture().join())
+                        .getCause());
     }
 
     @Test
@@ -51,5 +55,17 @@ final class AsyncDrainProbeTest {
         assertThrows(AssertionError.class, probe::assertDrained);
         probe.completeOn(CompletableFuture.completedFuture(null), first);
         probe.assertDrained();
+    }
+
+    @Test
+    void observedCompletionPrecedesDownstreamDrain() {
+        var probe = new AsyncDrainProbe();
+        var upstream = new CompletableFuture<Void>();
+        probe.expect("journal:actor:1", "Actor target");
+        var observed = probe.completeOn(upstream, "journal:actor:1");
+        var downstream = observed.thenRun(probe::assertDrained);
+
+        upstream.complete(null);
+        downstream.toCompletableFuture().join();
     }
 }
