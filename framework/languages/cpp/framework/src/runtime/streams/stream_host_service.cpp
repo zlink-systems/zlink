@@ -2388,7 +2388,7 @@ class stream_host_service_t::listener_t
         try {
             close_core_session (rid, close_reason);
             if (_core_socket) {
-                static_cast<zlink::socket_t &> (*_core_socket).disconnect_rid (rid);
+                _core_socket->disconnect_rid (rid);
             }
         }
         catch (...) {
