@@ -12,10 +12,7 @@ import {
   ServiceWireFrameworkErrorCode
 } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
-import {
-  internalFrameworkWireReply,
-  wireReplyFailureException
-} from '../../packages/framework/src/runtime/framework-errors-internal';
+import { wireReplyFailureException } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
@@ -98,41 +95,25 @@ test('canonical Join rejects missing targets as Unavailable and closing targets 
       } as never
     );
 
-    if (state === 'closing-user') {
-      const error = await dispatch.catch((cause: unknown) => cause);
-      assert.ok(error instanceof ZLinkFrameworkException, state);
-      const terminal = internalFrameworkWireReply(error);
-      assert.deepEqual(
-        { terminal: terminal.terminalResult, code: terminal.failureCode },
-        {
-          terminal:
-            ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestRejected],
-          code: ServiceWireFrameworkErrorCode.requestRejected
-        },
-        state
-      );
-      assert.deepEqual(
-        { terminal: terminal.terminalResult, code: terminal.failureCode },
-        {
-          terminal: 106,
-          code: 15
-        }
-      );
-      assert.equal(
-        wireReplyFailureException(terminal.terminalResult, terminal.failureCode, 'Actor Join').kind,
-        ZLinkFrameworkErrorKind.Rejected,
-        state
-      );
-    } else {
-      await dispatch;
-      assert.deepEqual(replies, [{ terminal: 105, code: 13 }], state);
-      const failure = wireReplyFailureException(
-        replies[0]!.terminal,
-        replies[0]!.code,
-        'Actor Join'
-      );
-      assert.equal(failure.kind, ZLinkFrameworkErrorKind.Unavailable, state);
-    }
+    // The Join requester must receive exactly one terminal reply: Rejected for a
+    // Closing target (barrier seal), Unavailable for an absent target.
+    await dispatch;
+    const expected =
+      state === 'closing-user'
+        ? {
+            terminal:
+              ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestRejected],
+            code: ServiceWireFrameworkErrorCode.requestRejected,
+            kind: ZLinkFrameworkErrorKind.Rejected
+          }
+        : { terminal: 105, code: 13, kind: ZLinkFrameworkErrorKind.Unavailable };
+    assert.deepEqual(replies, [{ terminal: expected.terminal, code: expected.code }], state);
+    if (state === 'closing-user') assert.deepEqual(replies[0], { terminal: 106, code: 15 });
+    assert.equal(
+      wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join').kind,
+      expected.kind,
+      state
+    );
     assert.equal(dispatched, false, state);
   }
 });

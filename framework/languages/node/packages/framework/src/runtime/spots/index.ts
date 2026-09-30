@@ -1907,9 +1907,26 @@ export class DefaultZLinkSpotManager {
       }
     }
     if (activation?.domain.kind === 'user') {
-      await activation.serial.executeLifecycleOperation(async () => {
-        await this.dispatchMeshActorJoinCore(meshName, owner, record);
-      });
+      // The execution barrier decides Closing admission before the callback runs. That
+      // rejection is this Join's terminal, so it is replied here; failures after entry
+      // belong to dispatchMeshActorJoinCore.
+      const turn = { entered: false };
+      try {
+        await activation.serial.executeLifecycleOperation(async () => {
+          turn.entered = true;
+          await this.dispatchMeshActorJoinCore(meshName, owner, record);
+        });
+      } catch (error) {
+        if (
+          turn.entered ||
+          !(error instanceof ZLinkFrameworkException) ||
+          record.replyFailure === undefined
+        ) {
+          throw error;
+        }
+        const terminal = internalFrameworkWireReply(error);
+        requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
+      }
       return;
     }
     await this.dispatchMeshActorJoinCore(meshName, owner, record);
