@@ -3749,7 +3749,7 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       async openRoutedActorSession() {
         events.push('session-route-opened');
       },
-      async deliverDeferredJoinAccepted(completion, joinedActor, _currentRef, execute) {
+      async deliverDeferredJoinCompletion(completion, joinedActor, _currentRef, execute) {
         assert.equal(completion, deferredJoinCompletion);
         assert.equal(joinedActor, actor);
         await execute(async () => {

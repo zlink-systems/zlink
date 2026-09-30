@@ -1,17 +1,20 @@
-import type { ActorRef, ZLinkActorJoinOperationId } from '../../contracts';
+import type { ActorRef, ZLinkActorJoinOperationId, ZLinkFrameworkErrorKind } from '../../contracts';
 
 /**
- * The Accepted completion of a deferred cross-node Join. Spot Actor membership
- * sections 4-5: the public OperationId, the optional reply and the delivery
+ * The Accepted or Failed result of a deferred cross-node Join. Spot Actor
+ * membership sections 4-5: the public OperationId, optional reply and delivery
  * state live only while the current source and target processes run. The
- * completion is never written to a Store and never replayed after a restart.
+ * completion is never written to a Store or replayed after a restart.
  */
-export interface ZLinkDeferredJoinCompletion {
+export type ZLinkDeferredJoinCompletion = {
   readonly operationId: ZLinkActorJoinOperationId;
   readonly actor: ActorRef;
   readonly rawReply: Buffer;
   readonly replyContentType?: string;
-}
+} & (
+  | { readonly status: 'accepted' }
+  | { readonly status: 'failed'; readonly kind: ZLinkFrameworkErrorKind }
+);
 
 export function createDeferredJoinCompletion(
   actorId: string,
@@ -32,6 +35,7 @@ export function createDeferredJoinCompletion(
     throw new TypeError('Deferred Join reply content type must be non-empty.');
   }
   return {
+    status: 'accepted',
     operationId,
     actor,
     rawReply: Buffer.from(rawReply),
