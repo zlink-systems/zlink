@@ -18,6 +18,7 @@ import {
   SubmitError,
   SubmitResult,
   ZlinkError,
+  ETERM,
 } from '../../contracts/errors/errors';
 import { withRuntimeErrorMessage } from './error_state';
 import { constants } from 'node:os';
@@ -53,7 +54,6 @@ const EALREADY = constants.errno.EALREADY;
 // Windows has no ESTALE; Core defines it as ZLINK_HAUSNUMERO + 19.
 const ESTALE = constants.errno.ESTALE ?? 156384712 + 19;
 const ECANCELED = constants.errno.ECANCELED;
-const ETERM = 156384765;
 
 export function isTerminationErrno(errno: number): boolean {
   return errno === ECANCELED || errno === ESHUTDOWN || errno === ETERM;

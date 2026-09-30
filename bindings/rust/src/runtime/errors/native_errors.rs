@@ -55,15 +55,14 @@ pub(crate) fn config_result_from_native(result: ffi::zlink_config_result_t) -> C
 }
 
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
-    // Core completion에는 errno가 없으므로 공개 result의 대표 errno를 사용한다.
-    // INTERNAL_ERROR에는 보존 errno가 전달되지 않아 별도 값을 만들지 않는다.
+    // Core REQUEST completion에는 errno가 없으므로 Core 표의 첫 errno를 사용한다.
     let native_errno = match code {
         RequestResult::Ok => 0,
         RequestResult::TimedOut => libc::ETIMEDOUT,
         RequestResult::NotFound => libc::ENOENT,
         RequestResult::Terminated => ETERM,
         RequestResult::ProtocolError => libc::EPROTO,
-        RequestResult::InternalError => 0,
+        RequestResult::InternalError => libc::EIO,
         RequestResult::Rejected => libc::EACCES,
         RequestResult::Conflict => libc::EEXIST,
         RequestResult::Busy => libc::EBUSY,
@@ -256,7 +255,7 @@ mod tests {
             (RequestResult::NotFound, libc::ENOENT),
             (RequestResult::Terminated, ETERM),
             (RequestResult::ProtocolError, libc::EPROTO),
-            (RequestResult::InternalError, 0),
+            (RequestResult::InternalError, libc::EIO),
             (RequestResult::Rejected, libc::EACCES),
             (RequestResult::Conflict, libc::EEXIST),
             (RequestResult::Busy, libc::EBUSY),
