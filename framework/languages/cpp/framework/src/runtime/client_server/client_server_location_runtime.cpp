@@ -206,7 +206,6 @@ struct client_server_location_runtime_t::snapshot_source_t
 struct client_server_location_runtime_t::worker_lane_snapshot_t
 {
     std::vector<client_connection_t *> connections;
-    std::vector<client_channel_t *> channels;
     std::vector<std::shared_ptr<raw_client_server_client_t>> owners;
     std::vector<std::shared_ptr<raw_client_server_server_t>> servers;
     std::optional<std::chrono::steady_clock::time_point> ready_deadline;
@@ -1172,7 +1171,6 @@ client_server_location_runtime_t::refresh_client_pump_snapshot ()
         for (auto &[_, channel] : _clients) {
             for (auto &[__, connection] : channel->connections) {
                 result.connections.push_back (&connection);
-                result.channels.push_back (channel.get ());
                 result.owners.push_back (connection.owner);
             }
         }
@@ -1197,15 +1195,24 @@ client_server_location_runtime_t::refresh_client_pump_snapshot ()
     }
     for (const auto &server : snapshot.servers)
         include_activity (co_await server->next_liveness_activity_task ());
-    co_await _lane.run_task ([connections = snapshot.connections, channels = snapshot.channels,
-                              ready = std::move (ready)] {
-        for (std::size_t i = 0; i < connections.size (); ++i) {
-            const bool selectable =
-              ready[i] && connections[i]->descriptor.state == framework_runtime_state_t::serving
-              && connections[i]->descriptor.weight > 0;
-            if (selectable != connections[i]->selector_ready) {
-                connections[i]->selector_ready = selectable;
-                channels[i]->selector_dirty = true;
+    co_await _lane.run_task ([this, &snapshot, ready = std::move (ready)] {
+        std::map<raw_client_server_client_t *, bool> current_ready;
+        for (std::size_t i = 0; i < snapshot.owners.size (); ++i)
+            current_ready.emplace (snapshot.owners[i].get (), ready[i]);
+        for (auto &[_, channel] : _clients) {
+            for (auto &[__, connection] : channel->connections) {
+                const auto status = current_ready.find (connection.owner.get ());
+                if (status == current_ready.end ())
+                    continue;
+                const bool ineligible =
+                  !status->second
+                  || connection.descriptor.state != framework_runtime_state_t::serving
+                  || connection.descriptor.weight <= 0;
+                const bool selectable = !ineligible;
+                if (selectable != connection.selector_ready) {
+                    connection.selector_ready = selectable;
+                    channel->selector_dirty = true;
+                }
             }
         }
         return true;
@@ -1493,53 +1500,56 @@ client_server_location_runtime_t::request (const std::string &channel_name,
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>>
-client_server_location_runtime_t::select_ready (const std::string &channel_name,
+client_server_location_runtime_t::select_ready (std::string channel_name,
                                                 std::chrono::steady_clock::time_point deadline)
 {
-    auto task =
-      _lane
-        .run_checked ([this, &channel_name, deadline] {
-            auto selected = select_ready_locked (channel_name);
-            if (selected || selected.error_kind () != framework_error_kind_t::not_found
-                || std::chrono::steady_clock::now () >= deadline) {
-                return task_t<std::shared_ptr<raw_client_server_client_t>> (std::move (selected));
-            }
-            auto completion = std::make_shared<
-              detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>> ();
-            auto task = completion->task ();
-            auto waiter = std::make_unique<ready_waiter_t> ();
-            waiter->channel_name = channel_name;
-            waiter->deadline = deadline;
-            waiter->completion = std::move (completion);
-            _ready_waiters.push_back (std::move (waiter));
-            return task;
-        })
-        .get ();
+    auto completion = std::make_shared<
+      detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>> ();
+    co_await _lane.run_task (
+      [this, channel_name = std::move (channel_name), deadline, completion] () mutable {
+          const auto channel = select_channel_locked (channel_name);
+          if (!channel)
+              throw framework_exception_t (channel.error_kind (), channel.error ()->what ());
+          auto waiter = std::make_unique<ready_waiter_t> ();
+          waiter->channel_name = std::move (channel_name);
+          waiter->deadline = deadline;
+          waiter->completion = completion;
+          _ready_waiters.push_back (std::move (waiter));
+          return true;
+      });
     _wake_timer->signal ();
-    return task;
+    co_return co_await completion->task ();
+}
+
+result_t<client_server_location_runtime_t::client_channel_t *>
+client_server_location_runtime_t::select_channel_locked (const std::string &channel_name)
+{
+    if (_stop.load (std::memory_order_acquire)) {
+        return result_t<client_channel_t *>::failure (framework_error_kind_t::shutting_down,
+                                                      "ClientServer runtime is stopping");
+    }
+    const auto channel_it = _clients.find (channel_name);
+    if (channel_it == _clients.end ()) {
+        return result_t<client_channel_t *>::failure (
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
+    }
+    return result_t<client_channel_t *>::success (channel_it->second.get ());
 }
 
 result_t<std::shared_ptr<raw_client_server_client_t>>
 client_server_location_runtime_t::select_ready_locked (const std::string &channel_name)
 {
-    if (_stop.load (std::memory_order_acquire)) {
+    const auto found = select_channel_locked (channel_name);
+    if (!found)
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::shutting_down, "ClientServer runtime is stopping");
-    }
-    const auto channel_it = _clients.find (channel_name);
-    if (channel_it == _clients.end ()) {
-        return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_configured,
-          "ClientServer Client role is not registered for this channel");
-    }
-    auto &channel = *channel_it->second;
+          found.error_kind (), found.error ()->what ());
+    auto &channel = *found.value ();
     if (channel.selector_dirty) {
         channel.selector_candidates.clear ();
         channel.selector_candidates.reserve (channel.connections.size ());
         for (auto &[key, connection] : channel.connections) {
-            if (!connection.owner->ready ()
-                || connection.descriptor.state != framework_runtime_state_t::serving
-                || connection.descriptor.weight <= 0)
+            if (!connection.selector_ready)
                 continue;
             channel.selector_candidates.push_back (
               {key, static_cast<std::uint32_t> (connection.descriptor.weight),

@@ -108,7 +108,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                                       zlink::message_t message,
                                       std::chrono::milliseconds timeout);
     task_t<std::shared_ptr<raw_client_server_client_t>>
-    select_ready (const std::string &channel_name, std::chrono::steady_clock::time_point deadline);
+    select_ready (std::string channel_name, std::chrono::steady_clock::time_point deadline);
+    result_t<client_channel_t *> select_channel_locked (const std::string &channel_name);
     result_t<std::shared_ptr<raw_client_server_client_t>>
     select_ready_locked (const std::string &channel_name);
     task_t<void> complete_ready_waiters (std::chrono::steady_clock::time_point now);
