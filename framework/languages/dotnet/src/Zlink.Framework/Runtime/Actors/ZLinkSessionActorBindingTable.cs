@@ -200,7 +200,8 @@ internal readonly record struct ZLinkSessionOneWayAcceptance(
 internal sealed record ZLinkHeldSessionRelay(
     ulong Sequence,
     Func<ulong, ValueTask> Deliver,
-    Action<ZLinkMessageFlowReason> Drop
+    Action<ZLinkMessageFlowReason> Drop,
+    Action<Exception> Error
 );
 
 internal readonly record struct ZLinkSessionRouteCommit(
@@ -805,6 +806,31 @@ internal sealed class ZLinkSessionActorBindingTable
             relay.Drop(reason);
     }
 
+    private ZLinkFrameworkRuntime? ReleaseSealOnLane(
+        ZLinkSessionBindingKey key,
+        ZLinkSessionBindingEntry entry,
+        ZLinkSessionBindingEntry updatedEntry
+    )
+    {
+        if (_heldRelays.TryGetValue(key, out var held) && held.Count > 0)
+        {
+            _entries[key] = updatedEntry with { DrainSignal = null };
+            return entry.Context.Runtime;
+        }
+
+        _heldRelays.Remove(key);
+        _entries[key] = updatedEntry with
+        {
+            CanonicalRelocationSeal = null,
+            CanonicalRelocationSealResult = null,
+            RelocationHandoffId = null,
+            DrainSignal = null,
+            RouteAvailableSignal = null,
+        };
+        entry.RouteAvailableSignal?.TrySetResult();
+        return null;
+    }
+
     private async Task DrainHeldRelaysAsync(ZLinkSessionBindingKey key)
     {
         while (true)
@@ -816,15 +842,7 @@ internal sealed class ZLinkSessionActorBindingTable
                         return null;
                     if (_heldRelays.TryGetValue(key, out var queue) && queue.Count > 0)
                         return queue.Dequeue();
-                    _heldRelays.Remove(key);
-                    _entries[key] = entry with
-                    {
-                        CanonicalRelocationSeal = null,
-                        CanonicalRelocationSealResult = null,
-                        RelocationHandoffId = null,
-                        RouteAvailableSignal = null,
-                    };
-                    entry.RouteAvailableSignal?.TrySetResult();
+                    ReleaseSealOnLane(key, entry, entry);
                     return null;
                 })
                 .ConfigureAwait(false);
@@ -836,40 +854,46 @@ internal sealed class ZLinkSessionActorBindingTable
             }
             catch (Exception failure)
             {
-                relay.Drop(
-                    failure switch
+                var reason = failure switch
+                {
+                    OperationCanceledException => ZLinkMessageFlowReason.Shutdown,
+                    ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
+                        ZLinkMessageFlowReason.Shutdown,
+                    ZLinkFrameworkException
                     {
-                        OperationCanceledException => ZLinkMessageFlowReason.Shutdown,
-                        ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
-                            ZLinkMessageFlowReason.Shutdown,
-                        ZLinkFrameworkException
-                        {
-                            Kind: ZLinkFrameworkErrorKind.Unavailable
-                                or ZLinkFrameworkErrorKind.NotFound
-                                or ZLinkFrameworkErrorKind.InvalidOperation
-                        } => ZLinkMessageFlowReason.StaleTarget,
-                        ZlinkSubmitException
-                        {
-                            Result: ZlinkSubmitException.ErrorCode.NotConnected
-                                or ZlinkSubmitException.ErrorCode.NotFound
-                        } => ZLinkMessageFlowReason.StaleTarget,
-                        ZlinkSubmitException
-                        {
-                            Result: ZlinkSubmitException.ErrorCode.Terminated
-                        } => ZLinkMessageFlowReason.Shutdown,
-                        ObjectDisposedException => ZLinkMessageFlowReason.StaleTarget,
-                        _ => ZLinkMessageFlowReason.Backpressure,
-                    }
-                );
+                        Kind: ZLinkFrameworkErrorKind.Unavailable
+                            or ZLinkFrameworkErrorKind.NotFound
+                            or ZLinkFrameworkErrorKind.InvalidOperation
+                    } => ZLinkMessageFlowReason.StaleTarget,
+                    ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
+                        ZLinkMessageFlowReason.Backpressure,
+                    ZlinkSubmitException
+                    {
+                        Result: ZlinkSubmitException.ErrorCode.NotConnected
+                            or ZlinkSubmitException.ErrorCode.NotFound
+                    } => ZLinkMessageFlowReason.StaleTarget,
+                    ZlinkSubmitException { Result: ZlinkSubmitException.ErrorCode.Terminated } =>
+                        ZLinkMessageFlowReason.Shutdown,
+                    ZlinkSubmitException { Result: ZlinkSubmitException.ErrorCode.Backpressured } =>
+                        ZLinkMessageFlowReason.Backpressure,
+                    ObjectDisposedException => ZLinkMessageFlowReason.StaleTarget,
+                    _ => (ZLinkMessageFlowReason?)null,
+                };
+                if (reason is { } dropped)
+                    relay.Drop(dropped);
+                else
+                    relay.Error(failure);
             }
         }
     }
 
     private async ValueTask StartHeldDrainAsync(
-        ZLinkFrameworkRuntime runtime,
+        ZLinkFrameworkRuntime? runtime,
         ZLinkSessionBindingKey key
     )
     {
+        if (runtime is null)
+            return;
         if (
             runtime.TryRunDetached(
                 "session-held-relay-drain",
@@ -881,16 +905,8 @@ internal sealed class ZLinkSessionActorBindingTable
             .RunAsync(() =>
             {
                 DropHeldRelays(key, ZLinkMessageFlowReason.Shutdown);
-                if (!_entries.TryGetValue(key, out var entry))
-                    return;
-                _entries[key] = entry with
-                {
-                    CanonicalRelocationSeal = null,
-                    CanonicalRelocationSealResult = null,
-                    RelocationHandoffId = null,
-                    RouteAvailableSignal = null,
-                };
-                entry.RouteAvailableSignal?.TrySetResult();
+                if (_entries.TryGetValue(key, out var entry))
+                    ReleaseSealOnLane(key, entry, entry);
             })
             .ConfigureAwait(false);
     }
@@ -1039,10 +1055,8 @@ internal sealed class ZLinkSessionActorBindingTable
         ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute
     )
     {
-        TaskCompletionSource? routeAvailableSignal = null;
         ZLinkSessionBindingKey routedKey = default;
         ZLinkFrameworkRuntime? drainRuntime = null;
-        var drainHeld = false;
         var routed = await _lane
             .RunAsync(() =>
             {
@@ -1126,19 +1140,15 @@ internal sealed class ZLinkSessionActorBindingTable
                         throw new InvalidDataException("Command 44 target route is invalid.");
                     CancelCanonicalSealTimeout(key);
                     routedKey = key;
-                    drainHeld = _heldRelays.TryGetValue(key, out var held) && held.Count > 0;
-                    drainRuntime = entry.Context.Runtime;
-                    _entries[key] = entry with
-                    {
-                        Route = targetRoute,
-                        CanonicalRelocationSeal = drainHeld ? seal : null,
-                        CanonicalRelocationSealResult = drainHeld
-                            ? entry.CanonicalRelocationSealResult
-                            : null,
-                        AppliedCanonicalRelocationRoute = request,
-                        DrainSignal = null,
-                        RouteAvailableSignal = drainHeld ? entry.RouteAvailableSignal : null,
-                    };
+                    drainRuntime = ReleaseSealOnLane(
+                        key,
+                        entry,
+                        entry with
+                        {
+                            Route = targetRoute,
+                            AppliedCanonicalRelocationRoute = request,
+                        }
+                    );
                 }
                 else
                 {
@@ -1158,30 +1168,21 @@ internal sealed class ZLinkSessionActorBindingTable
                         return false;
                     CancelCanonicalSealTimeout(key);
                     routedKey = key;
-                    drainHeld = _heldRelays.TryGetValue(key, out var held) && held.Count > 0;
-                    drainRuntime = entry.Context.Runtime;
-                    _entries[key] = entry with
-                    {
-                        CanonicalRelocationSeal = drainHeld ? seal : null,
-                        CanonicalRelocationSealResult = drainHeld
-                            ? entry.CanonicalRelocationSealResult
-                            : null,
-                        AppliedCanonicalRelocationRoute = request,
-                        DrainSignal = null,
-                        RouteAvailableSignal = drainHeld ? entry.RouteAvailableSignal : null,
-                    };
+                    drainRuntime = ReleaseSealOnLane(
+                        key,
+                        entry,
+                        entry with
+                        {
+                            AppliedCanonicalRelocationRoute = request,
+                        }
+                    );
                 }
-                routeAvailableSignal = entry.RouteAvailableSignal;
                 return true;
             })
             .ConfigureAwait(false);
-        if (!routed)
-            return false;
-        if (drainHeld)
-            await StartHeldDrainAsync(drainRuntime!, routedKey).ConfigureAwait(false);
-        else
-            routeAvailableSignal?.TrySetResult();
-        return true;
+        if (routed)
+            await StartHeldDrainAsync(drainRuntime, routedKey).ConfigureAwait(false);
+        return routed;
     }
 
     internal ValueTask<bool> IsCanonicalRouteAppliedAsync(
@@ -1398,10 +1399,8 @@ internal sealed class ZLinkSessionActorBindingTable
 
     public async ValueTask<bool> AbortRouteSealAsync(ZLinkSessionRouteSeal request)
     {
-        TaskCompletionSource? routeAvailableSignal = null;
         ZLinkSessionBindingKey routedKey = default;
         ZLinkFrameworkRuntime? drainRuntime = null;
-        var drainHeld = false;
         var aborted = await _lane
             .RunAsync(() =>
             {
@@ -1429,25 +1428,13 @@ internal sealed class ZLinkSessionActorBindingTable
                 )
                     return false;
                 routedKey = key;
-                drainHeld = _heldRelays.TryGetValue(key, out var held) && held.Count > 0;
-                drainRuntime = entry.Context.Runtime;
-                _entries[key] = entry with
-                {
-                    RelocationHandoffId = drainHeld ? entry.RelocationHandoffId : null,
-                    DrainSignal = null,
-                    RouteAvailableSignal = drainHeld ? entry.RouteAvailableSignal : null,
-                };
-                routeAvailableSignal = entry.RouteAvailableSignal;
+                drainRuntime = ReleaseSealOnLane(key, entry, entry);
                 return true;
             })
             .ConfigureAwait(false);
-        if (!aborted)
-            return false;
-        if (drainHeld)
-            await StartHeldDrainAsync(drainRuntime!, routedKey).ConfigureAwait(false);
-        else
-            routeAvailableSignal?.TrySetResult();
-        return true;
+        if (aborted)
+            await StartHeldDrainAsync(drainRuntime, routedKey).ConfigureAwait(false);
+        return aborted;
     }
 
     public async ValueTask<bool> UnsealCommittedRouteAsync(ZLinkSessionRouteCommit request)
@@ -1463,10 +1450,8 @@ internal sealed class ZLinkSessionActorBindingTable
             )
         )
             return false;
-        TaskCompletionSource? routeAvailableSignal = null;
         ZLinkSessionBindingKey routedKey = default;
         ZLinkFrameworkRuntime? drainRuntime = null;
-        var drainHeld = false;
         var unsealed = await _lane
             .RunAsync(() =>
             {
@@ -1520,25 +1505,13 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (!handoffMatches && completedHandoffMatches)
                     return true;
                 routedKey = key;
-                drainHeld = _heldRelays.TryGetValue(key, out var held) && held.Count > 0;
-                drainRuntime = entry.Context.Runtime;
-                _entries[key] = entry with
-                {
-                    RelocationHandoffId = drainHeld ? entry.RelocationHandoffId : null,
-                    DrainSignal = null,
-                    RouteAvailableSignal = drainHeld ? entry.RouteAvailableSignal : null,
-                };
-                routeAvailableSignal = entry.RouteAvailableSignal;
+                drainRuntime = ReleaseSealOnLane(key, entry, entry);
                 return true;
             })
             .ConfigureAwait(false);
-        if (!unsealed)
-            return false;
-        if (drainHeld)
-            await StartHeldDrainAsync(drainRuntime!, routedKey).ConfigureAwait(false);
-        else
-            routeAvailableSignal?.TrySetResult();
-        return true;
+        if (unsealed)
+            await StartHeldDrainAsync(drainRuntime, routedKey).ConfigureAwait(false);
+        return unsealed;
     }
 
     public ValueTask<ZLinkSessionRouteCommitResult> CommitRouteAsync(

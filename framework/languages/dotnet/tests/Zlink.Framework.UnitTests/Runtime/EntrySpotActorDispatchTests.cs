@@ -2746,6 +2746,13 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             await heldSend;
             await nodeSendAttempted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.True(
+                await runtime.WaitForSessionActorRouteAvailableAsync(
+                    actorId,
+                    bindingToken,
+                    CancellationToken.None
+                )
+            );
 
             var sentRelay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
                 Assert.Single(node.NodeSendAttempts)[1]
@@ -2843,6 +2850,13 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal(2UL, requestFence.SessionSequence);
             Assert.True(
+                await runtime.WaitForSessionActorRouteAvailableAsync(
+                    actorId,
+                    bindingToken,
+                    CancellationToken.None
+                )
+            );
+            Assert.True(
                 runtime.TryGetSessionActorBinding(actorId, bindingToken, out var targetTwoBinding)
             );
             Assert.Equal(targetTwo, targetTwoBinding.Route.Ref.NodeRid);
@@ -2904,6 +2918,179 @@ public sealed partial class EntrySpotActorDispatchTests
                     flow.Outcome == "dropped" && flow.FlowId == droppedFlowId
                 )
             );
+
+            Assert.True(
+                await runtime.WaitForSessionActorRouteAvailableAsync(
+                    actorId,
+                    bindingToken,
+                    CancellationToken.None
+                )
+            );
+            node.NodeSendAsyncFailure = null;
+            node.NodeSendAttempts.Clear();
+            Assert.True(
+                runtime.TryGetSessionActorBinding(actorId, bindingToken, out var thirdBinding)
+            );
+            var fourthSeal = SessionSeal(
+                thirdBinding,
+                new ZLinkServiceWireCodec.RelocationWireId(8, 4),
+                thirdTarget,
+                sourceNodeGeneration: 5,
+                coordinatorLease: 303
+            );
+            _ = await runtime.SealCanonicalSessionActorRouteAsync(
+                fourthSeal,
+                CancellationToken.None
+            );
+            var errorHeader = sendHeader with { Name = "held-error" };
+            using var errorPayload = Message.From(sendBody);
+            string errorFlowId;
+            using (
+                var errorFlow = ZLinkFlowContext.Enter(
+                    null,
+                    null,
+                    captureEnabled: true,
+                    ZLinkFlowOrigin.Inbound
+                )
+            )
+            {
+                errorFlowId = ZLinkFlowContext.Current!.Value.FlowId;
+                await context.ActorCoordinator.RelayToActorAsync(
+                    bound,
+                    errorHeader,
+                    errorPayload,
+                    static (_, _, _) => ValueTask.CompletedTask,
+                    CancellationToken.None
+                );
+            }
+            using var continuedPayload = Message.From(sendBody);
+            await context.ActorCoordinator.RelayToActorAsync(
+                bound,
+                sendHeader with
+                {
+                    Name = "held-after-error",
+                },
+                continuedPayload,
+                static (_, _, _) => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            var reportedError = new TaskCompletionSource<Exception>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            runtime.ErrorSink.UnhandledCallbackException += exception =>
+                reportedError.TrySetResult(exception);
+            node.NodeSendAsyncFailures.Enqueue(new InvalidOperationException("held relay failed"));
+            var continuedSend = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            node.OnNodeSend = () => continuedSend.TrySetResult();
+            var fourthTarget = RoutingId.From("target-actor-four");
+            Assert.True(
+                runtime.RouteCanonicalSessionActor(
+                    SessionCommit(fourthSeal, fourthTarget, 6, 15, 404),
+                    new ZLinkSessionRelocationAuthenticatedRoute(fourthTarget, 6, "entry", 15, 404)
+                )
+            );
+            await continuedSend.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(
+                "held relay failed",
+                (await reportedError.Task.WaitAsync(TimeSpan.FromSeconds(2))).Message
+            );
+            var surfaced = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "failed" && flow.FlowId == errorFlowId
+                )
+            );
+            Assert.Equal("stream", surfaced.Surface);
+            Assert.Equal("handler_exception", surfaced.Reason);
+            Assert.Equal("drop", surfaced.Action);
+            Assert.Equal("InvalidOperationException", surfaced.ErrorType);
+            Assert.Equal("held relay failed", surfaced.ErrorMessage);
+            Assert.Empty(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "dropped" && flow.FlowId == errorFlowId
+                )
+            );
+            Assert.Single(node.NodeSendAttempts);
+
+            Assert.True(
+                await runtime.WaitForSessionActorRouteAvailableAsync(
+                    actorId,
+                    bindingToken,
+                    CancellationToken.None
+                )
+            );
+            node.NodeSendAttempts.Clear();
+            runtime.Registration.DefaultRequestTimeout = TimeSpan.FromMilliseconds(100);
+            Assert.True(
+                runtime.TryGetSessionActorBinding(actorId, bindingToken, out var fourthBinding)
+            );
+            var fifthSeal = SessionSeal(
+                fourthBinding,
+                new ZLinkServiceWireCodec.RelocationWireId(8, 5),
+                fourthTarget,
+                sourceNodeGeneration: 6,
+                coordinatorLease: 404
+            );
+            _ = await runtime.SealCanonicalSessionActorRouteAsync(
+                fifthSeal,
+                CancellationToken.None
+            );
+            using var timedOutPayload = Message.From(sendBody);
+            string timedOutFlowId;
+            using (
+                var timedOutFlow = ZLinkFlowContext.Enter(
+                    null,
+                    null,
+                    captureEnabled: true,
+                    ZLinkFlowOrigin.Inbound
+                )
+            )
+            {
+                timedOutFlowId = ZLinkFlowContext.Current!.Value.FlowId;
+                await context.ActorCoordinator.RelayToActorAsync(
+                    bound,
+                    sendHeader with
+                    {
+                        Name = "held-timeout",
+                    },
+                    timedOutPayload,
+                    static (_, _, _) => ValueTask.CompletedTask,
+                    CancellationToken.None
+                );
+            }
+            using var afterTimeoutPayload = Message.From(sendBody);
+            await context.ActorCoordinator.RelayToActorAsync(
+                bound,
+                sendHeader with
+                {
+                    Name = "held-after-timeout",
+                },
+                afterTimeoutPayload,
+                static (_, _, _) => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            node.BlockNextNodeSendAsync = true;
+            var afterTimeoutSend = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            node.OnNodeSend = () => afterTimeoutSend.TrySetResult();
+            var fifthTarget = RoutingId.From("target-actor-five");
+            Assert.True(
+                runtime.RouteCanonicalSessionActor(
+                    SessionCommit(fifthSeal, fifthTarget, 7, 16, 505),
+                    new ZLinkSessionRelocationAuthenticatedRoute(fifthTarget, 7, "entry", 16, 505)
+                )
+            );
+            await afterTimeoutSend.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var timedOutDrop = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "dropped" && flow.FlowId == timedOutFlowId
+                )
+            );
+            Assert.Equal("stream", timedOutDrop.Surface);
+            Assert.Equal("backpressure", timedOutDrop.Reason);
+            Assert.Single(node.NodeSendAttempts);
         }
         finally
         {
@@ -11803,6 +11990,10 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public Exception? NodeSendAsyncFailure { get; set; }
 
+        public ConcurrentQueue<Exception> NodeSendAsyncFailures { get; } = new();
+
+        public bool BlockNextNodeSendAsync { get; set; }
+
         public List<IReadOnlyList<byte[]>> NodeSendAttempts { get; } = [];
 
         public Action? OnNodeSend { get; set; }
@@ -12369,6 +12560,13 @@ public sealed partial class EntrySpotActorDispatchTests
             NodeSendAsyncCalls++;
             if (NodeSendAsyncFailure is { } failure)
                 throw failure;
+            if (NodeSendAsyncFailures.TryDequeue(out var nextFailure))
+                throw nextFailure;
+            if (BlockNextNodeSendAsync)
+            {
+                BlockNextNodeSendAsync = false;
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -12670,7 +12868,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 Tag("spot_id") ?? Tag("zlink.spot.id"),
                 Normalize(Tag("reason") ?? Tag("zlink.reason")),
                 Normalize(Tag("action") ?? Tag("zlink.action")),
-                Tag("stream_session_id")
+                Tag("stream_session_id"),
+                Tag("error_type"),
+                Tag("error_message")
             );
             _events.Enqueue(flow);
             _observed.TrySetResult(flow);
@@ -12710,7 +12910,9 @@ public sealed partial class EntrySpotActorDispatchTests
         string? SpotId,
         string? Reason,
         string? Action,
-        string? StreamSessionId
+        string? StreamSessionId,
+        string? ErrorType,
+        string? ErrorMessage
     );
 
     private sealed class ThrowingBackendAdapterFactory : IZLinkBackendAdapterFactory

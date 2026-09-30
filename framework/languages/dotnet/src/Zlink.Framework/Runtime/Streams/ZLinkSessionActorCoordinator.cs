@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
 
 internal sealed class ZLinkSessionActorCoordinator(
@@ -630,8 +631,7 @@ internal sealed class ZLinkSessionActorCoordinator(
                                             retained,
                                             null,
                                             acceptedSequence,
-                                            CancellationToken.None,
-                                            admissionCompleted: true
+                                            CancellationToken.None
                                         )
                                         .ConfigureAwait(false);
                                 else
@@ -669,6 +669,28 @@ internal sealed class ZLinkSessionActorCoordinator(
                                         FlowOrigin = flow?.Origin,
                                         StreamSessionId = actorRef.Context.SessionId,
                                     }
+                                );
+                            },
+                            failure =>
+                            {
+                                runtime.Flow.TraceDispatchError(
+                                    new ZLinkDispatchFailure(
+                                        ZLinkDispatchErrorSurface.StreamSession,
+                                        ZLinkDispatchMessageKind.Send,
+                                        ZLinkDispatchErrorReason.HandlerException,
+                                        ZLinkDispatchErrorAction.Drop,
+                                        header.Name,
+                                        CorrelationId: header.CorrelationId,
+                                        ActorId: actorRef.ActorId,
+                                        Exception: failure,
+                                        FlowId: flow?.FlowId,
+                                        FlowOrigin: flow?.Origin,
+                                        StreamSessionId: actorRef.Context.SessionId
+                                    )
+                                );
+                                runtime.ErrorSink.ReportRuntimeTaskException(
+                                    "session-held-relay-drain",
+                                    failure
                                 );
                             }
                         );
@@ -787,8 +809,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         Message payload,
         string? replyCapability,
         ulong acceptedHighWater,
-        CancellationToken cancellationToken,
-        bool admissionCompleted = false
+        CancellationToken cancellationToken
     )
     {
         if (actorRef.Context.RoutingId is not { } sessionRid)
@@ -847,8 +868,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             cancellationToken,
             runtime.ShutdownToken
         );
-        if (!admissionCompleted)
-            terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
+        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
         try
         {
             await runtime
@@ -881,7 +901,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
-                "Remote actor session relay timed out before local admission completed.",
+                "Remote actor session relay timed out.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
         }
