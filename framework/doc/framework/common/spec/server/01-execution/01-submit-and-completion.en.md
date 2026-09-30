@@ -192,7 +192,8 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 |---|---|
 | No Actor authority | `NotFound` |
 | No Spot authority | `NotFound` |
-| No Mesh or Server membership | `NotFound` |
+| No Mesh | `NotFound` |
+| ChannelName target selection fails | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result) |
 | No route available | `Unavailable` |
 | Admission deadline expired | `DeadlineExceeded` |
 | Runtime not accepting new admission | `ShuttingDown` |

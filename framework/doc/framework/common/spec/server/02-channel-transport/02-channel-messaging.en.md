@@ -186,15 +186,11 @@ select-one on a MeshNode where only itself is that ChannelName's Server has no
 candidates, and it fails with no target. To handle it in the same process, use a
 ClientServer path.
 
-The two paths also handle the "no candidate yet" case differently. RouteMesh fails
-immediately with no target, as above. If there's no target to select, ClientServer
-waits within the call's admission deadline
+<a id="clientserver-ready-wait"></a>
+The two paths also handle the "no candidate yet" case differently. RouteMesh doesn't wait,
+as above. If there's no ready target, ClientServer waits within the call's admission deadline
 ([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules)).
-If no target to select appears within it, the call fails with
-[`Unavailable`](../00-foundation/06-framework-api.en.md#no-eligible-select-one-member) when a ready
-target exists but no eligible member remains, and otherwise with `DeadlineExceeded`, the
-expired admission deadline of
-[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
+The result of both paths follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).
 Framework startup doesn't wait for local ClientServer admission to complete.
 
 The two paths are handled differently because the meaning of "no candidate" differs.
@@ -644,7 +640,7 @@ The precise full signature is defined by
 | The Node direct target isn't a member of the same MeshName. | Ends with a target-not-found error. |
 | The Node direct target's object role is `Client`. | Ends with `NotFound` since it's not an application target. Doesn't create a Client pair connection. |
 | ChannelName isn't registered in the current process. | Ends with `NotFound` and isn't sent via a different send path. |
-| ChannelName has no selectable target. | Ends with `NotFound`. |
+| ChannelName has no selectable target. | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result). |
 | A known target's connection doesn't become ready by the time limit. | Ends with a route connection error or timeout. |
 | No request handler was found, or the payload couldn't be interpreted. | Completes with an error reply if a reply route remains. |
 | No one-way handler was found, or the payload couldn't be interpreted. | Doesn't deliver the message to a handler — records it in runtime observability information. |

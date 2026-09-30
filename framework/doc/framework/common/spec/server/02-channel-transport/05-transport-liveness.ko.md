@@ -265,8 +265,8 @@ Spot·Actor·Channel message는 Framework가 generation으로 다시 판정하�
 
 Peer 하나의 실패는 host 전체를 `Error`로 바꾸지 않는다. 다른 ready peer와, 현재 이
 host에서 Actor·Spot을 실제로 실행하며 그 application queue를 관리하는 local
-[Owner](../00-foundation/02-glossary.ko.md#owner)는 계속 처리한다. Ready peer가 없으면 Channel 호출은 `NotFound` 또는 `Unavailable`로
-끝난다. Framework는 timeout을 늘려 실패를 숨기지 않는다.
+[Owner](../00-foundation/02-glossary.ko.md#owner)는 계속 처리한다. Ready peer가 없을 때 Channel 호출의 결과는
+[Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다. Framework는 timeout을 늘려 실패를 숨기지 않는다.
 
 ## 6. Connection loss와 reconnect
 

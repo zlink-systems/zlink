@@ -168,14 +168,11 @@ RouteMesh select-one을 호출하면 후보가 없으며, 이때는 target 없�
 process에서 처리하려면 ClientServer 경로를 사용한다.
 
 <a id="clientserver-ready-wait"></a>
-두 경로는 후보가 아직 없을 때의 처리도 다르다. RouteMesh는 위와 같이 즉시 target 없음으로
-실패한다. ClientServer는 선택할 target이 없으면 호출의 admission deadline
+두 경로는 후보가 아직 없을 때의 처리도 다르다. RouteMesh는 위와 같이 기다리지 않는다.
+ClientServer는 ready target이 없으면 호출의 admission deadline
 ([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙))
-안에서 기다린다. 그 안에 선택할 target이 생기지 않으면, ready target은 있지만 eligible member가
-없을 때는 [`Unavailable`](../00-foundation/06-framework-api.ko.md#no-eligible-select-one-member)로,
-그 밖에는 admission deadline 만료([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류))인
-`DeadlineExceeded`로 실패한다. Framework startup은 local ClientServer admission 완료를 기다리지
-않는다.
+안에서 기다린다. 두 경로의 결과는 [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다.
+Framework startup은 local ClientServer admission 완료를 기다리지 않는다.
 
 두 경로를 다르게 정하는 이유는 후보가 없다는 사실의 의미가 다르기 때문이다. RouteMesh에서
 후보 없음은 그 ChannelName의 Server membership을 게시한 peer가 없다는 뜻이고, 기다린다고
@@ -575,7 +572,7 @@ Classic fanout publish에 적용하지 않는다.
 | Node direct target이 같은 MeshName의 member가 아니다. | Target을 찾을 수 없다는 오류로 끝난다. |
 | Node direct target의 Object role이 `Client`다. | Application target이 아니므로 `NotFound`로 끝낸다. Client pair connection을 만들지 않는다. |
 | ChannelName이 현재 process에 등록되지 않았다. | `NotFound`로 끝나며 다른 송신 경로로 보내지 않는다. |
-| ChannelName의 선택 가능한 target이 없다. | `NotFound`로 끝난다. |
+| ChannelName의 선택 가능한 target이 없다. | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다. |
 | 알려진 target의 연결이 제한 시간까지 ready가 되지 않는다. | Route 연결 오류 또는 timeout으로 끝난다. |
 | Request handler를 찾지 못하거나 payload를 해석하지 못했다. | Reply 경로가 남아 있으면 error reply로 완료한다. |
 | One-way handler를 찾지 못하거나 payload를 해석하지 못했다. | Message를 handler에 전달하지 않고 runtime 관측 정보에 기록한다. |
