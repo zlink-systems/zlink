@@ -1842,6 +1842,40 @@ test('ZLinkSpotManager create request uses configured custom serializer without 
   assert.deepEqual(created.reply, { text: 'created' });
 });
 
+test('ZLinkSpotManager create request decodes with a registered application/json serializer', async () => {
+  const decoded = [];
+  class CodecSpot {
+    async onCreate(request) {
+      decoded.push(request.decode());
+      return { accepted: true };
+    }
+  }
+
+  const serializer = {
+    serialize(value) {
+      return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify({ value })));
+    },
+    deserialize(payload) {
+      return {
+        codec: 'registered-json',
+        value: JSON.parse(Buffer.from(payload.data()).toString()).value
+      };
+    }
+  };
+  const registration = framework.createFrameworkRegistration({
+    codecs: { serializers: [{ contentType: 'application/json', serializer }] }
+  });
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [CodecSpot],
+    messageSerializers: registration.messageSerializers
+  });
+
+  const created = await manager.create('test.mesh', CodecSpot, { text: 'open' });
+
+  assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
+  assert.deepEqual(decoded, [{ codec: 'registered-json', value: { text: 'open' } }]);
+});
+
 test('ZLinkSpotManager preserves binary serializer content type through onCreate', async () => {
   const decoded = [];
   class CodecSpot {
