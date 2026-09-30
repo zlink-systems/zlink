@@ -1048,34 +1048,6 @@ class socket_t
         });
     }
 
-    int recv (message_t &part_, int flags_ = 0)
-    {
-        return visit ([&] (auto &socket_) -> int {
-            using socket_type_t = typename std::decay<decltype (socket_)>::type;
-            if constexpr (std::is_same<socket_type_t, pair_socket_t>::value
-                          || std::is_same<socket_type_t, dealer_socket_t>::value) {
-                return recv_single_part_impl (socket_, NULL, part_, flags_);
-            } else {
-                errno = EOPNOTSUPP;
-                return -1;
-            }
-        });
-    }
-
-    int recv (routing_id_t &source_rid_out_, message_t &part_, int flags_ = 0)
-    {
-        return visit ([&] (auto &socket_) -> int {
-            using socket_type_t = typename std::decay<decltype (socket_)>::type;
-            if constexpr (std::is_same<socket_type_t, router_socket_t>::value
-                          || std::is_same<socket_type_t, stream_socket_t>::value) {
-                return recv_single_part_impl (socket_, &source_rid_out_, part_, flags_);
-            } else {
-                errno = EOPNOTSUPP;
-                return -1;
-            }
-        });
-    }
-
     int receive (received_t &received_out_, int flags_ = 0)
     {
         return visit ([&] (auto &socket_) -> int {
@@ -1745,45 +1717,6 @@ class socket_t
     recv_received_impl (SocketLike &socket_, received_t &received_out_, recv_flags_t flags_)
     {
         return socket_.recv (received_out_, flags_);
-    }
-
-    template <typename SocketLike>
-    static int recv_single_part_impl (SocketLike &socket_,
-                                      routing_id_t *source_rid_out_,
-                                      message_t &part_out_,
-                                      recv_flags_t flags_)
-    {
-        using socket_type_t = typename std::decay<SocketLike>::type;
-        if constexpr (std::is_same<socket_type_t, pair_socket_t>::value
-                      || std::is_same<socket_type_t, dealer_socket_t>::value) {
-            if (source_rid_out_ != NULL)
-                *source_rid_out_ = routing_id_t::from (std::string ("placeholder"));
-            return socket_.recv (part_out_, flags_);
-        } else if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
-            if (source_rid_out_ == NULL) {
-                routing_id_t ignored = routing_id_t::from (std::string ("placeholder"));
-                return socket_.recv (ignored, part_out_, flags_);
-            }
-            return socket_.recv (*source_rid_out_, part_out_, flags_);
-        }
-
-        received_t received;
-        const int rc = recv_received_impl (socket_, received, flags_);
-        if (rc != 0)
-            return rc;
-        if (received.parts ().size () != 1) {
-            errno = EMSGSIZE;
-            return -1;
-        }
-        if (source_rid_out_ != NULL) {
-            if (!received.routing_id ().has_value ()) {
-                errno = EPROTO;
-                return -1;
-            }
-            *source_rid_out_ = *received.routing_id ();
-        }
-        part_out_ = std::move (received.parts ()[0]);
-        return 0;
     }
 
     static int bool_result_to_errno (bool ok_)
