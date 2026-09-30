@@ -553,8 +553,8 @@ Even when an Actor moves to another MeshNode, the physical STREAM
 connection and Session scope remain in the Session owner process. The
 socket, transport handle, and Session callback state aren't moved or
 copied to the target Actor process. The Session's responsibility is to
-keep the binding closed during the move, change its route once according
-to the relocation result, and reopen it. The Session doesn't choose the
+install a seal on the binding during the move, change its Actor route once according
+to the relocation result, and release the seal. The Session doesn't choose the
 relocation target, judge Actor or Spot readiness, or read or change the
 Location Store.
 

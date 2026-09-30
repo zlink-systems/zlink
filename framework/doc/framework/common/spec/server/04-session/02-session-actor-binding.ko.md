@@ -458,8 +458,8 @@ sequenceDiagram
 
 Actor가 다른 MeshNode로 이동해도 physical STREAM connection과 Session scope는 Session
 owner process에 유지된다. Socket, transport handle과 Session callback state를 target
-Actor process로 이동하거나 복제하지 않는다. Session의 책임은 이동 중 해당 binding을
-닫아 두고, 이동 결과에 맞춰 route를 한 번 바꾼 뒤 다시 여는 것이다. Session은
+Actor process로 이동하거나 복제하지 않는다. Session은 이동 중 해당 binding에
+seal을 설치하고, 이동 결과에 맞춰 Actor route를 한 번 바꾼 뒤 seal을 해제한다. Session은
 relocation target을 선택하거나 Actor·Spot의 준비 상태를 판정하지 않으며 Location
 Store를 읽거나 변경하지 않는다.
 
