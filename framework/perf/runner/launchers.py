@@ -7,7 +7,6 @@ import json
 import os
 import re
 from pathlib import Path
-import re
 import subprocess
 from typing import Callable
 
@@ -19,6 +18,8 @@ class Launcher:
     build: Callable[[Path, str], list[str]]  # (perf_dir, role) -> build command
     command: Callable[[Path, str], list[str]]  # (perf_dir, role) -> command without role arguments
     provenance: Callable[[Path, list[str]], dict]  # (perf_dir, roles) -> runtime, artifact and restored-package provenance
+    loaded_artifact_markers: tuple[str, ...]
+    stream_scheme: str
     # Where this language documents the public ClientServer status and gates its Selectable state; quoted when a
     # ClientServer Server is Degraded although Serving, a Ready target and a typed probe reply are observed.
     clientserver_interface: str
@@ -51,9 +52,14 @@ def _dotnet_provenance(perf_dir: Path, roles: list[str]) -> dict:
                 package, _, version = key.partition("/")
                 if library.get("type") == "package" and package.lower().startswith(("zlink", "systems.zlink")):
                     packages[key] = {"name": package, "version": version, "nupkgSha512": library.get("sha512")}
+    listed_packages = sorted(packages.values(), key=lambda item: item["name"])
+    version_of = lambda name: next((item["version"] for item in listed_packages if item["name"].lower() == name.lower()), None)
     return {
         "artifacts": artifacts,
-        "packages": sorted(packages.values(), key=lambda item: item["name"]),
+        "packages": listed_packages,
+        "frameworkVersion": version_of("Zlink.Framework"),
+        "bindingVersion": version_of("Zlink"),
+        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
         "runtimeSettings": runtime_settings,
         "dotnetInfo": subprocess.check_output(["dotnet", "--info"], text=True),
         "installedRuntimes": subprocess.check_output(["dotnet", "--list-runtimes"], text=True),
@@ -78,9 +84,29 @@ def _node_output(perf_dir: Path, role: str) -> Path:
 
 
 def _node_build(perf_dir: Path, role: str) -> list[str]:
-    # One TypeScript project builds every role; the incremental build makes the repeat per role cheap. `npm install`
-    # restores the pinned published packages from package-lock.json (no local Core, binding or Framework build).
-    return ["bash", "-c", f'cd "{perf_dir}" && npm install --no-audit --no-fund --loglevel=error && npm run build']
+    # Each role build reuses node_modules only when its lock hash matches. npm ci must leave the lock unchanged.
+    script = r'''set -euo pipefail
+cd "$1"
+lock_hash=$(sha256sum package-lock.json | cut -d ' ' -f 1)
+marker="node_modules/.zlink-perf-package-lock.sha256"
+if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$lock_hash" ]; then
+  set +e
+  npm ci --no-audit --no-fund --loglevel=error
+  npm_status=$?
+  set -e
+  installed_lock_hash=$(sha256sum package-lock.json | cut -d ' ' -f 1)
+  if [ "$installed_lock_hash" != "$lock_hash" ]; then
+    echo "npm ci changed package-lock.json; refusing to record the install as current" >&2
+    exit 1
+  fi
+  if [ "$npm_status" -ne 0 ]; then
+    exit "$npm_status"
+  fi
+  printf '%s\n' "$installed_lock_hash" > "$marker.tmp"
+  mv "$marker.tmp" "$marker"
+fi
+npm run build'''
+    return ["bash", "-c", script, "zlink-node-build", str(perf_dir)]
 
 
 def _node_provenance(perf_dir: Path, roles: list[str]) -> dict:
@@ -100,6 +126,7 @@ def _node_provenance(perf_dir: Path, roles: list[str]) -> dict:
         "packages": sorted(packages.values(), key=lambda item: item["name"]),
         "frameworkVersion": packages["@zlink-systems/framework"]["version"],
         "bindingVersion": packages["@zlink-systems/zlink"]["version"],
+        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
         "runtimeSettings": {"node": {"execPath": _node_binary(), "versions": node_versions,
                                      "arguments": []}},
         "installedRuntimes": subprocess.check_output(["node", "--version"], text=True).strip(),
@@ -122,12 +149,10 @@ def _cpp_target(role: str) -> str:
 
 def _cpp_provenance(perf_dir: Path, roles: list[str]) -> dict:
     """The C++ perf links the published framework-cpp package that samples/bootstrap.cmake extracted into .zlink/install
-    (§17.5): Core is loaded dynamically, the binding is static, Framework is a shared library of the package. The declared
-    version is framework/languages/cpp/VERSION; a package of another version fails the run."""
+    (§17.5): Core is loaded dynamically, the binding is static, Framework is a shared library of the package."""
     install = perf_dir / ".zlink" / "install"
     downloads = perf_dir / ".zlink" / "downloads"
-    declared = next((line.split("=", 1)[1].strip() for line in (perf_dir.parent / "VERSION").read_text().splitlines()
-                     if line.startswith("ZLINK_FRAMEWORK_VERSION=")), None)
+    declared = _declared_framework_version(perf_dir)
 
     def sha256(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -140,8 +165,6 @@ def _cpp_provenance(perf_dir: Path, roles: list[str]) -> dict:
     archives = sorted(downloads.glob("zlink-framework-cpp-*.tar.gz")) if downloads.is_dir() else []
     framework = cmake_version("zlink_framework", "zlink_frameworkConfigVersion.cmake")
     binding = cmake_version("zlink_cpp", "zlink_cppConfigVersion.cmake")
-    if framework is not None and framework != declared:
-        raise ValueError(f"Installed framework-cpp package {framework} differs from the declared {declared}")
     artifacts = []
     packages = []
     if framework is not None:
@@ -162,6 +185,9 @@ def _cpp_provenance(perf_dir: Path, roles: list[str]) -> dict:
     return {
         "artifacts": artifacts,
         "packages": packages,
+        "frameworkVersion": framework,
+        "bindingVersion": binding,
+        "declaredFrameworkVersion": declared,
         "runtimeSettings": {"buildType": cache_values.get("CMAKE_BUILD_TYPE:STRING"), "cxxFlagsRelease": cache_values.get("CMAKE_CXX_FLAGS_RELEASE:STRING"),
                             "cxxCompiler": cache_values.get("CMAKE_CXX_COMPILER:FILEPATH"), "packageRoot": str(install)},
         "installedRuntimes": subprocess.check_output(["g++", "--version"], text=True),
@@ -216,9 +242,10 @@ def _java_provenance(perf_dir: Path, roles: list[str]) -> dict:
     return {
         "artifacts": artifacts,
         "packages": listed,
-        # environment.collect() derives these from NuGet names; the runtime dict overrides them with the Maven versions.
+        # The launcher reports the versions resolved into the published Maven installDist artifacts.
         "frameworkVersion": version_of("systems.zlink:zlink-framework-core"),
         "bindingVersion": version_of("systems.zlink:zlink"),
+        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
         "runtimeSettings": runtime_settings,
         "installedRuntimes": java,
         "javaHome": os.environ.get("JAVA_HOME"),
@@ -235,6 +262,8 @@ LAUNCHERS = {
         build=_node_build,
         command=lambda perf_dir, role: ["node", str(_node_output(perf_dir, role))],
         provenance=_node_provenance,
+        loaded_artifact_markers=(".node", "libzlink.so"),
+        stream_scheme="ws",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/node/interfaces/03-location-observability.ko.md:480",
         clientserver_gate="Runtime implementation gates Selectable on readyTargetCount at "
                           "framework/languages/node/packages/framework/src/runtime/foundation/runtime-state-projections.ts:68.",
@@ -243,6 +272,8 @@ LAUNCHERS = {
         build=lambda perf_dir, role: ["bash", str(perf_dir / "scripts/build_role.sh"), _cpp_target(role)],
         command=lambda perf_dir, role: [str(perf_dir / "build" / _cpp_target(role))],
         provenance=_cpp_provenance,
+        loaded_artifact_markers=("libzlink.so", "libzlink_framework.so"),
+        stream_scheme="tcp",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/cpp/interfaces/03-channel-messaging.ko.md:269",
         clientserver_gate="Selectable is populated from ready Client-side target snapshots at "
                           "framework/languages/cpp/framework/src/runtime/client_server/client_server_location_runtime.cpp:383; "
@@ -252,6 +283,8 @@ LAUNCHERS = {
         build=lambda perf_dir, role: ["dotnet", "build", str(perf_dir / _dotnet_role(perf_dir, role)), "-c", "Release", "-m:1", "--nologo"],
         command=lambda perf_dir, role: ["dotnet", str(_dotnet_output(perf_dir, role) / (_dotnet_role(perf_dir, role) + ".dll"))],
         provenance=_dotnet_provenance,
+        loaded_artifact_markers=("libzlink", "Systems.Zlink", "Zlink.Framework", "ZLink.Framework.Perf", "System.Text.Json"),
+        stream_scheme="tcp",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.ko.md:359",
         clientserver_gate="Runtime implementation gates Selectable on HasClient at "
                           "framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerRuntimeService.cs:99.",
@@ -261,11 +294,22 @@ LAUNCHERS = {
                                       ":" + _java_module(role) + ":installDist", "-q"],
         command=lambda perf_dir, role: [str(_java_install(perf_dir, role) / "bin" / _java_module(role))],
         provenance=_java_provenance,
+        loaded_artifact_markers=("libzlink.so", ".jar"),
+        stream_scheme="tcp",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/java/interfaces/monitoring.ko.md:227",
         clientserver_gate="Runtime implementation gates ready on hostServing && readyTargetCount > 0 at "
                           "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkTopologyRuntimeViews.java:71.",
     ),
 }
+
+
+def _declared_framework_version(perf_dir: Path) -> str | None:
+    """Read this language's fixed framework release from its VERSION file."""
+    version_file = perf_dir.parent / "VERSION"
+    if not version_file.is_file():
+        return None
+    return next((line.split("=", 1)[1].strip() for line in version_file.read_text().splitlines()
+                 if line.startswith("ZLINK_FRAMEWORK_VERSION=")), None)
 
 
 def launcher(language: str) -> Launcher:

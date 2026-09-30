@@ -43,7 +43,7 @@ def awaits_remote_targets(scenario, role: RoleUse, mode: str) -> bool:
     return not (role.source and role.object_role == "ObjectClient" and mode == "send-send" and scenario.channel)
 
 
-def plan_roles(cell: Cell, values: dict, common: dict, reserve: Callable[[], int]) -> list[PlannedRole]:
+def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reserve: Callable[[], int]) -> list[PlannedRole]:
     """`common` carries what every role config shares: runId, cellId, configHash, workload, worker, store,
     diagnostics(name -> dict|None), provenance. `reserve` returns a fresh OS-reserved loopback port."""
     scenario = cell.scenario
@@ -53,7 +53,7 @@ def plan_roles(cell: Cell, values: dict, common: dict, reserve: Callable[[], int
     for role, index in uses:
         key = (role.kind, index)
         admin[key], trigger[key] = reserve(), reserve()
-        endpoints[key] = {name: f"tcp://127.0.0.1:{reserve()}" for name in
+        endpoints[key] = {name: f"{stream_scheme if name == 'stream' else 'tcp'}://127.0.0.1:{reserve()}" for name in
                           (endpoint_key(listen, cell.topology) for listen in role.listens) if name}
     target = next(((r.kind, i) for r, i in uses if not r.source), None)
     mesh_name = "perf-mesh" if any("mesh" in found for found in endpoints.values()) else None

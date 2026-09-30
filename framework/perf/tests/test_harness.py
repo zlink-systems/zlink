@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runner"))
 from launchers import launcher
 from results import BOUNDS, MAX_U64, aggregate, export_latency, histogram_merge, u64, write_json
 from roles import plan_roles
-from runner import agreed_core_version, comparison, options, role_executables
+from runner import agreed_core_version, agreed_framework_version, comparison, options, role_executables
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
@@ -144,7 +144,8 @@ class HarnessTests(unittest.TestCase):
             args = options(["single", "--scenario", scenario.name, *(["--subscriber-count", "3"] if scenario.uses(count="subscribers") else []), *COMMON])
             cell = expand(args, False)[0]
             port = iter(range(20000, 30000))
-            for role in plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4}, common, lambda: next(port)):
+            for role in plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
+                                  common, launcher("dotnet").stream_scheme, lambda: next(port)):
                 if not role.config["awaitRemoteTargets"]:
                     skipping.add((scenario.name, role.config["role"]))
         # Bad direction: the receivers, the request sources and the server-side send/send source (10.6) still wait.
@@ -159,7 +160,8 @@ class HarnessTests(unittest.TestCase):
             port = iter(range(20000, 30000))
             common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "workload": {}, "worker": None, "store": None,
                       "diagnostics": lambda name: None, "provenance": {}}
-            planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4}, common, lambda: next(port))
+            planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
+                                 common, launcher("dotnet").stream_scheme, lambda: next(port))
             expected = sum(3 if role.count else 1 for role in scenario.roles)
             self.assertEqual(len(planned), expected)
             self.assertEqual(sum(role.source for role in planned), 0 if scenario.driver == "clients" else 1)
@@ -178,6 +180,35 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             launcher("cobol")
         self.assertEqual(launcher("dotnet").command(Path("/p"), "Client")[0], "dotnet")
+
+    def test_launcher_owns_each_languages_stream_scheme_and_loaded_artifact_markers(self):
+        expected_schemes = {"dotnet": "tcp", "java": "tcp", "node": "ws", "cpp": "tcp"}
+        for language, scheme in expected_schemes.items():
+            with self.subTest(language=language):
+                selected = launcher(language)
+                self.assertEqual(selected.stream_scheme, scheme)
+                self.assertTrue(selected.loaded_artifact_markers)
+        self.assertIn(".node", launcher("node").loaded_artifact_markers)
+        self.assertIn("libzlink.so", launcher("java").loaded_artifact_markers)
+        self.assertIn(".jar", launcher("java").loaded_artifact_markers)
+        self.assertIn("libzlink_framework.so", launcher("cpp").loaded_artifact_markers)
+
+    def test_planned_stream_endpoint_uses_the_launcher_scheme(self):
+        args = options(["single", "--scenario", "session-echo-only", *COMMON])
+        cell = expand(args, False)[0]
+        common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "workload": {}, "worker": None,
+                  "store": None, "diagnostics": lambda name: None, "provenance": {}}
+        expected = {"dotnet": "tcp", "java": "tcp", "node": "ws", "cpp": "tcp"}
+        for language, scheme in expected.items():
+            port = iter(range(20000, 30000))
+            planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
+                                 common, launcher(language).stream_scheme, lambda: next(port))
+            stream_roles = [role for role in planned if role.config["transportEndpoints"].get("stream")]
+            self.assertTrue(stream_roles)
+            for role in stream_roles:
+                endpoint = role.config["transportEndpoints"]["stream"]
+                self.assertTrue(endpoint.startswith(scheme + "://"))
+                self.assertEqual(role.manifest["streamEndpoint"], endpoint)
 
     def test_cell_comparison_excludes_run_identity_but_keeps_workload(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
@@ -274,7 +305,12 @@ class HarnessTests(unittest.TestCase):
                     "nullReasons": {}, "provenance": {"pid": instance + 100}, "clock": {}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_json(root / "client-0.json", original("client", 0, 10, 1, 10, 0))
+            client_zero = original("client", 0, 10, 1, 10, 0)
+            client_zero["metrics"]["sourceProbe"] = None
+            client_zero["nullReasons"] = {"/metrics/sourceProbe": {"code": "PUBLIC_OBSERVATION_UNSUPPORTED",
+                                                                       "reason": "Source metric reason lacks the optional lower bound.",
+                                                                       "owner": "test/source"}}
+            write_json(root / "client-0.json", client_zero)
             write_json(root / "client-1.json", original("client", 1, 90, 9, 90, 0))
             write_json(root / "server-session-0.json", original("session", 2, 0, 10, 0, 100))
             result = aggregate(root, config, ["client-0.json", "client-1.json"], ["server-session-0.json"], [], ["client-0.json", "client-1.json"])
@@ -287,6 +323,11 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(result["histograms"]["latencyMs"]["count"], "100")
             self.assertIsNone(result["measuredSeconds"])
             self.assertEqual(result["nullReasons"]["/measuredSeconds"]["code"], "MULTIPLE_OWNERS")
+            self.assertEqual(result["nullReasons"]["/metrics/sourceProbe"]["owner"], "test/source")
+            self.assertIsNone(result["nullReasons"]["/metrics/sourceProbe"]["lowerBoundMs"])
+            for output in (root / "result.json", root / "summary.json"):
+                saved = json.loads(output.read_text())
+                self.assertTrue(all("lowerBoundMs" in reason for reason in saved["nullReasons"].values()))
 
 
 if __name__ == "__main__":
@@ -308,3 +349,13 @@ class CoreVersionAgreementTest(unittest.TestCase):
     def test_a_later_cell_must_match_the_version_already_recorded(self):
         with self.assertRaises(RuntimeError):
             agreed_core_version({"a.json": "1.9.0"}, "1.10.0")
+
+
+class FrameworkVersionAgreementTest(unittest.TestCase):
+    def test_observed_framework_version_matches_the_declaration(self):
+        self.assertEqual(agreed_framework_version("0.26.0", "0.26.0"), "0.26.0")
+
+    def test_a_different_or_missing_framework_version_fails(self):
+        for observed, declared in (("0.25.0", "0.26.0"), (None, "0.26.0"), ("0.26.0", None)):
+            with self.subTest(observed=observed, declared=declared), self.assertRaises(RuntimeError):
+                agreed_framework_version(observed, declared)

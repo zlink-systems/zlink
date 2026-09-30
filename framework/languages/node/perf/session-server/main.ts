@@ -1,6 +1,5 @@
 import { Measurement } from '../shared/measurement';
 import { PerfActorRelaySessionFactory, SessionActorSetup } from '../server-support/actor-echo-support';
-import { streamEndpoint } from '../server-support/endpoints';
 import { ObjectsReadiness, readConfig, runRole } from '../server-support/server-application';
 import { PerfSessionFactory, SessionEchoHandler } from './perf-session';
 
@@ -19,12 +18,12 @@ runRole({
     : [PerfSessionFactory, SessionEchoHandler],
   configureFramework: (builder) => {
     if (!remote) {
-      builder.addStreamNode('perf-session').bind(streamEndpoint(config)).registerSession(PerfSessionFactory);
+      builder.addStreamNode('perf-session').bind(config.transportEndpoints.stream).registerSession(PerfSessionFactory);
       return;
     }
     // §10.2: an Object Client node; the Actors live in the separate Actor process.
     builder.addRouteMesh(config.meshName!).listen(config.transportEndpoints.mesh).setAdvertiseHost('127.0.0.1').objects().client();
-    builder.addStreamNode('perf-session').enableActorDispatch().bind(streamEndpoint(config)).registerSession(PerfActorRelaySessionFactory);
+    builder.addStreamNode('perf-session').enableActorDispatch().bind(config.transportEndpoints.stream).registerSession(PerfActorRelaySessionFactory);
   }
 }, measurement).catch((error: unknown) => {
   console.error(error);

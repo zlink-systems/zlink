@@ -30,17 +30,26 @@ def read(path: str) -> str | None:
         return None
 
 
-def collect(language: str, perf_dir: Path, roles: list[str]) -> dict:
+def collect(language: str, perf_dir: Path, roles: list[str], require_versions: bool = True) -> dict:
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.processor())
     runtime = launcher(language).provenance(perf_dir, roles)
+    framework_version = runtime.pop("frameworkVersion", None)
+    binding_version = runtime.pop("bindingVersion", None)
+    declared_framework_version = runtime.pop("declaredFrameworkVersion", None)
+    if require_versions:
+        missing = [name for name, value in (("frameworkVersion", framework_version),
+                                            ("bindingVersion", binding_version),
+                                            ("declaredFrameworkVersion", declared_framework_version))
+                   if not isinstance(value, str) or not value.strip()]
+        if missing:
+            raise ValueError("Launcher did not report required versions: " + ", ".join(missing))
     artifacts = []
     seen = set()
     for path in [SCHEMA / "histogram-bounds.json", *runtime.pop("artifacts")]:
         if path.is_file() and str(path) not in seen:
             seen.add(str(path))
             artifacts.append({"path": str(path), "resolvedPath": str(path.resolve()), "sha256": digest(path)})
-    packages = runtime["packages"]
     limits = resource.getrlimit(resource.RLIMIT_NOFILE)
     return {
         "schemaVersion": 2,
@@ -48,10 +57,11 @@ def collect(language: str, perf_dir: Path, roles: list[str]) -> dict:
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)),
         "buildMode": "Release",
-        # Restored published packages are the version source; nothing is copied from a local Core or binding build.
-        "frameworkVersion": next((p["version"] for p in packages if p["name"] == "Zlink.Framework"), None),
+        # Version values come from this language's launcher; the common runner does not inspect package names.
+        "frameworkVersion": framework_version,
         "coreVersion": None,  # reported by the role processes from the libzlink they load
-        "bindingVersion": next((p["version"] for p in packages if p["name"] == "Zlink"), None),
+        "bindingVersion": binding_version,
+        "declaredFrameworkVersion": declared_framework_version,
         "cpuModel": cpu, "effectiveProcessorCount": len(os.sched_getaffinity(0)),
         "cpuAffinity": sorted(os.sched_getaffinity(0)),
         "loadAverage": list(os.getloadavg()),

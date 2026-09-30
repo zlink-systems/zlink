@@ -165,22 +165,9 @@ class role_t
         }
         else if (host_ready && topology == "clientserver" && client_server.load () && config.channel_name) {
             const auto snapshot = client_server.load ()->snapshot (*config.channel_name);
-            // `selectable` is the Client's candidate decision. A Server proves its own readiness through
-            // ready_server_count; requiring client selectability from the Server role makes it wait forever.
-            infrastructure = config.source ? snapshot.selectable && snapshot.ready_server_count > 0
-                                           : snapshot.ready_server_count > 0;
-        }
-        // An Object Client has nothing to call before a remote Object Server is a ready peer, and an Object Server accepts
-        // no object before its placement is available (public RouteMesh status).
-        if (host_ready && config.object_role != "None" && config.mesh_name && mesh.load ()) {
-            const auto snapshot = mesh.load ()->snapshot (*config.mesh_name);
-            infrastructure = infrastructure && (config.object_role == "ObjectClient" ? snapshot.ready_peer_count > 0 : snapshot.placement.is_available);
+            infrastructure = snapshot.ready_server_count > 0;
         }
         const bool probe = measurement.has_setup_evidence ();
-        // A phase starts only from a drained role (measurement_t::start), so a probe handler that is still finishing its
-        // public completion keeps the infrastructure stage open until it has ended.
-        const bool drained = measurement.active_handlers () == 0;
-        infrastructure = infrastructure && drained;
         const bool objects_ready = objects ? objects->ready () : true;
         json evidence = json::array ({{{"kind", "publicStatus"}, {"source", "public Framework runtime status"}, {"observedValue", public_status ()}}});
         if (!config.transport_endpoints.empty ())
@@ -199,8 +186,6 @@ class role_t
             reasons.push_back ("Public host/channel/listener infrastructure is not ready.");
         if (!objects_ready)
             reasons.push_back (objects->reason ());
-        if (!drained)
-            reasons.push_back ("A setup probe handler is still running.");
         if (!probe)
             reasons.push_back ("No successful typed probe echo has been observed.");
         if (measurement.has_errors ())

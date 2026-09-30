@@ -21,7 +21,7 @@ import uuid
 
 from environment import ROOT, collect, digest
 from launchers import Launcher, launcher
-from results import aggregate, settle_status, write_json
+from results import aggregate, null_reason, settle_status, write_json
 from roles import plan_roles
 from scenarios import (BY_NAME, CLIENT, EXECUTABLES, MODE_VALUES, OPTIONS, PAYLOADS, ROLE_KINDS, TERMINAL_VALUES,
                        TOPOLOGY_VALUES, Cell, check, expand, owner_files, selected, values)
@@ -111,6 +111,13 @@ def agreed_core_version(role_versions: dict, declared: str | None) -> str:
     if None in role_versions.values() or len(observed) != 1:
         raise RuntimeError(f"Core version differs between roles or is unreported: {role_versions}; declared {declared}")
     return observed.pop()
+
+
+def agreed_framework_version(observed: str | None, declared: str | None) -> str:
+    """The launcher-observed framework package must match the language's fixed release declaration."""
+    if not observed or not declared or observed != declared:
+        raise RuntimeError(f"Framework version differs from or is missing against the declaration: observed {observed}; declared {declared}")
+    return observed
 
 
 def role_executables(args: argparse.Namespace) -> list[str]:
@@ -379,7 +386,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                   "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                  "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
                                  "listenerReservation": "OS bind(127.0.0.1,0), held until this exact process starts"}}
-        planned = plan_roles(cell_spec, values(scenario, args), common, owned.reserve)
+        planned = plan_roles(cell_spec, values(scenario, args), common, language.stream_scheme, owned.reserve)
         for role in planned:
             write_json(cell / role.config_file, role.config)
             server_files.append(role.name + ".json")
@@ -429,8 +436,8 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                 barrier.append({"participant": f"client-{index}", "sentTicks": str(sent), "ackTicks": str(time.monotonic_ns()), "acknowledgement": ack})
             write_json(cell / "tmp" / (phase + "-start-barrier.json"), {"clockDomainId": f"coordinator-{os.getpid()}",
                        "clockSource": "time.monotonic_ns", "observedStartSkewBoundNs": str(int(barrier[-1]["ackTicks"]) - int(barrier[0]["sentTicks"])),
-                       "exactCrossProcessStartSkewNs": None, "nullReasons": {"/exactCrossProcessStartSkewNs": {
-                           "code": "CLOCK_DOMAIN_UNVERIFIED", "reason": "Process clock epochs are not asserted to be shared."}}, "participants": barrier})
+                       "exactCrossProcessStartSkewNs": None, "nullReasons": {"/exactCrossProcessStartSkewNs": null_reason(
+                           "CLOCK_DOMAIN_UNVERIFIED", "Process clock epochs are not asserted to be shared.")}, "participants": barrier})
             duration = config["workload"]["warmupSeconds" if phase == "warmup" else "durationSeconds"]
             for client in clients:
                 client.send("wait")
@@ -467,7 +474,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
         loaded = []
         for name, process in owned.processes:
             paths = sorted({line.split()[-1] for line in Path(f"/proc/{process.pid}/maps").read_text().splitlines()
-                            if "/" in line and any(token in line for token in ("libzlink", "Systems.Zlink", "Zlink.Framework", "ZLink.Framework.Perf", "System.Text.Json"))})
+                            if "/" in line and any(token in line for token in language.loaded_artifact_markers)})
             loaded.append({"process": name, "pid": process.pid, "artifacts": [{"actualLoadPath": path,
                            "sha256": digest(Path(path))} for path in paths if Path(path).is_file()]})
         # The role processes report the version of the libzlink they actually loaded; every role must agree.
@@ -513,11 +520,12 @@ def main(argv: list[str]) -> int:
         raise FileExistsError("Refusing to overwrite an existing run root: " + str(args.output))
     args.output.mkdir(parents=True)
     executables = role_executables(args)
-    env = collect(args.language, args.perf_dir, executables)
+    env = collect(args.language, args.perf_dir, executables, require_versions=False)
     preflight(args, env)
     print("run_root=" + str(args.output), flush=True)
     build(args, executables)
     env = collect(args.language, args.perf_dir, executables)
+    env["frameworkVersion"] = agreed_framework_version(env["frameworkVersion"], env["declaredFrameworkVersion"])
     if not env["packages"]:
         raise ValueError("No restored Zlink package in the role outputs; perf must reference published packages")
     write_json(args.output / "env.json", env)

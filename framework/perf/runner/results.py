@@ -11,6 +11,10 @@ OUTCOMES = ("sent", "completed", "settleCompleted", "failed", "timeout", "cancel
 MAX_U64 = 18446744073709551615
 
 
+def null_reason(code: str, reason: str, owner: str | None = None, lower_bound_ms: float | None = None) -> dict:
+    return {"code": code, "reason": reason, "owner": owner or "perf/runner", "lowerBoundMs": lower_bound_ms}
+
+
 def u64(value: str) -> int:
     if not isinstance(value, str) or not value.isascii() or not value.isdecimal() or str(int(value)) != value:
         raise ValueError("SchemaMismatch: noncanonical U64")
@@ -71,15 +75,13 @@ def export_latency(histogram: dict, prefix: str, histogram_key: str, metrics: di
                         break
         metrics[prefix + "." + suffix] = value
         if value is None:
-            reasons[pointer] = {"code": "NO_SAMPLES" if not count else "HISTOGRAM_OVERFLOW",
-                                "reason": "No successful samples." if not count else "Nearest rank is above the final bucket.",
-                                "owner": "perf/README.ko.md §15.3"}
-            if count:
-                reasons[pointer]["lowerBoundMs"] = 1024
+            reasons[pointer] = null_reason("NO_SAMPLES" if not count else "HISTOGRAM_OVERFLOW",
+                                           "No successful samples." if not count else "Nearest rank is above the final bucket.",
+                                           "perf/README.ko.md §15.3", 1024 if count else None)
     pointer = "/histograms/" + histogram_key + "/maxNs"
     reasons.pop(pointer, None)
     if not count:
-        reasons[pointer] = {"code": "NO_SAMPLES", "reason": "No successful samples."}
+        reasons[pointer] = null_reason("NO_SAMPLES", "No successful samples.")
 
 
 def write_json(path: Path, value: object) -> None:
@@ -175,8 +177,8 @@ def fanout_aggregate(cell: Path, config: dict, originals: dict, owners: list[str
         reasons.pop("/metrics/fanout.deliveryRatio", None)
     else:
         metrics["fanout.deliveryRatio"] = None
-        reasons["/metrics/fanout.deliveryRatio"] = {"code": "ZERO_DENOMINATOR", "reason": "The publisher has no window-success publish.",
-                                                    "owner": "perf/README.ko.md §15.4"}
+        reasons["/metrics/fanout.deliveryRatio"] = null_reason("ZERO_DENOMINATOR", "The publisher has no window-success publish.",
+                                                               "perf/README.ko.md §15.4")
     # Delivery latency needs a verified shared clock domain; the subscribers' originals carry the reason (§15.2).
     first = originals[subscriber_files[0]]["nullReasons"]
     for prefix in ("fanout.deliveryLatency", "fanout.settleDeliveryLatency"):
@@ -264,7 +266,7 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                 if group == "metrics" and key.startswith("errors."):
                     continue
                 values[key] = None
-                reasons[f"/{group}/{key}"] = {"code": "PHASE_NOT_STARTED", "reason": "No completed measured owner window is available."}
+                reasons[f"/{group}/{key}"] = null_reason("PHASE_NOT_STARTED", "No completed measured owner window is available.")
     if selected:
         try:
             if ps:
@@ -301,7 +303,8 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                     metrics["connections." + key] = count_text(sum(u64(value["metrics"]["connections." + key]) for value in selected))
             if len(selected) > 1 and not ps:
                 metrics["load.inflight.max"] = None
-                reasons["/metrics/load.inflight.max"] = {"code": "MULTIPLE_OWNERS", "reason": "Separate process maxima have no verified simultaneous global observation; see owner originals."}
+                reasons["/metrics/load.inflight.max"] = null_reason(
+                    "MULTIPLE_OWNERS", "Separate process maxima have no verified simultaneous global observation; see owner originals.")
             for name, original in originals.items():
                 if any(original["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")):
                     issues.append({"code": "PublicOrApplicationFailure", "message": "See original error namespaces and firstErrors evidence.", "sourceFile": name})
@@ -310,22 +313,26 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                     issues.append({"code": "EchoOutcomeFailure", "message": key + "=" + metrics["messages." + key], "sourceFile": ",".join(owners)})
             for key in ("process.cpuPercent", "process.rssMb", "process.allocatedMb", "gc.gen0", "gc.gen1", "gc.gen2"):
                 metrics[key] = None
-                reasons["/metrics/" + key] = {"code": "MULTIPLE_OWNERS", "reason": "Resource observations belong to individual processes; see processes and originals."}
+                reasons["/metrics/" + key] = null_reason(
+                    "MULTIPLE_OWNERS", "Resource observations belong to individual processes; see processes and originals.")
         except (KeyError, TypeError, ValueError, OverflowError) as error:
             issues.append({"code": "CounterOverflow" if "overflow" in str(error) else "SchemaMismatch",
                            "message": str(error), "sourceFile": ",".join(owners)})
     seconds = selected[0]["window"]["measuredSeconds"] if len(selected) == 1 else None
     if seconds is None:
-        reasons["/measuredSeconds"] = {"code": "MULTIPLE_OWNERS" if len(selected) > 1 else "COLLECTION_FAILED",
-                                     "reason": "A single primary owner window is not available."}
+        reasons["/measuredSeconds"] = null_reason("MULTIPLE_OWNERS" if len(selected) > 1 else "COLLECTION_FAILED",
+                                                   "A single primary owner window is not available.")
     if not ps:
-        reasons["/aggregation/fanoutDeliveryRateMethod"] = {"code": "NOT_APPLICABLE", "reason": "Request baseline has no fanout."}
+        reasons["/aggregation/fanoutDeliveryRateMethod"] = null_reason("NOT_APPLICABLE", "Request baseline has no fanout.")
     status = ("unsupported" if any(issue["code"] == "PublicContractMismatch" for issue in issues) else
               "invalid" if any(issue["code"] in ("InvalidSetup", "SchemaMismatch") for issue in issues) else "failed" if issues else "valid")
     if not issues and not u64(metrics.get("messages.publishedInWindow" if ps else "messages.completed", "0")):
         status = "invalid"
         issues.append({"code": "ZeroDenominator" if ps else "NoCompletedEcho",
                        "message": "No window publish success." if ps else "No window echo success.", "sourceFile": ",".join(owners)})
+    # Inputs from language roles can predate lowerBoundMs; every runner result uses the §15.5 reason shape.
+    reasons = {key: null_reason(value["code"], value["reason"], value.get("owner"), value.get("lowerBoundMs"))
+               for key, value in reasons.items()}
     result = {
         "schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash", "scenario")},
         "language": config["language"], "configFile": "config.json", "endpointsFile": "endpoints.json",

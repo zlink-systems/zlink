@@ -30,8 +30,7 @@ export class SessionEchoOnlyScenario {
     const workload = this.manifest.workload;
     // The connector package is ESM-only; a dynamic import keeps this CommonJS process a plain public consumer of it.
     const { zlinkStreamConnectorFactory, zlinkStreamJsonCodec, ZlinkStreamDispatchMode } = await import('@zlink-systems/stream-connector');
-    // The runner lists every stream listener as tcp://; the Node.js STREAM transport is a WebSocket (ws://).
-    const endpoint = this.manifest.roles.find((role) => role.streamEndpoint !== null)!.streamEndpoint!.replace(/^tcp:\/\//, 'ws://');
+    const endpoint = this.manifest.roles.find((role) => role.streamEndpoint !== null)!.streamEndpoint!;
     this.sequences = new Array<number>(this.count).fill(0);
     const evidence: unknown[] = new Array<unknown>(this.count);
     let next = 0;

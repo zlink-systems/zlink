@@ -1,6 +1,5 @@
 import { Measurement } from '../shared/measurement';
 import { ActorEchoRequestHandler, PERF_ACTOR_TYPE, PerfActorFactory, PerfActorRelaySessionFactory, PerfEntrySpot, SessionActorSetup } from '../server-support/actor-echo-support';
-import { streamEndpoint } from '../server-support/endpoints';
 import { ObjectsReadiness, readConfig, runRole } from '../server-support/server-application';
 
 const { config } = readConfig(process.argv.slice(2));
@@ -17,7 +16,7 @@ runRole({
   configureFramework: (builder) => {
     builder.addRouteMesh(config.meshName!).listen(config.transportEndpoints.mesh).setAdvertiseHost('127.0.0.1')
       .objects().server().addEntrySpot(PerfEntrySpot).addActorFactory(PERF_ACTOR_TYPE, PerfActorFactory, (factory) => factory.disableRelocation());
-    builder.addStreamNode('perf-session').enableActorDispatch().bind(streamEndpoint(config)).registerSession(PerfActorRelaySessionFactory);
+    builder.addStreamNode('perf-session').enableActorDispatch().bind(config.transportEndpoints.stream).registerSession(PerfActorRelaySessionFactory);
   }
 }, measurement).catch((error: unknown) => {
   console.error(error);
