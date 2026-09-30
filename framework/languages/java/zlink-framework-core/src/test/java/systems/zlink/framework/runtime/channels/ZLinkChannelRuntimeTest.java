@@ -1858,8 +1858,7 @@ final class ZLinkChannelRuntimeTest {
                             .join());
             return true;
         } catch (CompletionException failure) {
-            // Channel messaging §3.2: selection occurs at terminal submit;
-            // a ready connection with no eligible server ends as NotFound.
+            // Channel messaging §8: no selectable target ends as NotFound.
             assertEquals(
                     ZLinkFrameworkErrorKind.NOT_FOUND,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());

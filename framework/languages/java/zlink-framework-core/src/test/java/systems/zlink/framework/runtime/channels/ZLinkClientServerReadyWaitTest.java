@@ -74,29 +74,23 @@ final class ZLinkClientServerReadyWaitTest {
     }
 
     @Test
-    void shortCallTimeoutBoundsReadyWaitAtSubmit() throws Exception {
+    void callTimeoutStartsAfterClientServerAdmission() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
-            long building = fixture.time.nanoTime();
             ZLinkRequestCall call =
                     fixture.runtime
                             .requestToChannel("orders", new Request("short"))
                             .timeout(Duration.ofMillis(150));
-            assertEquals(
-                    building,
-                    fixture.time.nanoTime(),
-                    "creating the builder must not wait for service readiness");
+            long started = fixture.time.nanoTime();
             assertEquals(0, fixture.businessRequests.get());
 
-            fixture.time.advanceBy(Duration.ofSeconds(1).toNanos());
-            long started = fixture.time.nanoTime();
-            assertUnavailable(call);
-            assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.time.nanoTime());
+            assertDeadlineExceeded(call);
+            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
             assertEquals(0, fixture.businessRequests.get());
         }
     }
 
     @Test
-    void lateReadyServerReceivesOnlyTheRemainingCallTimeout() throws Exception {
+    void lateReadyServerReceivesFullCallTimeoutAfterAdmission() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             ZLinkRequestCall call =
                     fixture.runtime
@@ -108,15 +102,15 @@ final class ZLinkClientServerReadyWaitTest {
             assertEquals(new Reply("reply"), call.submit(Reply.class).toCompletableFuture().join());
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofMillis(250), fixture.requestTimeout.get());
+            assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
             assertEquals(
-                    started + Duration.ofMillis(400).toNanos(),
+                    started + Duration.ofMillis(550).toNanos(),
                     fixture.requestStarted + fixture.requestTimeout.get().toNanos());
         }
     }
 
     @Test
-    void lateReadyRequestReplyStillExpiresAtTheOriginalCallDeadline() throws Exception {
+    void lateReadyRequestReplyUsesTheFullTimeoutFromAdmission() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             fixture.replyImmediately = false;
             ZLinkRequestCall call =
@@ -129,11 +123,11 @@ final class ZLinkClientServerReadyWaitTest {
             CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofMillis(250), fixture.requestTimeout.get());
+            assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
             assertFalse(reply.isDone());
-            fixture.time.advanceBy(Duration.ofMillis(250).toNanos() - 1);
+            fixture.time.advanceBy(Duration.ofMillis(400).toNanos() - 1);
             assertFalse(
-                    reply.isDone(), "the request must remain pending before its original deadline");
+                    reply.isDone(), "the request must remain pending before its reply deadline");
             fixture.time.advanceBy(1);
             // E5 publishes the due terminal on the shared completion dispatcher.
             // Keep virtual time at the exact deadline while that turn completes.
@@ -143,51 +137,51 @@ final class ZLinkClientServerReadyWaitTest {
             assertEquals(
                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
-            assertEquals(started + Duration.ofMillis(400).toNanos(), fixture.time.nanoTime());
+            assertEquals(started + Duration.ofMillis(550).toNanos(), fixture.time.nanoTime());
         }
     }
 
     @Test
-    void readyWaitHasFiveSecondCapEvenWhenCallTimeoutExceedsChannelDefault() throws Exception {
+    void readyWaitUsesSendTimeoutInsteadOfCallTimeout() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofMillis(150))) {
             ZLinkRequestCall call =
                     fixture.runtime
                             .requestToChannel("orders", new Request("cap"))
                             .timeout(Duration.ofSeconds(8));
             long started = fixture.time.nanoTime();
-            assertUnavailable(call);
-            assertEquals(started + Duration.ofSeconds(5).toNanos(), fixture.time.nanoTime());
+            assertDeadlineExceeded(call);
+            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
             assertEquals(0, fixture.businessRequests.get());
         }
     }
 
     @Test
-    void serverReadyAtFiveSecondCapReceivesTheRemainingCallTimeout() throws Exception {
+    void serverReadyWithinSendTimeoutReceivesFullCallTimeoutAfterAdmission() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofMillis(150))) {
             ZLinkRequestCall call =
                     fixture.runtime
                             .requestToChannel("orders", new Request("cap-ready"))
                             .timeout(Duration.ofSeconds(8));
             long started = fixture.time.nanoTime();
-            fixture.time.schedule(fixture::admit, 5, TimeUnit.SECONDS);
+            fixture.time.schedule(fixture::admit, 500, TimeUnit.MILLISECONDS);
 
             assertEquals(new Reply("reply"), call.submit(Reply.class).toCompletableFuture().join());
             assertEquals(1, fixture.businessRequests.get());
-            assertEquals(started + Duration.ofSeconds(5).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofSeconds(3), fixture.requestTimeout.get());
+            assertEquals(started + Duration.ofMillis(500).toNanos(), fixture.requestStarted);
+            assertEquals(Duration.ofSeconds(8), fixture.requestTimeout.get());
             assertEquals(
-                    started + Duration.ofSeconds(8).toNanos(),
+                    started + Duration.ofMillis(8_500).toNanos(),
                     fixture.requestStarted + fixture.requestTimeout.get().toNanos());
         }
     }
 
-    private static void assertUnavailable(ZLinkRequestCall call) {
+    private static void assertDeadlineExceeded(ZLinkRequestCall call) {
         CompletionException failure =
                 assertThrows(
                         CompletionException.class,
                         () -> call.submit(Reply.class).toCompletableFuture().join());
         assertEquals(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                 assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
     }
 

@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonito
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobReceiveFlowController;
@@ -287,8 +288,8 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit) {
         long started = nanoTime.getAsLong();
-        // This operation's timeout is fixed on its first turn, even if channel
-        // registration changes during the existing bounded readiness wait.
+        // The request timeout starts after Core admission. Before a ClientServer
+        // target is ready, the family send timeout bounds the admission wait.
         Duration[] timeout = {null};
         while (true) {
             boolean interrupted = Thread.currentThread().isInterrupted();
@@ -310,14 +311,27 @@ final class ZLinkChannelSocketRegistry {
                                         "ClientServer metadata is not available");
                             }
                             ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
-                            Duration remaining =
-                                    timeout[0].minusNanos(nanoTime.getAsLong() - started);
                             if (target != null) {
-                                return clientSubmit.apply(target, remaining);
+                                return clientSubmit.apply(target, timeout[0]);
                             }
                             long readyBound =
-                                    Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5));
-                            if (nanoTime.getAsLong() - started >= readyBound || interrupted) {
+                                    ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT.toNanos();
+                            long elapsed = nanoTime.getAsLong() - started;
+                            if (elapsed >= readyBound) {
+                                ZLinkFrameworkErrorKind kind =
+                                        hasCompletedAdmissionWithoutSelectableTargetCore(
+                                                        channelName)
+                                                ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                                : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+                                throw new ZLinkFrameworkException(
+                                        kind,
+                                        kind == ZLinkFrameworkErrorKind.NOT_FOUND
+                                                ? "client/server channel has no selectable server: "
+                                                        + channelName
+                                                : "client/server channel admission timed out: "
+                                                        + channelName);
+                            }
+                            if (interrupted) {
                                 boolean unavailable =
                                         hasUnavailableClientServerConnectionCore(channelName);
                                 throw new ZLinkFrameworkException(
@@ -355,7 +369,7 @@ final class ZLinkChannelSocketRegistry {
             // An existing turn cannot block admission callbacks queued behind it.
             stateLane.throwIfReentrant();
             long remaining =
-                    Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5))
+                    ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT.toNanos()
                             - (nanoTime.getAsLong() - started);
             parkNanos.accept(
                     Math.min(
@@ -786,6 +800,19 @@ final class ZLinkChannelSocketRegistry {
                         connection ->
                                 connection.descriptor().channelName().equals(channelName)
                                         && !connection.ready());
+    }
+
+    private boolean hasCompletedAdmissionWithoutSelectableTargetCore(String channelName) {
+        Set<ClientServerConnection> physical = Collections.newSetFromMap(new IdentityHashMap<>());
+        physical.addAll(clientServerConnections.values());
+        List<ClientServerConnection> channelConnections =
+                physical.stream()
+                        .filter(
+                                connection ->
+                                        connection.descriptor().channelName().equals(channelName))
+                        .toList();
+        return !channelConnections.isEmpty()
+                && channelConnections.stream().allMatch(ClientServerConnection::ready);
     }
 
     List<ClientServerTargetSnapshot> clientServerTargetSnapshots(String channelName) {
