@@ -39,6 +39,7 @@ public final class ZLinkSerialExecutionQueue {
     private final Executor executor;
     private final ExecutorService ownedExecutor;
     private final ZLinkExecutionLanePolicy lanePolicy;
+    private final ZLinkSerialExecutionQueue timerOwner;
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
     private final ArrayDeque<Entry> applicationPending = new ArrayDeque<>();
@@ -105,6 +106,15 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkExecutionLanePolicy lanePolicy,
             int lifecycleBurstLimit,
             Duration ownerTimeBudget) {
+        this(executor, lanePolicy, lifecycleBurstLimit, ownerTimeBudget, null);
+    }
+
+    private ZLinkSerialExecutionQueue(
+            Executor executor,
+            ZLinkExecutionLanePolicy lanePolicy,
+            int lifecycleBurstLimit,
+            Duration ownerTimeBudget,
+            ZLinkSerialExecutionQueue timerOwner) {
         if (lifecycleBurstLimit <= 0
                 || ownerTimeBudget == null
                 || ownerTimeBudget.isNegative()
@@ -119,8 +129,20 @@ public final class ZLinkSerialExecutionQueue {
             this.executor = executor;
         }
         this.lanePolicy = Objects.requireNonNull(lanePolicy, "lanePolicy");
+        this.timerOwner = timerOwner;
         this.lifecycleBurstLimit = lifecycleBurstLimit;
         this.ownerTimeBudgetNanos = ownerTimeBudget.toNanos();
+    }
+
+    /** Creates a timer queue whose current turn can be identified by its owning Spot queue. */
+    public static ZLinkSerialExecutionQueue spotTimer(
+            Executor executor, ZLinkSerialExecutionQueue owner) {
+        return new ZLinkSerialExecutionQueue(
+                executor,
+                ZLinkExecutionLanePolicy.spot(),
+                DEFAULT_LIFECYCLE_BURST_LIMIT,
+                DEFAULT_OWNER_TIME_BUDGET,
+                Objects.requireNonNull(owner, "owner"));
     }
 
     public void close() {
@@ -167,10 +189,6 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    public CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
-        return enqueue(operation, null);
-    }
-
     public CompletionStage<Void> enqueue(
             Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
         EnqueueResult result;
@@ -206,11 +224,6 @@ public final class ZLinkSerialExecutionQueue {
      * budget. The queue also charges the fixed per-turn cost; callers must pass the payload length
      * before deserializing the payload.
      */
-    public CompletionStage<Void> enqueueWithPayloadBytes(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return enqueueWithPayloadBytes(payloadBytes, operation, null);
-    }
-
     public CompletionStage<Void> enqueueWithPayloadBytes(
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
@@ -258,15 +271,21 @@ public final class ZLinkSerialExecutionQueue {
      * Internal lifecycle barrier that runs immediately after the active turn and before previously
      * queued application turns.
      */
-    public CompletionStage<Void> enqueueBarrierNext(Supplier<CompletionStage<Void>> operation) {
+    public CompletionStage<Void> enqueueBarrierNext(
+            Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
         EnqueueResult result;
+        boolean rejected;
         synchronized (this) {
-            if (relocated) {
-                return CompletableFuture.failedFuture(new RelocatedOwnerException());
-            }
-            result = enqueueBarrierNextLocked(operation);
+            rejected = relocated;
+            result = rejected ? null : enqueueBarrierNextLocked(operation);
+        }
+        if (rejected) {
+            RelocatedOwnerException failure = new RelocatedOwnerException();
+            if (admission != null) admission.completeExceptionally(failure);
+            return CompletableFuture.failedFuture(failure);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
+        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -346,23 +365,30 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public CompletionStage<Void> enqueueRelocatable(
-            byte[] record, Supplier<CompletionStage<Void>> operation) {
-        return enqueueRelocatable(record, operation, () -> {});
-    }
-
-    public CompletionStage<Void> enqueueRelocatable(
-            byte[] record, Supplier<CompletionStage<Void>> operation, Runnable relocationRelease) {
+            byte[] record,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
+        CompletionStage<Void> rejection;
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
-            CompletionStage<Void> rejection = admissionFailureLocked();
-            if (rejection != null) {
-                return rejection;
+            rejection = admissionFailureLocked();
+            result =
+                    rejection == null
+                            ? enqueueAccepted(
+                                    record.clone(), record.length, operation, relocationRelease)
+                            : null;
+        }
+        if (rejection != null) {
+            if (admission != null) {
+                rejection.whenComplete((done, failure) -> admission.completeExceptionally(failure));
             }
-            result = enqueueAccepted(record.clone(), record.length, operation, relocationRelease);
+            return rejection;
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
+        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -370,15 +396,6 @@ public final class ZLinkSerialExecutionQueue {
      * Enqueues a relocatable turn without materializing its relocation record until a relocation
      * seal captures the turn.
      */
-    public CompletionStage<Void> enqueueRelocatableLazyRecord(
-            Supplier<byte[]> record,
-            long recordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return enqueueRelocatableLazyRecord(
-                record, recordSizeHint, operation, relocationRelease, null);
-    }
-
     public CompletionStage<Void> enqueueRelocatableLazyRecord(
             Supplier<byte[]> record,
             long recordSizeHint,
@@ -918,6 +935,18 @@ public final class ZLinkSerialExecutionQueue {
             return Optional.empty();
         }
         return Optional.of(new ActiveTurnSealHandle(this, active));
+    }
+
+    /** Captures the queue that owns the calling thread's current lifecycle turn. */
+    public static Optional<ActiveTurnSealHandle> captureCurrentActiveTurnSealHandle() {
+        ZLinkSerialExecutionQueue current = CURRENT.get();
+        return current == null ? Optional.empty() : current.captureActiveTurnSealHandle();
+    }
+
+    /** Reports whether the calling turn belongs to a timer queue of this Spot. */
+    public static boolean isCurrentTimerOf(ZLinkSerialExecutionQueue owner) {
+        ZLinkSerialExecutionQueue current = CURRENT.get();
+        return current != null && current.timerOwner == owner;
     }
 
     /** Seals this queue while the captured turn is still the active turn. */

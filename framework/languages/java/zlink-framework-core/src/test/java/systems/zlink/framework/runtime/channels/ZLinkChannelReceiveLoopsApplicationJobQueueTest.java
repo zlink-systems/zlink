@@ -124,7 +124,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                                     ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                                     bothDispatched.countDown();
                                     return CompletableFuture.completedFuture(null);
-                                });
+                                },
+                                null);
                     },
                     error -> {
                         throw new AssertionError(error);

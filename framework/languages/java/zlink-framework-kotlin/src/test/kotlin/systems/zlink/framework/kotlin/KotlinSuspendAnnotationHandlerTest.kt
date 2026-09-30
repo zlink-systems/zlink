@@ -320,22 +320,25 @@ final class KotlinSuspendAnnotationHandlerTest {
                 val result = CompletableFuture<Any?>()
                 val queue = ZLinkSerialExecutionQueue()
 
-                queue.enqueue {
-                    ZLinkHandlerMethodInvoker.invoke(
-                            handler,
-                            method,
-                            arrayOf(ProfileRequest("Ada")),
-                            listOf(ZLinkCoroutineSuspendHandlerInvoker(firstDispatcher)),
-                        )
-                        .whenComplete { reply, error ->
-                            if (error == null) {
-                                result.complete(reply)
-                            } else {
-                                result.completeExceptionally(error)
+                queue.enqueue(
+                    {
+                        ZLinkHandlerMethodInvoker.invoke(
+                                handler,
+                                method,
+                                arrayOf(ProfileRequest("Ada")),
+                                listOf(ZLinkCoroutineSuspendHandlerInvoker(firstDispatcher)),
+                            )
+                            .whenComplete { reply, error ->
+                                if (error == null) {
+                                    result.complete(reply)
+                                } else {
+                                    result.completeExceptionally(error)
+                                }
                             }
-                        }
-                        .thenApply { null }
-                }
+                            .thenApply { null }
+                    },
+                    null,
+                )
 
                 assertEquals(ProfileReply("yield:Ada"), result.get(3, TimeUnit.SECONDS))
             }

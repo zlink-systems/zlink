@@ -236,7 +236,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     public CompletionStage<Void> enqueueInfrastructureDispatch(
             Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
-        return infrastructureQueue.enqueue(operation);
+        return infrastructureQueue.enqueue(operation, null);
     }
 
     @Override

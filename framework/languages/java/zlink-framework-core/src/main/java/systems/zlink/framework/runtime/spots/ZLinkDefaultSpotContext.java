@@ -239,7 +239,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
         return infrastructureQueue.enqueueWithPayloadBytes(
-                0, () -> host.runEntryDispatch(this, operation));
+                0, () -> host.runEntryDispatch(this, operation), null);
     }
 
     @Override

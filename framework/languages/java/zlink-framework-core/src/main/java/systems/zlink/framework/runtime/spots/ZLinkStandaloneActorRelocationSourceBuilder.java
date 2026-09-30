@@ -470,7 +470,16 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             String actorId,
             ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
             ZLinkStoreCancellation cancellation) {
-        ZLinkSerialExecutionQueue queue = actors.actorRelocationLane(actorId);
+        return actors.actorRelocationLaneAsync(actorId)
+                .thenCompose(
+                        queue -> sealAtTurnBoundaryOnQueue(queue, activeTurnSeal, cancellation));
+    }
+
+    private CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
+            sealAtTurnBoundaryOnQueue(
+                    ZLinkSerialExecutionQueue queue,
+                    ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
+                    ZLinkStoreCancellation cancellation) {
         if (activeTurnSeal != null) {
             //  A deferred Join holds this queue's active turn (its mailbox
             //  barrier). Reserving a lifecycle boundary here would queue it
@@ -964,9 +973,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         systems.zlink.framework.runtime.internal.relocation
                                 .ZLinkRetainedSerialQueueCommit.Commit>
                 relocationCommit;
+        private CompletableFuture<Void> relayCompletion;
         private boolean captureFinished;
         private boolean committed;
         private boolean terminal;
+
+        private record RelayClaim(
+                CompletableFuture<Void> completion,
+                CompletionStage<
+                                systems.zlink.framework.runtime.internal.relocation
+                                        .ZLinkRetainedSerialQueueCommit.Commit>
+                        retained) {}
 
         private PreparedSource(
                 ZLinkLocationRepository locations,
@@ -1093,10 +1110,39 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                         throw new IllegalStateException(
                                                 "Actor relocation relay boundary is terminal");
                                     }
-                                    return retainCommitOnLane();
+                                    if (relayCompletion != null) {
+                                        return new RelayClaim(relayCompletion, null);
+                                    }
+                                    CompletionStage<
+                                                    systems.zlink.framework.runtime.internal
+                                                            .relocation
+                                                            .ZLinkRetainedSerialQueueCommit.Commit>
+                                            retained = retainCommitOnLane();
+                                    CompletableFuture<Void> completion = new CompletableFuture<>();
+                                    relayCompletion = completion;
+                                    return new RelayClaim(completion, retained);
                                 })
-                        .thenCompose(stage -> stage)
-                        .thenCompose(retained -> relayRetained(retained, client, timeout));
+                        .thenCompose(
+                                claim -> {
+                                    if (claim.retained() != null) {
+                                        claim.retained()
+                                                .thenCompose(
+                                                        retained ->
+                                                                relayRetained(
+                                                                        retained, client, timeout))
+                                                .whenComplete(
+                                                        (ignored, failure) -> {
+                                                            if (failure == null) {
+                                                                claim.completion().complete(null);
+                                                            } else {
+                                                                claim.completion()
+                                                                        .completeExceptionally(
+                                                                                failure);
+                                                            }
+                                                        });
+                                    }
+                                    return claim.completion();
+                                });
             } catch (RuntimeException failure) {
                 return failed(failure);
             }
@@ -1133,13 +1179,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     throw new IllegalStateException(
                                             "Actor relocation relay boundary is terminal");
                                 }
-                                boolean first = !captureFinished;
                                 List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
                                         finishCaptureOnLane(retained);
-                                return first
-                                        ? installExpectedRelocationForward()
-                                                .thenApply(ignored -> relayed)
-                                        : CompletableFuture.completedFuture(relayed);
+                                return installExpectedRelocationForward()
+                                        .thenApply(ignored -> relayed);
                             })
                     .thenCompose(stage -> stage)
                     .thenCompose(

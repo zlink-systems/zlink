@@ -148,8 +148,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     .enqueueRelocatable(
                             acceptedRecord,
                             () -> fail("source must not execute transferred ingress"),
-                            () -> {})
+                            () -> {},
+                            null)
                     .toCompletableFuture();
+            AtomicInteger relays = new AtomicInteger();
+            AtomicInteger acceptedRelays = new AtomicInteger();
             ZLinkRelocationTransitionClient relayClient =
                     (ZLinkRelocationTransitionClient)
                             Proxy.newProxyInstance(
@@ -157,6 +160,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                     new Class<?>[] {ZLinkRelocationTransitionClient.class},
                                     (proxy, method, args) -> {
                                         if (method.getName().equals("relay")) {
+                                            relays.incrementAndGet();
+                                            if (java.util.Arrays.equals(
+                                                    (byte[]) args[2], acceptedRecord)) {
+                                                acceptedRelays.incrementAndGet();
+                                            }
                                             return CompletableFuture.completedFuture(null);
                                         }
                                         throw new AssertionError("unexpected control request");
@@ -164,6 +172,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
                     .toCompletableFuture()
                     .get();
+            int firstRelayCount = relays.get();
+            assertEquals(1, acceptedRelays.get());
+            prepared.relayCapturedIngress(relayClient, Duration.ofSeconds(5))
+                    .toCompletableFuture()
+                    .get();
+            assertEquals(firstRelayCount, relays.get());
             assertEquals(
                     ZLinkSpotRelocationReplyRoutes.Ack.TERMINAL_RECEIVED,
                     replyRoutes
@@ -449,7 +463,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                 .enqueueRelocatable(
                                         suffixRecord,
                                         () -> fail("source must not execute transferred ingress"),
-                                        released::incrementAndGet)
+                                        released::incrementAndGet,
+                                        null)
                                 .toCompletableFuture());
             }
             byte[] lateRecord =
@@ -462,7 +477,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .enqueueRelocatable(
                                     lateRecord,
                                     () -> fail("late source ingress must remain held"),
-                                    () -> lateReleased.set(true))
+                                    () -> lateReleased.set(true),
+                                    null)
                             .toCompletableFuture();
             assertTrue(accepted.stream().noneMatch(CompletableFuture::isDone));
             assertFalse(lateAccepted.isDone());

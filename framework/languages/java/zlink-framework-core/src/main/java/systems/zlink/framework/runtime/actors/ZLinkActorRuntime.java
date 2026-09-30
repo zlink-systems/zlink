@@ -1233,23 +1233,32 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkBackendActorRef preparedActorRef) {
         requireActorId(actorId);
         Class<? extends ZLinkActorFactory> factoryType = requireFactory(actorType);
-        ZLinkBackendActorRef reentryActorRef =
+        CompletionStage<ZLinkBackendActorRef> reentry =
                 preparedActorRef == null
                         ? detachMessageFollowProxyForReentry(actorId)
-                        : preparedActorRef;
-        if (actorRegistry.contains(actorId)) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "target runtime already owns actor: " + actorId));
-        }
-        if (adapterKey != null && !adapterKey.equals(actorType)) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "actor transfer adapter key does not match actor type: " + adapterKey));
-        }
-        return prepareTransferredActor(
-                        actorId, actorType, adapterKey, transferState, factoryType, reentryActorRef)
-                .thenApply(prepared -> publishPreparedTransferredActor(prepared));
+                        : CompletableFuture.completedFuture(preparedActorRef);
+        return reentry.thenCompose(
+                reentryActorRef -> {
+                    if (actorRegistry.contains(actorId)) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkConfigurationException(
+                                        "target runtime already owns actor: " + actorId));
+                    }
+                    if (adapterKey != null && !adapterKey.equals(actorType)) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkConfigurationException(
+                                        "actor transfer adapter key does not match actor type: "
+                                                + adapterKey));
+                    }
+                    return prepareTransferredActor(
+                                    actorId,
+                                    actorType,
+                                    adapterKey,
+                                    transferState,
+                                    factoryType,
+                                    reentryActorRef)
+                            .thenApply(prepared -> publishPreparedTransferredActor(prepared));
+                });
     }
 
     public CompletionStage<PreparedTransferredActor> prepareDeferredJoinTarget(
@@ -1280,36 +1289,43 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         retiringSourceReleaseWindow(request), () -> localActorSlotFree(actorId))
                 .thenCompose(
                         ignored -> {
-                            ZLinkBackendActorRef reentryActorRef =
-                                    detachMessageFollowProxyForReentry(actorId);
-                            if (actorRegistry.contains(actorId)) {
-                                return CompletableFuture.<PreparedTransferredActor>failedFuture(
-                                        new ZLinkConfigurationException(
-                                                "target runtime already owns actor: " + actorId));
-                            }
-                            if (adapterKey != null && !adapterKey.equals(actorType)) {
-                                return CompletableFuture.<PreparedTransferredActor>failedFuture(
-                                        new ZLinkConfigurationException(
-                                                "actor transfer adapter key does not match "
-                                                        + "actor type: "
-                                                        + adapterKey));
-                            }
-                            ZLinkMessage transferState =
-                                    ZLinkMessage.fromEncoded(
-                                            ZLinkEncodedPayload.from(root.applicationState()),
-                                            serializer);
-                            return prepareTransferredActor(
-                                    actorId,
-                                    actorType,
-                                    adapterKey,
-                                    transferState,
-                                    factoryType,
-                                    reentryActorRef == null
-                                            ? new ZLinkBackendActorRef(
-                                                    spotNode.routingId(),
-                                                    actorId,
-                                                    request.actorGeneration())
-                                            : reentryActorRef);
+                            return detachMessageFollowProxyForReentry(actorId)
+                                    .thenCompose(
+                                            reentryActorRef -> {
+                                                if (actorRegistry.contains(actorId)) {
+                                                    return CompletableFuture
+                                                            .<PreparedTransferredActor>failedFuture(
+                                                                    new ZLinkConfigurationException(
+                                                                            "target runtime already owns actor: "
+                                                                                    + actorId));
+                                                }
+                                                if (adapterKey != null
+                                                        && !adapterKey.equals(actorType)) {
+                                                    return CompletableFuture
+                                                            .<PreparedTransferredActor>failedFuture(
+                                                                    new ZLinkConfigurationException(
+                                                                            "actor transfer adapter key does not match "
+                                                                                    + "actor type: "
+                                                                                    + adapterKey));
+                                                }
+                                                ZLinkMessage transferState =
+                                                        ZLinkMessage.fromEncoded(
+                                                                ZLinkEncodedPayload.from(
+                                                                        root.applicationState()),
+                                                                serializer);
+                                                return prepareTransferredActor(
+                                                        actorId,
+                                                        actorType,
+                                                        adapterKey,
+                                                        transferState,
+                                                        factoryType,
+                                                        reentryActorRef == null
+                                                                ? new ZLinkBackendActorRef(
+                                                                        spotNode.routingId(),
+                                                                        actorId,
+                                                                        request.actorGeneration())
+                                                                : reentryActorRef);
+                                            });
                         });
     }
 
@@ -1527,34 +1543,54 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             PreparedTransferredActor prepared) {
         Objects.requireNonNull(prepared, "prepared");
         prepared.requireOwner(this);
-        boolean discard =
-                inStateLane(
+        return stateLane
+                .runNowOrQueue(
                         () -> {
                             if (prepared.terminal) {
-                                return false;
+                                return null;
                             }
                             if (prepared.published) {
                                 actorRegistry.remove(prepared.actorId, prepared.actor);
-                                dispatches.remove(prepared.actorId);
                             }
                             prepared.terminal = true;
-                            return true;
+                            return prepared.published;
+                        })
+                .thenCompose(
+                        published -> {
+                            if (published == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            CompletionStage<Void> removed =
+                                    published
+                                            ? dispatches.removeAsync(prepared.actorId)
+                                            : CompletableFuture.completedFuture(null);
+                            return removed.thenCompose(
+                                    ignored ->
+                                            discardPreparedBackend(
+                                                    prepared.actorRef, prepared.context));
                         });
-        if (!discard) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return discardPreparedBackend(prepared.actorRef, prepared.context);
     }
 
-    private ZLinkBackendActorRef detachMessageFollowProxyForReentry(String actorId) {
-        DetachedMessageFollow detached =
-                inStateLane(() -> detachMessageFollowProxyForReentryInStateLane(actorId));
-        if (detached == null) {
-            return null;
-        }
-        spotNode.closeActorBoundSession(detached.sourceActorRef(), defaultRequestTimeout);
-        detached.context().closeHandlerInstances();
-        return detached.sourceActorRef();
+    private CompletionStage<ZLinkBackendActorRef> detachMessageFollowProxyForReentry(
+            String actorId) {
+        return stateLane
+                .runNowOrQueue(() -> detachMessageFollowProxyForReentryInStateLane(actorId))
+                .thenCompose(
+                        detached -> {
+                            if (detached == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            return dispatches
+                                    .removeAsync(actorId)
+                                    .thenApply(
+                                            ignored -> {
+                                                spotNode.closeActorBoundSession(
+                                                        detached.sourceActorRef(),
+                                                        defaultRequestTimeout);
+                                                detached.context().closeHandlerInstances();
+                                                return detached.sourceActorRef();
+                                            });
+                        });
     }
 
     private DetachedMessageFollow detachMessageFollowProxyForReentryInStateLane(String actorId) {
@@ -1569,7 +1605,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return null;
         }
         actorRegistry.remove(actorId, oldActor);
-        dispatches.remove(actorId);
         ZLinkBackendActorRef sourceActorRef =
                 handoff.takeMessageFollowSource(actorId)
                         .map(ZLinkActorTransferHandoff.MessageFollowSource::sourceActorRef)
@@ -1588,12 +1623,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .exceptionally(error -> null)
                 .thenCompose(
                         ignored -> locations.releaseActor(actorType, actor.context().actorId()))
-                .thenRun(
-                        () -> {
+                .thenCompose(
+                        ignored -> {
                             removeActorSessionRouteForContext(context);
                             context.clearAfterDestroy();
                             actorRegistry.remove(actor.context().actorId(), actor);
-                            dispatches.remove(actor.context().actorId());
+                            return dispatches.removeAsync(actor.context().actorId());
                         });
     }
 
@@ -4183,6 +4218,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches.relocationLane(actorId);
     }
 
+    public CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        return dispatches.relocationLaneAsync(actorId);
+    }
+
     public boolean abortActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.abort(actorId, seal);
@@ -4229,7 +4269,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkActorDispatchTarget target,
             String actorId,
             Supplier<CompletionStage<Void>> operation) {
-        return target.executeActor(actorId, () -> dispatches.runTurn(actorId, operation));
+        return target.executeActor(actorId, () -> dispatches.runTurn(actorId, operation), null);
     }
 
     public <T> CompletionStage<T> invokeActorLifecycle(

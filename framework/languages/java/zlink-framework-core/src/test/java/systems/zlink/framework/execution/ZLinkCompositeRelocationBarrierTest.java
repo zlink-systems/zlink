@@ -80,21 +80,27 @@ final class ZLinkCompositeRelocationBarrierTest {
                                 new byte[] {1},
                                 () ->
                                         CompletableFuture.failedFuture(
-                                                new AssertionError("held Spot ingress ran")))
+                                                new AssertionError("held Spot ingress ran")),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> actorHeld =
                 actor.enqueueRelocatable(
                                 new byte[] {2},
                                 () ->
                                         CompletableFuture.failedFuture(
-                                                new AssertionError("held Actor ingress ran")))
+                                                new AssertionError("held Actor ingress ran")),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Void> timerHeld =
                 timer.enqueueRelocatable(
                                 new byte[] {3},
                                 () ->
                                         CompletableFuture.failedFuture(
-                                                new AssertionError("held timer ingress ran")))
+                                                new AssertionError("held timer ingress ran")),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         assertEquals(
@@ -122,13 +128,14 @@ final class ZLinkCompositeRelocationBarrierTest {
         ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> actorActive = new CompletableFuture<>();
-        actor.enqueue(() -> actorActive);
+        actor.enqueue(() -> actorActive, null);
         actorExecutor.take().run();
 
         assertTrue(
                 barrier.trySeal(lanes(spot, actor, timer)).toCompletableFuture().join().isEmpty());
         CompletableFuture<Void> spotIngress =
-                spot.enqueue(() -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+                spot.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
         spotExecutor.take().run();
         spotIngress.get(3, TimeUnit.SECONDS);
         spot.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
@@ -160,7 +167,8 @@ final class ZLinkCompositeRelocationBarrierTest {
                                             ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                     yielded.complete(null);
                                     return continuation;
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         yielded.get(3, TimeUnit.SECONDS);
 
@@ -194,7 +202,8 @@ final class ZLinkCompositeRelocationBarrierTest {
                 () -> {
                     started.complete(null);
                     return active;
-                });
+                },
+                null);
         started.get(3, TimeUnit.SECONDS);
         AtomicBoolean acceptedRan = new AtomicBoolean();
         CompletableFuture<Void> accepted =
@@ -203,7 +212,9 @@ final class ZLinkCompositeRelocationBarrierTest {
                                 () -> {
                                     acceptedRan.set(true);
                                     return CompletableFuture.completedFuture(null);
-                                })
+                                },
+                                () -> {},
+                                null)
                         .toCompletableFuture();
 
         CompletableFuture<Optional<ZLinkCompositeRelocationBarrier.Seal>> sealing =
@@ -242,11 +253,14 @@ final class ZLinkCompositeRelocationBarrierTest {
         CompletableFuture<Void> active = new CompletableFuture<>();
         AtomicBoolean cancelled = new AtomicBoolean();
 
-        actor.enqueue(() -> active);
+        actor.enqueue(() -> active, null);
         actorExecutor.take().run();
         CompletableFuture<Void> accepted =
                 actor.enqueueRelocatable(
-                                new byte[] {9}, () -> CompletableFuture.completedFuture(null))
+                                new byte[] {9},
+                                () -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                null)
                         .toCompletableFuture();
         CompletableFuture<Optional<ZLinkCompositeRelocationBarrier.Seal>> sealing =
                 barrier.sealAtTurnBoundary(lanes(spot, actor, timer), cancelled::get)
@@ -317,7 +331,8 @@ final class ZLinkCompositeRelocationBarrierTest {
                                             ZLinkSerialExecutionQueue.yieldCurrent(remote);
                                     yielded.complete(null);
                                     return continuation;
-                                })
+                                },
+                                null)
                         .toCompletableFuture();
         yielded.get(3, TimeUnit.SECONDS);
 
@@ -347,7 +362,8 @@ final class ZLinkCompositeRelocationBarrierTest {
                 () -> {
                     timerStarted.complete(null);
                     return releaseTimer;
-                });
+                },
+                null);
         timerStarted.get(3, TimeUnit.SECONDS);
 
         CompletableFuture<Optional<ZLinkCompositeRelocationBarrier.Seal>> sealing =

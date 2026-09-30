@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQu
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
@@ -14,35 +15,47 @@ import java.util.function.Supplier;
  * Actor queue.
  */
 public interface ZLinkActorDispatchTarget {
-    CompletionStage<Void> executeActor(String actorId, Supplier<CompletionStage<Void>> operation);
+    CompletionStage<Void> executeActor(
+            String actorId,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission);
 
     CompletionStage<Void> executeActor(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation);
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission);
 
     CompletionStage<Void> executeActor(
             String actorId,
             byte[] acceptedJournalRecord,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease);
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission);
 
     CompletionStage<Void> executeActorLazyRecord(
             String actorId,
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease);
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission);
 
     CompletionStage<Void> executeActorLifecycle(
             String actorId, Supplier<CompletionStage<Void>> operation);
 
     CompletionStage<Void> executeActorLifecycleNext(
-            String actorId, Supplier<CompletionStage<Void>> operation);
+            String actorId,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission);
 
     boolean isActorQueueCurrent(String actorId);
 
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(String actorId);
 
     ZLinkSerialExecutionQueue actorRelocationLane(String actorId);
+
+    CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId);
 
     boolean abortActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 

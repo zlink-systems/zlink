@@ -2880,7 +2880,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                                     acceptedRoute.set(received);
                                                     queued.complete(null);
                                                     return released;
-                                                });
+                                                },
+                                                null);
                                     }
                                 });
                         return CompletableFuture.completedFuture(null);
@@ -2978,7 +2979,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
                         @Override
                         public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
-                            return admission.enqueue(() -> CompletableFuture.completedFuture(null));
+                            return admission.enqueue(
+                                    () -> CompletableFuture.completedFuture(null), null);
                         }
                     });
             admission.sealClosingAdmission();
@@ -3026,7 +3028,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 () -> {
                                     acceptedRoute.complete(received);
                                     return released;
-                                });
+                                },
+                                null);
                     }
 
                     @Override
@@ -3043,7 +3046,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                             .ZLinkBackendActorJoinRequest
                                     request) {
                         request.parts().forEach(Message::close);
-                        return admission.enqueue(() -> CompletableFuture.completedFuture(null));
+                        return admission.enqueue(
+                                () -> CompletableFuture.completedFuture(null), null);
                     }
                 });
 

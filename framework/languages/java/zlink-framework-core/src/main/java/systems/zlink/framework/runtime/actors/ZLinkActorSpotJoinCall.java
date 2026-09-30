@@ -311,10 +311,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         //  directly; reserving another lifecycle boundary from inside this
         //  operation would queue behind this very turn and deadlock.
         bounded.deferredActiveTurnSeal =
-                services.actors()
-                        .actorRelocationLane(context.actorRef().actorId())
-                        .captureActiveTurnSealHandle()
-                        .orElse(null);
+                ZLinkSerialExecutionQueue.captureCurrentActiveTurnSealHandle().orElse(null);
         // A deferred Join is an infrastructure/lifecycle operation. It must
         // not inherit the application execution context of the handler that
         // registered it; otherwise a synchronous barrier activation can make

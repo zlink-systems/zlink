@@ -36,7 +36,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                     .executeSpot(0, () -> completed(executed, "spot"))
                                     .toCompletableFuture(),
                             fixture.serial
-                                    .executeActor("actor-a", 0, () -> completed(executed, "actor"))
+                                    .executeActor(
+                                            "actor-a", 0, () -> completed(executed, "actor"), null)
                                     .toCompletableFuture(),
                             fixture.serial
                                     .executeTimer("tick", ignored -> completed(executed, "timer"))
@@ -101,6 +102,44 @@ final class ZLinkSerialExecutorLayersContractTest {
     }
 
     @Test
+    void lifecycleSubmissionDoesNotReleaseAForeignTimerTurn() throws Exception {
+        try (Fixture owner = fixture(ZLinkUserSpotExecutionMode.PER_ACTOR);
+                Fixture lifecycle = fixture(ZLinkUserSpotExecutionMode.PER_ACTOR)) {
+            CompletableFuture<Void> lifecycleStarted = new CompletableFuture<>();
+            CompletableFuture<Void> lifecycleRelease = new CompletableFuture<>();
+            AtomicBoolean ownerNextStarted = new AtomicBoolean();
+
+            CompletionStage<Void> ownerTurn =
+                    owner.serial.executeTimer(
+                            "owner-timer",
+                            ignored ->
+                                    lifecycle.serial.executeLifecycle(
+                                            () -> {
+                                                lifecycleStarted.complete(null);
+                                                return lifecycleRelease;
+                                            }));
+            lifecycleStarted.get(3, TimeUnit.SECONDS);
+            CompletionStage<Void> ownerNext =
+                    owner.serial.executeTimer(
+                            "owner-timer",
+                            ignored -> {
+                                ownerNextStarted.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            try {
+                assertThrows(
+                        TimeoutException.class,
+                        () -> ownerNext.toCompletableFuture().get(250, TimeUnit.MILLISECONDS));
+                assertFalse(ownerNextStarted.get());
+            } finally {
+                lifecycleRelease.complete(null);
+            }
+            await(ownerTurn, ownerNext);
+            assertTrue(ownerNextStarted.get());
+        }
+    }
+
+    @Test
     void lifecycleSubmissionReleasesItsCurrentPerActorTimerTurn() throws Exception {
         try (Fixture fixture = fixture(ZLinkUserSpotExecutionMode.PER_ACTOR)) {
             CompletableFuture<Void> lifecycleStarted = new CompletableFuture<>();
@@ -133,14 +172,16 @@ final class ZLinkSerialExecutorLayersContractTest {
                             () -> {
                                 actorAStarted.complete(null);
                                 return release;
-                            });
+                            },
+                            null);
             CompletionStage<Void> actorB =
                     fixture.serial.executeActor(
                             "actor-b",
                             () -> {
                                 actorBStarted.complete(null);
                                 return release;
-                            });
+                            },
+                            null);
 
             CompletableFuture.allOf(actorAStarted, actorBStarted).get(3, TimeUnit.SECONDS);
             assertFalse(actorA.toCompletableFuture().isDone());
@@ -169,7 +210,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                     order.add("first:start");
                                     firstStarted.complete(null);
                                     return release.thenRun(() -> order.add("first:end"));
-                                });
+                                },
+                                null);
                 firstStarted.get(3, TimeUnit.SECONDS);
                 CompletionStage<Void> second =
                         fixture.serial.executeActor(
@@ -178,7 +220,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                     secondStarted.set(true);
                                     order.add("second");
                                     return CompletableFuture.completedFuture(null);
-                                });
+                                },
+                                null);
 
                 assertFalse(secondStarted.get(), mode.name());
                 release.complete(null);
@@ -248,12 +291,15 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 () -> {
                                     started.complete(null);
                                     return release;
-                                }));
+                                },
+                                null));
                 started.get(3, TimeUnit.SECONDS);
                 for (int index = 1; index < 1_025; index++) {
                     CompletionStage<Void> pending =
                             fixture.serial.executeActor(
-                                    "actor-full", () -> CompletableFuture.completedFuture(null));
+                                    "actor-full",
+                                    () -> CompletableFuture.completedFuture(null),
+                                    null);
                     assertFalse(
                             pending.toCompletableFuture().isCompletedExceptionally(),
                             mode.name() + " accepted index " + index);
@@ -262,10 +308,10 @@ final class ZLinkSerialExecutorLayersContractTest {
 
                 accepted.add(
                         fixture.serial.executeActor(
-                                "actor-full", () -> CompletableFuture.completedFuture(null)));
+                                "actor-full", () -> CompletableFuture.completedFuture(null), null));
                 CompletionStage<Void> otherActor =
                         fixture.serial.executeActor(
-                                "actor-open", () -> CompletableFuture.completedFuture(null));
+                                "actor-open", () -> CompletableFuture.completedFuture(null), null);
                 assertFalse(
                         otherActor.toCompletableFuture().isCompletedExceptionally(), mode.name());
 
@@ -293,15 +339,19 @@ final class ZLinkSerialExecutorLayersContractTest {
                             () -> {
                                 started.complete(null);
                                 return release;
-                            });
+                            },
+                            null);
             started.get(3, TimeUnit.SECONDS);
 
             CompletionStage<Void> large =
                     fixture.serial.executeActor(
-                            "actor-a", largePayload, () -> CompletableFuture.completedFuture(null));
+                            "actor-a",
+                            largePayload,
+                            () -> CompletableFuture.completedFuture(null),
+                            null);
             CompletionStage<Void> small =
                     fixture.serial.executeActor(
-                            "actor-a", 1, () -> CompletableFuture.completedFuture(null));
+                            "actor-a", 1, () -> CompletableFuture.completedFuture(null), null);
             assertFalse(small.toCompletableFuture().isCompletedExceptionally());
 
             release.complete(null);
@@ -322,14 +372,16 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 () -> {
                                     started.complete(null);
                                     return release;
-                                });
+                                },
+                                null);
                 started.get(3, TimeUnit.SECONDS);
 
                 CompletionStage<Void> queued =
                         fixture.serial.executeActor(
                                 "actor-b",
                                 payloadBytes,
-                                () -> CompletableFuture.completedFuture(null));
+                                () -> CompletableFuture.completedFuture(null),
+                                null);
                 release.complete(null);
                 await(first, queued);
             }
@@ -356,7 +408,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 order.add("overloaded:0");
                                 firstStarted.complete(null);
                                 return releaseFirst.thenRun(() -> blockFor(Duration.ofMillis(2)));
-                            }));
+                            },
+                            null));
             for (int index = 1; index < 8; index++) {
                 int captured = index;
                 turns.add(
@@ -365,7 +418,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                     order.add("overloaded:" + captured);
                                     blockFor(Duration.ofMillis(2));
                                     return CompletableFuture.completedFuture(null);
-                                }));
+                                },
+                                null));
             }
             firstStarted.get(3, TimeUnit.SECONDS);
             turns.add(
@@ -373,7 +427,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                             () -> {
                                 order.add("other");
                                 return CompletableFuture.completedFuture(null);
-                            }));
+                            },
+                            null));
 
             releaseFirst.complete(null);
             CompletableFuture.allOf(
@@ -408,7 +463,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 firstStarted.complete(null);
                                 return ZLinkSerialExecutionQueue.yieldCurrent(remote)
                                         .thenRun(() -> events.add("actor-a:resume"));
-                            });
+                            },
+                            null);
             firstStarted.get(3, TimeUnit.SECONDS);
             CompletionStage<Void> sameActorNext =
                     fixture.serial.executeActor(
@@ -417,7 +473,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 sameActorNextRan.set(true);
                                 events.add("actor-a:next");
                                 return CompletableFuture.completedFuture(null);
-                            });
+                            },
+                            null);
             CompletionStage<Void> otherActor =
                     fixture.serial.executeActor(
                             "actor-b",
@@ -425,7 +482,8 @@ final class ZLinkSerialExecutorLayersContractTest {
                                 events.add("actor-b");
                                 otherActorRan.complete(null);
                                 return CompletableFuture.completedFuture(null);
-                            });
+                            },
+                            null);
             CompletionStage<Void> spot =
                     fixture.serial.executeSpot(
                             0,

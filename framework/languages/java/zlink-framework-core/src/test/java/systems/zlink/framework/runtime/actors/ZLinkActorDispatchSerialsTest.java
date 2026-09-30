@@ -303,7 +303,7 @@ final class ZLinkActorDispatchSerialsTest {
         dispatches.commit("actor-1", seal).orElseThrow();
 
         owner.set(null);
-        dispatches.remove("actor-1");
+        dispatches.removeAsync("actor-1").toCompletableFuture().join();
         owner.set(spotA);
         enqueueLazy(dispatches, order, "after-remove").toCompletableFuture().join();
 
@@ -323,7 +323,7 @@ final class ZLinkActorDispatchSerialsTest {
         dispatches.commit("actor-1", seal).orElseThrow();
 
         owner.set(null);
-        dispatches.remove("actor-1");
+        dispatches.removeAsync("actor-1").toCompletableFuture().join();
         owner.set(spotA);
         enqueueLazy(dispatches, order, "after-remove").toCompletableFuture().join();
 
