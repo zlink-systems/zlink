@@ -25,7 +25,11 @@ fn main() {
     drop(dealer_mon);
 
     let req = Message::try_from(b"ping").expect("message failed");
-    dealer.send().message(req).submit_sync().expect("send failed");
+    dealer
+        .send()
+        .message(req)
+        .submit_sync()
+        .expect("send failed");
 
     let mut received = zlink::Received::empty();
     router
