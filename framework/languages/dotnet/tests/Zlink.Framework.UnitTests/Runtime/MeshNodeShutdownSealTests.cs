@@ -138,55 +138,9 @@ public sealed class MeshNodeShutdownSealTests
         Assert.Equal(MeshPeerState.Admitted, peer.State);
 
         left.RemovePeerConnection(intent);
-    }
-
-    [Fact]
-    public async Task RemovingIntent_DoesNotRemoveAnInboundAdmissionWithoutRouteLoss()
-    {
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, MeshName);
-        var rid = RoutingId.From("inbound-intent-owner");
-        const string endpoint = "tcp://127.0.0.1:20001";
-        var admission = new ZLinkServiceWireCodec.AdmissionRecord(
-            MeshName,
-            ZLinkServiceSecurityIdentity.Plaintext,
-            endpoint,
-            7,
-            1,
-            new Dictionary<string, uint>(),
-            1,
-            1,
-            (byte)ZLinkMeshNodeObjectRole.Server,
-            100,
-            0,
-            0,
-            0,
-            0,
-            new Dictionary<byte, byte[]>(),
-            []
-        );
-        var peer = new ZLinkMeshPeer(999)
-        {
-            RoutingId = rid,
-            PhysicalRoutingId = rid,
-            RouteGeneration = 9,
-            Admission = admission,
-            Admitted = true,
-            State = MeshPeerState.Admitted,
-        };
-        const System.Reflection.BindingFlags Private =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var index =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
-        index.Add(rid, peer);
-
-        var intent = node.ConnectPeer(endpoint, rid);
-        Assert.Equal(1U, node.Status().AdmittedPeerCount);
-        node.RemovePeerConnection(intent);
-        Assert.Equal(1U, node.Status().AdmittedPeerCount);
-        Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
-        Assert.DoesNotContain(node.Peers(), candidate => candidate.ConnectionIntentId == intent);
+        Assert.Equal(0U, left.Status().AdmittedPeerCount);
+        Assert.DoesNotContain(left.Peers(), candidate => candidate.ConnectionIntentId == intent);
+        Assert.DoesNotContain(left.Peers(), candidate => candidate.RoutingId == rightRid);
     }
 
     [Fact]

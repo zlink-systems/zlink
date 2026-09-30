@@ -119,7 +119,8 @@ public sealed class MeshApplicationWorkerTests
                 {
                     using (received)
                     {
-                        received.ApplicationJobAdmission?.ReleaseForHandlerStart();
+                        if (received.ApplicationJobAdmission is { } admission)
+                            await admission.ReleaseForHandlerStartAsync();
                         if (Interlocked.Increment(ref count) == 1)
                         {
                             first = received;
@@ -209,7 +210,8 @@ public sealed class MeshApplicationWorkerTests
             Assert.True(state.Routes.TryDequeue(out var received));
             using (received)
             {
-                received.ApplicationJobAdmission?.ReleaseForHandlerStart();
+                if (received.ApplicationJobAdmission is { } admission)
+                    await admission.ReleaseForHandlerStartAsync();
                 if (Interlocked.Increment(ref count) == 1)
                 {
                     first = received;
@@ -364,9 +366,9 @@ public sealed class MeshApplicationWorkerTests
             await Task.Delay(1);
         }
         Assert.False(second.Task.IsCompleted);
-        firstRecord.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        await firstRecord.ApplicationJobAdmission!.ReleaseForHandlerStartAsync();
         using var secondRecord = await second.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        secondRecord.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        await secondRecord.ApplicationJobAdmission!.ReleaseForHandlerStartAsync();
         Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
     }
 

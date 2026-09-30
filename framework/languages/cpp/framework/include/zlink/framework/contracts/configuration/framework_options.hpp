@@ -616,6 +616,12 @@ class client_server_channel_builder_t
           "client/server channel");
     }
 
+    void set_client_send_timeout (std::chrono::milliseconds timeout)
+    {
+        _client_send_timeout = timeout;
+        apply_channel ();
+    }
+
     void apply_channel ()
     {
         const auto channel_name = _channel_name;
@@ -624,6 +630,7 @@ class client_server_channel_builder_t
         const auto server_bind_host_override = _server_bind_host_override;
         const auto server_weight = _server_weight;
         const auto client_enabled = _client_enabled;
+        const auto client_send_timeout = _client_send_timeout;
         const auto client_endpoints =
           _options->client_endpoint_connections[_channel_name].list_connections ();
         if (server_port) {
@@ -640,8 +647,10 @@ class client_server_channel_builder_t
         }
         if (client_enabled) {
             _options->client_server_client_actions[channel_name] =
-              [client_endpoints] (channel_builder_t &channel) {
+              [client_endpoints, client_send_timeout] (channel_builder_t &channel) {
                   auto client = channel.enable_client ();
+                  if (client_send_timeout)
+                      client.send_timeout (*client_send_timeout);
                   for (const auto &endpoint : client_endpoints) {
                       client.connect (endpoint);
                   }
@@ -682,12 +691,21 @@ class client_server_channel_builder_t
     std::optional<std::uint16_t> _server_port;
     int _server_weight = 100;
     bool _client_enabled = false;
+    std::optional<std::chrono::milliseconds> _client_send_timeout;
     std::size_t _inline_handler_sequence = 0;
 };
 
 class client_server_channel_client_builder_t
 {
   public:
+    template <typename Rep, typename Period>
+    client_server_channel_client_builder_t &
+    set_send_timeout (std::chrono::duration<Rep, Period> timeout)
+    {
+        _channel->set_client_send_timeout (detail::normalize_channel_send_timeout (timeout));
+        return *this;
+    }
+
     client_server_channel_client_builder_t &connect (std::string endpoint)
     {
         _channel->connect_client (std::move (endpoint));
@@ -892,6 +910,14 @@ class fanout_channel_builder_t
         return *this;
     }
 
+    template <typename Rep, typename Period>
+    fanout_channel_builder_t &set_send_timeout (std::chrono::duration<Rep, Period> timeout)
+    {
+        _send_timeout = detail::normalize_channel_send_timeout (timeout);
+        apply ();
+        return *this;
+    }
+
     fanout_channel_builder_t &enable_subscriber ()
     {
         _subscriber_enabled = true;
@@ -947,6 +973,7 @@ class fanout_channel_builder_t
         const auto routing_id = _routing_id;
         const auto automatic_routing_id_prefix = _automatic_routing_id_prefix;
         const auto no_drop = _no_drop;
+        const auto send_timeout = _send_timeout;
         const auto subscriber_enabled = _subscriber_enabled;
         const auto subscriber_endpoints =
           _options->subscriber_endpoint_connections[_channel_name].list_connections ();
@@ -975,7 +1002,8 @@ class fanout_channel_builder_t
           "fanout_channel:" + channel_name,
           [channel_name, options, publisher_endpoint, publisher_port, publisher_bind_host_override,
            subscriber_enabled, subscriber_endpoints, routing_id, automatic_routing_id_prefix,
-           no_drop, subscriber_uses_discovery, subscription_topics] (zlink_builder_t &zlink) {
+           no_drop, send_timeout, subscriber_uses_discovery,
+           subscription_topics] (zlink_builder_t &zlink) {
               auto channel = zlink.channel (channel_name);
               if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
                   /* Publisher discovery (Location
@@ -988,6 +1016,8 @@ class fanout_channel_builder_t
                   auto publisher = channel.enable_publisher (
                     routing_id.has_value () || automatic_routing_id_prefix.has_value ());
                   publisher.set_no_drop (no_drop);
+                  if (send_timeout)
+                      publisher.send_timeout (*send_timeout);
                   if (routing_id) {
                       publisher.set_routing_id (*routing_id);
                   } else if (automatic_routing_id_prefix) {
@@ -1023,6 +1053,7 @@ class fanout_channel_builder_t
     std::optional<zlink::routing_id_t> _routing_id;
     std::optional<std::string> _automatic_routing_id_prefix;
     bool _no_drop = false;
+    std::optional<std::chrono::milliseconds> _send_timeout;
     bool _subscriber_enabled = false;
 };
 

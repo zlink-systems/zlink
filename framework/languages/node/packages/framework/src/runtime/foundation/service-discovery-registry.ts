@@ -31,6 +31,20 @@ export interface SelectedClientServer {
 
 /** Dedicated discovery state; fanout publishers never reuse RouteMesh peer rows. */
 export class ServiceDiscoveryRegistry {
+  private readonly clientServerChanged = new Set<(error?: Error) => void>();
+
+  onClientServerChanged(listener: (error?: Error) => void): () => void {
+    this.clientServerChanged.add(listener);
+    return () => {
+      this.clientServerChanged.delete(listener);
+    };
+  }
+
+  dispose(error: Error): void {
+    for (const listener of this.clientServerChanged) listener(error);
+    this.clientServerChanged.clear();
+  }
+
   private readonly clientServers = new Map<string, Current<ClientServerDescriptor>>();
   private readonly fanoutPublishers = new Map<string, Current<FanoutPublisherDescriptor>>();
   private readonly clientServerSelections = new Map<
@@ -101,6 +115,14 @@ export class ServiceDiscoveryRegistry {
     return selection.select();
   }
 
+  hasReadyClientServer(channelName: string): boolean {
+    return [...this.clientServers.values()].some(
+      ({ descriptor }) =>
+        descriptor.channelName === channelName &&
+        (descriptor.state === 'serving' || descriptor.state === 'retiring')
+    );
+  }
+
   clientServerDescriptors(channelName: string): readonly ClientServerDescriptor[] {
     return [...this.clientServers.values()]
       .map((value) => value.descriptor)
@@ -161,6 +183,7 @@ export class ServiceDiscoveryRegistry {
     if (this.clientServerSelections.has(channelName)) {
       this.clientServerSelections.get(channelName)!.rebuild();
     }
+    for (const listener of this.clientServerChanged) listener();
   }
 
   private clientServerCandidates(channelName: string) {

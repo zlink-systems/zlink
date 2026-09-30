@@ -11,6 +11,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
 import java.nio.charset.StandardCharsets;
@@ -57,6 +58,37 @@ final class ZLinkSpotHandlerInvokerCodecTest {
     }
 
     @Test
+    void registeredApplicationJsonSerializerDecodesThroughThePublicHandlerContract() {
+        ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
+        codecs.use(
+                registrar ->
+                        registrar.addSerializer("application/json", new MarkerSerializer("JSON")));
+        codecs.freeze();
+
+        CapturingHandler handler =
+                receive(
+                        codecs.serializerWithFallback(new FailingJsonSerializer()),
+                        "application/json",
+                        new byte[] {1});
+
+        assertEquals("JSON", handler.received.marker());
+    }
+
+    @Test
+    void unregisteredApplicationJsonUsesTheDefaultJsonSerializer() {
+        ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
+        codecs.freeze();
+
+        CapturingHandler handler =
+                receive(
+                        codecs.serializerWithFallback(new ZLinkJsonMessageSerializer()),
+                        "application/json",
+                        "{\"marker\":\"default\"}".getBytes(StandardCharsets.UTF_8));
+
+        assertEquals("default", handler.received.marker());
+    }
+
+    @Test
     void unknownWireContentTypeIsProtocolErrorBeforeHandlerDispatch() {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         codecs.freeze();
@@ -92,6 +124,35 @@ final class ZLinkSpotHandlerInvokerCodecTest {
     }
 
     private record Probe(String marker) {}
+
+    private static CapturingHandler receive(
+            ZLinkMessageSerializer serializer, String contentType, byte[] payloadBytes) {
+        CapturingHandler handler = new CapturingHandler();
+        ZLinkSpotHandlerInvoker invoker = new ZLinkSpotHandlerInvoker(serializer, List.of());
+        SpotPacketHandlerRegistration registration =
+                new SpotPacketHandlerRegistration(
+                        CapturingHandler.class,
+                        null,
+                        Object.class,
+                        Probe.class,
+                        Void.class,
+                        "Probe",
+                        false);
+
+        try (Message payload = Message.from(payloadBytes)) {
+            invoker.invokePacket(
+                            registration,
+                            new Object(),
+                            payload,
+                            contentType,
+                            Map.of(),
+                            ignored -> handler)
+                    .toCompletableFuture()
+                    .join();
+        }
+
+        return handler;
+    }
 
     private static final class CapturingHandler implements ZLinkSpotPacketHandler<Object, Probe> {
         private Probe received;

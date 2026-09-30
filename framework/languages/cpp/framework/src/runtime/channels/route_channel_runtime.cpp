@@ -168,10 +168,11 @@ route_channel_runtime_t::submit_send_parts (const zlink::routing_id_t &target_no
     std::optional<zlink::routing_id_t> backend_target;
     std::optional<std::string> backend_spot_target;
     runtime::messaging::message_parts_t backend_parts;
-    if (auto connected = wait_until_connected (default_request_timeout ()); !connected) {
+    if (auto connected = wait_until_connected (std::chrono::milliseconds::zero ()); !connected) {
         return connected;
     }
-    if (auto ready = wait_until_peer_ready (target_node_rid, default_request_timeout ()); !ready) {
+    if (auto ready = wait_until_peer_ready (target_node_rid, std::chrono::milliseconds::zero ());
+        !ready) {
         return ready;
     }
     auto prepared = _lane
@@ -221,11 +222,12 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
 {
     request_backend_t backend;
     std::uint64_t request_seq = 0;
-    if (auto connected = wait_until_connected (timeout); !connected) {
+    if (auto connected = wait_until_connected (std::chrono::milliseconds::zero ()); !connected) {
         return detail::propagate_failure<runtime::messaging::message_parts_t> (
           connected, "route channel is not connected");
     }
-    if (auto ready = wait_until_peer_ready (target_node_rid, timeout); !ready) {
+    if (auto ready = wait_until_peer_ready (target_node_rid, std::chrono::milliseconds::zero ());
+        !ready) {
         return detail::propagate_failure<runtime::messaging::message_parts_t> (
           ready, "route channel peer is not ready");
     }

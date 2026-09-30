@@ -57,8 +57,7 @@ Channel caller가 지정하는 논리 주소와 호출 완료 의미는
 ClientServer send와 request는 local process에 해당 `ChannelName`의 Client role이
 등록되어 있을 때만 시작할 수 있다. ChannelName과 Server role이 존재하더라도 Client
 role이 없으면 local handler를 직접 호출하지 않고 `NotConfigured`인 Framework error로
-끝난다. `NotFound`는 ChannelName 또는 선택할 target 자체가 존재하지 않는 경우에
-사용한다.
+끝난다. Target 선택과 대기의 결과는 [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다.
 
 ```csharp
 public interface IZLinkFrameworkOptions

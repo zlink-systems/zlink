@@ -56,7 +56,8 @@ final class ZLinkChannelRuntimeConfigurator {
 
     private void configureClientServer(ChannelRegistration channel) {
         if (channel.clientEnabled() && !dedicatedClientServerRuntime) {
-            ZLinkBackendDealerSocket dealer = backend.createDealerSocket(context);
+            ZLinkBackendDealerSocket dealer =
+                    backend.createDealerSocket(context, channel.sendTimeout());
             dealer.setChannelName(channel.name());
             sockets.registerClient(channel.name(), dealer);
         }
@@ -91,7 +92,8 @@ final class ZLinkChannelRuntimeConfigurator {
 
     private void configureFanout(ChannelRegistration channel) {
         if (channel.publisherEnabled()) {
-            ZLinkBackendPublisherSocket publisher = backend.createPublisherSocket(context);
+            ZLinkBackendPublisherSocket publisher =
+                    backend.createPublisherSocket(context, channel.sendTimeout());
             publisher.setChannelName(channel.name());
             RoutingId publisherRoutingId =
                     channel.routingId() == null

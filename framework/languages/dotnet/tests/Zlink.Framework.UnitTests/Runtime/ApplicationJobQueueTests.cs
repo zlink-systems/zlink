@@ -271,12 +271,12 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
         Assert.Equal(2UL, queue.GetStatus().CapacityWaiters);
 
-        first.ReleaseForHandlerStart();
+        await first.ReleaseForHandlerStartAsync();
         using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(thirdTask.IsCompleted);
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
 
-        second.ReleaseForHandlerStart();
+        await second.ReleaseForHandlerStartAsync();
         using var third = await thirdTask.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
     }
@@ -298,10 +298,10 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(2, applied.Count);
 
-        leases[0].ReleaseForHandlerStart();
+        await leases[0].ReleaseForHandlerStartAsync();
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
         Assert.Equal(2, applied.Count);
-        leases[1].ReleaseForHandlerStart();
+        await leases[1].ReleaseForHandlerStartAsync();
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Running,
             queue.GetStatus().PressureState
@@ -327,12 +327,12 @@ public sealed class ApplicationJobQueueTests
 
         Assert.False(waiting.IsCompleted);
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
-        holder.ReleaseForHandlerStart();
+        await holder.ReleaseForHandlerStartAsync();
         using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
         Assert.Equal(2, applied.Count);
 
-        admitted.ReleaseForHandlerStart();
+        await admitted.ReleaseForHandlerStartAsync();
         Assert.Equal(ReceiveFlowState.Running, applied[^1]);
         Assert.Equal(3, applied.Count);
     }
@@ -355,7 +355,7 @@ public sealed class ApplicationJobQueueTests
 
         Assert.Equal([ReceiveFlowState.Paused], applied);
         await first.DisposeAsync();
-        lease.ReleaseForHandlerStart();
+        await lease.ReleaseForHandlerStartAsync();
         Assert.Equal([ReceiveFlowState.Paused, ReceiveFlowState.Running], applied);
         await duplicate.DisposeAsync();
         using var unregisteredLease = await queue.AcquireAsync(CancellationToken.None);
@@ -387,7 +387,7 @@ public sealed class ApplicationJobQueueTests
         var secondTask = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
 
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
-        var releaseTask = Task.Run(first.ReleaseForHandlerStart);
+        var releaseTask = Task.Run(async () => await first.ReleaseForHandlerStartAsync());
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
@@ -450,7 +450,7 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
 
         queue.Dispose();
-        lease.ReleaseForHandlerStart();
+        await lease.ReleaseForHandlerStartAsync();
 
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
         var afterDisposeApplyCount = 0;
@@ -572,7 +572,7 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(TimeSpan.Zero, resetMetrics.CumulativePauseDuration);
 
         time.Advance(TimeSpan.FromSeconds(3));
-        first.ReleaseForHandlerStart();
+        await first.ReleaseForHandlerStartAsync();
         var resumed = queue.GetPressureMetrics();
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Running, resumed.State);
         Assert.Equal(1UL, resumed.RunningTransitionCount);
@@ -591,7 +591,7 @@ public sealed class ApplicationJobQueueTests
 
         oldestCancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oldest);
-        holder.ReleaseForHandlerStart();
+        await holder.ReleaseForHandlerStartAsync();
 
         using var admitted = await next.WaitAsync(TimeSpan.FromSeconds(1));
         var status = queue.GetStatus();
@@ -632,6 +632,75 @@ public sealed class ApplicationJobQueueTests
     }
 
     [Fact]
+    public async Task Handler_start_release_waits_for_its_lane_result_without_blocking_the_caller()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var resume = new ManualResetEventSlim();
+        var time = new BlockingTimeProvider(entered, resume);
+        using var queue = CreateQueue(limit: 1, time);
+        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        time.Arm();
+        var waiting = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            var release = lease.ReleaseForHandlerStartAsync();
+            Assert.False(release.IsCompleted);
+            resume.Set();
+            await release;
+
+            using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        }
+        finally
+        {
+            resume.Set();
+        }
+    }
+
+    [Fact]
+    public async Task One_hundred_handler_starts_release_under_default_thread_pool()
+    {
+        using var queue = CreateQueue(limit: 128);
+        var leases = new ZLinkApplicationJobQueueLease[100];
+        for (var index = 0; index < leases.Length; index++)
+        {
+            leases[index] = await queue.AcquireAsync(CancellationToken.None);
+            leases[index].MarkQueued();
+        }
+
+        var started = 0;
+        ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref started);
+            return Task.CompletedTask;
+        };
+        using var concurrency = new SemaphoreSlim(128);
+        var calls = leases
+            .Select(lease =>
+                Task.Run(async () =>
+                {
+                    await concurrency.WaitAsync();
+                    try
+                    {
+                        using var scope = ZLinkApplicationJobQueueInvocation.Enter(lease);
+                        await ZLinkHandlerInvocationEngine.InvokeAsync(new object(), invoker);
+                    }
+                    finally
+                    {
+                        concurrency.Release();
+                    }
+                })
+            )
+            .ToArray();
+
+        await Task.WhenAll(calls).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(100, Volatile.Read(ref started));
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
     public async Task Sequential_one_to_many_handlers_reacquire_one_per_handler()
     {
         using var queue = CreateQueue(limit: 1);
@@ -640,13 +709,13 @@ public sealed class ApplicationJobQueueTests
 
         await ZLinkApplicationJobQueueInvocation.EnsureQueuedPermitAsync(CancellationToken.None);
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
 
         await ZLinkApplicationJobQueueInvocation.EnsureQueuedPermitAsync(CancellationToken.None);
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
     }
 
@@ -722,9 +791,9 @@ public sealed class ApplicationJobQueueTests
         using var first = await queue.AcquireAsync(CancellationToken.None);
         using var second = await queue.AcquireAsync(CancellationToken.None);
         var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
-        first.ReleaseForHandlerStart();
+        await first.ReleaseForHandlerStartAsync();
         using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(1));
-        second.ReleaseForHandlerStart();
+        await second.ReleaseForHandlerStartAsync();
 
         Assert.Equal(2UL, queue.GetStatus().PeakPermitsInUse);
         Assert.Equal(1UL, queue.GetStatus().CapacityWaitCount);
@@ -748,7 +817,7 @@ public sealed class ApplicationJobQueueTests
 
         queue.ResetMetrics();
         time.Advance(TimeSpan.FromSeconds(3));
-        holder.ReleaseForHandlerStart();
+        await holder.ReleaseForHandlerStartAsync();
         using var admitted = await oldEpochWaiter.WaitAsync(TimeSpan.FromSeconds(1));
 
         var afterOldEpochCompletion = queue.GetStatus();
@@ -757,7 +826,7 @@ public sealed class ApplicationJobQueueTests
 
         var currentEpochWaiter = queue.AcquireAsync(CancellationToken.None).AsTask();
         time.Advance(TimeSpan.FromSeconds(2));
-        admitted.ReleaseForHandlerStart();
+        await admitted.ReleaseForHandlerStartAsync();
         using var current = await currentEpochWaiter.WaitAsync(TimeSpan.FromSeconds(1));
 
         var currentEpoch = queue.GetStatus();
@@ -786,5 +855,26 @@ public sealed class ApplicationJobQueueTests
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
 
         public void Dispose() => Interlocked.Increment(ref _disposeCount);
+    }
+
+    private sealed class BlockingTimeProvider(
+        ManualResetEventSlim entered,
+        ManualResetEventSlim resume
+    ) : TimeProvider
+    {
+        private int _armed;
+
+        internal void Arm() => Volatile.Write(ref _armed, 1);
+
+        public override long GetTimestamp()
+        {
+            if (Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                entered.Set();
+                if (!resume.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("The queue lane was not released.");
+            }
+            return TimeProvider.System.GetTimestamp();
+        }
     }
 }

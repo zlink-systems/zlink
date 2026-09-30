@@ -79,18 +79,19 @@ final class ZLinkStreamReceiveDispatcher {
             return;
         }
         DefaultZLinkStreamConnector.trace(
-                "connector read-frame endpoint="
-                        + configuration.endpoint()
-                        + " kind="
-                        + header.kind()
-                        + " name="
-                        + header.name()
-                        + " requestSeq="
-                        + header.requestSeq()
-                        + " bytes="
-                        + decodedPayload.length
-                        + " correlation="
-                        + header.correlationId());
+                () ->
+                        "connector read-frame endpoint="
+                                + configuration.endpoint()
+                                + " kind="
+                                + header.kind()
+                                + " name="
+                                + header.name()
+                                + " requestSeq="
+                                + header.requestSeq()
+                                + " bytes="
+                                + decodedPayload.length
+                                + " correlation="
+                                + header.correlationId());
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
             return;
@@ -119,10 +120,11 @@ final class ZLinkStreamReceiveDispatcher {
             //  protocol violation (spec 32 9).
             ZLinkStreamCloseReason reason = ZLinkSessionClosingControl.decode(payload);
             DefaultZLinkStreamConnector.trace(
-                    "connector session-closing version="
-                            + ZLinkSessionClosingControl.VERSION
-                            + " reason="
-                            + reason.name().toLowerCase());
+                    () ->
+                            "connector session-closing version="
+                                    + ZLinkSessionClosingControl.VERSION
+                                    + " reason="
+                                    + reason.name().toLowerCase());
             sessionClosing.accept(reason);
             return;
         }

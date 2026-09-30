@@ -87,8 +87,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                           std::string topic,
                           std::string packet_name,
                           std::string content_type,
-                          zlink::message_t message,
-                          std::chrono::milliseconds timeout);
+                          zlink::message_t message);
     bool owner_is_live (const fanout_publisher_descriptor_t &descriptor) const;
     static std::uint64_t make_lifecycle_generation ();
 

@@ -486,7 +486,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         ZLinkBackendSocketMonitor monitor = null;
         Connection connection = null;
         try {
-            dealer = backend.createDealerSocket(context);
+            dealer =
+                    backend.createDealerSocket(
+                            context, sockets.registration(descriptor.channelName()).sendTimeout());
             dealer.setChannelName(descriptor.channelName());
             monitor = monitoringAdapter.openSocketMonitor(dealer);
             connection = new Connection(connectionId, descriptor, dealer, false);

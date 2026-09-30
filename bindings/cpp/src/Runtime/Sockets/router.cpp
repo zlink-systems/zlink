@@ -45,12 +45,6 @@ int router_socket_t::recv (received_t &out_, recv_flags_t flags_)
     return 0;
 }
 
-int router_socket_t::recv (routing_id_t &source_rid_out_, message_t &part_out_, recv_flags_t flags_)
-{
-    return detail::recv_single_part_routed_message (detail::native_handle (*this), source_rid_out_,
-                                                    part_out_, flags_);
-}
-
 void router_socket_t::set_routing_id (const routing_id_t &routing_id_)
 {
     detail::set_routing_id_or_throw (detail::native_handle (*this), routing_id_);

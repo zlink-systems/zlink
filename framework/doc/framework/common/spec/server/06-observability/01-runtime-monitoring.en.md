@@ -250,6 +250,11 @@ A `not_required` peer is still left in the status's peer list. This lets an
 operator distinguish a normal connection omission from a connection
 failure. This state alone doesn't cause a RouteMesh to become `degraded`.
 
+When a RouteMesh would otherwise be `ready`, its overall state is `degraded` if a
+peer is `connecting` or `not_connected`, or if the Location Store is unavailable.
+A Channel having no ready target does not by itself change the RouteMesh's
+overall state.
+
 RouteMesh placement state provides whether new objects are accepted and
 the current active Actor/Spot count. Status separately provides the count
 of Spots and the Actors processing application messages within them. These

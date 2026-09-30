@@ -20,6 +20,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -530,48 +531,51 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                     "outbound stream frame is invalid: " + invalid.getMessage(), invalid);
         }
         trace(
-                "connector write-start endpoint="
-                        + configuration.endpoint()
-                        + " kind="
-                        + header.kind()
-                        + " name="
-                        + header.name()
-                        + " requestSeq="
-                        + header.requestSeq()
-                        + " bytes="
-                        + payload.length
-                        + " correlation="
-                        + header.correlationId());
+                () ->
+                        "connector write-start endpoint="
+                                + configuration.endpoint()
+                                + " kind="
+                                + header.kind()
+                                + " name="
+                                + header.name()
+                                + " requestSeq="
+                                + header.requestSeq()
+                                + " bytes="
+                                + payload.length
+                                + " correlation="
+                                + header.correlationId());
         CompletableFuture<Void> publication =
                 lifecycle.enqueueFrame(sendChain, frame, onAccepted).toCompletableFuture();
         publication.whenComplete(
                 (ignored, ex) -> {
                     if (ex == null) {
                         trace(
-                                "connector write-complete endpoint="
-                                        + configuration.endpoint()
-                                        + " kind="
-                                        + header.kind()
-                                        + " name="
-                                        + header.name()
-                                        + " requestSeq="
-                                        + header.requestSeq()
-                                        + " correlation="
-                                        + header.correlationId());
+                                () ->
+                                        "connector write-complete endpoint="
+                                                + configuration.endpoint()
+                                                + " kind="
+                                                + header.kind()
+                                                + " name="
+                                                + header.name()
+                                                + " requestSeq="
+                                                + header.requestSeq()
+                                                + " correlation="
+                                                + header.correlationId());
                     } else {
                         trace(
-                                "connector write-failed endpoint="
-                                        + configuration.endpoint()
-                                        + " kind="
-                                        + header.kind()
-                                        + " name="
-                                        + header.name()
-                                        + " requestSeq="
-                                        + header.requestSeq()
-                                        + " correlation="
-                                        + header.correlationId()
-                                        + " error="
-                                        + ex);
+                                () ->
+                                        "connector write-failed endpoint="
+                                                + configuration.endpoint()
+                                                + " kind="
+                                                + header.kind()
+                                                + " name="
+                                                + header.name()
+                                                + " requestSeq="
+                                                + header.requestSeq()
+                                                + " correlation="
+                                                + header.correlationId()
+                                                + " error="
+                                                + ex);
                     }
                 });
         return publication;
@@ -755,9 +759,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         }
     }
 
-    static void trace(String message) {
+    static void trace(Supplier<String> message) {
         if (STREAM_TRACE) {
-            LOGGER.fine("[zlink-java-stream-trace] " + message);
+            LOGGER.fine(() -> "[zlink-java-stream-trace] " + message.get());
         }
     }
 }
