@@ -34,7 +34,7 @@ TEST (ZLinkFrameworkSyncSubmit, DebugWaitRejectsPendingInfrastructureTask)
 {
     ASSERT_DEATH (
       {
-          detail::task_completion_source_t<void> pending;
+          task_completion_source_t<void> pending;
           runtime::infrastructure_wait_guard::infrastructure_scope_t scope (&pending);
           (void) pending.task ().result_for (1ms);
       },
@@ -43,7 +43,7 @@ TEST (ZLinkFrameworkSyncSubmit, DebugWaitRejectsPendingInfrastructureTask)
 
 TEST (ZLinkFrameworkSyncSubmit, DebugWaitAcceptsReadyInfrastructureTask)
 {
-    detail::task_completion_source_t<void> ready;
+    task_completion_source_t<void> ready;
     ready.complete (result_t<void>::success ());
     runtime::infrastructure_wait_guard::infrastructure_scope_t scope (&ready);
     EXPECT_TRUE (ready.task ().result_for (1ms).has_value ());
@@ -115,6 +115,11 @@ struct calls_t
         expect_invalid_operation ([&] { bound_send.submit (); });
         expect_invalid_operation ([&] { stream_send.submit (); });
         expect_invalid_operation ([&] { stream_write.submit (); });
+        task_completion_source_t<int> pending;
+        auto pending_task = pending.task ();
+        task_t<void> ready (result_t<void>::success ());
+        expect_invalid_operation ([&] { (void) pending_task.result_for (0ms); });
+        expect_invalid_operation ([&] { (void) ready.result_for (1ms); });
         EXPECT_EQ (0, preflights);
         EXPECT_EQ (0, requests);
         EXPECT_EQ (0, channel_requests);
@@ -165,7 +170,7 @@ TEST (ZLinkFrameworkSyncSubmit, OneWayTerminalsShareTheSingleSubmissionClaim)
 struct channel_handler_t
 {
     calls_t calls;
-    detail::task_completion_source_t<void> resume;
+    task_completion_source_t<void> resume;
     std::promise<void> entered;
 
     int handle (const int &value)
@@ -364,7 +369,7 @@ TEST (ZLinkFrameworkSyncSubmit, ActorContextRejectsBeforeSideEffects)
 
 TEST (ZLinkFrameworkSyncSubmit, RequestWaitsForApplicationReply)
 {
-    detail::task_completion_source_t<int> reply;
+    task_completion_source_t<int> reply;
     std::promise<void> submitted;
     request_call_t<int> call{"request",
                              [&] (const auto &packet, auto timeout, const auto &metadata) {
@@ -385,7 +390,7 @@ TEST (ZLinkFrameworkSyncSubmit, RequestWaitsForApplicationReply)
 TEST (ZLinkFrameworkSyncSubmit, ChannelRequestWaitsForTypedApplicationReply)
 {
     serializer_registry_t serializers;
-    detail::task_completion_source_t<zlink::message_t> reply;
+    task_completion_source_t<zlink::message_t> reply;
     std::promise<void> submitted;
     channel_request_call_t call{"channel-request", &serializers,
                                 [&] (const auto &, auto, const auto &) {
@@ -404,7 +409,7 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
 {
     detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
     stream_t stream;
-    detail::task_completion_source_t<void> admitted;
+    task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (stream,
                                      [&] (const auto &header, const auto &payload, auto timeout) {
@@ -427,7 +432,7 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendPropagatesDeferredAdmissionFailure)
 {
     detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
     stream_t stream;
-    detail::task_completion_source_t<void> admitted;
+    task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (stream, [&] (const auto &, const auto &, auto) {
         submitted.set_value ();
@@ -477,7 +482,7 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
     detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
     stream_t stream;
     reply_session_t session;
-    detail::task_completion_source_t<void> admitted;
+    task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     std::atomic_int writes{0};
     runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload, auto) {

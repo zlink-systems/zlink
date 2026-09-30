@@ -414,25 +414,24 @@ handler_registry_t::invoke (std::string_view channel_name,
         return result;
     };
 
-    detail::task_completion_source_t<zlink::message_t> completion;
-    auto task = completion.task ();
+    auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+    auto task = completion->task ();
     try {
         auto executor = handler_invocation_executor ();
         if (!executor) {
             return detail::boundary_failure<zlink::message_t> (
               detail::boundary_error_t::shutdown, "handler invocation executor is not running");
         }
-        executor->submit (
-          [completion = std::move (completion), invoke_body = std::move (invoke_body)] () mutable {
-              completion.complete (invoke_body ());
-          });
+        executor->submit ([completion, invoke_body = std::move (invoke_body)] () mutable {
+            completion->complete (invoke_body ());
+        });
     }
     catch (const std::exception &error) {
-        completion.complete (result_t<zlink::message_t>::failure (
+        completion->complete (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, error.what ()));
     }
     catch (...) {
-        completion.complete (result_t<zlink::message_t>::failure (
+        completion->complete (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler executor rejected invocation"));
     }
     return task.result ();

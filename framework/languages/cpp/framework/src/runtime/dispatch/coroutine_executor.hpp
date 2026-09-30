@@ -55,7 +55,7 @@ class coroutine_executor_t
     template <typename TResult>
     task_t<TResult> submit (std::function<boost::asio::awaitable<result_t<TResult>> ()> work)
     {
-        detail::task_completion_source_t<TResult> completion;
+        task_completion_source_t<TResult> completion;
         auto task = completion.task ();
         boost::asio::co_spawn (
           _pool,

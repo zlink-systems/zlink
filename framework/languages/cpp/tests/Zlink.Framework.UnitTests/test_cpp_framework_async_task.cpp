@@ -206,7 +206,7 @@ int main ()
         return 1;
     }
 
-    zlink::framework::detail::task_completion_source_t<int> completion;
+    zlink::framework::task_completion_source_t<int> completion;
     auto first_complete_wins = completion.task ();
     int callback_count = 0;
     int callback_value = 0;
@@ -248,28 +248,6 @@ int main ()
         || zlink::framework::detail::boundary_state (*shutdown_result.error ())
              != zlink::framework::detail::boundary_error_t::shutdown) {
         return 5;
-    }
-
-    std::deque<std::function<void ()>> scheduled;
-    zlink::framework::detail::task_completion_source_t<int> scheduled_completion (
-      [&scheduled] (std::function<void ()> work) { scheduled.push_back (std::move (work)); });
-    auto scheduled_task = scheduled_completion.task ();
-    int scheduled_callback_count = 0;
-    zlink::framework::detail::observe_task_completion (
-      scheduled_task, [&scheduled_callback_count] (const zlink::framework::result_t<int> &result) {
-          if (result.value () == 300) {
-              ++scheduled_callback_count;
-          }
-      });
-    scheduled_completion.complete (zlink::framework::result_t<int>::success (300));
-    scheduled_completion.complete (zlink::framework::result_t<int>::success (400));
-    if (scheduled_callback_count != 0 || scheduled.size () != 1) {
-        return 6;
-    }
-    scheduled.front () ();
-    scheduled.pop_front ();
-    if (scheduled_callback_count != 1 || scheduled_task.result ().value () != 300) {
-        return 7;
     }
 
     std::deque<std::function<void ()>> rescheduled_work;
@@ -520,21 +498,16 @@ int main ()
         return 26;
     }
 
-    zlink::framework::detail::task_completion_source_t<int> stopped_completion;
-    auto stopped_task = stopped_completion.task ();
-    std::stop_source stop_wait;
-    std::thread stop_request ([&] {
-        std::this_thread::sleep_for (std::chrono::milliseconds (5));
-        stop_wait.request_stop ();
-    });
-    const auto stop_wait_started_at = std::chrono::steady_clock::now ();
-    const auto stopped_result =
-      stopped_task.result_for (std::chrono::seconds (1), stop_wait.get_token ());
-    const auto stop_wait_elapsed = std::chrono::steady_clock::now () - stop_wait_started_at;
-    stop_request.join ();
-    if (stopped_result || stop_wait_elapsed >= std::chrono::milliseconds (250)) {
+    zlink::framework::task_completion_source_t<int> observed_completion;
+    auto observed_task = observed_completion.task ();
+    if (observed_task.result_for (std::chrono::milliseconds (0)))
         return 27;
-    }
+    if (!observed_completion.complete (zlink::framework::result_t<int>::success (123))
+        || observed_completion.complete (zlink::framework::result_t<int>::success (456)))
+        return 28;
+    const auto observed_result = observed_task.result_for (std::chrono::milliseconds (0));
+    if (!observed_result || observed_result->value () != 123)
+        return 29;
 
     return 0;
 }

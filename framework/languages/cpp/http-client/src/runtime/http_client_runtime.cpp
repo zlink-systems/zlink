@@ -77,7 +77,7 @@ http_client_runtime_t::submit (http_request_t request) const
 {
     const auto timeout = request.timeout.value_or (_options.timeout);
     const auto deadline = std::chrono::steady_clock::now () + timeout;
-    zlink::framework::detail::task_completion_source_t<raw_http_response_t> completion (
+    zlink::framework::task_completion_source_t<raw_http_response_t> completion (
       completion_scheduler ());
     auto task = completion.task ();
     auto runtime = shared_from_this ();

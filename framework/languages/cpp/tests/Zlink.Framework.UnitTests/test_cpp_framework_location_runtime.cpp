@@ -45,7 +45,7 @@ class pending_renew_repository_t final : public in_memory_location_repository_t
   private:
     std::promise<void> _renew_started;
     std::atomic_int _renew_calls = 0;
-    zlink::framework::detail::task_completion_source_t<zlink::framework::owner_lease_renew_result_t>
+    zlink::framework::task_completion_source_t<zlink::framework::owner_lease_renew_result_t>
       _renew_completion;
 };
 
@@ -155,7 +155,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
                 "injected owner lease provider failure"));
         }
         if (_claim_mode == claim_mode_t::delay_first && call == 0) {
-            auto completion = std::make_shared<zlink::framework::detail::task_completion_source_t<
+            auto completion = std::make_shared<zlink::framework::task_completion_source_t<
               zlink::framework::owner_lease_claim_result_t>> ();
             auto pending = completion->task ();
             _delayed_claim = std::thread (
@@ -181,7 +181,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
                 "injected owner lease response failure"));
         }
         if (_claim_mode == claim_mode_t::never_complete) {
-            _pending_claim = std::make_shared<zlink::framework::detail::task_completion_source_t<
+            _pending_claim = std::make_shared<zlink::framework::task_completion_source_t<
               zlink::framework::owner_lease_claim_result_t>> ();
             if (_cancellation != nullptr) {
                 _cancellation->request_stop ();
@@ -209,7 +209,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     {
         _release_calls.fetch_add (1);
         if (_block_releases) {
-            _pending_release = std::make_shared<zlink::framework::detail::task_completion_source_t<
+            _pending_release = std::make_shared<zlink::framework::task_completion_source_t<
               zlink::framework::owner_lease_release_result_t>> ();
             return _pending_release->task ();
         }
@@ -227,11 +227,11 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     std::stop_source *_cancellation = nullptr;
     std::chrono::milliseconds _claim_delay{0};
     std::thread _delayed_claim;
-    std::shared_ptr<zlink::framework::detail::task_completion_source_t<
-      zlink::framework::owner_lease_claim_result_t>>
+    std::shared_ptr<
+      zlink::framework::task_completion_source_t<zlink::framework::owner_lease_claim_result_t>>
       _pending_claim;
-    std::shared_ptr<zlink::framework::detail::task_completion_source_t<
-      zlink::framework::owner_lease_release_result_t>>
+    std::shared_ptr<
+      zlink::framework::task_completion_source_t<zlink::framework::owner_lease_release_result_t>>
       _pending_release;
     std::atomic_int _claim_calls = 0;
     std::atomic_int _release_calls = 0;

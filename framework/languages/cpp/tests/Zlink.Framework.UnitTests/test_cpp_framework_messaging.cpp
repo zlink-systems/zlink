@@ -1141,7 +1141,7 @@ int main ()
          * registration even when the task completes from a flow-less thread,
          * and nothing leaks into the completing thread afterwards. */
         {
-            zlink::framework::detail::task_completion_source_t<int> source;
+            zlink::framework::task_completion_source_t<int> source;
             std::string observed_in_callback;
             bool leaked_on_completer = false;
             {

@@ -1463,6 +1463,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;async"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_task_completion_source
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_task_completion_source.cpp)
+  target_link_libraries(test_cpp_framework_task_completion_source PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_task_completion_source
+    COMMAND test_cpp_framework_task_completion_source
+    LABELS "framework-contract;framework-unit;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE

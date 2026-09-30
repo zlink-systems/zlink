@@ -163,7 +163,7 @@ void shutdown_handler_coroutine_executor () noexcept
 namespace zlink::framework::detail
 {
 
-task_scheduler_t capture_runtime_native_continuation_scheduler ()
+task_scheduler_t capture_host_continuation_scheduler ()
 {
     {
         std::lock_guard lock (runtime::executor_mutex ());
@@ -187,5 +187,17 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
         configured->post_native_continuation (std::move (work));
     };
 }
+
+void check_blocking_submit_context ();
+
+namespace
+{
+constexpr runtime_execution_hooks_t host_execution_hooks{&capture_host_continuation_scheduler,
+                                                         &check_blocking_submit_context};
+const bool host_execution_hooks_installed = [] {
+    set_runtime_execution_hooks (&host_execution_hooks);
+    return true;
+}();
+} // namespace
 
 } // namespace zlink::framework::detail

@@ -24,6 +24,7 @@ namespace zlink::framework
 {
 
 template <typename T> class task_t;
+template <typename T> class task_completion_source_t;
 
 namespace detail
 {
@@ -34,6 +35,16 @@ using task_scheduler_t = std::function<void (std::function<void ()>)>;
 // binding operations own no executor lifetime; invocation and post admission
 // are serialized with host shutdown.
 task_scheduler_t capture_runtime_native_continuation_scheduler ();
+void ensure_blocking_submit_allowed ();
+
+struct runtime_execution_hooks_t
+{
+    task_scheduler_t (*capture_scheduler) ();
+    void (*ensure_blocking_allowed) ();
+};
+
+void set_runtime_execution_hooks (const runtime_execution_hooks_t *hooks) noexcept;
+
 
 struct serial_resume_failure_t
 {
@@ -242,14 +253,9 @@ template <typename T>
 class task_shared_state_t : public std::enable_shared_from_this<task_shared_state_t<T>>
 {
   public:
-    explicit task_shared_state_t (task_scheduler_t scheduler = {}) :
-        _scheduler (std::move (scheduler))
+    bool complete (result_t<T> result)
     {
-    }
-
-    void complete (result_t<T> result)
-    {
-        std::vector<std::pair<std::coroutine_handle<>, ambient_context_snapshot_t>> continuations;
+        std::vector<std::pair<std::coroutine_handle<>, task_scheduler_t>> continuations;
         std::vector<
           std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
           callbacks;
@@ -260,7 +266,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         {
             std::lock_guard lock (_mutex);
             if (_result) {
-                return;
+                return false;
             }
             _result = std::move (result);
             continuations = std::move (_continuations);
@@ -273,17 +279,13 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             callback.first (*_result);
         }
         for (auto &callback : callbacks) {
-            schedule ([self, callback = std::move (callback)] {
-                const auto ambient_guard = enter_ambient_context (callback.second);
-                callback.first (*self->_result);
-            });
+            const auto ambient_guard = enter_ambient_context (callback.second);
+            callback.first (*self->_result);
         }
         for (auto &continuation : continuations) {
-            schedule ([continuation] {
-                const auto ambient_guard = enter_ambient_context (continuation.second);
-                continuation.first.resume ();
-            });
+            continuation.second ([handle = continuation.first] { handle.resume (); });
         }
+        return true;
     }
 
     bool is_ready () const
@@ -294,21 +296,18 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 
     void set_continuation (std::coroutine_handle<> continuation)
     {
-        auto snapshot = capture_ambient_context ();
+        auto scheduler = capture_native_continuation_scheduler ();
         bool resume_now = false;
         {
             std::lock_guard lock (_mutex);
             if (_result) {
                 resume_now = true;
             } else {
-                _continuations.emplace_back (continuation, std::move (snapshot));
+                _continuations.emplace_back (continuation, std::move (scheduler));
             }
         }
         if (resume_now) {
-            schedule ([continuation, snapshot = std::move (snapshot)] {
-                const auto ambient_guard = enter_ambient_context (snapshot);
-                continuation.resume ();
-            });
+            scheduler ([continuation] { continuation.resume (); });
         }
     }
 
@@ -322,14 +321,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return *_result;
     }
 
-    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout)
-    {
-        return result_for (timeout, {});
-    }
-
     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
-                                           std::stop_token cancellation)
+                                           std::stop_token cancellation = {})
     {
+        ensure_blocking_submit_allowed ();
         std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
         std::unique_lock lock (_mutex);
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
@@ -339,9 +334,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 #endif
         if (!_ready.wait_for (
               lock, timeout, [&] { return _result.has_value () || cancellation.stop_requested (); })
-            || !_result) {
+            || !_result)
             return std::nullopt;
-        }
         return *_result;
     }
 
@@ -359,14 +353,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             }
         }
         if (completed) {
-            /* The already-completed path may still defer through a scheduler,
-             * so the registration-time context travels with the callback the
-             * same way the pending path stores it. */
-            schedule (
-              [self, callback = std::move (callback), snapshot = capture_ambient_context ()] {
-                  const auto ambient_guard = enter_ambient_context (snapshot);
-                  callback (*self->_result);
-              });
+            const auto ambient_guard = enter_ambient_context (capture_ambient_context ());
+            callback (*self->_result);
         }
     }
 
@@ -385,45 +373,38 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     }
 
   private:
-    void schedule (std::function<void ()> work) const
-    {
-        if (!_scheduler) {
-            work ();
-            return;
-        }
-        try {
-            _scheduler (std::move (work));
-        }
-        catch (...) {
-        }
-    }
-
     mutable std::mutex _mutex;
     std::condition_variable _ready;
-    task_scheduler_t _scheduler;
     std::optional<result_t<T>> _result;
-    std::vector<std::pair<std::coroutine_handle<>, ambient_context_snapshot_t>> _continuations;
+    std::vector<std::pair<std::coroutine_handle<>, task_scheduler_t>> _continuations;
     std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
       _callbacks;
     std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
       _terminal_callbacks;
 };
 
+} // namespace detail
+
 template <typename T> class task_completion_source_t
 {
+    static_assert (std::is_void_v<T> || std::is_copy_constructible_v<T>);
+
   public:
-    explicit task_completion_source_t (task_scheduler_t scheduler = {}) :
-        _state (std::make_shared<task_shared_state_t<T>> (std::move (scheduler)))
-    {
-    }
+    task_completion_source_t () : _state (std::make_shared<detail::task_shared_state_t<T>> ()) {}
+    task_completion_source_t (task_completion_source_t &&) noexcept = default;
+    task_completion_source_t &operator= (task_completion_source_t &&) noexcept = default;
+    task_completion_source_t (const task_completion_source_t &) = delete;
+    task_completion_source_t &operator= (const task_completion_source_t &) = delete;
 
-    task_t<T> task ();
-
-    void complete (result_t<T> result) { _state->complete (std::move (result)); }
+    task_t<T> task () const;
+    bool complete (result_t<T> result) { return _state->complete (std::move (result)); }
 
   private:
-    std::shared_ptr<task_shared_state_t<T>> _state;
+    std::shared_ptr<detail::task_shared_state_t<T>> _state;
 };
+
+namespace detail
+{
 
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback);
@@ -434,6 +415,11 @@ void observe_task_completion (task_t<T> &task, TCallback &&callback);
 template <typename T, typename TCallback>
 void observe_task_terminal (task_t<T> &task, TCallback &&callback);
 
+template <typename T>
+std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::stop_token cancellation);
+
 template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler);
 
 } // namespace detail
@@ -443,7 +429,7 @@ template <typename T> class task_t
   public:
     struct promise_type
     {
-        detail::task_completion_source_t<T> completion;
+        task_completion_source_t<T> completion;
 
         detail::task_scheduler_t zlink_continuation_scheduler ()
         {
@@ -512,12 +498,6 @@ template <typename T> class task_t
         return _state->result_for (timeout);
     }
 
-    std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
-                                           std::stop_token cancellation) const
-    {
-        return _state->result_for (timeout, cancellation);
-    }
-
   private:
     explicit task_t (std::shared_ptr<detail::task_shared_state_t<T>> state) :
         _state (std::move (state))
@@ -526,7 +506,10 @@ template <typename T> class task_t
 
     std::shared_ptr<detail::task_shared_state_t<T>> _state;
 
-    friend class detail::task_completion_source_t<T>;
+    friend class task_completion_source_t<T>;
+    template <typename U>
+    friend std::optional<result_t<U>>
+    detail::observe_task_result_for (const task_t<U> &, std::chrono::milliseconds, std::stop_token);
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
     template <typename TObserved, typename TCallback>
@@ -538,7 +521,7 @@ template <> class task_t<void>
   public:
     struct promise_type
     {
-        detail::task_completion_source_t<void> completion;
+        task_completion_source_t<void> completion;
 
         detail::task_scheduler_t zlink_continuation_scheduler ()
         {
@@ -599,12 +582,6 @@ template <> class task_t<void>
         return _state->result_for (timeout);
     }
 
-    std::optional<result_t<void>> result_for (std::chrono::milliseconds timeout,
-                                              std::stop_token cancellation) const
-    {
-        return _state->result_for (timeout, cancellation);
-    }
-
   private:
     explicit task_t (std::shared_ptr<detail::task_shared_state_t<void>> state) :
         _state (std::move (state))
@@ -613,20 +590,23 @@ template <> class task_t<void>
 
     std::shared_ptr<detail::task_shared_state_t<void>> _state;
 
-    friend class detail::task_completion_source_t<void>;
+    friend class task_completion_source_t<void>;
+    template <typename U>
+    friend std::optional<result_t<U>>
+    detail::observe_task_result_for (const task_t<U> &, std::chrono::milliseconds, std::stop_token);
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_terminal (task_t<TObserved> &, TCallback &&);
 };
 
-namespace detail
-{
-
-template <typename T> task_t<T> task_completion_source_t<T>::task ()
+template <typename T> task_t<T> task_completion_source_t<T>::task () const
 {
     return task_t<T> (_state);
 }
+
+namespace detail
+{
 
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback)
@@ -640,6 +620,14 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 {
     task._state->on_terminal (
       std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+}
+
+template <typename T>
+std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::stop_token cancellation)
+{
+    return task._state->result_for (timeout, cancellation);
 }
 
 template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler)
@@ -669,11 +657,5 @@ template <typename T> task_t<T> unsupported_yield_task ()
 
 
 } // namespace detail
-
-template <typename T, typename TCallback>
-void observe_task_completion (task_t<T> &task, TCallback &&callback)
-{
-    detail::observe_task_completion (task, std::forward<TCallback> (callback));
-}
 
 } // namespace zlink::framework

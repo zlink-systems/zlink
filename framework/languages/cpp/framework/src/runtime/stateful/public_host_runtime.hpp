@@ -191,8 +191,8 @@ struct pending_operation_t
     }
 
     call_id_t id;
-    std::shared_ptr<detail::task_completion_source_t<operation_completion_t>> completion =
-      std::make_shared<detail::task_completion_source_t<operation_completion_t>> ();
+    std::shared_ptr<task_completion_source_t<operation_completion_t>> completion =
+      std::make_shared<task_completion_source_t<operation_completion_t>> ();
     // Local replies have typed records rather than service-wire bytes. Only
     // the registry's terminal winner fills this value before dispatcher post.
     std::shared_ptr<operation_completion_t> local_result;

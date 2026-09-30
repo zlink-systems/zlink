@@ -635,7 +635,7 @@ int main ()
         return 32;
     }
 
-    zlink::framework::detail::task_completion_source_t<int> completion;
+    zlink::framework::task_completion_source_t<int> completion;
     auto first_complete_wins = completion.task ();
     int callback_count = 0;
     int callback_value = 0;

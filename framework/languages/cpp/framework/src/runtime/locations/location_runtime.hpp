@@ -354,10 +354,9 @@ class location_runtime_t
             || remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ())
             co_return std::nullopt;
         if (!heartbeat)
-            co_return pending.result_for (remaining_until (attempt->deadline_at),
-                                          attempt->cancellation);
-        auto completion =
-          std::make_shared<detail::task_completion_source_t<std::optional<result_t<T>>>> ();
+            co_return detail::observe_task_result_for (
+              pending, remaining_until (attempt->deadline_at), attempt->cancellation);
+        auto completion = std::make_shared<task_completion_source_t<std::optional<result_t<T>>>> ();
         auto ready = completion->task ();
         {
             std::lock_guard lock (heartbeat->gate);

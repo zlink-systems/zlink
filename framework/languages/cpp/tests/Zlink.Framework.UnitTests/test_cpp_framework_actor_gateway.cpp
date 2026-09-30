@@ -2194,7 +2194,7 @@ zlink::framework::task_t<std::optional<zlink::message_t>> inspect_pending_relay_
   const zlink::framework::actor_ref_t &actor,
   const zlink::framework::detail::stream_header_t &header,
   const zlink::message_t &payload,
-  const std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
   const std::shared_ptr<std::atomic_bool> &started,
   std::string expected_actor_id,
   std::string expected_packet_name,
@@ -2212,7 +2212,7 @@ zlink::framework::task_t<std::optional<zlink::message_t>> inspect_pending_relay_
 
 zlink::framework::task_t<void> inspect_pending_disconnect_argument (
   const zlink::framework::actor_ref_t &actor,
-  const std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
   const std::shared_ptr<std::atomic_bool> &started,
   std::string expected_actor_id)
 {

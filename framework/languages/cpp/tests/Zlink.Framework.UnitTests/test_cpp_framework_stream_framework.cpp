@@ -315,7 +315,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
     std::mutex _mutex;
     std::condition_variable _continuation_ready;
     std::deque<std::function<void ()>> _continuations;
-    zlink::framework::detail::task_completion_source_t<void> _resume;
+    zlink::framework::task_completion_source_t<void> _resume;
 };
 
 class shutdown_session_control_t final
@@ -403,7 +403,7 @@ class shutdown_session_control_t final
     std::condition_variable _changed;
     std::deque<std::function<void ()>> _continuations;
     std::vector<std::string> _lifecycle;
-    zlink::framework::detail::task_completion_source_t<void> _resume;
+    zlink::framework::task_completion_source_t<void> _resume;
     std::atomic_size_t _connected{0};
     std::atomic_size_t _packet_entered{0};
     std::atomic_size_t _packet_terminal{0};

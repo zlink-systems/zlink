@@ -1619,7 +1619,7 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
   public:
     std::atomic_int request_submissions{0};
     std::atomic_bool delay_next_request{false};
-    zlink::framework::detail::task_completion_source_t<zlink::framework::message_t> delayed_request;
+    zlink::framework::task_completion_source_t<zlink::framework::message_t> delayed_request;
 
   protected:
     zlink::framework::task_t<void>
@@ -2056,16 +2056,17 @@ void verify_actor_yield_releases_spot_gate_before_reply ()
         actor_request_call_t request (actor_client, actor_id_t ("actor-2"), "OtherRequest",
                                       message_t{});
         request_task = std::make_shared<task_t<message_t>> (request.yield_message ());
-        observe_task_completion (*request_task, [&, request_task, complete = std::move (complete)] (
-                                                  const auto &result) mutable {
-            assert (result);
-            {
-                std::lock_guard lock (gate);
-                request_completed = true;
-            }
-            changed.notify_all ();
-            complete ([] {});
-        });
+        detail::observe_task_completion (
+          *request_task,
+          [&, request_task, complete = std::move (complete)] (const auto &result) mutable {
+              assert (result);
+              {
+                  std::lock_guard lock (gate);
+                  request_completed = true;
+              }
+              changed.notify_all ();
+              complete ([] {});
+          });
     }));
     assert (queue.try_post ("same-spot-sibling", [&] {
         std::lock_guard lock (gate);

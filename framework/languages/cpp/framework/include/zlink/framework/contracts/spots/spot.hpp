@@ -993,8 +993,8 @@ class spot_context_t
                     framework_error_kind_t::internal_failure, "worker runtime is not configured"));
               }
 
-              detail::task_completion_source_t<result_type> completion;
-              auto task = completion.task ();
+              auto completion = std::make_shared<task_completion_source_t<result_type>> ();
+              auto task = completion->task ();
               auto shared_work = std::make_shared<TWork> (std::move (work));
               auto completed = std::make_shared<std::atomic_bool> (false);
               const auto scheduled =
@@ -1008,7 +1008,7 @@ class spot_context_t
                     if (!completed->exchange (true)) {
                         auto complete_result = [completion,
                                                 result = std::move (result)] () mutable {
-                            completion.complete (std::move (result));
+                            completion->complete (std::move (result));
                         };
                         scheduler->post_owner (std::move (complete_result));
                     }
@@ -1016,7 +1016,7 @@ class spot_context_t
               if (!scheduled) {
                   completed->store (true);
                   auto complete_full = [completion] () mutable {
-                      completion.complete (result_t<result_type>::failure (
+                      completion->complete (result_t<result_type>::failure (
                         framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
                   };
                   scheduler->post_owner (std::move (complete_full));
@@ -1048,7 +1048,7 @@ class spot_context_t
                   return task_t<result_type> (result_t<result_type>::failure (
                     framework_error_kind_t::internal_failure, "worker runtime is not configured"));
               }
-              auto completion = std::make_shared<detail::task_completion_source_t<result_type>> ();
+              auto completion = std::make_shared<task_completion_source_t<result_type>> ();
               auto result = completion->task ();
               auto completed = std::make_shared<std::atomic_bool> (false);
               auto shared_work = std::make_shared<TWork> (std::move (work));
@@ -1060,17 +1060,17 @@ class spot_context_t
                          * pending in the observer would make an incomplete
                          * I/O task retain its own state after the wrapper has
                          * timed out. */
-                        observe_task_completion (pending,
-                                                 [completion, completed, cancellation] (
-                                                   const result_t<result_type> &value) mutable {
-                                                     if (cancellation.stop_requested ()) {
-                                                         completed->store (true);
-                                                         return;
-                                                     }
-                                                     if (!completed->exchange (true)) {
-                                                         completion->complete (value);
-                                                     }
-                                                 });
+                        detail::observe_task_completion (
+                          pending, [completion, completed,
+                                    cancellation] (const result_t<result_type> &value) mutable {
+                              if (cancellation.stop_requested ()) {
+                                  completed->store (true);
+                                  return;
+                              }
+                              if (!completed->exchange (true)) {
+                                  completion->complete (value);
+                              }
+                          });
                     }
                     catch (const framework_exception_t &error) {
                         if (!completed->exchange (true)) {

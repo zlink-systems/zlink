@@ -372,7 +372,6 @@ class app_state_t
     struct lifecycle_waiter_t : public std::enable_shared_from_this<lifecycle_waiter_t<TResult>>
     {
         task_completion_source_t<TResult> completion;
-        std::atomic_bool completed = false;
         std::optional<std::stop_callback<std::function<void ()>>> cancellation;
 
         task_t<TResult> task () { return completion.task (); }
@@ -390,15 +389,11 @@ class app_state_t
 
         void complete (TResult result)
         {
-            if (completed.exchange (true, std::memory_order_acq_rel))
-                return;
             completion.complete (result_t<TResult>::success (std::move (result)));
         }
 
         void cancel ()
         {
-            if (completed.exchange (true, std::memory_order_acq_rel))
-                return;
             completion.complete (detail::boundary_failure<TResult> (
               detail::boundary_error_t::cancelled, "lifecycle waiter was cancelled"));
         }
@@ -1861,8 +1856,7 @@ void app_t::_apply_zlink_framework ()
                   trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
                                                   dispatch_message_kind_t::request, *trace_context);
               }
-              auto completion =
-                std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
+              auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
               auto output = completion->task ();
               const auto submitted =
                 co_await selected.value ().source->activate_instance_spot_remote (

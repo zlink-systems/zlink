@@ -2061,7 +2061,7 @@ request_spot_parts_async (service::spot_handle_t egress,
                           std::chrono::milliseconds timeout)
 {
     auto source =
-      std::make_shared<detail::task_completion_source_t<runtime::messaging::message_parts_t>> ();
+      std::make_shared<task_completion_source_t<runtime::messaging::message_parts_t>> ();
     auto output = source->task ();
     try {
         const auto &native_parts = parts.items ();
@@ -2167,7 +2167,7 @@ request_spot_mesh_message (const std::shared_ptr<detail::spot_context_state_t> &
                            runtime::messaging::message_parts_t parts,
                            std::chrono::milliseconds timeout)
 {
-    auto source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
+    auto source = std::make_shared<task_completion_source_t<zlink::message_t>> ();
     auto output = source->task ();
     auto reply = request_spot_mesh_parts (state, std::move (node_rid), std::move (spot_id),
                                           std::move (parts), timeout);
@@ -2419,22 +2419,22 @@ namespace
 template <typename T>
 task_t<T> run_close_step (std::function<task_t<T> ()> step, const detail::task_scheduler_t &resume)
 {
-    detail::task_completion_source_t<T> completion;
-    auto result = completion.task ();
+    auto completion = std::make_shared<task_completion_source_t<T>> ();
+    auto result = completion->task ();
     auto run = [step = std::move (step), completion] () mutable {
         try {
             auto running = std::make_shared<task_t<T>> (step ());
             detail::observe_task_terminal (
               *running, [running, completion] (const result_t<T> &value) mutable {
-                  completion.complete (value);
+                  completion->complete (value);
               });
         }
         catch (const framework_exception_t &error) {
-            completion.complete (detail::result_access_t::failure<T> (error));
+            completion->complete (detail::result_access_t::failure<T> (error));
         }
         catch (...) {
-            completion.complete (result_t<T>::failure (framework_error_kind_t::internal_failure,
-                                                       "Spot Close step failed"));
+            completion->complete (result_t<T>::failure (framework_error_kind_t::internal_failure,
+                                                        "Spot Close step failed"));
         }
     };
     if (!resume) {
@@ -2442,8 +2442,8 @@ task_t<T> run_close_step (std::function<task_t<T> ()> step, const detail::task_s
         return result;
     }
     if (!detail::submit_blocking_call (std::move (run)))
-        completion.complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
-                                                   "Spot Close step executor is stopping"));
+        completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                                    "Spot Close step executor is stopping"));
     return result;
 }
 
@@ -2885,7 +2885,7 @@ void spot_context_state_t::run_serial_task_async (
 task_t<void> spot_context_state_t::run_serial_task (std::string name,
                                                     std::function<task_t<void> ()> work)
 {
-    detail::task_completion_source_t<void> completion;
+    task_completion_source_t<void> completion;
     auto result = completion.task ();
     run_serial_task_async (
       std::move (name), std::move (work),
@@ -3282,7 +3282,7 @@ task_t<bool> spot_context_t::close_erased ()
         return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
     state->ensure_relocation_turn_open ();
-    auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+    auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     state->request_close (
       {}, [completion] (result_t<bool> result) { completion->complete (std::move (result)); });
@@ -4387,7 +4387,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                           std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
                   });
             }
-            detail::task_completion_source_t<zlink::message_t> completion;
+            task_completion_source_t<zlink::message_t> completion;
             auto task = completion.task ();
             auto state = _state;
             const auto coordinator = state->ensure_spot_serial_executor ();
@@ -7001,7 +7001,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_local_actor_p
       _state->lane.run ([&] { return detail::effective_spot_node_rid (_state->snapshot); }).get ();
     const auto local_rid = zlink::routing_id_t::from (local_node);
     auto source_owner = source_node.to_bytes ().empty () ? local_rid : source_node;
-    detail::task_completion_source_t<std::optional<zlink::message_t>> completion;
+    task_completion_source_t<std::optional<zlink::message_t>> completion;
     auto terminal = completion.task ();
     std::optional<spot_node_builder_state_t::pending_handoff_request_key_t> pending_key;
     if (is_request) {
@@ -8764,7 +8764,7 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
         bool reservation_failed = false;
     };
     auto outcome = std::make_shared<admission_outcome_t> ();
-    detail::task_completion_source_t<spot_actor_join_result_t> admitted;
+    task_completion_source_t<spot_actor_join_result_t> admitted;
     auto result = admitted.task ();
     auto state = _state;
     target.run_serial_task_async (
@@ -9088,7 +9088,7 @@ spot_node_runtime_t::deliver_actor_join_completion (const actor_ref_t &actor_ref
                                                     const actor_join_completion_t &completion,
                                                     std::optional<spot_id_t> source_spot_id)
 {
-    detail::task_completion_source_t<result_t<void>> settled;
+    task_completion_source_t<result_t<void>> settled;
     auto task = settled.task ();
     deliver_actor_join_completion_async (
       actor_ref, completion, std::move (source_spot_id), [settled] (result_t<void> value) mutable {
@@ -11343,7 +11343,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot 
   actor_gateway_runtime_t *actor_gateway,
   std::optional<std::chrono::steady_clock::time_point> deadline)
 {
-    detail::task_completion_source_t<actor_join_reply_t> completion;
+    task_completion_source_t<actor_join_reply_t> completion;
     auto result = completion.task ();
     finalize_remote_actor_to_spot_async (
       std::move (transfer_id), actor_ref, std::move (target_spot_id), services, actor_gateway,
@@ -12412,7 +12412,7 @@ spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_
               return disconnect_callback (spot_instance.get (), actor_instance.get ());
           });
     }
-    detail::task_completion_source_t<void> completion;
+    task_completion_source_t<void> completion;
     auto result = completion.task ();
     const auto posted = plan.executor->execute_actor (
       key, "actor-disconnected",

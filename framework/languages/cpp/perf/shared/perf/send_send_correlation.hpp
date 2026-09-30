@@ -22,14 +22,16 @@ class send_send_correlation_t
     struct entry_t
     {
         entry_t (echo_request_t request_, std::int64_t started, std::int64_t expires) :
-            request (std::move (request_)), started_ticks (started), expires_at_ticks (expires),
+            request (std::move (request_)),
+            started_ticks (started),
+            expires_at_ticks (expires),
             // The waiter resumes through the host executor, like a native binding awaitable, never on the completing thread.
             result (zlink::framework::detail::capture_native_continuation_scheduler ())
         {
         }
         echo_request_t request;
         std::int64_t started_ticks, expires_at_ticks;
-        zlink::framework::detail::task_completion_source_t<int> result;
+        zlink::framework::task_completion_source_t<int> result;
         std::atomic<int> state{pending};
         std::int64_t closed_ticks = 0;
         std::exception_ptr error;
@@ -50,8 +52,8 @@ class send_send_correlation_t
     send_send_correlation_t (measurement_t &measurement, scenario_metrics_t &metrics) :
         _measurement (measurement), _metrics (metrics)
     {
-        _metrics.counters ({"messages.admitted", "messages.expired", "messages.duplicateReply", "messages.lateReply",
-                            "messages.unknownCorrelation"});
+        _metrics.counters ({"messages.admitted", "messages.expired", "messages.duplicateReply",
+                            "messages.lateReply", "messages.unknownCorrelation"});
         _metrics.on_reset ([this] {
             std::lock_guard lock (_gate);
             _entries.clear ();
@@ -74,7 +76,10 @@ class send_send_correlation_t
     entry_ptr_t register_request (const echo_request_t &request, std::int64_t started_ticks)
     {
         auto entry = std::make_shared<entry_t> (
-          request, started_ticks, now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
+          request, started_ticks,
+          now_ticks ()
+            + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms)
+                * 1'000'000);
         {
             std::lock_guard lock (_gate);
             if (!_entries.emplace (request.correlation_id, entry).second)
@@ -99,8 +104,7 @@ class send_send_correlation_t
         if (!error) {
             if (_measurement.phase () != "setup")
                 _metrics.count ("messages.admitted");
-        }
-        else
+        } else
             entry->close (failed, std::move (error));
     }
 
@@ -127,13 +131,15 @@ class send_send_correlation_t
             invalid = std::current_exception ();
         }
         if (!entry->close (invalid ? failed : succeeded, invalid))
-            _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
+            _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply"
+                                                              : "messages.lateReply");
     }
 
     // The final result once the first send has ended: the first result of the correlation, or its expiry (closed by
     // the expiry thread). The time is when that result was fixed, so an echo seen before the first send's terminal
     // keeps its own time.
-    zlink::framework::task_t<std::pair<std::exception_ptr, std::int64_t>> complete (entry_ptr_t entry)
+    zlink::framework::task_t<std::pair<std::exception_ptr, std::int64_t>>
+    complete (entry_ptr_t entry)
     {
         auto waiting = entry->result.task ();
         (void) co_await waiting;
@@ -157,7 +163,10 @@ class send_send_correlation_t
             }
             _expiry.pop_front ();
             lock.unlock ();
-            if (front->close (expired, std::make_exception_ptr (validation_error_t ("CorrelationExpired", "No return send arrived before the correlation deadline."))))
+            if (front->close (expired,
+                              std::make_exception_ptr (validation_error_t (
+                                "CorrelationExpired",
+                                "No return send arrived before the correlation deadline."))))
                 _metrics.count ("messages.expired");
             lock.lock ();
         }

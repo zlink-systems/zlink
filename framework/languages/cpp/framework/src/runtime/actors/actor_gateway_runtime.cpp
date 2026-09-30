@@ -427,7 +427,7 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
                                     std::string packet_name,
                                     std::function<task_t<void> ()> dispatch)
 {
-    auto completion = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
     auto task = completion->task ();
     const auto start_drain = state->sync ([&] {
         auto &queue = state->pending_session_relays[actor_id];
@@ -1021,7 +1021,7 @@ actor_join_call_t actor_context_t::join_entry_spot_payload (const zlink::message
                 }
             });
 
-            detail::task_completion_source_t<void> completed;
+            task_completion_source_t<void> completed;
             auto result = completed.task ();
             auto joining = dispatcher (*context->_actor_ref, effective_request, timeout);
             detail::observe_task_completion (

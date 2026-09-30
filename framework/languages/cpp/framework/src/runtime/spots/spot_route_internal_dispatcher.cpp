@@ -874,7 +874,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             || header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
             /* One implementation (dispatch_request_async); a caller without a
              * deferred record terminal waits for it here. */
-            ::zlink::framework::detail::task_completion_source_t<zlink::message_t> completion;
+            ::zlink::framework::task_completion_source_t<zlink::message_t> completion;
             auto result = completion.task ();
             if (!dispatch_request_async (received, header, services,
                                          [completion] (result_t<zlink::message_t> value) mutable {
@@ -887,7 +887,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
               detail::encoded_payload_from_raw (body.value ()));
-            detail::task_completion_source_t<zlink::message_t> completion;
+            task_completion_source_t<zlink::message_t> completion;
             auto result = completion.task ();
             dispatch_actor_commit_request (std::move (request), received, header, services,
                                            [completion] (result_t<zlink::message_t> value) mutable {
