@@ -175,6 +175,83 @@ public sealed class test_request_writable_contract
     }
 
     [Fact]
+    public async Task route_removal_completes_admitted_request_as_not_found()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        using var client = context.CreateRouterSocket();
+        using var server = context.CreateRouterSocket();
+        RoutingId clientRid = CoreTestSupport.RoutingIdUtf8(
+            "request-errno-not-found-client");
+        RoutingId serverRid = CoreTestSupport.RoutingIdUtf8(
+            "request-errno-not-found-server");
+        client.SetRoutingId(clientRid);
+        server.SetRoutingId(serverRid);
+        client.Options.SetConnectRoutingId(serverRid);
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "request-errno-not-found");
+        server.Bind(endpoint);
+        client.Connect(endpoint);
+        Handshake(client, server, serverRid);
+        using var completions = new CompletionPollerDriver(client);
+
+        using Message part = Message.From("route-removal-not-found");
+        Task<IReadOnlyList<Message>> reply = client.Request(serverRid)
+            .Message(part).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
+        using (Received request = Receive(server))
+            Assert.Equal("route-removal-not-found",
+                request.SinglePartOrThrow().GetString());
+
+        client.DisconnectRid(serverRid);
+        ZlinkRequestException error = await Assert.ThrowsAsync<
+            ZlinkRequestException>(() => reply.WaitAsync(
+                TimeSpan.FromSeconds(3)));
+        Assert.Equal(ZlinkRequestException.ErrorCode.NotFound, error.Result);
+        Assert.Equal(2, error.NativeErrno);
+    }
+
+    [Fact]
+    public async Task target_close_completes_admitted_request_as_not_connected()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        using var client = context.CreateRouterSocket();
+        using var server = context.CreateRouterSocket();
+        RoutingId clientRid = CoreTestSupport.RoutingIdUtf8(
+            "request-errno-not-connected-client");
+        RoutingId serverRid = CoreTestSupport.RoutingIdUtf8(
+            "request-errno-not-connected-server");
+        client.SetRoutingId(clientRid);
+        server.SetRoutingId(serverRid);
+        client.Options.SetConnectRoutingId(serverRid);
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "request-errno-not-connected");
+        server.Bind(endpoint);
+        client.Connect(endpoint);
+        Handshake(client, server, serverRid);
+        using var completions = new CompletionPollerDriver(client);
+
+        using Message part = Message.From("target-close-not-connected");
+        Task<IReadOnlyList<Message>> reply = client.Request(serverRid)
+            .Message(part).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
+        using (Received request = Receive(server))
+            Assert.Equal("target-close-not-connected",
+                request.SinglePartOrThrow().GetString());
+
+        server.Dispose();
+        ZlinkRequestException error = await Assert.ThrowsAsync<
+            ZlinkRequestException>(() => reply.WaitAsync(
+                TimeSpan.FromSeconds(3)));
+        Assert.Equal(ZlinkRequestException.ErrorCode.NotConnected,
+            error.Result);
+        Assert.Equal(107, error.NativeErrno);
+    }
+
+    [Fact]
     public async Task send_and_request_tokens_share_the_completion_owner()
     {
         if (!CoreTestSupport.IsNativeAvailable())

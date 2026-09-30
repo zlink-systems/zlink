@@ -7,9 +7,11 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 public final class RecvScratch {
-    public static final int TOPIC_CAPACITY = 256;
+    private static final long INITIAL_TOPIC_CAPACITY = 256;
 
     public final Arena arena = Arena.ofAuto();
+    // Replacing this arena lets the previous auto allocation be reclaimed.
+    private Arena topicArena = Arena.ofAuto();
     public final MemorySegment sourceRidOut = arena.allocate(ValueLayout.ADDRESS);
     public final MemorySegment routingIdOut = arena.allocate(
         NativeLayouts.ROUTING_ID_LAYOUT);
@@ -20,6 +22,23 @@ public final class RecvScratch {
 
     // Subscribe hot path: keep the native topic-out buffer thread-local so
     // public receive calls avoid allocating scratch storage per message.
-    public final MemorySegment topicOut = arena.allocate(TOPIC_CAPACITY);
+    public MemorySegment topicOut = topicArena.allocate(
+        INITIAL_TOPIC_CAPACITY);
     public final MemorySegment topicLenOut = arena.allocate(ValueLayout.JAVA_LONG);
+
+    long topicCapacity() {
+        return topicOut.byteSize();
+    }
+
+    boolean growTopicBufferIfRequired() {
+        long required = topicLenOut.get(ValueLayout.JAVA_LONG, 0);
+        if (required <= topicCapacity()) {
+            return false;
+        }
+        Arena replacementArena = Arena.ofAuto();
+        MemorySegment replacement = replacementArena.allocate(required);
+        topicArena = replacementArena;
+        topicOut = replacement;
+        return true;
+    }
 }
