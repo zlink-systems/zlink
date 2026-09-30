@@ -100,7 +100,6 @@ import {
 } from './service-wire-m6a-codec';
 import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
 import { validateServiceMetadataFrame } from './service-metadata-codec';
-import type { ServiceSessionBindingIngressPort } from './service-session-binding-ingress-port';
 import { ZLinkFrameworkException } from '../../contracts';
 
 const ACTOR_ROUTE_STALE = 21;
@@ -194,9 +193,8 @@ export interface ServiceCanonicalActorJoinCandidate {
 
 export interface ServiceSessionDelivery {
   readonly binding: ServiceSessionBinding;
-  readonly bindingIngress?: ServiceSessionBindingIngressPort;
   /**
-   * Delivers the retained M6A application frame after the binding fence has
+   * Delivers the M6A application frame after the binding fence has
    * been validated. The stream adapter owns multipart decoding at that point.
    */
   readonly deliver: (sessionRid: string, payloadFrame: Uint8Array) => Promise<boolean>;
@@ -1721,7 +1719,6 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     deliver: ServiceSessionDelivery['deliver'],
     onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced'],
-    bindingIngress?: ServiceSessionBindingIngressPort,
     actorAuthority?: StreamSessionActorAuthorityFence
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
@@ -1740,7 +1737,6 @@ export class ServiceStatefulRuntime {
     const delivery: ServiceSessionDelivery = {
       binding: localBinding,
       deliver,
-      ...(bindingIngress === undefined ? {} : { bindingIngress }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
     const deliveryKey = actorKey(actor);
@@ -1975,18 +1971,6 @@ export class ServiceStatefulRuntime {
     if (this.closed) return;
     this.closed = true;
     this.operations.close();
-    const clearedActors = new Set<string>();
-    for (const deliveries of [this.sessionDeliveries, this.retiredSessionDeliveries]) {
-      for (const delivery of deliveries.values()) {
-        const actorId = delivery.binding.actor.actorId;
-        if (clearedActors.has(actorId)) continue;
-        clearedActors.add(actorId);
-        delivery.bindingIngress?.clearOutbound(
-          actorId,
-          new Error(`Actor '${actorId}' Session service closed with retained outbound delivery.`)
-        );
-      }
-    }
     this.sessionDeliveries.clear();
     this.retiredSessionDeliveries.clear();
     this.appliedReplacementNotices.clear();
@@ -3666,39 +3650,10 @@ export class ServiceStatefulRuntime {
       return 'protocolError';
     }
     const sessionRid = delivery.binding.sessionRid;
-    let retainedPayload: Uint8Array | undefined = payloadFrame;
-    let settled = false;
-    const settle = () => {
-      if (settled) return false;
-      settled = true;
-      retainedPayload = undefined;
-      return true;
-    };
-    const operation = {
-      deliver: async () => {
-        if (settled || retainedPayload === undefined) return false;
-        const delivered = await delivery.deliver(sessionRid, retainedPayload);
-        if (delivered) settle();
-        return delivered;
-      },
-      fail: (_error: unknown) => {
-        settle();
-      }
-    };
-    const decision = await delivery.bindingIngress?.retainOutbound(
-      record.actor.actor.actorId,
-      operation
-    );
-    if (decision === 'retained') return 'application';
-    if (decision === 'rejected') {
-      return 'protocolError';
-    }
     try {
-      const delivered = await delivery.deliver(sessionRid, retainedPayload);
-      settle();
+      const delivered = await delivery.deliver(sessionRid, payloadFrame);
       if (!delivered) return 'protocolError';
     } catch (error) {
-      operation.fail(error);
       // Remote command 36 is one-way: its source transport admission has
       // already completed, so a later client delivery terminal is local to
       // this session owner. Local fast paths still preserve the typed result.

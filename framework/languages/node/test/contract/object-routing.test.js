@@ -1208,7 +1208,7 @@ test('Missing Instance send directly awaits binding admission and submits once',
   assert.equal(sendAttempts, 1);
 });
 
-test('old route disconnect after relocation terminal permits a late same-seal relay on the successor route', async () => {
+test('old route disconnect preserves the terminal seal after a successor binding', async () => {
   const bindings = new internal.ZLinkActorSessionBindingRegistry();
   const actor = {
     actorId: 'actor-reconnect',
@@ -1263,31 +1263,8 @@ test('old route disconnect after relocation terminal permits a late same-seal re
   };
   await bindings.bind(newContext, actor, 'binding-new');
 
-  // A late relay carrying the exact same (now terminal) seal must still be
-  // accepted on the successor route.
-  let delivered = false;
-  const sameSealResult = await bindings.retainRelocationOutbound('actor-reconnect', {
-    deliver: async () => {
-      delivered = true;
-      return true;
-    },
-    fail: () => {
-      throw new Error('same-seal outbound must not be failed after a successor bind.');
-    }
-  }, 'seal-1');
-  assert.equal(sameSealResult, 'passThrough');
-  assert.equal(delivered, false);
-
-  // A mismatched (unknown) seal must still be rejected.
-  let failedWithMismatch = false;
-  const mismatchedSealResult = await bindings.retainRelocationOutbound('actor-reconnect', {
-    deliver: async () => true,
-    fail: () => {
-      failedWithMismatch = true;
-    }
-  }, 'seal-does-not-exist');
-  assert.equal(mismatchedSealResult, 'rejected');
-  assert.equal(failedWithMismatch, true);
+  await bindings.requireCurrentToken('actor-reconnect', 'binding-new');
+  assert.equal((await bindings.relocationSnapshot('actor-reconnect', 'seal-1'))?.phase, 'terminal');
 });
 
 test('unbind does not retire a still-open relocation seal whose Session identity differs from the route being unbound', async () => {

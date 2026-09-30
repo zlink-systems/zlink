@@ -5009,7 +5009,6 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       1_000,
       async () => true,
       undefined,
-      undefined,
       exactAuthority
     ).promise;
     assert.equal(completion.terminalResult, RequestResult.Ok);
@@ -5903,9 +5902,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     // Since #933 every bound-session STREAM frame carries the Actor slot the
     // Session binding owner issued; this raw harness stands in for that owner.
     registerServiceSessionBindingIngressPort(sessionService, {
-      actorSlot: async () => 1,
-      retainOutbound: async () => 'passThrough',
-      clearOutbound: async () => {}
+      actorSlot: async () => 1
     });
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
