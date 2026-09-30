@@ -1444,10 +1444,9 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
    - result code 가 `INTERNAL_ERROR` 계열
      (12, 206, 306, 404, 505, 604, 704 등) 이면
      `zlink_errno()` 로 내부 raw errno 를 조회할 수 있다.
-   - REQUEST completion 결과(1xx, 105 포함)는 completion 에 errno 가 없어
-     `zlink_errno()` 로 조회하지 않는다. 바인딩은 이 결과의 errno 로 Core
+   - REQUEST completion 실패 결과(1xx, 105 포함)의 errno 표시는 Core
      [Request completion result](../../../core/doc/spec/core/03-errors.ko.md#3-request-completion-result)
-     표의 첫 errno 를 둔다.
+     계약을 따른다. 이 결과의 원래 내부 errno 는 `zlink_errno()` 로 조회하지 않는다.
    - 바인딩의 에러 타입(exception 언어는 예외 객체, return-based 언어는
      에러 값)은 `internalErrno` / `internal_errno` 필드로 이를 노출한다
      (디버깅 전용).

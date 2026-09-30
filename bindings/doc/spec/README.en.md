@@ -1688,11 +1688,10 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
    - When the result code is in the `INTERNAL_ERROR` family (12, 206,
      306, 404, 505, 604, 704, and so on), the internal raw errno can be
      looked up with `zlink_errno()`.
-   - A REQUEST completion result (1xx, including 105) isn't looked up with
-     `zlink_errno()`, because a completion carries no errno. The binding
-     uses the first errno of the Core
+   - The errno representation of a failed REQUEST completion result
+     (1xx, including 105) follows the Core
      [Request completion result](../../../core/doc/spec/core/03-errors.en.md#3-request-completion-result)
-     table as that result's errno.
+     contract. Its original internal errno is not retrieved with `zlink_errno()`.
    - The binding's error type (an exception object for exception
      languages, an error value for return-based languages) exposes this
      through an `internalErrno`/`internal_errno` field (for debugging
