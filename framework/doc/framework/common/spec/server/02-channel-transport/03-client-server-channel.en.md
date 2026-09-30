@@ -440,7 +440,11 @@ The internal wire contract for a ClientServer application record carries
 Character, size-limit, error, and reply rules follow channel messaging §9. The total size in that
 section is the UTF-8 JSON encoding length of the entire metadata object, including keys, values, and
 structural overhead. The header's `metadata` field name and other fields are excluded from this size.
-The business payload frame carries no metadata.
+This length is measured on the minimal-escape form — in key and value strings only `"`, `\`, and
+U+0001–U+001F are escaped (control characters use `\b` `\f` `\n` `\r` `\t` where one exists, otherwise
+lowercase `\u00xx`), every other character is written as raw UTF-8, and no whitespace appears between
+structural characters. A sender writes this form, and a receiver judges by the length of the received
+value re-measured in this form. The business payload frame carries no metadata.
 
 ## 6. Drain
 
