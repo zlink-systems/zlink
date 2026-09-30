@@ -224,7 +224,8 @@ Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
 session sequence. The payload is
 added directly to the target Actor's application queue, regardless of local
-or remote. The current Spot is used for authority verification but isn't
+or remote. During a relocation seal, the Session owner's holding store of §8.1 receives it
+first and submits it after route application or abort. The current Spot is used for authority verification but isn't
 the callback execution context. The Actor handler doesn't run on the
 session callback thread, and different Actors aren't serialized into a
 session's execution context. Execution order between Actors is determined by
@@ -602,12 +603,12 @@ message from the Session to the Actor arriving during the seal is held by the ag
 message size, transport, deadline, and cancellation limits still apply
 unchanged.
 
-A relay (§5) to a sealed binding finishes admission when this holding store accepts it
-([Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
-The relay caller doesn't wait for the seal to be released. If a held message can't be submitted after route
+For a one-way relay accepted at the admission boundary of
+[Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary), the caller doesn't wait
+for the seal to be released. A relay request keeps its existing correlation and deadline. If a held message can't be submitted after route
 application or abort, or is cleaned up by the seal timeout, the caller's already completed result doesn't change;
 the failure is recorded once in that message's flow
-([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)). A request still ends by its existing correlation and deadline.
+([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)).
 
 The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 

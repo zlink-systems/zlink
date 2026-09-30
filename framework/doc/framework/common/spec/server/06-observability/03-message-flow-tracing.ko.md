@@ -312,8 +312,10 @@ Instance Spot의 one-way 생성 실패는 `surface=instance_spot`, `phase=droppe
 
 Relocation seal 보관소가 수락한 session Actor relay를 전달하지 못하면
 ([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환))
-`surface=stream`, `phase=dropped`, `outcome=dropped`로 정확히 한 번 기록한다. `reason`은 seal timeout으로
-Session을 닫았으면 `target_closed`, 제출이 실패했으면 그 제출 결과의 원인이다.
+`surface=stream`, `phase=dropped`, `outcome=dropped`로 정확히 한 번 기록한다. `reason`은 §3.1의 값만 쓴다:
+seal timeout으로 Session을 닫았으면 `target_closed`, 제출이 backpressure로 끝나면 `backpressure`,
+target route가 current가 아니거나 target이 없으면(`Unavailable`·`NotFound`) `stale_target`, runtime 종료면 `shutdown`이다.
+보관 중 message의 deadline이 지나거나 취소되면 `outcome=cancelled`로 기록하고 `reason`은 넣지 않는다.
 
 ## 7. 검증 요구
 

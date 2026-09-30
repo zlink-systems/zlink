@@ -2496,8 +2496,8 @@ and the client's table and handles by
 ### Session Sequence
 
 A value representing the order of ingress messages accepted on one STREAM session.
-Actor handoff doesn't use it as a cutover high-water. The Session owner holds messages
-arriving after seal, while ordered TCP relay provides pre-cutover order between source
+Actor handoff doesn't use it as a cutover high-water. The Session owner holds ingress messages
+from the Session to the Actor arriving after seal, while ordered TCP relay provides pre-cutover order between source
 and target.
 
 | Item | Content |

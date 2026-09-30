@@ -191,7 +191,7 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`
 record로 Actor owner에 전달한다. Payload는 local·remote 여부와 관계없이 target Actor
-application queue에 직접 추가한다. Current Spot은 authority 검증에 사용하지만 callback
+application queue에 직접 추가한다. 단, relocation seal 중에는 §8.1의 Session owner 보관소가 먼저 받고 route 적용 또는 abort 뒤 제출한다. Current Spot은 authority 검증에 사용하지만 callback
 실행 문맥이 아니다. Session callback thread에서 Actor handler를 실행하지 않으며 서로
 다른 Actor를 session의 실행 문맥으로 직렬화하지 않는다. Actor 사이의 실행 순서는
 [Actor 모델](../03-spot-actor/04-actor-model.ko.md)의 실행 모드(`PerActor`·`SpotWide`)가
@@ -498,10 +498,10 @@ Session route
 조건을 사용하지 않는다. Seal 중 Session에서 Actor로 도착한 message는 aggregate가 보관하지만 개별 message
 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
 
-Seal 중인 binding으로 가는 relay(§5)는 이 보관소가 수락하면 admission을 마친다([Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)).
-Relay 호출자는 seal 해제를 기다리지 않는다. 보관한 message를 route 적용이나 abort 뒤 제출하지 못하거나
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 admission 경계에서 수락한 one-way relay는
+호출자가 seal 해제를 기다리지 않는다. Relay request는 기존 correlation과 deadline으로 끝난다. 보관한 message를 route 적용이나 abort 뒤 제출하지 못하거나
 seal timeout으로 정리하면, 이미 끝난 호출자 결과는 바꾸지 않고 그 message의 flow에 한 번 기록한다
-([Message-flow tracing §6](../06-observability/03-message-flow-tracing.ko.md#6-완료-실패와-수명)). Request는 기존 correlation과 deadline으로 끝난다.
+([Message-flow tracing §6](../06-observability/03-message-flow-tracing.ko.md#6-완료-실패와-수명)).
 
 Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 
