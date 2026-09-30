@@ -545,6 +545,7 @@ void test_count1_router_adopts_anonymous_pipe_on_first_activation ()
 
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);
+    pipes[0]->set_transport_connection_id (701);
     pipes[0]->set_transport_pair (zlink::transport_lane_application, 701, 1);
     pipes[1]->set_transport_pair (zlink::transport_lane_application, 701, 1);
     pipes[0]->set_transport_lane_count (1);

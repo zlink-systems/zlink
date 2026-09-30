@@ -305,6 +305,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     bool attach_application = pair_id == 0;
     pipe_t *ready_application = NULL;
     pipe_t *ready_completion = NULL;
+    uint64_t ready_connection_id = 0;
     pipe_t *pair_application = NULL;
     distinct_pipe_lifetime_refs_t pair_pipe_refs (pipe_);
     //  A rejected pair is torn down after the table is unlocked: terminate()
@@ -386,20 +387,26 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 && (pair.validated_lane_mask () & expected_mask)
                      == expected_mask
                 && !pair.ready) {
+                const uint64_t application_connection_id =
+                  pair.application->get_transport_connection_id ();
                 // Either lane may start termination while its sibling's bind
                 // is queued. A retained object is still alive, but it is not
                 // an admissible transport; never publish a pair assembled
                 // from an inactive lane.
                 if (!pair.application->is_lifecycle_active ()
+                    || application_connection_id == 0
                     || (pair.expected_lane_count == 2u
                         && (!pair.completion->is_lifecycle_active ()
+                            || pair.completion->get_transport_connection_id ()
+                                 == 0
                             || !same_pair_peer_identity (pair.application,
-                                                        pair.completion)))) {
+                                                         pair.completion)))) {
                     reject_pipes[0] = pipe_;
                     reject_pipes[1] = pair.application;
                     reject_pipes[2] = pair.completion;
                 } else {
                     pair.ready = true;
+                    ready_connection_id = application_connection_id;
                     pair.application->set_transport_pair_completion_pipe (
                       pair.expected_lane_count == 2u ? pair.completion : NULL);
                     pair.application->set_transport_pair_application_ready (
@@ -613,8 +620,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         // complementary case after route registration.
         endpoint_uri_pair_t endpoint_pair =
           ready_application->get_endpoint_pair ();
-        endpoint_pair.connection_id =
-          ready_application->get_transport_connection_id ();
+        endpoint_pair.connection_id = ready_connection_id;
         const blob_t &routing_id = ready_application->get_routing_id ();
         if (routing_id.size () > 0)
             event_connection_ready_changed (

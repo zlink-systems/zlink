@@ -181,8 +181,9 @@ void blocking_directed_send_absorbs_short_active_router_disconnect ()
       zlink_set_router_option (client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "S", 1));
     configure_send_timeout (client, 500);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, ENDPOINT_1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_1));
+    char endpoint[MAX_SOCKET_STRING];
+    test_bind (server, "tcp://127.0.0.1:0", endpoint, sizeof (endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
 
     zlink_routing_id_t rid;
     make_rid ("S", &rid);
@@ -200,9 +201,9 @@ void blocking_directed_send_absorbs_short_active_router_disconnect ()
     msleep (SETTLE_TIME * 2);
 
     int rebind_rc = -1;
-    std::thread rebind_thread ([server_rebind, &rebind_rc] () {
+    std::thread rebind_thread ([server_rebind, &rebind_rc, &endpoint] () {
         msleep (30);
-        rebind_rc = zlink_bind (server_rebind, ENDPOINT_1);
+        rebind_rc = zlink_bind (server_rebind, endpoint);
     });
 
     const int send_rc = test_stream_send_bytes (client, &rid, "retry", 5, 0);
@@ -232,8 +233,9 @@ void blocking_directed_send_waits_for_detached_router_rid ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "D", 1));
     configure_send_timeout (router, 40);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, ENDPOINT_1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, ENDPOINT_1));
+    char endpoint[MAX_SOCKET_STRING];
+    test_bind (router, "tcp://127.0.0.1:0", endpoint, sizeof (endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
     zlink_routing_id_t rid;
     make_rid ("D", &rid);

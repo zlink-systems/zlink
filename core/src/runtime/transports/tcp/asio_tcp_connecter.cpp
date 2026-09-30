@@ -312,15 +312,15 @@ void zlink::asio_tcp_connecter_t::create_engine (fd_t fd_, const std::string &lo
     i_engine *engine = new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair);
     alloc_assert (engine);
 
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
+
     //  Attach the engine to the corresponding session object.
     send_attach (_session, engine);
 
     //  Shut the connecter down.
     terminate ();
-
-    _socket_ptr->event_connected (
-      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
-      options.transport_pair_generation);
 }
 
 bool zlink::asio_tcp_connecter_t::tune_socket (fd_t fd_)

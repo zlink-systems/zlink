@@ -260,13 +260,13 @@ void zlink::asio_ipc_connecter_t::create_engine (fd_t fd_, const std::string &lo
       new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair, std::move (transport));
     alloc_assert (engine);
 
-    send_attach (_session, engine);
-
-    terminate ();
-
     _socket_ptr->event_connected (
       endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
       options.transport_pair_generation);
+
+    send_attach (_session, engine);
+
+    terminate ();
 }
 
 void zlink::asio_ipc_connecter_t::close ()
