@@ -158,12 +158,7 @@ public final class NativePoller implements Poller {
         int rc = Native.pollerRemove(handle, InternalAccess.socketHandle(socket));
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
-        PollItem removed = items.remove(index);
-        if ((removed.events & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
-            InternalAccess.completionReleasePublic(removed.socket, this);
-        }
-        socketIndexes.remove(removed.handle.address());
-        refreshIndexesFrom(index);
+        removeAt(index);
         return true;
     }
 
@@ -177,9 +172,7 @@ public final class NativePoller implements Poller {
         int rc = Native.pollerRemove(handle, monitorHandle);
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
-        PollItem removed = items.remove(index);
-        socketIndexes.remove(removed.handle.address());
-        refreshIndexesFrom(index);
+        removeAt(index);
         return true;
     }
 
@@ -191,7 +184,7 @@ public final class NativePoller implements Poller {
         int rc = Native.pollerRemoveFd(handle, fd);
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
-        items.remove(index);
+        removeAt(index);
         return true;
     }
 
@@ -204,7 +197,7 @@ public final class NativePoller implements Poller {
         int rc = Native.pollerRemoveZlinkTimer(handle, InternalAccess.timerHandle(timer));
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
-        items.remove(index);
+        removeAt(index);
         return true;
     }
 
@@ -428,6 +421,17 @@ public final class NativePoller implements Poller {
                 return i;
         }
         return -1;
+    }
+
+    private void removeAt(int index) {
+        PollItem removed = items.remove(index);
+        if (removed.socket != null && (removed.events
+                & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
+            InternalAccess.completionReleasePublic(removed.socket, this);
+        }
+        if (removed.kind == PollSourceKind.SOCKET)
+            socketIndexes.remove(removed.handle.address());
+        refreshIndexesFrom(index);
     }
 
     private void refreshIndexesFrom(int start) {

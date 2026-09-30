@@ -919,7 +919,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     void RemovePeerExpectation(RoutingId peerRid, string endpoint);
     void RemovePeerConnection(ulong connectionIntentId);
     bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId);
-    void DisconnectPeer(RoutingId peerRid, ulong lifecycleGeneration = 0);
+    void DisconnectPeer(RoutingId peerRid, ulong lifecycleGeneration = 0, string? endpoint = null);
     void AddChannel(string channelName);
     void SetChannelWeight(string channelName, uint weight);
 

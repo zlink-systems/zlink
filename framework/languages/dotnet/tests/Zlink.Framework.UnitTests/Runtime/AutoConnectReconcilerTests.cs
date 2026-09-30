@@ -432,6 +432,64 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
+    public async Task Connect_Result_Can_Observe_Reconciler_Owner_While_Tick_Waits()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        Task<int>? observation = null;
+        fixture.Executor.BeforeConnect = () =>
+        {
+            observation = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                Task.Run(() => fixture.Reconciler.ActiveTargets.Count)
+            );
+            Assert.True(observation.Wait(TimeSpan.FromSeconds(1)));
+        };
+
+        try
+        {
+            await fixture.Reconciler.TickAsync();
+        }
+        finally
+        {
+            if (observation is not null)
+                await observation;
+        }
+
+        Assert.Equal(0, await observation!);
+        Assert.Single(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Disconnect_Result_Can_Observe_Active_Claim_Before_Release()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+        await fixture.RemovePeerAsync("r1");
+        Task<int>? observation = null;
+        fixture.Executor.BeforeDisconnect = () =>
+        {
+            observation = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                Task.Run(() => fixture.Reconciler.ActiveTargets.Count)
+            );
+            Assert.True(observation.Wait(TimeSpan.FromSeconds(1)));
+        };
+
+        try
+        {
+            await fixture.Reconciler.TickAsync();
+        }
+        finally
+        {
+            if (observation is not null)
+                await observation;
+        }
+
+        Assert.Equal(1, await observation!);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
     public async Task Failed_Connect_Is_Not_Marked_Active_And_Retries_On_The_Next_Tick()
     {
         var fixture = await FixtureAsync();

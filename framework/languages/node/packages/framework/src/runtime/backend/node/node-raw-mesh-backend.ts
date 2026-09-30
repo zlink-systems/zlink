@@ -155,9 +155,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private readyHandler?: (domains: number) => number;
   private maintenanceTimer?: NodeJS.Timeout;
   private pumping = false;
-  private readable = false;
-  private readonly onReadable = (): void => {
-    this.readable = true;
+  private readable = 0;
+  private readonly onReadable = (receiveReady: boolean, routeReady: boolean): void => {
+    if (receiveReady) this.readable |= 1;
+    if (routeReady) this.readable |= 2;
     if (!this.closed && !this.pumping) void this.pump();
   };
   private readonly onMaintenance = (): void => {
@@ -186,7 +187,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
-  private spotAdmissionProvider?: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0];
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -240,13 +240,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
-  }
-
-  setSpotAdmissionProvider(
-    provider: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0]
-  ): void {
-    this.spotAdmissionProvider = provider;
-    this.stateful?.setSpotAdmissionProvider(provider);
   }
 
   setProtocolErrorHandler(
@@ -402,9 +395,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
-    if (this.spotAdmissionProvider !== undefined) {
-      this.stateful.setSpotAdmissionProvider(this.spotAdmissionProvider);
-    }
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
     }
@@ -1493,16 +1483,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.maintenanceTimer = undefined;
     try {
       do {
-        const receiveReady = this.readable;
-        this.readable = false;
-        const more = await this.requireRuntime().pumpBatch(receiveReady);
+        const ready = this.readable;
+        this.readable = 0;
+        const more = await this.requireRuntime().pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
         if (more) {
           // Yield only after actual progress, retaining readiness across the
           // existing batch limits until receive reports no data.
-          this.readable = true;
+          this.readable |= 1;
           await yieldToIO();
         }
-      } while (!this.closed && this.readable);
+      } while (!this.closed && this.readable !== 0);
     } finally {
       this.pumping = false;
       this.scheduleMaintenance();
@@ -1899,7 +1889,6 @@ class RawStreamSessionService implements StreamSessionService {
         (targetSessionRid, payloadFrame) =>
           this.deliver(targetSessionRid, actor.actorId, payloadFrame),
         onBindingReplaced,
-        serviceSessionBindingIngressPortIfRegistered(this),
         actorAuthority
       )
     );

@@ -74,6 +74,36 @@ public sealed class test_stream_socket
     }
 
     [Fact]
+    public void disconnect_rid_closes_accepted_client_and_returns_connect_not_found()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var stream = ctx.CreateStreamSocket();
+        stream.Options.ReceiveMode = StreamReceiveMode.Packet;
+        string endpoint = CoreTestSupport.NewEndpoint("tcp", "stream-disconnect-rid");
+        int port = CoreTestSupport.ExtractPort(endpoint);
+        stream.Bind(endpoint);
+
+        using var client = new TcpClient();
+        client.ReceiveTimeout = 5000;
+        client.Connect(IPAddress.Loopback, port);
+        CoreTestSupport.SendStreamPacket(client.GetStream(), "disconnect-peer"u8);
+
+        using var packet = StreamPacket.Create();
+        Assert.True(stream.RecvPacket(packet));
+        RoutingId peerRid = packet.RoutingId!.Value;
+        stream.DisconnectRid(peerRid);
+
+        Assert.Equal(0, client.GetStream().Read(new byte[1], 0, 1));
+        ZlinkConnectException error = Assert.Throws<ZlinkConnectException>(
+            () => stream.DisconnectRid(peerRid));
+        Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, error.Result);
+        Assert.Equal(605, (int)error.Result);
+    }
+
+    [Fact]
     public void packet_dontwait_leaves_empty_output_empty()
     {
         if (!CoreTestSupport.IsNativeAvailable())

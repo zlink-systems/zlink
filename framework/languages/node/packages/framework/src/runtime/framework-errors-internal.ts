@@ -4,6 +4,10 @@ import {
 } from '../contracts/Errors/ZLinkFrameworkException';
 import { RequestResult } from './backend/runtime-values';
 import { ServiceWireProtocolError } from './foundation/service-wire-m6a-codec';
+import {
+  ServiceWireExactTerminalByFailureCode,
+  ServiceWireFrameworkErrorCode
+} from './foundation/service-wire-constants.generated';
 
 /** Detailed failure reasons owned by Framework runtime bounded contexts. */
 export enum ZLinkFrameworkInternalErrorKind {
@@ -294,7 +298,22 @@ export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
     return { terminalResult: 101, failureCode: 0 };
   }
   if (kind === undefined) {
-    return { terminalResult: 105, failureCode: 17 };
+    const failureCode =
+      error.kind === ZLinkFrameworkErrorKind.TypeMismatch
+        ? ServiceWireFrameworkErrorCode.actorTypeMismatch
+        : error.kind === ZLinkFrameworkErrorKind.ProtocolError
+          ? ServiceWireFrameworkErrorCode.requestProtocolError
+          : error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+            ? ServiceWireFrameworkErrorCode.actorLocationStale
+            : error.kind === ZLinkFrameworkErrorKind.NotFound
+              ? ServiceWireFrameworkErrorCode.actorRouteNotFound
+              : error.kind === ZLinkFrameworkErrorKind.Rejected
+                ? ServiceWireFrameworkErrorCode.requestRejected
+                : ServiceWireFrameworkErrorCode.requestFailed;
+    return {
+      terminalResult: ServiceWireExactTerminalByFailureCode[failureCode],
+      failureCode
+    };
   }
   const failureCode = ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind] + 1;
   const terminalResult = WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode);

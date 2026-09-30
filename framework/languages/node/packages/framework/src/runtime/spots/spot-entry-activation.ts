@@ -195,8 +195,6 @@ export class ZLinkEntrySpotActivation {
           target.remoteBoundSessionTarget,
           target.fallbackActorRef
         ),
-      onRemoteBoundSessionTarget: (targetActorId, target) =>
-        this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
       onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
         this.options.boundSessionRuntime
@@ -372,6 +370,10 @@ export class ZLinkEntrySpotActivation {
     }
   }
 
+  executeActor<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
+    return this.spotSerialExecutor.executeActor(actorId, operation);
+  }
+
   /**
    * Entry Spot membership does not have an application admission callback.
    * The shared core round-trip therefore accepts a valid returning Actor and
@@ -401,22 +403,9 @@ export class ZLinkEntrySpotActivation {
       },
       packets: {
         handle: (delivery) => this.dispatchActorPacket(delivery),
-        bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid, declaredTarget) => {
+        bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid) => {
           if (routingIdsEqual(sourceNodeRid, this.options.nativeNode.routingId)) {
             return;
-          }
-          const target =
-            declaredTarget ??
-            this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(
-              sourceNodeRid,
-              sourceSessionRid
-            );
-          if (target !== undefined) {
-            this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(actor.actorId, {
-              ...target,
-              sessionNodeRid: sourceNodeRid,
-              sessionRid: sourceSessionRid
-            });
           }
           this.options.nativeNode.bindRemoteActorSession(actor, sourceNodeRid, sourceSessionRid);
         },

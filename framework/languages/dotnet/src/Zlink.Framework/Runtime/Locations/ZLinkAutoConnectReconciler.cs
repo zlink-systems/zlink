@@ -481,7 +481,7 @@ internal sealed class ZLinkAutoConnectReconciler
             return;
         }
 
-        await _lane
+        var connectableDesired = await _lane
             .RunAsync(() =>
             {
                 if (_storeFailed)
@@ -513,8 +513,8 @@ internal sealed class ZLinkAutoConnectReconciler
                 // keep only the newest deterministic owner before diffing. Without
                 // this projection the old descriptor can reclaim the endpoint on the
                 // tick after a deferred handover and oscillate with its replacement.
-                var connectableDesired = SelectEndpointWinners(desired);
-                _lastDesired = connectableDesired;
+                var selected = SelectEndpointWinners(desired);
+                _lastDesired = selected;
                 // Membership snapshot for fail-fast target classification on the
                 // send path (known peer vs unknown node). This is the full mesh
                 // view, NOT the desired dial set: the pairwise initiator keeps
@@ -556,106 +556,113 @@ internal sealed class ZLinkAutoConnectReconciler
                     _retainedMemberRids = retained;
                 }
 
-                foreach (var (key, target) in connectableDesired)
-                {
-                    if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                        return;
-                    if (!_active.TryGetValue(key, out var current))
-                    {
-                        // A draining descriptor is not selected for new connections.
-                        if (target.Draining)
-                            continue;
-                        if (!ReleaseEndpointConflicts(target, out _))
-                            continue;
-                        var accepted = _executor.Connect(target);
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"autoconnect_add local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                                + $"target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
-                        );
-                        if (accepted)
-                        {
-                            _active[key] = target;
-                        }
-                        continue;
-                    }
-
-                    if (RequiresConnectionHandover(current, target))
-                    {
-                        // An endpoint change needs a new transport connection.
-                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                            return;
-                        var disconnected = _executor.Disconnect(current);
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                                + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
-                                + $"disconnect={disconnected}"
-                        );
-                        if (!disconnected)
-                            continue;
-                        _active.Remove(key);
-                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                            return;
-                        var connected = _executor.Connect(target);
-                        if (connected)
-                        {
-                            _active[key] = target;
-                        }
-                    }
-                    else if (OwnerChanged(current, target) || current.Draining != target.Draining)
-                    {
-                        // A restarted process can reclaim the same endpoint under a new owner.
-                        // The transport already reconnects that broken endpoint. Tearing it down
-                        // again here races the reconnect and can leave a stale pipe beside the
-                        // replacement connection, so only refresh the reconciler's metadata.
-                        _active[key] = target;
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"autoconnect_refresh local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                                + $"target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} "
-                                + $"draining={target.Draining}"
-                        );
-                    }
-                }
-
-                if (_time.GetTimestamp() >= _recoveryDeferUntil)
-                {
-                    var toRemove = _active
-                        .Keys.Where(key => !connectableDesired.ContainsKey(key))
-                        .ToArray();
-                    foreach (var key in toRemove)
-                    {
-                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                            return;
-                        var target = _active[key];
-                        var disconnected = _executor.Disconnect(target);
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"autoconnect_remove local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                                + $"target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
-                        );
-                        if (disconnected)
-                        {
-                            _active.Remove(key);
-                        }
-                    }
-                }
+                return selected;
             })
             .ConfigureAwait(false);
+        await ReconcileConnectionsAsync(connectableDesired).ConfigureAwait(false);
     }
 
-    private bool ReleaseEndpointConflicts(ZLinkAutoConnectTarget target, out bool endpointReleased)
+    private async ValueTask ReconcileConnectionsAsync(
+        IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> connectableDesired
+    )
     {
-        endpointReleased = false;
+        foreach (var (key, target) in connectableDesired)
+        {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return;
+            var current = await _lane
+                .RunAsync(() => _active.GetValueOrDefault(key))
+                .ConfigureAwait(false);
+            if (current is null)
+            {
+                if (
+                    target.Draining
+                    || !await ReleaseEndpointConflictsAsync(target).ConfigureAwait(false)
+                )
+                    continue;
+                var accepted = _executor.Connect(target);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_add local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                        + $"target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
+                );
+                if (accepted)
+                    await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
+                continue;
+            }
+
+            if (RequiresConnectionHandover(current, target))
+            {
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
+                var disconnected = _executor.Disconnect(current);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                        + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
+                        + $"disconnect={disconnected}"
+                );
+                if (!disconnected)
+                    continue;
+                await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
+                var connected = _executor.Connect(target);
+                if (connected)
+                    await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
+            }
+            else if (OwnerChanged(current, target) || current.Draining != target.Draining)
+            {
+                await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_refresh local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                        + $"target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} "
+                        + $"draining={target.Draining}"
+                );
+            }
+        }
+
+        var toRemove = await _lane
+            .RunAsync(() =>
+                _time.GetTimestamp() >= _recoveryDeferUntil
+                    ? _active.Where(entry => !connectableDesired.ContainsKey(entry.Key)).ToArray()
+                    : []
+            )
+            .ConfigureAwait(false);
+        foreach (var (key, target) in toRemove)
+        {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return;
+            var disconnected = _executor.Disconnect(target);
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"autoconnect_remove local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                    + $"target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
+            );
+            if (disconnected)
+                await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<bool> ReleaseEndpointConflictsAsync(ZLinkAutoConnectTarget target)
+    {
         // A restarted process may publish a new RID before the old lease row
         // expires. The endpoint is still one Core transport candidate, so an
         // old RID cannot retain the framework's auto-connect claim while the
         // new descriptor is admitted. Release only a different active target
         // on the same endpoint; the same-RID owner refresh remains transport
         // managed and does not trigger a second dial.
-        var conflicts = _active
-            .Where(entry =>
-                entry.Key != target.NodeRid
-                && string.Equals(entry.Value.Endpoint, target.Endpoint, StringComparison.Ordinal)
+        var conflicts = await _lane
+            .RunAsync(() =>
+                _active
+                    .Where(entry =>
+                        entry.Key != target.NodeRid
+                        && string.Equals(
+                            entry.Value.Endpoint,
+                            target.Endpoint,
+                            StringComparison.Ordinal
+                        )
+                    )
+                    .ToArray()
             )
-            .ToArray();
+            .ConfigureAwait(false);
         if (conflicts.Any(entry => !SupersedesEndpointTarget(target, entry.Value)))
             return false;
 
@@ -671,8 +678,7 @@ internal sealed class ZLinkAutoConnectReconciler
             );
             if (!disconnected)
                 return false;
-            _active.Remove(key);
-            endpointReleased = true;
+            await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
         }
 
         return true;

@@ -57,6 +57,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
 
+    internal string[] SnapshotPendingAttemptNames() =>
+        _targetAttempts.Keys.Select(static key => key.ToString()).ToArray();
+
     internal async ValueTask<ZLinkStandaloneActorRelocationResult> RelocateSourceAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkMeshNodeDescriptor target,

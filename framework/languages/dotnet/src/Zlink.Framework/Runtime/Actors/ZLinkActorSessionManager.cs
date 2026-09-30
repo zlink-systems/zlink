@@ -43,6 +43,9 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal ZLinkActorRuntimeState[] SnapshotStates() => _actorSessions.Snapshot();
 
+    internal ValueTask<ZLinkActorRuntimeState[]> SnapshotStatesAsync() =>
+        _actorSessions.SnapshotAsync();
+
     internal int CountActiveActors(string meshName) => _actorSessions.CountActive(meshName);
 
     internal bool IsCurrentLocalActor(ZLinkBackendActorRef actor) =>

@@ -74,6 +74,14 @@ internal sealed class ZLinkSpotNodeCatalog(
     /// <summary>Spots activated on this MeshNode, counted without copying the catalog.</summary>
     internal int ActiveSpotCount => AwaitStateLane(_lane.RunAsync(() => _spots.Count));
 
+    internal ValueTask<string[]> SnapshotPendingCloseNamesAsync() =>
+        _lane.RunAsync(() =>
+            _closing
+                .Where(static entry => !entry.Value.Task.IsCompleted)
+                .Select(static entry => entry.Key.Value)
+                .ToArray()
+        );
+
     internal void StartIdleEviction()
     {
         if (_instanceSpotIdleTimeout <= TimeSpan.Zero)

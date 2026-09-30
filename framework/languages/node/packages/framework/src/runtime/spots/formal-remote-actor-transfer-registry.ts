@@ -1,5 +1,5 @@
 import type { RoutingId, ZLinkActor } from '../../contracts';
-import type { ZLinkDeferredJoinCompletion } from '../actors';
+import type { ZLinkDeferredJoinCompletion, ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import { ZLinkStateLane } from '../execution/state-lane';
 
@@ -9,6 +9,8 @@ export interface ZLinkFormalRemoteActorTransfer {
   readonly transferId: string;
   readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
   readonly deferredJoinCompletion?: ZLinkDeferredJoinCompletion;
+  /** The Session seal this relocation carries until it publishes command 44. */
+  readonly sealedSession?: ZLinkRemoteBoundSessionTarget;
   readonly targetLifecycleCompleted: Promise<void>;
   readonly sourceLeaveSubmitted: Promise<boolean>;
 }
@@ -44,6 +46,7 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     readonly transferId: string;
     readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
     readonly deferredJoinCompletion?: ZLinkDeferredJoinCompletion;
+    readonly sealedSession?: ZLinkRemoteBoundSessionTarget;
   }): ZLinkFormalRemoteActorTransfer {
     const existingByActor = this.transfers.get(input.actor.context.actorId)?.transfer;
     if (existingByActor !== undefined) {

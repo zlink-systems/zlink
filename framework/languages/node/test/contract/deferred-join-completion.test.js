@@ -61,8 +61,8 @@ test('deferred Join Accepted completion is process-local and runs its callback o
     actorRef,
     Buffer.alloc(0)
   );
-  await runtime.deliverDeferredJoinAccepted(completion, actor, actorRef, submitMailbox);
-  await runtime.deliverDeferredJoinAccepted(completion, actor, actorRef, submitMailbox);
+  await runtime.deliverDeferredJoinCompletion(completion, actor, actorRef, submitMailbox);
+  await runtime.deliverDeferredJoinCompletion(completion, actor, actorRef, submitMailbox);
 
   assert.deepEqual(storeCalls, []);
   assert.equal(mailboxTurns, 1);
@@ -71,6 +71,46 @@ test('deferred Join Accepted completion is process-local and runs its callback o
   assert.deepEqual(completions[0].operationId, operationId);
   assert.equal(completions[0].actor.actorId, 'player-1');
   assert.equal(completions[0].reply, undefined);
+});
+
+test('deferred Join Failed completion prevents a later Accepted callback', async () => {
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({ getState: () => undefined })
+  });
+  const actorRef = {
+    actorId: 'player-2',
+    objectGeneration: 8n,
+    meshName: 'play',
+    nodeRid: 'target-node'
+  };
+  const results = [];
+  const actor = {
+    context: { actorId: 'player-2', meshName: 'play' },
+    async onJoinCompleted(result) {
+      results.push(result);
+    }
+  };
+  const accepted = runtime.prepareDeferredJoinAccepted(
+    'player-2',
+    { high: 0x33n, low: 0x44n },
+    actorRef,
+    Buffer.alloc(0)
+  );
+  await runtime.deliverDeferredJoinCompletion(
+    { ...accepted, status: 'failed', kind: framework.ZLinkFrameworkErrorKind.InternalFailure },
+    actor,
+    actorRef,
+    async (operation) => await operation()
+  );
+  await runtime.deliverDeferredJoinCompletion(
+    accepted,
+    actor,
+    actorRef,
+    async (operation) => await operation()
+  );
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'failed');
+  assert.equal(results[0].kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
 });
 
 test('deferred Join handoff is not keyed by the public Join OperationId', () => {

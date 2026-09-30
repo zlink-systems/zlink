@@ -48,6 +48,8 @@ internal sealed class ZLinkRelocationShutdownTracking
 
     internal bool SafeToShutdown => Volatile.Read(ref _pendingUnits) == 0;
 
+    internal int PendingCount => Volatile.Read(ref _pendingUnits);
+
     internal IDisposable Begin()
     {
         if (Interlocked.Increment(ref _pendingUnits) == 1)

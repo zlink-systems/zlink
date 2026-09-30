@@ -140,7 +140,7 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     this.eventLoopPoller = new ZLinkNodeEventLoopPoller(socket, true, () => {}, pollRoute);
   }
 
-  setReadableHandler(handler: () => void): void {
+  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void {
     this.requireOpen();
     this.eventLoopPoller.setReadableHandler(handler);
   }

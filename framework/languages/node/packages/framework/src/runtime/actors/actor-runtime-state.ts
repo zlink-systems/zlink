@@ -52,85 +52,24 @@ export interface ZLinkRemoteBoundSessionTarget {
 }
 
 /**
- * Applies a lightweight Session binding refresh without discarding the
- * relocation fence that was staged for the same route. Core emits the bind
- * refresh with routing coordinates only; the relocation owner retains the
- * service-wire relocation identity until command 44 releases the owner seal.
+ * Session–Actor binding §5·§6: the Actor owner keeps one current binding. The
+ * stored value is the binding identity and the route to its Session owner; a
+ * relocation fence belongs to the relocation operation that created it.
  */
-export function mergeRemoteBoundSessionTarget(
-  target: ZLinkRemoteBoundSessionTarget,
-  fallback: ZLinkRemoteBoundSessionTarget | undefined
-): ZLinkRemoteBoundSessionTarget {
-  if (
-    fallback === undefined ||
-    fallback.routerChannelId !== target.routerChannelId ||
-    !routingIdsEqual(fallback.targetNodeRid, target.targetNodeRid) ||
-    (!routingIdsEqual(fallback.spotId, target.spotId) &&
-      !samePhysicalRemoteSession(fallback, target)) ||
-    isSuccessorSessionBinding(fallback, target)
-  ) {
-    return target;
-  }
-  const merged = {
-    ...fallback,
-    ...target,
-    sessionNodeRid: target.sessionNodeRid ?? fallback.sessionNodeRid,
-    sessionRid: target.sessionRid ?? fallback.sessionRid,
-    sessionOwnerNodeGeneration:
-      target.sessionOwnerNodeGeneration ?? fallback.sessionOwnerNodeGeneration,
-    sessionOwnerId: target.sessionOwnerId ?? fallback.sessionOwnerId,
-    sessionOwnerLeaseGeneration:
-      target.sessionOwnerLeaseGeneration ?? fallback.sessionOwnerLeaseGeneration,
-    bindingGeneration: target.bindingGeneration ?? fallback.bindingGeneration,
-    previousAuthorityOwnerGeneration:
-      target.previousAuthorityOwnerGeneration ?? fallback.previousAuthorityOwnerGeneration,
-    previousOwnerLeaseGeneration:
-      target.previousOwnerLeaseGeneration ?? fallback.previousOwnerLeaseGeneration,
-    relocationSealId: target.relocationSealId ?? fallback.relocationSealId,
-    serviceWireRelocation: target.serviceWireRelocation ?? fallback.serviceWireRelocation
-  };
-  return merged;
-}
-
-/**
- * Spec 48 §125: reconnection creates a new Session; the previous Session's
- * binding — and its staged relocation fence — is never inherited by a
- * successor. A Core bind refresh only omits routing coordinates it did not
- * recompute, so an explicit Session identity on both sides that disagrees
- * marks the refresh as belonging to a different Session binding, not a
- * same-Session coordinate/generation-only refresh (a bindingGeneration bump
- * with the same sessionNodeRid/sessionRid is a legitimate same-Session
- * refresh and must keep the fence — see the transfer-target generation test
- * below).
- *
- * NOTE: this identity check is a no-op on the path exercised by
- * `remoteBoundSessionTargetForSource` (mesh-router-resolver.ts), which never
- * populates sessionNodeRid/sessionRid on the refresh it emits. Confirmed via
- * TTT reproduction (2026-08-22, run-dir preserved) that a rejected successor
- * bound-session send still occurs through that path after this change; see
- * session report for the STOP writeup.
- */
-function isSuccessorSessionBinding(
-  fallback: ZLinkRemoteBoundSessionTarget,
+function boundSessionIdentity(
   target: ZLinkRemoteBoundSessionTarget
-): boolean {
-  return (
-    (fallback.sessionNodeRid !== undefined &&
-      target.sessionNodeRid !== undefined &&
-      !routingIdsEqual(fallback.sessionNodeRid, target.sessionNodeRid)) ||
-    (fallback.sessionRid !== undefined &&
-      target.sessionRid !== undefined &&
-      !routingIdsEqual(fallback.sessionRid, target.sessionRid)) ||
-    (fallback.sessionOwnerNodeGeneration !== undefined &&
-      target.sessionOwnerNodeGeneration !== undefined &&
-      fallback.sessionOwnerNodeGeneration !== target.sessionOwnerNodeGeneration) ||
-    (fallback.sessionOwnerId !== undefined &&
-      target.sessionOwnerId !== undefined &&
-      fallback.sessionOwnerId !== target.sessionOwnerId) ||
-    (fallback.sessionOwnerLeaseGeneration !== undefined &&
-      target.sessionOwnerLeaseGeneration !== undefined &&
-      fallback.sessionOwnerLeaseGeneration !== target.sessionOwnerLeaseGeneration)
-  );
+): ZLinkRemoteBoundSessionTarget {
+  return {
+    routerChannelId: target.routerChannelId,
+    targetNodeRid: target.targetNodeRid,
+    spotId: target.spotId,
+    sessionNodeRid: target.sessionNodeRid,
+    sessionRid: target.sessionRid,
+    sessionOwnerNodeGeneration: target.sessionOwnerNodeGeneration,
+    sessionOwnerId: target.sessionOwnerId,
+    sessionOwnerLeaseGeneration: target.sessionOwnerLeaseGeneration,
+    bindingGeneration: target.bindingGeneration
+  };
 }
 
 type ZLinkRemoteSessionOwnerIdentity = Pick<
@@ -143,20 +82,6 @@ type ZLinkRemoteSessionOwnerIdentity = Pick<
 >;
 
 type ZLinkRemoteSessionOwnerLifecycle = Omit<ZLinkRemoteSessionOwnerIdentity, 'sessionRid'>;
-
-function samePhysicalRemoteSession(
-  left: ZLinkRemoteBoundSessionTarget,
-  right: Pick<ZLinkRemoteBoundSessionTarget, 'sessionNodeRid' | 'sessionRid'>
-): boolean {
-  return (
-    left.sessionNodeRid !== undefined &&
-    right.sessionNodeRid !== undefined &&
-    left.sessionRid !== undefined &&
-    right.sessionRid !== undefined &&
-    routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid) &&
-    routingIdsEqual(left.sessionRid, right.sessionRid)
-  );
-}
 
 function sameRemoteSessionOwnerLifecycle(
   left: ZLinkRemoteBoundSessionTarget,
@@ -207,23 +132,6 @@ function sameRemoteSessionBinding(
   );
 }
 
-/**
- * Selects the route that still carries the relocation fence when a Core
- * binding refresh and a formal transfer target temporarily coexist.
- */
-export function preferredRemoteBoundSessionTarget(
-  remote: ZLinkRemoteBoundSessionTarget | undefined,
-  transfer: ZLinkRemoteBoundSessionTarget | undefined
-): ZLinkRemoteBoundSessionTarget | undefined {
-  if (remote === undefined) return transfer;
-  if (hasRelocationFence(remote) || transfer === undefined) return remote;
-  return transfer;
-}
-
-function hasRelocationFence(target: ZLinkRemoteBoundSessionTarget): boolean {
-  return target.relocationSealId !== undefined || target.serviceWireRelocation !== undefined;
-}
-
 export interface ZLinkRemoteActorPacketTarget {
   readonly routerChannelId: string;
   readonly targetNodeRid: RoutingId;
@@ -269,10 +177,8 @@ export class ZLinkActorRuntimeState {
   private spotGenerationValue: bigint | undefined;
   private spotMembershipEpochValue = 0n;
   private nativeActorRefValue: ZLinkBackendActorRef | undefined;
-  private boundSessionBindingGenerationValue = 0n;
   private entryNodeRidValue: RoutingId | undefined;
-  private remoteBoundSessionTargetValue: ZLinkRemoteBoundSessionTarget | undefined;
-  private boundSessionTransferTargetValue: ZLinkRemoteBoundSessionTarget | undefined;
+  private boundSessionValue: ZLinkRemoteBoundSessionTarget | undefined;
   private remoteActorPacketTargetValue: ZLinkRemoteActorPacketTarget | undefined;
   private createRequestPayloadValue: Buffer | undefined;
   private ownsLocationValue = false;
@@ -282,7 +188,11 @@ export class ZLinkActorRuntimeState {
   private deferredJoinPendingValue = false;
   private destroyTask: Promise<void> | undefined;
 
-  constructor(readonly actorId: string) {}
+  constructor(readonly actorId: string) {
+    if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+      guardBoundSessionTargetWrites(this);
+    }
+  }
 
   get actorType(): string | undefined {
     return this.actorTypeValue;
@@ -323,19 +233,31 @@ export class ZLinkActorRuntimeState {
   }
 
   get boundSessionBindingGeneration(): bigint {
-    return this.boundSessionBindingGenerationValue;
+    return this.boundSessionValue?.bindingGeneration ?? 0n;
   }
 
   get entryNodeRid(): RoutingId | undefined {
     return this.entryNodeRidValue;
   }
 
-  get remoteBoundSessionTarget(): ZLinkRemoteBoundSessionTarget | undefined {
-    return this.remoteBoundSessionTargetValue;
+  /** The one current Session binding of this Actor (Session–Actor binding §6). */
+  get boundSession(): ZLinkRemoteBoundSessionTarget | undefined {
+    return this.boundSessionValue;
   }
 
-  get boundSessionTransferTarget(): ZLinkRemoteBoundSessionTarget | undefined {
-    return this.boundSessionTransferTargetValue;
+  /**
+   * The current binding when its Session owner is another node. A same-node
+   * binding is served by the local Session registry, so remote routing sees
+   * no target for it.
+   */
+  get remoteBoundSessionTarget(): ZLinkRemoteBoundSessionTarget | undefined {
+    const binding = this.boundSessionValue;
+    const actorNodeRid = this.nativeActorRefValue?.nodeRid;
+    return binding?.sessionNodeRid !== undefined &&
+      actorNodeRid !== undefined &&
+      routingIdsEqual(binding.sessionNodeRid, toFrameworkRoutingId(actorNodeRid))
+      ? undefined
+      : binding;
   }
 
   get remoteActorPacketTarget(): ZLinkRemoteActorPacketTarget | undefined {
@@ -559,24 +481,6 @@ export class ZLinkActorRuntimeState {
     this.entryNodeRidValue ??= toFrameworkRoutingId(actorRef.nodeRid);
   }
 
-  setBoundSessionBindingGeneration(generation: bigint): void {
-    if (generation > this.boundSessionBindingGenerationValue) {
-      this.boundSessionBindingGenerationValue = generation;
-      if (this.remoteBoundSessionTargetValue !== undefined) {
-        this.remoteBoundSessionTargetValue = {
-          ...this.remoteBoundSessionTargetValue,
-          bindingGeneration: generation
-        };
-      }
-      if (this.boundSessionTransferTargetValue !== undefined) {
-        this.boundSessionTransferTargetValue = {
-          ...this.boundSessionTransferTargetValue,
-          bindingGeneration: generation
-        };
-      }
-    }
-  }
-
   /** @internal Installs one authority-confirmed binding inside its Actor owner turn. */
   installBoundSessionBinding(target: ZLinkRemoteBoundSessionTarget): boolean {
     if (
@@ -587,34 +491,22 @@ export class ZLinkActorRuntimeState {
       target.sessionOwnerLeaseGeneration === undefined ||
       target.bindingGeneration === undefined
     ) {
-      throw new TypeError(
-        'An installed bound Session target requires its complete binding identity.'
-      );
+      throw new TypeError('An installed bound Session target requires its binding identity.');
     }
-    const current = preferredRemoteBoundSessionTarget(
-      this.remoteBoundSessionTargetValue,
-      this.boundSessionTransferTargetValue
-    );
+    const current = this.boundSessionValue;
     if (current !== undefined && sameRemoteSessionOwnerLifecycle(current, target)) {
-      // A duplicate command for the exact physical Session is idempotent. A
-      // different Session in the same owner lifecycle must advance that
-      // lifecycle's generation; a late equal/lower generation is stale.
-      if (sameRemoteSessionOwner(current, target)) return true;
-      if (
-        current.bindingGeneration !== undefined &&
-        current.bindingGeneration >= target.bindingGeneration
-      )
-        return false;
+      // A duplicate or late older command for the exact physical Session
+      // leaves the current binding; a newer generation of the same Session
+      // replaces it. A different Session in the same owner lifecycle must
+      // advance that lifecycle's generation; a late equal/lower one is stale.
+      const advances =
+        current.bindingGeneration === undefined ||
+        target.bindingGeneration > current.bindingGeneration;
+      if (!advances) return sameRemoteSessionOwner(current, target);
     }
-    const installed = mergeRemoteBoundSessionTarget(target, current);
     // Binding generations are scoped to a Session-owner lifecycle. A restarted
     // owner can legitimately reset its counter below the predecessor value.
-    this.boundSessionBindingGenerationValue = target.bindingGeneration;
-    this.remoteBoundSessionTargetValue = undefined;
-    this.boundSessionTransferTargetValue = {
-      ...installed,
-      bindingGeneration: target.bindingGeneration
-    };
+    this.boundSessionValue = boundSessionIdentity(target);
     return true;
   }
 
@@ -628,73 +520,16 @@ export class ZLinkActorRuntimeState {
       target.sessionOwnerLeaseGeneration === undefined ||
       target.bindingGeneration === undefined
     ) {
-      throw new TypeError('A retired bound Session target requires its complete binding identity.');
+      throw new TypeError('A retired bound Session target requires its binding identity.');
     }
-    let retired = false;
-    if (
-      this.remoteBoundSessionTargetValue !== undefined &&
-      sameRemoteSessionBinding(this.remoteBoundSessionTargetValue, target)
-    ) {
-      this.remoteBoundSessionTargetValue = undefined;
-      retired = true;
-    }
-    if (
-      this.boundSessionTransferTargetValue !== undefined &&
-      sameRemoteSessionBinding(this.boundSessionTransferTargetValue, target)
-    ) {
-      this.boundSessionTransferTargetValue = undefined;
-      retired = true;
-    }
-    if (retired) {
-      this.boundSessionBindingGenerationValue =
-        preferredRemoteBoundSessionTarget(
-          this.remoteBoundSessionTargetValue,
-          this.boundSessionTransferTargetValue
-        )?.bindingGeneration ?? 0n;
-    }
-    return retired;
+    const current = this.boundSessionValue;
+    if (current === undefined || !sameRemoteSessionBinding(current, target)) return false;
+    this.boundSessionValue = undefined;
+    return true;
   }
 
   setEntryNodeRid(entryNodeRid: RoutingId): void {
     this.entryNodeRidValue = entryNodeRid;
-  }
-
-  setRemoteBoundSessionTarget(target: ZLinkRemoteBoundSessionTarget | undefined): void {
-    const current = preferredRemoteBoundSessionTarget(
-      this.remoteBoundSessionTargetValue,
-      this.boundSessionTransferTargetValue
-    );
-    const merged =
-      target === undefined ? undefined : mergeRemoteBoundSessionTarget(target, current);
-    const bindingGeneration = maxBindingGeneration(
-      merged?.bindingGeneration,
-      this.remoteBoundSessionTargetValue?.bindingGeneration,
-      this.boundSessionBindingGenerationValue
-    );
-    this.remoteBoundSessionTargetValue =
-      merged === undefined
-        ? undefined
-        : bindingGeneration === undefined
-          ? merged
-          : { ...merged, bindingGeneration };
-  }
-
-  setBoundSessionTransferTarget(target: ZLinkRemoteBoundSessionTarget | undefined): void {
-    const merged =
-      target === undefined
-        ? undefined
-        : mergeRemoteBoundSessionTarget(target, this.boundSessionTransferTargetValue);
-    const bindingGeneration = maxBindingGeneration(
-      merged?.bindingGeneration,
-      this.boundSessionTransferTargetValue?.bindingGeneration,
-      this.boundSessionBindingGenerationValue
-    );
-    this.boundSessionTransferTargetValue =
-      merged === undefined
-        ? undefined
-        : bindingGeneration === undefined
-          ? merged
-          : { ...merged, bindingGeneration };
   }
 
   setRemoteActorPacketTarget(target: ZLinkRemoteActorPacketTarget | undefined): void {
@@ -737,10 +572,8 @@ export class ZLinkActorRuntimeState {
     this.spotGenerationValue = undefined;
     this.spotMembershipEpochValue = 0n;
     this.nativeActorRefValue = undefined;
-    this.boundSessionBindingGenerationValue = 0n;
     this.entryNodeRidValue = undefined;
-    this.remoteBoundSessionTargetValue = undefined;
-    this.boundSessionTransferTargetValue = undefined;
+    this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.ownsLocationValue = false;
@@ -753,11 +586,6 @@ export class ZLinkActorRuntimeState {
 
   prepareForRemoteReentry(): void {
     if (this.remoteActorPacketTargetValue === undefined) return;
-    const relocationTransferTarget =
-      this.boundSessionTransferTargetValue !== undefined &&
-      hasRelocationFence(this.boundSessionTransferTargetValue)
-        ? this.boundSessionTransferTargetValue
-        : undefined;
     this.creationTask = undefined;
     this.configured = false;
     this.context = undefined;
@@ -766,9 +594,8 @@ export class ZLinkActorRuntimeState {
     this.spotValue = undefined;
     this.spotIdValue = undefined;
     this.nativeActorRefValue = undefined;
-    this.boundSessionBindingGenerationValue = relocationTransferTarget?.bindingGeneration ?? 0n;
-    this.remoteBoundSessionTargetValue = undefined;
-    this.boundSessionTransferTargetValue = relocationTransferTarget;
+    // The arriving relocation installs the binding it carries.
+    this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.ownsLocationValue = false;
@@ -780,13 +607,22 @@ export class ZLinkActorRuntimeState {
   }
 }
 
-function maxBindingGeneration(...values: (bigint | undefined)[]): bigint | undefined {
-  let maximum: bigint | undefined;
-  for (const value of values) {
-    if (value === undefined || value <= 0n) continue;
-    if (maximum === undefined || value > maximum) maximum = value;
-  }
-  return maximum;
+function guardBoundSessionTargetWrites(actor: ZLinkActorRuntimeState): void {
+  let current: ZLinkRemoteBoundSessionTarget | undefined;
+  Object.defineProperty(actor, 'boundSessionValue', {
+    configurable: true,
+    enumerable: true,
+    get: () => current,
+    set: (target: ZLinkRemoteBoundSessionTarget | undefined) => {
+      if (
+        target !== undefined &&
+        new Error().stack?.includes('installBoundSessionBinding') !== true
+      ) {
+        throw new Error('Bound Session target must be installed by installBoundSessionBinding.');
+      }
+      current = target;
+    }
+  });
 }
 
 export function toFrameworkRoutingId(routingId: unknown): RoutingId {

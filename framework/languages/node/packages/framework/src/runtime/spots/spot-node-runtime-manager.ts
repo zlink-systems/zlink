@@ -1,4 +1,5 @@
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -328,7 +329,8 @@ export class ZLinkSpotNodeRuntimeManager {
             spotNode.actorLimit ?? 0,
             spotNode.spotLimit ?? 0
           ),
-          pendingCapacityLimit: spotNode.activationConcurrencyLimit ?? 128,
+          pendingCapacityLimit:
+            spotNode.activationConcurrencyLimit ?? DEFAULT_ACTIVATION_CONCURRENCY_LIMIT,
           objectCapabilities: [
             ...stableTypes.map((type) => `object-type:${type}`),
             ...instanceSpotTypes.map((type) => `instance-spot-type:${type}`)
@@ -491,7 +493,7 @@ export class ZLinkSpotNodeRuntimeManager {
         },
         activationConcurrency: this.options.activationConcurrency?.(meshName) ?? {
           active: 0,
-          limit: registration.activationConcurrencyLimit ?? 128
+          limit: registration.activationConcurrencyLimit ?? DEFAULT_ACTIVATION_CONCURRENCY_LIMIT
         },
         channelWeights: Object.fromEntries(
           this.serverChannels(meshName).map(([channelName, channel]) => [
@@ -1081,6 +1083,16 @@ export class ZLinkSpotNodeRuntimeManager {
       );
     }
     await activation.commitServiceActorJoin(actor, handoffBacklog);
+  }
+
+  executeEntryActor<T>(meshName: string, actorId: string, operation: () => Promise<T>): Promise<T> {
+    const activation = this.entryActivations.get(meshName);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(
+        `Entry Spot Actor '${actorId}' has no activation for MeshNode '${meshName}'.`
+      );
+    }
+    return activation.executeActor(actorId, operation);
   }
 
   publish(

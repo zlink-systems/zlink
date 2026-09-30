@@ -582,8 +582,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             if (!_peersByIntent.Remove(connectionIntentId, out var intent))
                 return;
-            DisconnectTransport(intent);
             NotifyPeerConnectionIntentRemoved(intent.ExpectedRid ?? intent.ResolvedRid);
+            DisconnectTransport(intent);
         });
     }
 
@@ -600,7 +600,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             && _peersByRid.TryGetValue(target, out var disconnected)
             && disconnected.RouteGeneration == 0
         )
-            RemovePeer(disconnected, disconnect: false);
+            RemovePeer(disconnected);
         // Location intent removal is terminal only after the last admitted
         // route is gone. Physical disconnect never publishes this transition.
         if (!hasOwner && (!_peersByRid.TryGetValue(target, out var admitted) || !admitted.Admitted))
@@ -619,42 +619,48 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (_peersByRid.TryGetValue(target, out var peer) && intent.IsAdmitted(peer))
                 return false;
             _peersByIntent.Remove(connectionIntentId);
-            DisconnectTransport(intent);
             NotifyPeerConnectionIntentRemoved(target);
+            DisconnectTransport(intent);
             return true;
         });
     }
 
-    public void DisconnectPeer(RoutingId peerRid, ulong lifecycleGeneration = 0)
+    public void DisconnectPeer(
+        RoutingId peerRid,
+        ulong lifecycleGeneration = 0,
+        string? endpoint = null
+    )
     {
         RunState(() =>
         {
             // An owner-wide disconnect removes its outbound registration.
-            // A specified lifecycle retires only that physical admission;
+            // A specified lifecycle retires only its matching endpoint;
             // another intent for the RID may already own a new endpoint.
-            if (lifecycleGeneration == 0)
-            {
-                foreach (
-                    var intent in _peersByIntent
-                        .Values.Where(intent =>
-                            intent.ResolvedRid == peerRid || intent.ExpectedRid == peerRid
-                        )
-                        .ToArray()
+            _peersByRid.TryGetValue(peerRid, out var peer);
+            if (
+                lifecycleGeneration != 0
+                && peer is not null
+                && lifecycleGeneration != peer.LifecycleGeneration
+            )
+                return;
+            var intents = _peersByIntent
+                .Values.Where(intent =>
+                    lifecycleGeneration == 0
+                        ? intent.ResolvedRid == peerRid || intent.ExpectedRid == peerRid
+                        : endpoint is not null
+                            && string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
+                            && intent.IsBoundTo(peer)
                 )
-                {
-                    _peersByIntent.Remove(intent.Id);
-                    DisconnectTransport(intent);
-                }
-            }
-            if (!_peersByRid.TryGetValue(peerRid, out var peer))
-            {
-                NotifyPeerConnectionIntentRemoved(peerRid);
-                return;
-            }
-            if (lifecycleGeneration != 0 && lifecycleGeneration != peer.LifecycleGeneration)
-                return;
-            RemovePeer(peer, disconnect: true);
+                .ToArray();
+            foreach (var intent in intents)
+                _peersByIntent.Remove(intent.Id);
+            if (peer is not null)
+                RemovePeer(peer);
             NotifyPeerConnectionIntentRemoved(peerRid);
+            foreach (var intent in intents)
+                DisconnectTransport(intent);
+            if (peer is not null && _socket is not null)
+                DisconnectTransport(peer, peer.PhysicalRoutingId);
         });
     }
 
@@ -9041,7 +9047,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && _peersByRid.TryGetValue(unknownRidIntent.ResolvedRid, out var previousPeer)
                 && previousPeer.RouteGeneration == 0
             )
-                RemovePeer(previousPeer, disconnect: false);
+                RemovePeer(previousPeer);
             peer.RouteGeneration = routeGeneration;
             if (matchedIntent is not null)
             {
@@ -9478,7 +9484,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // An inbound peer has no local connect intent. Once its route
             // ends, remove the peer instead of converting it into a locally
             // reconnecting candidate.
-            RemovePeer(peer, disconnect: false);
+            RemovePeer(peer);
             SetPeerLossStateUnderLock();
             return null;
         }
@@ -12201,13 +12207,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             && peer.LifecycleGeneration == lifecycleGeneration
         );
 
-    private void RemovePeer(Peer peer, bool disconnect)
+    private void RemovePeer(Peer peer)
     {
-        var physicalRoutingId = peer.PhysicalRoutingId;
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_remove local={_routingId} peer={peer.RoutingId} "
-                + $"endpoint={peer.Admission?.AdvertisedEndpoint ?? "<unknown>"} state={peer.State} "
-                + $"disconnect={disconnect}"
+                + $"endpoint={peer.Admission?.AdvertisedEndpoint ?? "<unknown>"} state={peer.State}"
         );
         if (
             !peer.RoutingId.IsEmpty
@@ -12218,8 +12222,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.Admitted = false;
         peer.State = MeshPeerState.Closed;
         RebuildChannelSelectionPlansUnderLock();
-        if (disconnect && _socket is not null)
-            DisconnectTransport(peer, physicalRoutingId);
         Publish(MeshMonitorEventKind.PeerClosed, peerRid: peer.RoutingId);
     }
 

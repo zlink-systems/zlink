@@ -31,6 +31,8 @@ internal sealed class ZLinkActorSerialExecutor
         get => AwaitStateLane(_lane.RunAsync(() => _pendingRequests));
     }
 
+    internal int PendingLifecycleCount => _queue.LifecyclePendingCount;
+
     public ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
         bool countAsPendingRequest = false

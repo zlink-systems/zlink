@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 
@@ -740,6 +741,106 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
         var requests = AwaitStateLane(_stateLane.RunAsync(() => _activeRequests));
         return new ZLinkDrainRemainderCounts(actors, spots, requests, sessions);
+    }
+
+    internal ValueTask<IReadOnlyList<ZLinkUnfinishedOperation>> SnapshotUnfinishedOperationsAsync()
+    {
+        var unfinished = new List<ZLinkUnfinishedOperation>();
+        AddAvailableSnapshot(
+            unfinished,
+            _actorSessionManager.SnapshotStatesAsync(),
+            "actor-session-registry",
+            static (actors, result) =>
+            {
+                foreach (var actor in actors)
+                {
+                    var pending = actor.PendingLifecycleCount;
+                    if (pending != 0)
+                        result.Add(
+                            new(
+                                $"actor-lifecycle-barrier count={pending}",
+                                $"actor:{actor.ActorId}"
+                            )
+                        );
+                }
+            }
+        );
+
+        AddAvailableSnapshot(
+            unfinished,
+            _stateLane.RunAsync(() => _activeRequests),
+            "framework-runtime",
+            static (count, result) =>
+            {
+                if (count != 0)
+                    result.Add(new($"pending-request count={count}", "framework-runtime"));
+            }
+        );
+
+        var relocationUnits = _shutdownTracking.PendingCount;
+        if (relocationUnits != 0)
+            unfinished.Add(new($"relocation-unit count={relocationUnits}", "framework-runtime"));
+        foreach (var attempt in _standaloneActorRelocationRuntime.SnapshotPendingAttemptNames())
+            unfinished.Add(new($"relocation-attempt:{attempt}", "standalone-actor-relocation"));
+
+        var state = _state;
+        if (state is not null)
+            AddAvailableSnapshot(
+                unfinished,
+                state.RunStateAsync(() => state.SpotNodes.Values.ToArray()),
+                "runtime-state",
+                static (nodes, result) =>
+                {
+                    foreach (var node in nodes)
+                        AddAvailableSnapshot(
+                            result,
+                            node.Catalog.SnapshotPendingCloseNamesAsync(),
+                            "spot-node-catalog",
+                            static (spots, list) =>
+                            {
+                                foreach (var spot in spots)
+                                    list.Add(new($"close-transaction:{spot}", "spot-node-catalog"));
+                            }
+                        );
+                }
+            );
+
+        return ValueTask.FromResult<IReadOnlyList<ZLinkUnfinishedOperation>>(unfinished);
+    }
+
+    private static void AddAvailableSnapshot<T>(
+        List<ZLinkUnfinishedOperation> unfinished,
+        ValueTask<T> snapshot,
+        string owner,
+        Action<T, List<ZLinkUnfinishedOperation>> add
+    )
+    {
+        if (snapshot.IsCompletedSuccessfully)
+        {
+            add(snapshot.Result, unfinished);
+            return;
+        }
+
+        _ = snapshot
+            .AsTask()
+            .ContinueWith(static task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        unfinished.Add(new("owner snapshot pending", owner));
+    }
+
+    internal void TraceUnfinishedDrain(string message)
+    {
+        if (!Flow.CaptureEnabled)
+            return;
+        Flow.TraceDispatchError(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.Node,
+                ZLinkDispatchMessageKind.Control,
+                ZLinkDispatchErrorReason.Shutdown,
+                ZLinkDispatchErrorAction.Drop,
+                "runtime-drain",
+                Exception: new InvalidOperationException(message)
+            )
+        );
     }
 
     internal object ExecutionOwner
