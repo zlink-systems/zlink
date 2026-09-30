@@ -45,7 +45,7 @@ internal sealed partial class SocketKernel
         parts = null;
         try
         {
-            var topicBuffer = subscription?.GetWritableTopicBuffer(TopicBufferSize);
+            var topicBuffer = subscription?.GetWritableTopicBuffer(InitialTopicBufferSize);
             while (true)
             {
                 IntPtr sourceRoutingId;
