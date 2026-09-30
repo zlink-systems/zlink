@@ -38,6 +38,7 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_rejects_unsupported_send_without_poisoning_routed_final",
   "test_stream_notify_records_and_bind_constraint",
   "test_stream_recv_ready_precedes_first_payload_contract",
+  "test_stream_connect_is_not_supported_without_side_effects",
   "test_stream_phase3_mode_freeze_contract",
   "test_stream_phase3_packet_pull_contract",
   "test_stream_packet_peer_isolation_readiness_and_order",
@@ -1427,6 +1428,40 @@ void test_stream_recv_multiclient_strict_ready_gating_regression ()
 }
 #endif
 
+void test_stream_connect_is_not_supported_without_side_effects ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (stream);
+    zlink_socket_monitor_open_options_t monitor_options = {};
+    monitor_options.events = ZLINK_EVENT_ALL;
+    void *monitor = zlink_socket_monitor_open (stream, &monitor_options);
+    TEST_ASSERT_NOT_NULL (monitor);
+
+    const char *endpoint = "tcp://127.0.0.1:1";
+    for (int mode_index = 0; mode_index != 3; ++mode_index) {
+        if (mode_index != 0) {
+            const zlink_stream_recv_mode_t mode = mode_index == 1
+                                                    ? ZLINK_STREAM_RECV_MODE_RAW
+                                                    : ZLINK_STREAM_RECV_MODE_PACKET;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_set_stream_option (stream, ZLINK_STREAM_OPT_RECV_MODE,
+                                       &mode, sizeof (mode)));
+        }
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_SUPPORTED,
+                               zlink_connect (stream, endpoint));
+        TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_FOUND,
+                               zlink_disconnect (stream, endpoint));
+        TEST_ASSERT_EQUAL_INT (ENOENT, zlink_errno ());
+        zlink_pollitem_t item = {monitor, 0, ZLINK_POLLIN, 0};
+        TEST_ASSERT_EQUAL_INT (0, zlink_poll (&item, 1, 0, NULL));
+    }
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (stream);
+}
+
 void test_stream_phase3_mode_freeze_contract ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -1497,15 +1532,20 @@ void test_stream_phase3_mode_freeze_contract ()
       zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
 
     errno = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_INVALID_ARGUMENT,
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_SUPPORTED,
                            zlink_connect (client, endpoint));
-    TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     mode = ZLINK_STREAM_RECV_MODE_RAW;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_set_stream_option (client, ZLINK_STREAM_OPT_RECV_MODE, &mode,
                                sizeof (mode)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_SUPPORTED,
+                           zlink_connect (client, endpoint));
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
+    char client_endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (client, client_endpoint, sizeof (client_endpoint));
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_INVALID_STATE,
@@ -2389,6 +2429,9 @@ int main (void)
           "test_stream_recv_multiclient_strict_ready_gating_regression"))
         RUN_TEST (test_stream_recv_multiclient_strict_ready_gating_regression);
 #endif
+    if (should_run_stream_socket_test (
+          "test_stream_connect_is_not_supported_without_side_effects"))
+        RUN_TEST (test_stream_connect_is_not_supported_without_side_effects);
     if (should_run_stream_socket_test ("test_stream_phase3_mode_freeze_contract"))
         RUN_TEST (test_stream_phase3_mode_freeze_contract);
     if (should_run_stream_socket_test ("test_stream_phase3_packet_pull_contract"))
