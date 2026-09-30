@@ -392,8 +392,8 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
                         sizeof (one)));
 
     char endpoint[MAX_SOCKET_STRING];
-    fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
-    close (reserved);
+    fd_t reserved = bind_socket_resolve_port (
+      "127.0.0.1", "0", endpoint, AF_INET, IPPROTO_TCP, false);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
 
     int request_context = 21;
@@ -444,6 +444,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
       zlink_set_option (dealer, ZLINK_OPT_RCVTIMEO, &normal_receive_timeout,
                         sizeof (normal_receive_timeout)));
 
+    close (reserved);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, endpoint));
     assert_writable_poll (dealer);
     bool saw_request = false;

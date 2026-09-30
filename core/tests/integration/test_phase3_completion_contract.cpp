@@ -1101,11 +1101,11 @@ void test_dontwait_connect_before_bind_is_not_retained_and_can_be_retried ()
                         sizeof (receive_timeout)));
 
     char endpoint[MAX_SOCKET_STRING];
-    // A plain listener holds the OS-assigned port until just before the
-    // receiver binds it, so a parallel test cannot be assigned the same port
-    // meanwhile. It never speaks ZMTP, so the sender never completes a
-    // handshake with it.
-    const fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
+    // listen하지 않는 소켓을 수신 소켓의 bind 직전까지 유지해 OS가 할당한
+    // 포트를 점유한다. 이 동안 다른 테스트에 같은 포트가 할당되지 않으며,
+    // 연결이 거절되어 ZMTP 핸드셰이크가 완료되지 않는다.
+    const fd_t reserved = bind_socket_resolve_port (
+      "127.0.0.1", "0", endpoint, AF_INET, IPPROTO_TCP, false);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (sender, endpoint));
 
     int poller_tag = 41;
