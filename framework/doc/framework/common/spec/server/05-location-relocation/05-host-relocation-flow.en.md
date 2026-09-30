@@ -823,9 +823,9 @@ completes within a fixed time, in this order.
    propagation after publishing.
 3. Processes already-accepted handlers, request completions, relocation units, and
    session barriers up to the deadline.
-4. Doesn't start new object relocation. While Actor membership and local instances
-   remain valid, delivers a `HostShutdown` closing context to every Entry, User, and
-   Instance Spot. Per-Actor closing callbacks aren't called.
+4. Doesn't start new object relocation. After following [Cancellation and shutdown §5.1](../01-execution/03-cancellation-and-shutdown.en.md#51-ending-waits-on-an-application-completion-source),
+   delivers a `HostShutdown` closing context to every Entry, User, and Instance Spot while Actor
+   membership and local instances remain valid. Per-Actor closing callbacks aren't called.
 5. After Spot callbacks, cleans up local Actor and Spot scope, owner record,
    descriptor, listener, and transport, in order.
 6. If finished within the deadline, ends with `Stopped/None`; if not, ends with
