@@ -242,20 +242,33 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         bool acceptsOwnerExecution
     )
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+#if DEBUG
+        if (ZLinkInfrastructureWaitGuard.IsInfrastructureContext)
+        {
+            if (!_lane.TryRunInline(Admit, out var accepted))
             {
-                if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
-                    return false;
+                ZLinkInfrastructureWaitGuard.ThrowIfBlocking(false, "task supervisor admission");
+                throw new InvalidOperationException(
+                    "Task supervisor admission requires a lane turn."
+                );
+            }
+            return accepted.GetAwaiter().GetResult();
+        }
+#endif
+        return AwaitStateLane(_lane.RunAsync(Admit));
 
-                if (!_accepting && !acceptsOwnerExecution)
-                    return false;
+        bool Admit()
+        {
+            if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
+                return false;
 
-                runner.ActiveOnSupervisorLane.Add(task);
-                _active.Add(task);
-                return true;
-            })
-        );
+            if (!_accepting && !acceptsOwnerExecution)
+                return false;
+
+            runner.ActiveOnSupervisorLane.Add(task);
+            _active.Add(task);
+            return true;
+        }
     }
 
     public void Remove(ZLinkRuntimeTaskRunner runner, Task completed)
@@ -293,6 +306,9 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "task supervisor lane");
+        return operation.GetAwaiter().GetResult();
+    }
 }
