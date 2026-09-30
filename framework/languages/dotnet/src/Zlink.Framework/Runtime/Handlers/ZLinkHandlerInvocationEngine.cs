@@ -2,7 +2,7 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal static class ZLinkHandlerInvocationEngine
 {
-    public static ValueTask<object?> InvokeAsync(
+    public static async ValueTask<object?> InvokeAsync(
         object handler,
         ZLinkHandlerMethodInvoker invoker,
         IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
@@ -51,12 +51,14 @@ internal static class ZLinkHandlerInvocationEngine
             }
         }
 
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation
+            .ReleaseForHandlerStartAsync()
+            .ConfigureAwait(false);
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
-        return ZLinkHandlerResultAwaiter.AwaitAsync(result);
+        return await ZLinkHandlerResultAwaiter.AwaitAsync(result).ConfigureAwait(false);
     }
 
-    public static ValueTask<object?> InvokeAsync(
+    public static async ValueTask<object?> InvokeAsync(
         object handler,
         ZLinkHandlerMethodInvoker invoker,
         object? arg0 = null,
@@ -66,8 +68,10 @@ internal static class ZLinkHandlerInvocationEngine
         object? arg4 = null
     )
     {
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation
+            .ReleaseForHandlerStartAsync()
+            .ConfigureAwait(false);
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
-        return ZLinkHandlerResultAwaiter.AwaitAsync(result);
+        return await ZLinkHandlerResultAwaiter.AwaitAsync(result).ConfigureAwait(false);
     }
 }

@@ -662,7 +662,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 await ZLinkApplicationJobQueueInvocation
                     .EnsureQueuedPermitAsync(cancellationToken)
                     .ConfigureAwait(false);
-                ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+                await ZLinkApplicationJobQueueInvocation
+                    .ReleaseForHandlerStartAsync()
+                    .ConfigureAwait(false);
                 await _handler.OnDispatchAsync(dispatch, decodedPayload, cancellationToken);
 
                 if (
@@ -856,7 +858,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             await ZLinkApplicationJobQueueInvocation
                 .EnsureQueuedPermitAsync(callbackDeadline.Token)
                 .ConfigureAwait(false);
-            ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+            await ZLinkApplicationJobQueueInvocation
+                .ReleaseForHandlerStartAsync()
+                .ConfigureAwait(false);
             var operation = _handler.OnActorBindingReplacedAsync(
                 identity.ActorId,
                 callbackDeadline.Token
@@ -1133,7 +1137,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         await ZLinkApplicationJobQueueInvocation
             .EnsureQueuedPermitAsync(cancellationToken)
             .ConfigureAwait(false);
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation
+            .ReleaseForHandlerStartAsync()
+            .ConfigureAwait(false);
         await _handler.OnConnectedAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1217,7 +1223,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         await ZLinkApplicationJobQueueInvocation
             .EnsureQueuedPermitAsync(_terminalCallbackStop.Token)
             .ConfigureAwait(false);
-        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
+        await ZLinkApplicationJobQueueInvocation
+            .ReleaseForHandlerStartAsync()
+            .ConfigureAwait(false);
         var operation = callback(_terminalCallbackStop.Token);
         if (operation.IsCompletedSuccessfully)
             return;
