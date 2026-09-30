@@ -860,19 +860,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     {
         try
         {
-            foreach (var peer in _node.Peers())
-            {
-                if (
-                    peer.RoutingId != peerRid
-                    || !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
-                    || peer.LifecycleGeneration != lifecycleGeneration
-                )
-                    continue;
-                // The auto-connect owner is releasing this lifetime. Release
-                // its endpoint registration before a new RID uses that endpoint.
-                _node.RemovePeerConnection(peer.ConnectionIntentId);
-            }
-            _node.DisconnectPeer(peerRid, lifecycleGeneration);
+            _node.DisconnectPeer(peerRid, lifecycleGeneration, endpoint);
         }
         catch (ZlinkException)
         {
