@@ -60,8 +60,6 @@ export {
 } from './actor-message-follow-context';
 export {
   ZLinkActorRuntimeState,
-  mergeRemoteBoundSessionTarget,
-  preferredRemoteBoundSessionTarget,
   toFrameworkActorRef,
   toFrameworkRoutingId,
   type ZLinkActorCreationOperation,

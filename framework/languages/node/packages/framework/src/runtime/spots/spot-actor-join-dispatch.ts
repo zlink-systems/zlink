@@ -66,7 +66,8 @@ interface ZLinkSpotActorAdmissionRuntime {
   readonly commitActorDeparture?: (actorId: string) => void;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
 }
 
@@ -75,8 +76,7 @@ interface ZLinkSpotActorPacketRuntime {
   readonly bindRemoteSession?: (
     actor: ZLinkBackendActorRef,
     sourceNodeRid: RoutingId,
-    sourceSessionRid: RoutingId,
-    declaredTarget?: ZLinkRemoteBoundSessionTarget
+    sourceSessionRid: RoutingId
   ) => void;
   readonly replyNoBind?: (
     info: ZLinkBackendActorRecvInfo,
@@ -93,7 +93,6 @@ interface ZLinkSpotActorJoinDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
   readonly serial: ZLinkSpotSerialTurnExecutor;
-  readonly isSpotClosing?: () => boolean;
   readonly actors: ZLinkSpotActorAdmissionRuntime;
   readonly packets?: ZLinkSpotActorPacketRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
@@ -149,7 +148,6 @@ export class ZLinkSpotActorJoinDispatch {
     this.routedFrames = new ZLinkSpotRoutedFrameDispatch({
       nativeSpotId: this.nativeSpotId,
       serial: options.serial,
-      isSpotClosing: options.isSpotClosing,
       resolveActor: actors.resolveActor,
       getTarget: () => actors.getTarget() as ZLinkActorJoinAdmissionTarget & ZLinkSpot,
       defaultAccept: actors.defaultAccept,
@@ -159,7 +157,7 @@ export class ZLinkSpotActorJoinDispatch {
       bindRemoteSession:
         options.packets?.bindRemoteSession === undefined
           ? undefined
-          : (actor, sourceNodeRid, sourceSessionRid, declaredTarget) =>
+          : (actor, sourceNodeRid, sourceSessionRid) =>
               options.packets!.bindRemoteSession!(
                 {
                   actorId: actor.actorId,
@@ -167,8 +165,7 @@ export class ZLinkSpotActorJoinDispatch {
                   nodeRid: actor.nodeRid
                 },
                 sourceNodeRid,
-                sourceSessionRid,
-                declaredTarget
+                sourceSessionRid
               ),
       routedBoundSessionReceiver: options.boundSessionRuntime?.receiveRoutedBoundSession.bind(
         options.boundSessionRuntime
@@ -307,7 +304,7 @@ export class ZLinkSpotActorJoinDispatch {
         return;
       }
       await this.options.serial.executeLifecycleOperation(() =>
-        this.nativeActorJoinAdmission.admit(request, this.options.isSpotClosing?.() === true)
+        this.nativeActorJoinAdmission.admit(request)
       );
     }
   }

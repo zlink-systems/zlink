@@ -35,9 +35,12 @@ function boundSessionRuntime(overrides = {}) {
     async receiveRoutedBoundSessionError() {},
     async receiveRemoteBoundSessionOwnership() {},
     async receiveRemoteBoundSessionSeal() {},
-    rememberRemoteBoundSessionTarget() {},
-    resolveRemoteBoundSessionTarget() { return undefined; },
-    actorPacketTargetForState() { return undefined; },
+    resolveRemoteBoundSessionTarget() {
+      return undefined;
+    },
+    actorPacketTargetForState() {
+      return undefined;
+    },
     async sendActorResponse() {},
     async sendActorError() {},
     ...overrides
@@ -160,9 +163,7 @@ test('Entry Spot native actor request dispatches to registered handler and repli
   });
 });
 
-test('Entry Spot routed actor packet records only an explicit remote bound session target', async () => {
-  let capturedTarget;
-  let capturedTargetCount = 0;
+test('Entry Spot routed actor packet replies with its current actor packet target', async () => {
   const replies = [];
   let dispatchHandler;
 
@@ -206,10 +207,6 @@ test('Entry Spot routed actor packet records only an explicit remote bound sessi
     spotNodeName: 'room',
     entryActorRuntime: entryActorRuntime((actorId) => actorId === actor.actorId ? actor : undefined),
     boundSessionRuntime: boundSessionRuntime({
-      rememberRemoteBoundSessionTarget(_actorId, target) {
-        capturedTargetCount++;
-        capturedTarget = target;
-      },
       actorPacketTargetForState(actorId) {
         assert.equal(actorId, 'player-1');
         return {
@@ -265,12 +262,6 @@ test('Entry Spot routed actor packet records only an explicit remote bound sessi
     }
   });
 
-  await waitFor(() => capturedTarget !== undefined, 'remote target capture');
-  assert.equal(capturedTarget.routerChannelId, 'bingo.room.route');
-  assert.equal(String(capturedTarget.targetNodeRid), 'session-node');
-  assert.equal(String(capturedTarget.spotId), 'session-entry');
-  assert.equal(typeof capturedTarget.targetNodeRid, 'string');
-  assert.equal(typeof capturedTarget.spotId, 'string');
   await waitFor(() => replies.length === 1, 'routed actor packet reply');
   const reply = JSON.parse(Buffer.from(replies[0]).toString('utf8'));
   assert.deepEqual(reply.actorPacketTarget, {
@@ -308,7 +299,6 @@ test('Entry Spot routed actor packet records only an explicit remote bound sessi
     }
   });
   await waitFor(() => replies.length === 2, 'backend actor packet reply');
-  assert.equal(capturedTargetCount, 1);
   backendRelay.close();
   header.close();
   payload.close();
@@ -573,8 +563,7 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
   );
 });
 
-test('runtime host normalizes remote actor join bound-session route ids', async () => {
-  let capturedTarget;
+test('runtime host legacy remote actor join admits the actor', async () => {
   const actor = { actorId: 'player-1' };
   const runtime = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration({})
@@ -588,9 +577,6 @@ test('runtime host normalizes remote actor join bound-session route ids', async 
       assert.equal(actorId, 'player-1');
       return {
         setNativeActorRef() {},
-        setRemoteBoundSessionTarget(target) {
-          capturedTarget = target;
-        },
         setJoinedSpot() {}
       };
     }
@@ -613,17 +599,9 @@ test('runtime host normalizes remote actor join bound-session route ids', async 
     actorGeneration: '1',
     routerChannelId: 'bingo.room.route',
     request: Buffer.from('join-request').toString('base64')
-  }, {
-    channelName: 'bingo.room.route',
-    sourceNodeRid: 'session-node'
   });
 
   assert.equal(result.accepted, true);
-  assert.equal(capturedTarget.routerChannelId, 'bingo.room.route');
-  assert.equal(String(capturedTarget.targetNodeRid), 'session-node');
-  assert.equal(String(capturedTarget.spotId), 'session-node');
-  assert.equal(typeof capturedTarget.targetNodeRid, 'string');
-  assert.equal(typeof capturedTarget.spotId, 'string');
 });
 
 test('runtime host remembers routed packet target for stream-bound actors without actor manager', async () => {

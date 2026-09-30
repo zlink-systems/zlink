@@ -117,8 +117,7 @@ export class ZLinkChannelRuntimeOptionsFactory {
       [
         ZLINK_REMOTE_ACTOR_JOIN_PACKET,
         {
-          handle: (payload, routeContext) =>
-            this.options.boundSessionRelay.actorJoins.receive(payload, routeContext)
+          handle: (payload) => this.options.boundSessionRelay.actorJoins.receive(payload)
         }
       ],
       [

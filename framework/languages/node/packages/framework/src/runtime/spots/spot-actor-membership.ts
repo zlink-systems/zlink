@@ -11,10 +11,6 @@ import { throwIfAborted } from '../abort';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { ZLinkConfigurationException } from '../configuration';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
 import { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -41,7 +37,6 @@ export interface ZLinkSpotActorMembershipOptions {
   readonly entrySpotIdProvider?: (meshName: string) => string | undefined;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
-  readonly isSpotClosing?: (activation: ZLinkSpotActivation) => boolean;
 }
 
 export type ZLinkActorJoinRollback = () => Promise<void> | void;
@@ -63,12 +58,6 @@ export class ZLinkSpotActorMembership {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
     return await this.runLifecycleOperation(activation, async () => {
-      if (this.options.isSpotClosing?.(activation) === true) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          `User Spot '${String(spotId)}' is closing.`
-        );
-      }
       return await this.admitActorJoinCore(
         activation,
         actor,

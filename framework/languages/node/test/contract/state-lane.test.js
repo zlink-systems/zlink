@@ -79,11 +79,15 @@ test('isOnLane is true only inside a turn', async () => {
   assert.equal(lane.isOnLane, false);
 });
 
-test('a different lane is enterable from inside a turn', async () => {
+test('a different lane accepts detached work from inside a turn', async () => {
   const outer = new ZLinkStateLane();
   const inner = new ZLinkStateLane();
+  let completion;
 
-  assert.equal(await outer.run(async () => await inner.run(() => 5)), 5);
+  await outer.run(() => {
+    completion = inner.run(() => 5);
+  });
+  assert.equal(await completion, 5);
 });
 
 test('dispose waits for queued work', async () => {

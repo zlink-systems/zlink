@@ -752,13 +752,9 @@ void zlink::session_base_t::process_conn_failed ()
 
 void zlink::session_base_t::reconnect ()
 {
-    // STREAM routes identify one physical connection. Reusing its pipe would
-    // preserve the old RID and suppress the new connection's READY edge.
-    // Delayed-connect sockets likewise create a pipe for each live transport.
-    if (_pipe
-        && (options.immediate == 1 || options.type == ZLINK_CORE_SOCKET_STREAM)) {
-        if (options.type != ZLINK_CORE_SOCKET_STREAM)
-            _pipe->hiccup ();
+    // Delayed-connect sockets create a pipe for each live transport.
+    if (_pipe && options.immediate == 1) {
+        _pipe->hiccup ();
         _pipe->terminate (false);
         _terminating_pipes.insert (_pipe);
         release_socket_pipe ();
@@ -847,9 +843,7 @@ void zlink::session_base_t::start_connecting (bool wait_)
 
     //  Choose I/O thread to run connecter in. Given that we are already
     //  running in an I/O thread, there must be at least one available.
-    io_thread_t *io_thread = options.type == ZLINK_CORE_SOCKET_STREAM
-                               ? choose_io_thread_stream (options.affinity)
-                               : choose_io_thread_transport (options.affinity);
+    io_thread_t *io_thread = choose_io_thread_transport (options.affinity);
     zlink_assert (io_thread);
 
     //  Create the connecter object.

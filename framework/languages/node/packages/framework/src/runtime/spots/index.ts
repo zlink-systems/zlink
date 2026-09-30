@@ -59,6 +59,7 @@ import {
 } from '../foundation/service-runtime-contracts';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import { ZLinkConfigurationException } from '../configuration';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -217,7 +218,6 @@ export interface ZLinkSpotManagerOptions {
     readonly actorRef?: ActorRef;
     readonly spotId?: RoutingId;
   };
-  readonly actorBindingGenerationObserver?: (actorId: string, generation: bigint) => void;
   readonly channelClient?: ZLinkChannelClient;
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -300,7 +300,6 @@ interface ZLinkTargetSpotCloseOperation {
   readonly beginAuthority: (
     onCommitted: () => void
   ) => Promise<{ release(): Promise<void> } | undefined>;
-  committed: boolean;
   authority?: { release(): Promise<void> };
   authorityDecision?: Promise<void>;
   ready?: Promise<boolean>;
@@ -338,9 +337,7 @@ export class DefaultZLinkSpotManager {
     private readonly options: ZLinkSpotManagerOptions,
     timerClock?: import('./spot-timer').ZLinkTimerClock
   ) {
-    this.activations = new ZLinkSpotActivationRegistry(options.metrics, (meshName, spotId) =>
-      this.isSpotClosing(meshName, spotId)
-    );
+    this.activations = new ZLinkSpotActivationRegistry(options.metrics);
     this.factories = new Set(options.spotFactories);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
     this.locationClaim = new ZLinkSpotLocationClaim({
@@ -359,9 +356,6 @@ export class DefaultZLinkSpotManager {
       dispatchErrors: options.dispatchErrors
     });
     this.actorMembership = new ZLinkSpotActorMembership({
-      isSpotClosing: (activation) =>
-        this.isSpotClosing(activation.meshName, activation.spotId) ||
-        this.activations.resolve(activation.meshName, activation.spotId) !== activation,
       resolveActivation: (spotId, meshName) =>
         meshName === undefined
           ? this.activations.resolveUnique(spotId)
@@ -417,9 +411,6 @@ export class DefaultZLinkSpotManager {
         this.actorMembership.leaveActor(spotId, actor, signal, meshName),
       requestContextClose: (activation, objectGeneration, signal) =>
         this.closeFromContext(activation, objectGeneration, signal),
-      isSpotClosing: (activation) =>
-        this.isSpotClosing(activation.meshName, activation.spotId) ||
-        this.activations.resolve(activation.meshName, activation.spotId) !== activation,
       registerActivation: (activation) => {
         this.activations.register(activation);
         this.scheduleIdleSweep();
@@ -597,10 +588,6 @@ export class DefaultZLinkSpotManager {
         await awaitWithAbort(pendingClose, signal);
         continue;
       }
-      if (closeOperation?.committed === true) {
-        await awaitWithAbort(this.closeWithReason(meshName, spotId), signal);
-        continue;
-      }
       const closing = this.activations.closingOperation(meshName, spotId);
       if (closing !== undefined) {
         await awaitWithAbort(closing.ready, signal);
@@ -707,16 +694,13 @@ export class DefaultZLinkSpotManager {
   }
 
   isSpotClosing(meshName: string, spotId: RoutingId): boolean {
-    const key = `${meshName}\0${String(spotId)}`;
-    return this.closeOperations.get(key)?.committed === true;
+    return (
+      this.activations.activationForClose(meshName, spotId)?.executionBarrier.isCloseSealed === true
+    );
   }
 
   pendingSpotCloseDecision(meshName: string, spotId: RoutingId): Promise<void> | undefined {
     return this.closeOperations.get(`${meshName}\0${String(spotId)}`)?.authorityDecision;
-  }
-
-  isInstanceClosing(meshName: string, spotId: RoutingId): boolean {
-    return this.closeOperations.has(`${meshName}\0${String(spotId)}`);
   }
 
   async discardInstance(meshName: string, spotId: RoutingId): Promise<void> {
@@ -1010,8 +994,8 @@ export class DefaultZLinkSpotManager {
     requireMeshName(meshName);
     const args = normalizeSpotCreateArgs(requestOrSignal, signal);
     throwIfAborted(args.signal);
+    this.options.admission?.requireRequest('SPOT create', meshName);
     const operation = this.activations.getOrBegin(meshName, spotType, spotId, async () => {
-      this.options.admission?.requireRequest('SPOT create', meshName);
       const release = await this.options.activationAdmission?.acquire(meshName, args.signal);
       const ownedRequest =
         args.request === undefined
@@ -1036,12 +1020,16 @@ export class DefaultZLinkSpotManager {
 
   async find(meshName: string, spotId: RoutingId): Promise<ZLinkSpotInfo | null> {
     requireMeshName(meshName);
-    return this.activations.has(meshName, spotId) ? { spotId } : null;
+    return this.activations.has(meshName, spotId) && !this.isSpotClosing(meshName, spotId)
+      ? { spotId }
+      : null;
   }
 
   async list(meshName: string): Promise<readonly ZLinkSpotInfo[]> {
     requireMeshName(meshName);
-    return this.activations.list(meshName);
+    return this.activations
+      .list(meshName)
+      .filter(({ spotId }) => !this.isSpotClosing(meshName, spotId));
   }
 
   async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
@@ -1165,14 +1153,13 @@ export class DefaultZLinkSpotManager {
       operation = {
         activation,
         reason,
-        beginAuthority,
-        committed: false
+        beginAuthority
       };
       this.closeOperations.set(key, operation);
     }
     if (operation.ready === undefined) {
       const active = operation;
-      const run = active.activation.serial.executeLifecycleOperation(() =>
+      const run = active.activation.serial.executeControlLifecycleOperation(() =>
         this.runCloseOperation(meshName, spotId, active, signal, deadline)
       );
       active.ready = run.finally(() => {
@@ -1192,9 +1179,8 @@ export class DefaultZLinkSpotManager {
     signal?: AbortSignal,
     deadline?: Date
   ): Promise<boolean> {
-    const began = await this.beginCloseAuthority(meshName, spotId, operation, signal);
-    if (!began) return false;
-    const seal = operation.activation.sealExecution(true);
+    const seal = await this.beginCloseAuthority(meshName, spotId, operation, signal);
+    if (seal === undefined) return false;
     await this.activationLifecycle.sealForClose(operation.activation, seal);
     const closingFailure = await this.activationLifecycle.cleanupClosedActivation(
       operation.activation,
@@ -1202,9 +1188,6 @@ export class DefaultZLinkSpotManager {
       deadline
     );
     await operation.authority?.release();
-    // The incarnation has no further lifecycle item once its authority is
-    // released, so its lifecycle lane admission closes with this Close.
-    operation.activation.serial.closeAdmission();
     this.activations.finishClose(meshName, spotId);
     this.closeOperations.delete(`${meshName}\0${String(spotId)}`);
     // An OnClosing failure never changes a Close result; host shutdown alone
@@ -1220,9 +1203,9 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     operation: ZLinkTargetSpotCloseOperation,
     signal?: AbortSignal
-  ): Promise<boolean> {
+  ): Promise<import('../execution').ZLinkExecutionBarrierSeal | undefined> {
     await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
-    if (!operation.activation.canClose(operation.reason)) return false;
+    if (!operation.activation.canClose(operation.reason)) return undefined;
     if (operation.activation.executionBarrier.isSealed) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotMoving,
@@ -1230,9 +1213,10 @@ export class DefaultZLinkSpotManager {
         true
       );
     }
+    let seal: import('../execution').ZLinkExecutionBarrierSeal | undefined;
     const authorityPromise = Promise.resolve().then(() =>
       operation.beginAuthority(() => {
-        operation.committed = true;
+        seal = operation.activation.sealExecution('close');
       })
     );
     operation.authorityDecision = authorityPromise.then(
@@ -1240,12 +1224,12 @@ export class DefaultZLinkSpotManager {
       () => undefined
     );
     const authority = await authorityPromise;
-    if (authority === undefined) return false;
+    if (authority === undefined) return undefined;
     operation.authority = authority;
-    if (!this.isSpotClosing(meshName, spotId)) {
+    if (seal === undefined) {
       throw new Error(`Spot '${String(spotId)}' Closing authority did not confirm its commit.`);
     }
-    return true;
+    return seal;
   }
 
   async executeOnSpot<TSpot extends ZLinkSpot, TResult>(
@@ -1796,9 +1780,6 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor record is missing its Actor owner.');
     }
     const request = record.kind === ReceiveKind.ActorRequest;
-    if (record.sourceBindingGeneration > 0n) {
-      this.options.actorBindingGenerationObserver?.(actor.actorId, record.sourceBindingGeneration);
-    }
     const resolvedOwner = this.options.actorDispatchOwnerResolver?.(actor.actorId);
     const resolvedActorRef = resolvedOwner?.actorRef ?? {
       actorId: actor.actorId,
@@ -1926,27 +1907,26 @@ export class DefaultZLinkSpotManager {
       }
     }
     if (activation?.domain.kind === 'user') {
-      await activation.serial.executeLifecycleOperation(async () => {
+      // The execution barrier decides Closing admission before the callback runs. That
+      // rejection is this Join's terminal, so it is replied here; failures after entry
+      // belong to dispatchMeshActorJoinCore.
+      const turn = { entered: false };
+      try {
+        await activation.serial.executeLifecycleOperation(async () => {
+          turn.entered = true;
+          await this.dispatchMeshActorJoinCore(meshName, owner, record);
+        });
+      } catch (error) {
         if (
-          this.isSpotClosing(meshName, activation.spotId) ||
-          this.activations.resolve(meshName, activation.spotId) !== activation
+          turn.entered ||
+          !(error instanceof ZLinkFrameworkException) ||
+          record.replyFailure === undefined
         ) {
-          const rejection = createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-            `User Spot '${String(spotId)}' is closing.`
-          );
-          if (record.replyFailure !== undefined) {
-            const terminal = internalFrameworkWireReply(rejection);
-            requireMeshSpotReply(
-              record.replyFailure(terminal.terminalResult, terminal.failureCode)
-            );
-          } else {
-            requireMeshSpotReply(record.replyActorJoin(1, []));
-          }
-          return;
+          throw error;
         }
-        await this.dispatchMeshActorJoinCore(meshName, owner, record);
-      });
+        const terminal = internalFrameworkWireReply(error);
+        requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
+      }
       return;
     }
     await this.dispatchMeshActorJoinCore(meshName, owner, record);
@@ -2020,6 +2000,7 @@ export class DefaultZLinkSpotManager {
       admissionRecord = provisional.record;
       canonicalAdmissionCreated = provisional.created;
       try {
+        releaseApplicationJobPermitBeforeHandler();
         canonicalActorType = (await resolver({ actorId, ...control.canonicalActorJoin })).actorType;
       } catch (error) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
@@ -2448,21 +2429,6 @@ export class DefaultZLinkSpotManager {
       }
       if (
         accepted &&
-        transferRequest !== undefined &&
-        this.options.actorTransferRuntime !== undefined &&
-        !isRemoteAdmission
-      ) {
-        // A lightweight Core actor-join notification can create the Actor
-        // before the formal transfer request reaches this branch. Preserve
-        // the full relocation fence in that race so a later Session bind
-        // refresh cannot erase the seal.
-        this.options.actorTransferRuntime.rememberRoutedActorTransferTarget(
-          actorId,
-          transferRequest.remoteBoundSessionTarget
-        );
-      }
-      if (
-        accepted &&
         actor !== undefined &&
         transferRequest !== undefined &&
         !isRemoteAdmission &&
@@ -2473,7 +2439,8 @@ export class DefaultZLinkSpotManager {
           spotId,
           transferId: transferRequest.transferId,
           handoffBacklog: transferRequest.handoffBacklog,
-          deferredJoinCompletion
+          deferredJoinCompletion,
+          sealedSession: transferRequest.remoteBoundSessionTarget
         });
         if (isRemoteCommit && admissionRecord !== undefined) {
           this.formalRemoteActorAdmissions.markCommitted(transferRequest.transferId, actor);
@@ -2780,8 +2747,12 @@ export class DefaultZLinkSpotManager {
             // the Session binding aggregate after this boundary.
             this.formalRemoteTransfers.delete(actor.context.actorId);
           }
+          const sealedSession = pendingTransfer?.sealedSession;
           const updateBoundSessionRoute = async (): Promise<void> => {
-            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
+            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(
+              actor,
+              sealedSession
+            );
             await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
           };
           // Session routing is an independent post-Ready branch. Callback

@@ -371,10 +371,16 @@ test('transferred actor materialization creates a fresh actor before restoring s
   assert.equal(String(result.actorRef.nodeRid), 'target-node');
   assert.deepEqual(lifecycle, ['factory']);
 
-  manager.getState('alice').setRemoteBoundSessionTarget({
+  manager.getState('alice').installBoundSessionBinding({
     routerChannelId: 'session-route',
     targetNodeRid: 'session-a',
-    spotId: 'session-entry'
+    spotId: 'session-entry',
+    sessionNodeRid: 'session-a',
+    sessionRid: 'session-alice',
+    sessionOwnerNodeGeneration: 1n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 1n,
+    bindingGeneration: 1n
   });
   await manager.rollbackTransferredActor(result.actor);
   assert.equal(manager.getState('alice'), undefined);
@@ -2609,13 +2615,24 @@ function boundSessionCommand44Harness(overrides = {}) {
     shutdownSignal: overrides.shutdownSignal,
     clearRemoteActorPacketTarget() {}
   });
-  return { actor, actorRef, authority, routes, runtime, serviceWireRelocation, state };
+  const sealedSession = state.remoteBoundSessionTarget;
+  return {
+    actor,
+    actorRef,
+    authority,
+    routes,
+    runtime,
+    serviceWireRelocation,
+    state,
+    sealedSession
+  };
 }
 
 test('target ownership publication submits one exact command 44 without a completion ACK', async () => {
-  const { actor, routes, runtime, serviceWireRelocation } = boundSessionCommand44Harness();
+  const { actor, routes, runtime, serviceWireRelocation, sealedSession } =
+    boundSessionCommand44Harness();
 
-  await runtime.publishRoutedActorOwnership(actor);
+  await runtime.publishRoutedActorOwnership(actor, sealedSession);
 
   assert.equal(routes.length, 1);
   assert.equal(routes[0].meshName, 'session.route');
@@ -2643,21 +2660,21 @@ test('target ownership publication submits one exact command 44 without a comple
 });
 
 test('target ownership publication reports a one-way command 44 submit failure without retry', async () => {
-  const { actor, routes, runtime } = boundSessionCommand44Harness({
+  const { actor, routes, runtime, sealedSession } = boundSessionCommand44Harness({
     async send() {
       throw new Error('command 44 submit failed');
     }
   });
 
   await assert.rejects(
-    runtime.publishRoutedActorOwnership(actor),
+    runtime.publishRoutedActorOwnership(actor, sealedSession),
     /command 44 submit failed/
   );
   assert.equal(routes.length, 1);
 });
 
 test('target ownership publication rejects a stale target fence before command 44 submit', async () => {
-  const { actor, routes, runtime } = boundSessionCommand44Harness({
+  const { actor, routes, runtime, sealedSession } = boundSessionCommand44Harness({
     authority: {
       kind: 'snapshot',
       storeVersion: { value: 'authority-stale' },
@@ -2679,16 +2696,16 @@ test('target ownership publication rejects a stale target fence before command 4
   });
 
   await assert.rejects(
-    runtime.publishRoutedActorOwnership(actor),
+    runtime.publishRoutedActorOwnership(actor, sealedSession),
     /command 44 target authority fence is stale/
   );
   assert.equal(routes.length, 0);
 });
 
 test('target route opening is a no-op after one-way command 44 submission', async () => {
-  const { actor, routes, runtime } = boundSessionCommand44Harness();
+  const { actor, routes, runtime, sealedSession } = boundSessionCommand44Harness();
 
-  await runtime.publishRoutedActorOwnership(actor);
+  await runtime.publishRoutedActorOwnership(actor, sealedSession);
   await runtime.openRoutedActorSession(actor);
 
   assert.equal(routes.length, 1);
@@ -2764,7 +2781,7 @@ test('ordinary remote Session binding does not publish command 44 before relocat
     clearRemoteActorPacketTarget() {}
   });
 
-  await runtime.publishRoutedActorOwnership(actor);
+  await runtime.publishRoutedActorOwnership(actor, undefined);
   assert.equal(routeSubmissions, 0);
 });
 
@@ -2784,10 +2801,16 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-seal', generation: 9n },
     locationGeneration: 3n,
     ownerLeaseGeneration: 5n,
-    get remoteBoundSessionTarget() { return remoteTarget; },
-    setRemoteBoundSessionTarget(value) { remoteTarget = value; },
-    beginMove() { assert.equal(moving, false); moving = true; },
-    endMove() { moving = false; }
+    get boundSession() {
+      return remoteTarget;
+    },
+    beginMove() {
+      assert.equal(moving, false);
+      moving = true;
+    },
+    endMove() {
+      moving = false;
+    }
   };
   const relocation = { high: 7n, low: 9n };
   const authority = {
@@ -2897,17 +2920,10 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
       bindingGeneration: 11n
     }
   });
-  assert.deepEqual(remoteTarget.serviceWireRelocation, {
-    relocation,
-    coordinator: seals[0].request.coordinator,
-    session: seals[0].request.session
-  });
-  assert.equal(remoteTarget.previousAuthorityOwnerGeneration, 3n);
-  assert.equal(remoteTarget.previousOwnerLeaseGeneration, 5n);
   assert.equal(
-    remoteTarget.relocationSealId,
-    '7:9:actor-seal:9:session-rid:11',
-    'remote sends retain against the exact command 42/44 Session identity'
+    remoteTarget.serviceWireRelocation,
+    undefined,
+    'the relocation operation owns its seal; the Actor keeps only its current binding'
   );
   assert.equal(moving, true);
 
@@ -3044,10 +3060,15 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     nativeActorRef: { nodeRid: rid('source-node'), actorId: 'actor-abort-reopen', generation: 9n },
     locationGeneration: 3n,
     ownerLeaseGeneration: 5n,
-    get remoteBoundSessionTarget() { return remoteTarget; },
-    setRemoteBoundSessionTarget(value) { remoteTarget = value; },
-    beginMove() { moving = true; },
-    endMove() { moving = false; }
+    get boundSession() {
+      return remoteTarget;
+    },
+    beginMove() {
+      moving = true;
+    },
+    endMove() {
+      moving = false;
+    }
   };
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
@@ -3509,13 +3530,10 @@ test('one-way command 44 shutdown failure preserves the committed target without
     clearRemoteActorPacketTarget() {}
   });
 
-  await assert.rejects(
-    async () => {
+  await assert.rejects(async () => {
       await runtime.claimRoutedActorLocation(actor, rid('room'), 'play');
-      await runtime.publishRoutedActorOwnership(actor);
-    },
-    /command 44 submit unavailable during shutdown/
-  );
+    await runtime.publishRoutedActorOwnership(actor, state.remoteBoundSessionTarget);
+  }, /command 44 submit unavailable during shutdown/);
   assert.equal(routeSubmissions, 1);
   assert.equal(released, 0);
   assert.equal(ownsLocation, true);

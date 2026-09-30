@@ -1870,15 +1870,11 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
     }
   }]]));
 
-  let stopLoop = false;
+  const stopLoop = new AbortController();
   manager.start({
     errorSink: { reportRuntimeTaskException() {} },
     run(_name, task) {
-      void task({
-        get aborted() {
-          return stopLoop;
-        }
-      });
+      void task(stopLoop.signal);
       return Promise.resolve();
     }
   });
@@ -1892,7 +1888,7 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
   const reply = await request;
   assert.deepEqual(JSON.parse(reply[0].data().toString()), { ok: true, response: { value: 'reply' } });
   reply[0].close();
-  stopLoop = true;
+  stopLoop.abort();
   await manager.dispose();
 });
 

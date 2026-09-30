@@ -71,7 +71,7 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
   for (const gate of ['ZW-G1', 'ZW-G3', 'ZW-G4', 'ZW-G5']) {
     assert.match(runner, new RegExp(gate));
   }
-  for (const scenario of ['C4', 'B4-C2-C3', 'D2', 'E', 'E5-arm', 'E5', 'F']) {
+  for (const scenario of ['C4', 'B4-C3', 'D2', 'E', 'E5-arm', 'E5', 'F']) {
     assert.match(runner, new RegExp(`specialClientConfig\\([^\\n]*?'${scenario}'(?:,[^\\n]*)?\\)`));
   }
   assert.match(runner, /faultTickZone:\s*'zone-nw'/);

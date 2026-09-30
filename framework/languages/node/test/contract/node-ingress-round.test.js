@@ -41,7 +41,7 @@ for (const [size, clockStep, expected] of [[1, 0, 64], [2 * 1024 * 1024, 0, 2], 
       assert.equal(await runtime.pumpBatch(), true);
       assert.equal(received, expected);
       assert.equal(closed, expected);
-      assert.equal(routeSnapshots, 1, 'route observation belongs to the round, not each record');
+      assert.equal(routeSnapshots, 0, 'receive rounds do not observe unchanged routes');
     } finally {
       runtime.close();
     }

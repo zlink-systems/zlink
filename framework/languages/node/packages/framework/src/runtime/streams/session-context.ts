@@ -1,4 +1,5 @@
 import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
+import { guardStateLaneCompletion, trackDiagnosticCompletion } from '../execution/state-lane';
 import type {
   ActorRef,
   RoutingId,
@@ -651,4 +652,43 @@ function sameRetiredSession(
     left.sessionRid === right.sessionRid &&
     left.retiredBindingGeneration === right.retiredBindingGeneration
   );
+}
+
+if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+  const controlsGetter = Object.getOwnPropertyDescriptor(
+    DefaultZLinkSessionContext.prototype,
+    'actorSlotControls'
+  )?.get;
+  if (controlsGetter !== undefined) {
+    Object.defineProperty(DefaultZLinkSessionContext.prototype, 'actorSlotControls', {
+      configurable: true,
+      get(this: DefaultZLinkSessionContext) {
+        const controls = controlsGetter.call(this) as
+          | {
+              enqueueBound(actorSlot: number, actorId: string): Promise<void>;
+              enqueueUnbound(actorSlot: number): Promise<void>;
+            }
+          | undefined;
+        if (controls === undefined) return undefined;
+        return {
+          enqueueBound: (actorSlot: number, actorId: string) =>
+            guardStateLaneCompletion(
+              trackDiagnosticCompletion(
+                controls.enqueueBound(actorSlot, actorId),
+                `binding transport bound ${actorId}`
+              ),
+              'binding transport completion'
+            ),
+          enqueueUnbound: (actorSlot: number) =>
+            guardStateLaneCompletion(
+              trackDiagnosticCompletion(
+                controls.enqueueUnbound(actorSlot),
+                `binding transport unbound ${actorSlot}`
+              ),
+              'binding transport completion'
+            )
+        };
+      }
+    });
+  }
 }

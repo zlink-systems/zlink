@@ -6,7 +6,6 @@ import type { RoutingId, Type, ZLinkSpot, ZLinkSpotInfo } from '../../contracts'
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 import { ZLinkSpotCreateState, ZLinkSpotCloseReason } from '../../contracts';
 import type { ZLinkSpotActivation } from './spot-activation-state';
-import { ZLinkConfigurationException } from '../configuration';
 import { createAbortError } from '../abort';
 import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 export { ZLinkSpotActivation } from './spot-activation-state';
@@ -39,11 +38,7 @@ export class ZLinkSpotActivationRegistry {
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
-  constructor(
-    metrics?: import('../diagnostics').ZLinkRuntimeMetrics,
-    private readonly isCommittedClose: (meshName: string, spotId: RoutingId) => boolean = () =>
-      false
-  ) {
+  constructor(metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {
     this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(metrics);
   }
 
@@ -58,35 +53,21 @@ export class ZLinkSpotActivationRegistry {
 
   resolve(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(meshName, spotId);
-    return this.isCommittedClose(meshName, spotId) ||
-      this.closing.has(key) ||
-      this.failedClose.has(key) ||
-      this.staged.has(key)
-      ? undefined
-      : this.activations.get(key);
+    return this.staged.has(key) ? undefined : this.activations.get(key);
   }
 
   resolveUnique(spotId: RoutingId): ZLinkSpotActivation | undefined {
     const matches = [...this.activations.values()].filter(
       (activation) =>
         String(activation.spotId) === String(spotId) &&
-        !this.isCommittedClose(activation.meshName, activation.spotId) &&
-        !this.staged.has(spotActivationKey(activation.meshName, activation.spotId)) &&
-        !this.closing.has(spotActivationKey(activation.meshName, activation.spotId)) &&
-        !this.failedClose.has(spotActivationKey(activation.meshName, activation.spotId))
+        !this.staged.has(spotActivationKey(activation.meshName, activation.spotId))
     );
     return matches.length === 1 ? matches[0] : undefined;
   }
 
   has(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
-    return (
-      !this.isCommittedClose(meshName, spotId) &&
-      !this.staged.has(key) &&
-      !this.closing.has(key) &&
-      !this.failedClose.has(key) &&
-      this.activations.has(key)
-    );
+    return !this.staged.has(key) && this.activations.has(key);
   }
 
   list(meshName: string): readonly ZLinkSpotInfo[] {
@@ -94,12 +75,7 @@ export class ZLinkSpotActivationRegistry {
       .filter((activation) => {
         if (activation.meshName !== meshName) return false;
         const key = spotActivationKey(activation.meshName, activation.spotId);
-        return (
-          !this.isCommittedClose(meshName, activation.spotId) &&
-          !this.staged.has(key) &&
-          !this.closing.has(key) &&
-          !this.failedClose.has(key)
-        );
+        return !this.staged.has(key);
       })
       .map((activation) => String(activation.spotId))
       .sort((left, right) => left.localeCompare(right))
@@ -262,45 +238,19 @@ export class ZLinkSpotActivationRegistry {
     create: () => Promise<ZLinkLocalSpotCreateResult>
   ): ZLinkSpotActivationOperation {
     const key = spotActivationKey(meshName, spotId);
-    if (this.isCommittedClose(meshName, spotId)) {
-      return {
-        owner: false,
-        ready: Promise.reject(
-          createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestRejected,
-            `Spot '${String(spotId)}' is Closing.`
-          )
-        )
-      };
-    }
-    const closing = this.closing.get(key);
-    if (closing !== undefined) {
-      return {
-        owner: false,
-        ready: closing.ready
-          .catch(() => undefined)
-          .then(() => this.getOrBegin(meshName, spotType, spotId, create).ready)
-      };
-    }
-    if (this.failedClose.has(key)) {
-      return {
-        owner: false,
-        ready: Promise.reject(
-          new ZLinkConfigurationException(`Spot '${spotId}' cleanup has not completed.`)
-        )
-      };
-    }
     const existing = this.activations.get(key);
     if (existing !== undefined) {
-      if (existing.spotType !== spotType) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
-          `Spot '${spotId}' already exists with a different spot type.`
-        );
-      }
       return {
         owner: false,
-        ready: Promise.resolve({ spotId, state: ZLinkSpotCreateState.Existing })
+        ready: existing.serial.execute(() => {
+          if (existing.spotType !== spotType) {
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
+              `Spot '${spotId}' already exists with a different spot type.`
+            );
+          }
+          return { spotId, state: ZLinkSpotCreateState.Existing };
+        })
       };
     }
 
