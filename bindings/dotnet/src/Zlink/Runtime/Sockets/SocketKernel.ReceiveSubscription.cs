@@ -85,7 +85,7 @@ internal sealed partial class SocketKernel : IDisposable
                     throw ZlinkException.CreateRecvException((RecvResult)rc);
                 }
 
-                if (topicLength <= (nuint)topicBuffer.Length)
+                if (!TopicBufferNeedsGrowth(topicBuffer, topicLength))
                     throw new ZlinkRecvException(RecvResult.InternalError);
 
                 var expandedTopicBuffer = ArrayPool<byte>.Shared.Rent(
