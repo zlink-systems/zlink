@@ -1329,18 +1329,10 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                         pending_failure_reply = error;
                     }
                 } else {
-                    auto result = _channel_runtime.dispatch_send (
-                      record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
-                      *_handlers, message, inbound);
-                    if (!result) {
-                        const framework_exception_t error (result.error_kind (),
-                                                           result.error () != nullptr
-                                                             ? result.error ()->what ()
-                                                             : "ClientServer send handler failed");
-                        report_client_server_dispatch_error (
-                          _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
-                          dispatch_message_kind_t::send, dispatch_error_action_t::drop, error);
-                    } else {
+                    try {
+                        co_await _channel_runtime.dispatch_send_async (
+                          record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
+                          *_handlers, message, inbound);
                         flow.trace (message_flow_outcome_t::completed, [&] {
                             return message_flow_event_t{message_flow_outcome_t::completed,
                                                         dispatch_error_surface_t::channel,
@@ -1354,6 +1346,11 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                                                         std::nullopt,
                                                         std::nullopt};
                         });
+                    }
+                    catch (const framework_exception_t &error) {
+                        report_client_server_dispatch_error (
+                          _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
+                          dispatch_message_kind_t::send, dispatch_error_action_t::drop, error);
                     }
                 }
             }

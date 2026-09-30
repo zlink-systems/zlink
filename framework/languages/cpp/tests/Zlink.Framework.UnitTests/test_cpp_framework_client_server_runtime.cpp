@@ -41,12 +41,61 @@ struct network_probe_message_t
 {
 };
 
+void to_json (nlohmann::json &json, const network_probe_message_t &)
+{
+    json = nlohmann::json::object ();
+}
+
+void from_json (const nlohmann::json &, network_probe_message_t &) {}
+
 struct network_probe_handler_t
 {
     using message_type = network_probe_message_t;
 
     void handle (const network_probe_message_t &) {}
 };
+
+struct slow_send_handler_t
+{
+    using message_type = network_probe_message_t;
+    void handle (const network_probe_message_t &)
+    {
+        std::this_thread::sleep_for (150ms);
+        completed.store (true, std::memory_order_release);
+    }
+    inline static std::atomic_bool completed{false};
+};
+
+void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
+{
+    slow_send_handler_t::completed.store (false, std::memory_order_release);
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("slow-send").add_send<slow_send_handler_t> ();
+        auto channel = options.add_client_server_channel ("slow-send");
+        channel.server ().listen ().add_handler_group ("slow-send");
+        channel.client ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    char program[] = "client-server-slow-send";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!runtime.snapshot ("slow-send").selectable
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.snapshot ("slow-send").selectable);
+    const auto submitted = channels.send ("slow-send", network_probe_message_t{}).async ().result ();
+    assert (submitted);
+    while (!slow_send_handler_t::completed.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (slow_send_handler_t::completed.load (std::memory_order_acquire));
+    app.stop ();
+    app_thread.join ();
+}
 
 struct readiness_case_t
 {
@@ -459,6 +508,7 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
 int main ()
 {
+    verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();
