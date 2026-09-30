@@ -1583,7 +1583,8 @@ public sealed class SessionActorCoordinatorTests
                 targetNode,
                 CancellationToken.None
             );
-        Assert.Empty(stream.Writes);
+        // Actor-to-Session push uses the current binding during a seal.
+        Assert.Equal(pushBeforeRoute ? 1 : 0, stream.Writes.Count);
 
         var command44 = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
             relocationId,
@@ -1746,8 +1747,7 @@ public sealed class SessionActorCoordinatorTests
         );
         var admission = await table.AdmitOutboundAsync(targetTenure, ActorFrame([1, 2, 3]));
         Assert.Equal(ZLinkSessionOutboundAdmissionKind.Immediate, admission.Kind);
-        var admitted = Assert.IsType<ZLinkSessionOutboundCapability>(admission.Capability);
-        Assert.Equal(ZLinkSessionOutboundDelivery.Delivered, admitted.Settle(deliver: true));
+        Assert.Equal(ZLinkSessionOutboundDelivery.Delivered, admission.Delivery);
         Assert.Equal(new byte[] { 1, 2, 3 }, stream.Writes.Single().Payload);
         var staleBinding = await table.AdmitOutboundAsync(
             targetTenure with
