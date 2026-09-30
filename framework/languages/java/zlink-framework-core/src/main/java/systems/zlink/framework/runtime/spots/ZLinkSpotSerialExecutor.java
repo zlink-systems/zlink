@@ -357,12 +357,23 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         List<CompletionStage<Void>> queues = new ArrayList<>();
         queues.add(spotQueue.awaitQuiescence(spotScope));
         queues.add(infrastructureQueue.awaitQuiescence());
-        timerSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
-        actorSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
-        return CompletableFuture.allOf(
-                queues.stream()
-                        .map(CompletionStage::toCompletableFuture)
-                        .toArray(CompletableFuture[]::new));
+        return stateLane
+                .runAsync(
+                        () -> {
+                            timerQueues
+                                    .values()
+                                    .forEach(queue -> queues.add(queue.awaitQuiescence()));
+                            actorQueues
+                                    .values()
+                                    .forEach(queue -> queues.add(queue.awaitQuiescence()));
+                            return queues;
+                        })
+                .thenCompose(
+                        pending ->
+                                CompletableFuture.allOf(
+                                        pending.stream()
+                                                .map(CompletionStage::toCompletableFuture)
+                                                .toArray(CompletableFuture[]::new)));
     }
 
     boolean isCurrentSpotTurn() {
@@ -370,22 +381,38 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     void close() {
+        CompletableFuture<Void> closing = closeAsync().toCompletableFuture();
+        assert closing.isDone() || ZLinkStateLane.assertMayBlock();
+        closing.join();
+    }
+
+    CompletionStage<Void> closeAsync() {
         if (!closed.compareAndSet(false, true)) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        inStateLane(
-                () -> {
-                    timerQueues.values().forEach(ZLinkSerialExecutionQueue::close);
-                    actorQueues.values().forEach(ZLinkActorSerialExecutor::close);
-                    timerQueues.clear();
-                    actorQueues.clear();
-                    return null;
+        CompletionStage<Runnable> prepared =
+                stateLane.runAsync(
+                        () -> {
+                            List<ZLinkSerialExecutionQueue> timers =
+                                    List.copyOf(timerQueues.values());
+                            List<ZLinkActorSerialExecutor> actors =
+                                    List.copyOf(actorQueues.values());
+                            timerQueues.clear();
+                            actorQueues.clear();
+                            return (Runnable)
+                                    () -> {
+                                        timers.forEach(ZLinkSerialExecutionQueue::close);
+                                        actors.forEach(ZLinkActorSerialExecutor::close);
+                                        spotQueue.close();
+                                        infrastructureQueue.close();
+                                    };
+                        });
+        CompletionStage<Void> laneClosed = stateLane.closeAsync();
+        return prepared.thenComposeAsync(
+                closeQueues -> {
+                    closeQueues.run();
+                    return laneClosed;
                 });
-        spotQueue.close();
-        infrastructureQueue.close();
-        CompletableFuture<Void> laneClosed = stateLane.closeAsync().toCompletableFuture();
-        assert laneClosed.isDone() || ZLinkStateLane.assertMayBlock();
-        laneClosed.join();
     }
 
     Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> captureSpotActiveTurnSealHandle() {

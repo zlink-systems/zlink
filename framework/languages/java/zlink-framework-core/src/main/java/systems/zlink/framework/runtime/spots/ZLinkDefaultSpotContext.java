@@ -624,6 +624,17 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         serials.close();
     }
 
+    CompletionStage<Void> closeTimersAsync() {
+        List<CompletableFuture<?>> closing = new ArrayList<>();
+        closing.add(timers.closeAsync().toCompletableFuture());
+        actorTimers
+                .values()
+                .forEach(registry -> closing.add(registry.closeAsync().toCompletableFuture()));
+        actorTimers.clear();
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
+                .thenCompose(ignored -> serials.closeAsync());
+    }
+
     @Override
     public ZLinkHandlerInstanceOwner handlerInstances() {
         return handlerInstances;

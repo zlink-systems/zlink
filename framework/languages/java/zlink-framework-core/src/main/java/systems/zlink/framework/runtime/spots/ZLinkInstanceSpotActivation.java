@@ -495,11 +495,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                     .completedFuture(null);
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
-                                                        () -> {
-                                                            context.closeTimers();
-                                                            return CompletableFuture
-                                                                    .completedFuture(null);
-                                                        }),
+                                                        context::closeTimersAsync),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
                                                             context.closeHandlerInstances();

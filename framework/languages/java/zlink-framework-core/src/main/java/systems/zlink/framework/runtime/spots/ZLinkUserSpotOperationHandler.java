@@ -477,14 +477,9 @@ final class ZLinkUserSpotOperationHandler
                                                                                     }),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
-                                                                                    () -> {
-                                                                                        activation
-                                                                                                .context
-                                                                                                .closeTimers();
-                                                                                        return CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null);
-                                                                                    }),
+                                                                                    activation
+                                                                                                    .context
+                                                                                            ::closeTimersAsync),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {

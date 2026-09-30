@@ -123,6 +123,10 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         timers.close();
     }
 
+    CompletionStage<Void> closeTimersAsync() {
+        return timers.closeAsync();
+    }
+
     void closeHandlerInstances() {
         handlerInstances.close();
     }
