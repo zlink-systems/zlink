@@ -20,8 +20,7 @@ pub(crate) use send_ops::{
 
 mod routed_async;
 
-pub(crate) fn fixed_topic_or_panic(value: &str, label: &str) -> smol_str::SmolStr {
-    assert!(value.len() <= 255, "invalid {label}");
+pub(crate) fn topic_or_panic(value: &str, label: &str) -> smol_str::SmolStr {
     assert!(!value.as_bytes().contains(&0), "invalid {label}");
     smol_str::SmolStr::new(value)
 }

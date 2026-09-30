@@ -96,9 +96,18 @@ pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError
     let flags = op.flags.bits();
     let mut topic_buf = [0u8; 256];
     let bytes = op.topic.as_str().as_bytes();
-    topic_buf[..bytes.len()].copy_from_slice(bytes);
+    let mut long_topic_buf = Vec::new();
+    let topic_ptr = if bytes.len() < topic_buf.len() {
+        topic_buf[..bytes.len()].copy_from_slice(bytes);
+        topic_buf.as_ptr().cast()
+    } else {
+        long_topic_buf.reserve_exact(bytes.len() + 1);
+        long_topic_buf.extend_from_slice(bytes);
+        long_topic_buf.push(0);
+        long_topic_buf.as_ptr().cast()
+    };
     let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
-        ffi::zlink_publish(op.handle, topic_buf.as_ptr().cast(), parts, count, flags)
+        ffi::zlink_publish(op.handle, topic_ptr, parts, count, flags)
     })?;
     check_submit_result(rc, errno)
 }

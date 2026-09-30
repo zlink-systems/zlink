@@ -110,15 +110,8 @@ impl crate::internal::SocketStorage {
         out: &mut TopicMessage,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
-        let mut topic_buf = [0i8; 256];
         let (parts, native_parts) = out.receive_scratch();
-        let received = recv_subscribed_parts(
-            self.handle,
-            &mut topic_buf,
-            flags.bits(),
-            parts,
-            native_parts,
-        )?;
+        let received = recv_subscribed_parts(self.handle, flags.bits(), parts, native_parts)?;
         match received {
             Some((routing_id, topic)) => {
                 out.replace_received_parts(routing_id, topic);
@@ -201,27 +194,32 @@ impl crate::internal::SocketStorage {
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
         let mut subscribed: i32 = 0;
-        let mut topic_buf = [0i8; 256];
-        let mut topic_len: usize = 256;
+        let mut topic_buf = TopicBuffer::new();
         let mut source_rid_ptr = ptr::null();
 
-        let rc = unsafe {
-            ffi::zlink_xpub_recv(
-                self.handle,
-                &mut source_rid_ptr,
-                &mut subscribed,
-                topic_buf.as_mut_ptr(),
-                topic_buf.len(),
-                &mut topic_len,
-                flags.bits(),
-            )
-        };
+        let (rc, topic_len) = recv_topic_with_growth(
+            &mut topic_buf,
+            |topic_ptr, topic_capacity, topic_len| unsafe {
+                ffi::zlink_xpub_recv(
+                    self.handle,
+                    &mut source_rid_ptr,
+                    &mut subscribed,
+                    topic_ptr,
+                    topic_capacity,
+                    topic_len,
+                    flags.bits(),
+                )
+            },
+        );
         if rc == RecvResult::NoData as i32 {
             return Ok(false);
         }
+        if rc == ffi::ZLINK_RECV_BUFFER_TOO_SMALL {
+            return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
+        }
         check_recv_rc(rc)?;
 
-        let topic = cstr_buf_to_smolstr(&topic_buf, topic_len);
+        let topic = cstr_buf_to_smolstr(topic_buf.as_slice(), topic_len);
         out.replace_from(SubscriptionEvent::new(
             routing_id_from_ptr(source_rid_ptr),
             subscribed != 0,

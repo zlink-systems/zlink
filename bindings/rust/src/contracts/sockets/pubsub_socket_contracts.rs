@@ -144,7 +144,7 @@ impl PubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
     /// submit. A part is consumed on a successful submit (see [`SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
-        let topic = crate::operations::fixed_topic_or_panic(topic, "topic");
+        let topic = crate::operations::topic_or_panic(topic, "topic");
         crate::operations::socket_publish_op(crate::socket::pub_inner(self).handle, topic)
     }
 
@@ -213,7 +213,7 @@ impl XPubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
     /// submit. A part is consumed on a successful submit (see [`SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
-        let topic = crate::operations::fixed_topic_or_panic(topic, "topic");
+        let topic = crate::operations::topic_or_panic(topic, "topic");
         crate::operations::socket_publish_op(crate::socket::xpub_inner(self).handle, topic)
     }
 

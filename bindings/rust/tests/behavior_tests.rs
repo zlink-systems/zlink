@@ -217,6 +217,50 @@ fn pub_sub_roundtrip() {
 }
 
 #[test]
+fn sub_receives_topics_beyond_inline_buffer() {
+    let ctx = Context::new().unwrap();
+    let xpub = ctx.xpub_socket().unwrap();
+    xpub.bind("inproc://beh-pubsub-long-topic").unwrap();
+
+    let sub_sock = ctx.sub_socket().unwrap();
+    sub_sock.connect("inproc://beh-pubsub-long-topic").unwrap();
+    sub_sock.set_subscription("t").unwrap();
+
+    let mut event = SubscriptionEvent::empty();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
+            Ok(false) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(true) => {
+                assert!(event.is_subscribed());
+                assert_eq!(event.topic(), "t");
+                break;
+            }
+            Ok(false) => panic!("subscription event was not received"),
+            Err(error) => panic!("subscription event receive failed: {error}"),
+        }
+    }
+
+    for topic_len in [300, 70_000] {
+        let topic = "t".repeat(topic_len);
+        xpub
+            .publish(&topic)
+            .message(Message::try_from(b"payload").unwrap())
+            .submit()
+            .unwrap();
+
+        let mut received = TopicMessage::empty();
+        assert!(sub_sock
+            .subscribe(&mut received, RecvFlags::NONE)
+            .unwrap());
+        assert_eq!(received.topic(), topic);
+        assert_eq!(received.parts()[0].as_bytes(), b"payload");
+    }
+}
+
+#[test]
 fn sub_try_subscribe_empty() {
     let ctx = Context::new().unwrap();
     let sub_sock = ctx.sub_socket().unwrap();
@@ -272,26 +316,32 @@ fn xpub_try_receive_subscription_event_empty() {
     assert!(!result.unwrap());
 }
 
-// Core returns RECV_BUFFER_TOO_SMALL (ENOBUFS) for a topic longer than the
-// caller buffer; the binding projects that result instead of an errno guess.
 #[test]
-fn xpub_subscription_event_projects_core_buffer_too_small() {
+fn xpub_receives_subscription_topics_beyond_inline_buffer() {
     let ctx = Context::new().unwrap();
     let xpub = ctx.xpub_socket().unwrap();
     xpub.bind("inproc://beh-xpub-long-topic").unwrap();
     let sub = ctx.sub_socket().unwrap();
     sub.connect("inproc://beh-xpub-long-topic").unwrap();
-    sub.set_subscription(&"t".repeat(300)).unwrap();
-
     let mut event = SubscriptionEvent::empty();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
-            Ok(false) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            Ok(received) => panic!("expected BUFFER_TOO_SMALL, received={received}"),
-            Err(error) => {
-                assert_eq!(error.code(), zlink::RecvResult::BufferTooSmall);
-                break;
+
+    for topic_len in [300, 70_000] {
+        let topic = "t".repeat(topic_len);
+        sub.set_subscription(&topic).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
+                Ok(false) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(true) => {
+                    assert!(event.is_subscribed());
+                    assert_eq!(event.topic(), topic);
+                    break;
+                }
+                Ok(false) => panic!("subscription event was not received"),
+                Err(error) => panic!("subscription event receive failed: {error}"),
             }
         }
     }
