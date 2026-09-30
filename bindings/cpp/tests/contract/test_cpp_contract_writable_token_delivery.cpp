@@ -113,6 +113,34 @@ void unknown_writable_uses_protocol_error ()
     assert_protocol (request_wait);
 }
 
+void request_completion_backpressure_preserves_result_and_errno ()
+{
+    completion_test::fixture_t fixture;
+    completion_test::active = &fixture;
+    const auto target = zlink::routing_id_t::from ("submit-target");
+    auto request = fixture.socket.request (target)
+                     .message (zlink::message_t::from ("request"))
+                     .timeout (std::chrono::seconds (5)).async ();
+    auto request_wait = std::move (request.reply).operator co_await ();
+    assert (!request_wait.await_ready ());
+
+    fixture.writable (0, "submit-target");
+    assert (fixture.owner->drain () == 1);
+    assert (!fixture.completions.empty ());
+    fixture.completions.back ().request_result =
+      ZLINK_REQUEST_BACKPRESSURED;
+    assert (fixture.owner->drain () == 1);
+    assert (request_wait.await_ready ());
+    try {
+        request_wait.await_resume ();
+        assert (false);
+    }
+    catch (const zlink::request_error_t &error) {
+        assert (error.result () == zlink::request_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
+    }
+}
+
 void abandoned_send_does_not_resubmit ()
 {
     completion_test::fixture_t fixture;
@@ -175,6 +203,7 @@ int main ()
     terminal_writable_uses_core_result (ZLINK_SEND_TIMED_OUT, EAGAIN,
                                         zlink::submit_result_t::backpressured);
     unknown_writable_uses_protocol_error ();
+    request_completion_backpressure_preserves_result_and_errno ();
     abandoned_send_does_not_resubmit ();
     abandonment_during_resubmit_completes ();
 }

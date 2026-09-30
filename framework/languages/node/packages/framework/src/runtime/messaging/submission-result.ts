@@ -2,6 +2,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
+import { SubmitResult } from '../backend/runtime-values';
 export enum ZLinkSubmitStatus {
   Submitted = 'submitted',
   Backpressured = 'backpressured',
@@ -13,6 +14,41 @@ export enum ZLinkSubmitStatus {
 
 export interface ZLinkSubmitResult {
   readonly status: ZLinkSubmitStatus;
+}
+
+/**
+ * The single owner that classifies a binding SubmitResult as a Framework submit status.
+ * NotConnected is a route that cannot be used (Unavailable); it is never a backpressure signal.
+ */
+export function classifySubmitResult(result: number, operation: string): ZLinkSubmitResult {
+  switch (result) {
+    case SubmitResult.Ok:
+      return { status: ZLinkSubmitStatus.Submitted };
+    case SubmitResult.Backpressured:
+    case SubmitResult.NotAdmitted:
+      return { status: ZLinkSubmitStatus.Backpressured };
+    case SubmitResult.NotFound:
+      return { status: ZLinkSubmitStatus.TargetNotFound };
+    case SubmitResult.NotConnected:
+      return { status: ZLinkSubmitStatus.RouteNotConnected };
+    case SubmitResult.Terminated:
+      return { status: ZLinkSubmitStatus.Shutdown };
+    case SubmitResult.InvalidState:
+    case SubmitResult.InvalidArgument:
+    case SubmitResult.InvalidHandle:
+    case SubmitResult.ThreadViolation:
+      // Spec 07-framework-error-model §2: a submit in the wrong state or with a bad handle or
+      // argument is an invalid operation, not a missing target.
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `${operation} failed with submit result ${result}.`
+      );
+    default:
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestFailed,
+        `${operation} failed with submit result ${result}.`
+      );
+  }
 }
 
 export function requireOneWayCompletion(

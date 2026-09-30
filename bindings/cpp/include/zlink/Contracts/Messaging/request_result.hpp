@@ -22,7 +22,8 @@ enum class request_result_t : int
     not_connected = 109,
     invalid_argument = 110,
     invalid_state = 111,
-    not_supported = 112
+    not_supported = 112,
+    backpressured = 113
 };
 
 } // namespace zlink

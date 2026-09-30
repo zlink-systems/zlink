@@ -274,11 +274,6 @@ export class ZLinkSpotRuntimeOptionsFactory {
           ZLinkSpotRelocationCoordinationMode.FrameworkManaged
         );
       },
-      actorBindingGenerationObserver: (actorId, generation) =>
-        this.options
-          .actorManager()
-          ?.getState(actorId)
-          ?.setBoundSessionBindingGeneration(generation),
       actorTransferRuntime,
       boundSessionRuntime: this.options.boundSessionRelay.boundSessions,
       actorHandoffRuntime: this.options.actorHandoff,

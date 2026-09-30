@@ -144,6 +144,7 @@ call of this section; it follows the transport execution-context contract of
 |---|---|
 | Remote target | Local transport queue |
 | Local target | The matching mailbox or relay queue |
+| One-way session Actor relay to a binding under a relocation seal | The Session owner's seal holding store ([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)) |
 | [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) — a separate PUB/SUB path that sends events only to targets that finished connecting and subscribing — /STREAM | The matching socket queue |
 
 Global Spot/Actor send waits from the current [Ready](../00-foundation/02-glossary.en.md#ready) authority
@@ -233,7 +234,7 @@ not exposed as a public result.
 
 ## 7. Admission Deadline — Owner and Value Rules
 
-The one-way admission deadline is owned by the outbound socket or a
+The one-way admission deadline and the outbound admission deadline of a global object request are owned by the outbound socket or a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that participates in a
 RouteMesh to send or receive messages — that the operation actually uses.
 
@@ -258,13 +259,18 @@ The Framework's public send timeout follows these value rules.
   not mean every language must add the same root option.
 - If a runtime setter exists, an invalid value is rejected immediately at the setter call.
 
+An admission that carries a caller-side deadline uses whichever comes first, the socket send
+timeout or that deadline; the caller-side value never extends the socket send timeout. The
+caller-side deadlines are the STREAM one-way send admission-timeout modifier below and the
+remaining request timeout of a global object request
+([§9](#9-request-completion--the-completion-race-and-timeout-budget)).
+
 A STREAM one-way send call provides an optional per-call admission-timeout modifier. This
 value is not reply wait time; it is the maximum time that send can wait for acceptance by
 the STREAM transport queue.
 
 - If omitted, the matching STREAM socket's send timeout is used.
-- If specified, the earlier of the socket timeout and the per-call timeout is used. A
-  per-call value never extends the socket timeout.
+- If specified, the caller-side deadline rule above applies.
 - Validation and millisecond rounding use the same `1..INT_MAX` rules above.
 - If the deadline wins, the call completes once with `DeadlineExceeded`; later capacity does
   not admit or replay that send.
@@ -320,7 +326,8 @@ flowchart LR
 
 The global object request timeout covers the current Ready authority resolve, outbound
 admission, handler, and reply as a whole. A source only passes the remaining time, after
-subtracting what earlier stages used, to the next stage. The resubmission boundary for a request after timeout or connection failure is defined by
+subtracting what earlier stages used, to the next stage. The deadline of the outbound
+admission stage is set by [§7](#7-admission-deadline--owner-and-value-rules). The resubmission boundary for a request after timeout or connection failure is defined by
 [§5](#5-backpressure-and-error-classification).
 
 How a request sent within the same handler turn releases and reacquires the gate while

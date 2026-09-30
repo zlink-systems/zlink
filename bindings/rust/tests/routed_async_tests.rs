@@ -14,8 +14,8 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, Message, POLLCOMPLETION, POLLOUT, PollEvent, Poller, Received, RecvFlags,
-    RequestResult, RoutingId, SubmitResult, ZlinkError,
+    ConnectError, ConnectResult, Context, Message, POLLCOMPLETION, POLLIN, POLLOUT, PollEvent,
+    Poller, Received, RecvFlags, RequestResult, RoutingId, SocketMonitor, SubmitResult, ZlinkError,
 };
 
 const RECORD_HWM: u64 = 65_536 + 64;
@@ -70,6 +70,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
             .connect("inproc://rust-send-complete-inline")
             .unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let mut future = send_stage(
         dealer
@@ -96,7 +97,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 }
 
 #[test]
-fn ownerless_backpressured_send_fails_fast() {
+fn ownerless_send_rejects_before_core_submission() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
     let receiver = ctx.pair_socket().unwrap();
@@ -119,19 +120,12 @@ fn ownerless_backpressured_send_fails_fast() {
     let mut received = Received::empty();
     assert!(receiver.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let error = (0..64)
-        .find_map(
-            |_| match sender.send().message(large_filler(b'o')).submit() {
-                Ok(submission) => {
-                    assert_eq!(submission.result, SubmitResult::Ok);
-                    test_support::block_on(submission.admitted).unwrap();
-                    None
-                }
-                Err(error) => Some(error),
-            },
-        )
-        .expect("test target did not reach ownerless backpressure");
+    let error = match sender.send().message(large_filler(b'o')).submit() {
+        Ok(_) => panic!("ownerless SEND reached Core"),
+        Err(error) => error,
+    };
     assert_eq!(error.code(), SubmitResult::InvalidState);
+    assert!(!receiver.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
 }
 
 #[test]
@@ -1154,6 +1148,9 @@ fn removing_the_target_fails_a_parked_router_send() {
     ctx.options().set_auto_hwm_enabled(false).unwrap();
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
+    let monitor = SocketMonitor::open(&dealer).unwrap();
+    let monitor_poller = Poller::new().unwrap();
+    monitor_poller.add_monitor(&monitor, POLLIN, 42).unwrap();
     let rid = RoutingId::from(b"rust-terminal-target");
     dealer.set_routing_id(&rid).unwrap();
     router
@@ -1193,13 +1190,48 @@ fn removing_the_target_fails_a_parked_router_send() {
 
     // Explicit target removal retires the token with a terminal WRITABLE;
     // the waiter must fail instead of waiting forever.
-    router.disconnect_rid(&rid).unwrap();
+    let disconnect_result: Result<(), ConnectError> = router.disconnect_rid(&rid);
+    disconnect_result.unwrap();
     let outcome = done_rx
         .recv_timeout(Duration::from_secs(3))
         .expect("terminal WRITABLE did not resume the parked send");
     let error = outcome.expect_err("a removed target cannot admit the retained packet");
     assert_eq!(error.code(), SubmitResult::NotFound);
     waiter.join().unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut monitor_events = [PollEvent::default()];
+    loop {
+        let now = std::time::Instant::now();
+        assert!(
+            now < deadline,
+            "timed out waiting for DISCONNECTED monitor event"
+        );
+        let timeout_ms = (deadline - now).as_millis().min(i64::MAX as u128) as i64;
+        let count = monitor_poller
+            .wait(&mut monitor_events, timeout_ms)
+            .unwrap();
+        if count == 0 {
+            continue;
+        }
+        assert_eq!(monitor_events[0].slot, 42);
+        assert!(monitor_events[0].is_readable());
+        let mut disconnected = false;
+        while let Some(event) = monitor.recv_with_flags(RecvFlags::DONT_WAIT).unwrap() {
+            if event.is_disconnected() {
+                disconnected = true;
+                break;
+            }
+        }
+        if disconnected {
+            break;
+        }
+    }
+
+    let disconnect_result: Result<(), ConnectError> = router.disconnect_rid(&rid);
+    let disconnect_error = disconnect_result.unwrap_err();
+    assert_eq!(disconnect_error.code(), ConnectResult::NotFound);
+    assert_eq!(disconnect_error.code() as i32, 605);
     drop(filler);
 }
 

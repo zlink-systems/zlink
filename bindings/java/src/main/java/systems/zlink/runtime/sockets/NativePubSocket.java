@@ -56,13 +56,11 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
 
         @Override
         public void submit(List<Message> parts, SendFlags flags) {
-            SendResult result = runtime().publishNoWaitResult(topicId, parts);
-            if (result == SendResult.SENT)
-                return;
-            int errno = Native.errno();
-            throw result == SendResult.BACKPRESSURED
-                ? new ZlinkSubmitException(SubmitResult.BACKPRESSURED, errno)
-                : new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, errno);
+            if (!runtime().publish(topicId, parts,
+                SendFlag.fromValue(flags.value()))) {
+                throw new ZlinkSubmitException(SubmitResult.BACKPRESSURED,
+                    Native.errno());
+            }
         }
     }
 

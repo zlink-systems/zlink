@@ -38,7 +38,6 @@ import {
   encodeStreamWireHeader
 } from '@zlink-systems/stream-wire';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
-import { ZLinkActorRuntimeOptionsFactory } from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
@@ -197,7 +196,7 @@ test('M6B command and flag constants match the generated service wire schema', a
 
 test('stale native bound-session binding falls through to the routed session target', async () => {
   const adapter = meshActorSessionNodeAdapter({
-    sendActorBoundSession: async () => SubmitResult.InvalidState
+    sendActorBoundSession: async () => SubmitResult.NotFound
   } as unknown as ZLinkBackendMeshNode);
 
   assert.deepEqual(
@@ -352,73 +351,6 @@ test('routed bound-session sends use infrastructure node routing after native bi
   assert.equal(directSubmits, 0);
   assert.equal(infrastructureSubmits, 1);
   assert.equal(spotRoute, undefined);
-});
-
-test('bound-session factory keeps the sealed transfer route ahead of an unfenced binding refresh', async () => {
-  const staleBindingTarget = {
-    routerChannelId: 'mesh',
-    targetNodeRid: 'binding-refresh-node',
-    spotId: 'entry-spot'
-  };
-  const sealedTransferTarget = {
-    routerChannelId: 'mesh',
-    targetNodeRid: 'relocation-target-node',
-    spotId: 'entry-spot',
-    relocationSealId: 'seal-17'
-  };
-  let submittedTarget: string | undefined;
-  const actorState = {
-    actor: undefined,
-    nativeActorRef: undefined,
-    remoteBoundSessionTarget: staleBindingTarget,
-    boundSessionTransferTarget: sealedTransferTarget
-  };
-  const factory = new ZLinkActorRuntimeOptionsFactory({
-    registration: {
-      messageSerializers: new Map(),
-      requestTimeoutMs: 1_000,
-      actorTransferTimeoutMs: 1_000
-    },
-    routeTransport: {
-      async submitInfrastructure(_channelId: string, targetNodeRid: string) {
-        submittedTarget = targetNodeRid;
-        return { status: ZLinkSubmitStatus.Submitted };
-      }
-    },
-    streamBindingRuntime: {},
-    actorManager: () => ({
-      getState: () => actorState
-    }),
-    spotManager: () => undefined,
-    primaryMeshNode: () => ({}),
-    primaryMeshNodeOrUndefined: () => undefined,
-    primaryMeshCompletions: () => undefined,
-    meshNode: () => undefined,
-    meshCompletions: () => undefined,
-    actorMeshName: () => 'mesh',
-    primaryMeshName: () => 'mesh',
-    createLocationSpotRouteResolver: () => ({}) as never,
-    locationLifecycle: () => ({}) as never,
-    actorTransferRuntime: {} as never,
-    createActorLocationResolver: () => undefined,
-    forgetDestroyedActorRef: () => undefined,
-    notifyEntrySpotActorCreated: async () => undefined,
-    invalidateActorRoute: () => undefined,
-    rememberDestroyedActorRef: () => undefined,
-    publishActorAuthority: async () => undefined,
-    reportPostCommitError: () => undefined,
-    reportBoundSessionSendError: () => undefined,
-    shutdownSignal: () => undefined,
-    metrics: {} as never,
-    admission: {} as never,
-    actorPacketTargetForState: () => undefined
-  } as never);
-
-  const boundSession = factory.createActorManagerOptions().boundSessionFactory!('actor-a');
-  class SessionNotice {}
-  await boundSession.send(new SessionNotice()).submit();
-
-  assert.equal(submittedTarget, sealedTransferTarget.targetNodeRid);
 });
 
 test('Message Follow command preserves route fences and rejects mismatched objects', async () => {
@@ -3212,7 +3144,7 @@ test('Instance activation joins a Creating authority after local materialization
   runtime.close();
 });
 
-test('Ready Instance route waits for a closing materialized application before admission', async () => {
+test('Ready Instance route rematerializes a missing application before admission', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3252,13 +3184,9 @@ test('Ready Instance route waits for a closing materialized application before a
   };
   runtime.registerInstanceIntent('TenantWorker', route);
   runtime.registerInstanceApplicationLifecycle({
-    isClosing: (target) => {
-      events.push(`closing:${target.targetSpotId}`);
-      return true;
-    },
     isMaterialized: (target) => {
       events.push(`check:${target.targetSpotId}`);
-      return true;
+      return false;
     },
     materialize: (target, generation) => {
       events.push(`materialize:${target.stableType}:${String(generation)}`);
@@ -3287,7 +3215,7 @@ test('Ready Instance route waits for a closing materialized application before a
   );
   await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(events, ['closing:tenant-rematerialize', 'materialize:TenantWorker:4']);
+  assert.deepEqual(events, ['check:tenant-rematerialize', 'materialize:TenantWorker:4']);
   assert.equal(queued.length, 1);
   assert.equal(runtime.registry.spot('tenant-rematerialize')?.stableType, 'TenantWorker');
   runtime.close();
@@ -3461,7 +3389,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
   runtime.close();
 });
 
-test('Missing Instance activation joins a new reservation while the prior local generation is closing', async () => {
+test('Missing Instance activation joins a new reservation after the prior local generation closes', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3489,9 +3417,12 @@ test('Missing Instance activation joins a new reservation while the prior local 
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
   runtime.restoreSpotAuthority('tenant-close-race', 'instance_spot', 'TenantWorker', 1n, 1n);
+  const prior = runtime.registry.spot('tenant-close-race');
+  assert.notEqual(prior, undefined);
+  assert.equal(runtime.registry.closeSpot(prior!.ref), true);
+  assert.equal(runtime.registry.spot('tenant-close-race'), undefined);
   runtime.registerInstanceApplicationLifecycle({
-    isClosing: () => true,
-    isMaterialized: () => true,
+    isMaterialized: () => false,
     materialize: async () =>
       assert.fail('A concurrent reservation must be joined, not materialized here'),
     discard: async () => undefined,

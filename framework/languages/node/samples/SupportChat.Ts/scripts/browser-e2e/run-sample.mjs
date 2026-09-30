@@ -54,18 +54,30 @@ page.on('pageerror', (error) => process.stderr.write(`${error.stack ?? error.mes
 
 try {
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: 'load' });
+  recordStage('waitForFunction:start');
   await page.waitForFunction(
     () => window.__zlinkSampleResult?.status === 'passed' || window.__zlinkSampleResult?.status === 'failed',
     undefined,
     { timeout: definition.timeoutMs }
   );
+  recordStage('waitForFunction:complete');
+  recordStage('result:start');
   const result = await page.evaluate(() => window.__zlinkSampleResult);
+  recordStage('result:complete');
   if (result?.status !== 'passed') {
     throw new Error(`${sampleName} browser scenario failed: ${result?.error ?? 'missing result'}`);
   }
 } finally {
+  recordStage('playwright.close:start');
   await browser.close();
+  recordStage('playwright.close:complete');
+  recordStage('http.close:start');
   await close(server);
+  recordStage('http.close:complete');
+}
+
+function recordStage(stage) {
+  process.stderr.write(`browser-runner stage=${stage} at=${new Date().toISOString()}\n`);
 }
 
 function loadDefinition(filePath) {

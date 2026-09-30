@@ -349,7 +349,7 @@ export class ZLinkRemoteBoundSessionRelay {
       await owner.clearRelocation(actorId, error);
       void this.options
         .streamBindingRuntime()
-        .disconnectBoundSession(actorId)
+        .closeSessionBinding(actorId, value.session)
         .catch((disconnectError) =>
           this.options.reportOwnershipRefreshError?.(actorId, disconnectError)
         );
@@ -389,7 +389,7 @@ export class ZLinkRemoteBoundSessionRelay {
           await owner.clearRelocation(actorId, error);
           void this.options
             .streamBindingRuntime()
-            .disconnectBoundSession(actorId)
+            .closeSessionBinding(actorId, value.session)
             .catch((disconnectError) =>
               this.options.reportOwnershipRefreshError?.(actorId, disconnectError)
             );
@@ -500,7 +500,7 @@ export class ZLinkRemoteBoundSessionRelay {
       );
       await this.options
         .streamBindingRuntime()
-        .disconnectBoundSession(state.actorId)
+        .closeSessionBinding(state.actorId, value.session)
         .catch((disconnectError) =>
           this.options.reportOwnershipRefreshError?.(state.actorId, disconnectError)
         );
@@ -590,13 +590,6 @@ export class ZLinkRemoteBoundSessionRelay {
         `Actor '${value.actor.actor.actorId}' command 42 was fenced by its exact Session route.`
       );
     }
-  }
-
-  rememberRemoteBoundSessionTarget(
-    actorId: string,
-    target: ZLinkRemoteBoundSessionTarget | undefined
-  ): void {
-    this.options.actorManager()?.getState(actorId)?.setRemoteBoundSessionTarget(target);
   }
 
   resolveRemoteBoundSessionTarget(

@@ -449,8 +449,10 @@ The server package's one-way send/publish/explicit STREAM reply follows the asyn
 admission contract of the
 [Async Execution Policy](../01-execution/01-submit-and-completion.en.md). Public calls don't also
 provide a synchronous terminator that tries once immediately. The separate stream connector
-package's send builder follows the connector package's contract. Request timeout applies
-only to waiting for a reply; send timeout applies to waiting for transport admission. If the
+package's send builder follows the connector package's contract. Send timeout applies to
+waiting for transport admission, and request timeout to waiting for a reply. The admission
+wait and timeout budget of a global object request are set by
+[Submit and completion §§7, 9](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules). If the
 initial non-blocking transport submit is accepted immediately, an already-completed or
 resolved language-specific awaitable is returned without adding to the framework scheduler
 or a separate work queue.

@@ -111,8 +111,8 @@ application version. If no target is usable, source application dispatch isn't b
 and relocation doesn't start.
 
 If the Actor is bound to a Session, the Session owner seals that binding before source
-application dispatch stops. Requests and pushes arriving from that Session after the
-seal are held by the Session owner. Other Actors bound to the same Session aren't
+application dispatch stops. Which messages the Session owner holds during the seal is
+defined by [Session–Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). Other Actors bound to the same Session aren't
 affected.
 
 ### 4.2 Stop Source Execution, Not Message Reception
@@ -341,7 +341,7 @@ sequenceDiagram
     participant L as Location Store
 
     opt Actor is bound to a Session
-        A->>S: [request] Session seal · freeze binding route and hold later messages
+        A->>S: [request] Session seal · freeze binding route and hold later Session-to-Actor messages
         S-->>A: [reply] seal installed for that binding
     end
     A->>A: [local] stop application dispatch after current turn
@@ -770,7 +770,7 @@ test.
 
 **Session and abort**
 
-- A bound Session message is held during the seal, submitted after the target route
+- A message from the Session to the Actor is held during the seal, submitted after the target route
   change, and only then is the seal released.
 - A late or duplicate cutover only records a Warning and doesn't change owner or queue
   again.

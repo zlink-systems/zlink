@@ -55,8 +55,11 @@ from .socket_base import (
     _SubscriberOptionSocket,
     _SubscriberSocket,
     _close_native_parts,
+    _grow_topic_receive_buffer,
     _native_extension,
+    _new_topic_receive_buffer,
     _submit_parts,
+    _topic_receive_bytes,
 )
 
 
@@ -729,22 +732,33 @@ class XPubSocket(
     def _subscription_event(self, flags):
         routing_id = ctypes.POINTER(ZlinkRoutingId)()
         subscribed = ctypes.c_int()
-        topic_buf = ctypes.create_string_buffer(256)
         topic_len = ctypes.c_size_t()
-        rc = lib().zlink_xpub_recv(
-            self._handle,
-            ctypes.byref(routing_id),
-            ctypes.byref(subscribed),
-            topic_buf,
-            len(topic_buf),
-            ctypes.byref(topic_len),
-            int(flags),
-        )
+        topic_storage, topic_buf, topic_capacity = _new_topic_receive_buffer()
+        while True:
+            topic_len.value = 0
+            rc = lib().zlink_xpub_recv(
+                self._handle,
+                ctypes.byref(routing_id),
+                ctypes.byref(subscribed),
+                topic_buf,
+                topic_capacity,
+                ctypes.byref(topic_len),
+                int(flags),
+            )
+            topic_storage, topic_buf, topic_capacity, retry = (
+                _grow_topic_receive_buffer(
+                    topic_storage, topic_buf, topic_capacity, topic_len, rc
+                )
+            )
+            if not retry:
+                break
         if rc != 0:
             _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
         return SubscriptionEvent(
             routing_id=_routing_id_bytes(routing_id.contents) if routing_id else None,
-            topic=_decode_topic_text(topic_buf.raw[: topic_len.value]),
+            topic=_decode_topic_text(
+                _topic_receive_bytes(topic_buf, topic_capacity, topic_len.value)
+            ),
             subscribed=bool(subscribed.value),
         )
 

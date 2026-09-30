@@ -241,12 +241,7 @@ export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecut
 
 export interface ZLinkExecutionBarrierSeal {
   readonly generation: bigint;
-  /**
-   * A Spot Close seal waits for yielded turns accepted before it and lets them
-   * resume (Spot address messaging §7 step 2); a relocation seal does not, and
-   * their continuation fails (execution gate §4).
-   */
-  readonly drainsYieldedTurns: boolean;
+  readonly kind: 'close' | 'relocation';
 }
 
 export interface ZLinkExecutionBarrierClaim {
@@ -273,29 +268,41 @@ export class ZLinkExecutionBarrier {
   private currentSeal: ZLinkExecutionBarrierSeal | undefined;
   private readonly admissionWaiters: ZLinkExecutionBarrierWaiter[] = [];
   private readonly quiescenceWaiters = new Set<() => void>();
-  private committed = false;
+  private committedSeal?: ZLinkExecutionBarrierSeal;
 
   get isSealed(): boolean {
-    return this.currentSeal !== undefined || this.committed;
+    return this.currentSeal !== undefined || this.committedSeal !== undefined;
   }
 
-  async enter(): Promise<ZLinkExecutionBarrierClaim> {
-    if (this.committed) {
+  get isCloseSealed(): boolean {
+    return (this.currentSeal ?? this.committedSeal)?.kind === 'close';
+  }
+
+  enter(): ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> {
+    if (this.committedSeal !== undefined) {
       throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        this.committedSeal.kind === 'close'
+          ? ZLinkFrameworkInternalErrorKind.RequestRejected
+          : ZLinkFrameworkInternalErrorKind.SpotMoving,
         'ZLink execution barrier is committed.'
       );
     }
     if (this.currentSeal !== undefined) {
-      return await new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
+      if (this.currentSeal.kind === 'close') {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestRejected,
+          'ZLink execution barrier is sealed for Close.'
+        );
+      }
+      return new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
         this.admissionWaiters.push({ resolve, reject });
       });
     }
     return this.createClaim();
   }
 
-  seal(drainsYieldedTurns = false): ZLinkExecutionBarrierSeal {
-    if (this.committed) {
+  seal(kind: ZLinkExecutionBarrierSeal['kind'] = 'relocation'): ZLinkExecutionBarrierSeal {
+    if (this.committedSeal !== undefined) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotMoving,
         'ZLink execution barrier is committed.'
@@ -304,7 +311,7 @@ export class ZLinkExecutionBarrier {
     if (this.currentSeal !== undefined) {
       throw new Error('ZLink execution barrier is already sealed.');
     }
-    const seal = Object.freeze({ generation: ++this.generation, drainsYieldedTurns });
+    const seal = Object.freeze({ generation: ++this.generation, kind });
     this.currentSeal = seal;
     return seal;
   }
@@ -341,9 +348,11 @@ export class ZLinkExecutionBarrier {
   commit(seal: ZLinkExecutionBarrierSeal): boolean {
     if (!this.isCurrent(seal)) return false;
     this.currentSeal = undefined;
-    this.committed = true;
+    this.committedSeal = seal;
     const error = createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotMoving,
+      seal.kind === 'close'
+        ? ZLinkFrameworkInternalErrorKind.RequestRejected
+        : ZLinkFrameworkInternalErrorKind.SpotMoving,
       'ZLink execution barrier is committed.'
     );
     for (const waiter of this.admissionWaiters) waiter.reject(error);
@@ -356,7 +365,7 @@ export class ZLinkExecutionBarrier {
   }
 
   private isQuiescent(seal: ZLinkExecutionBarrierSeal): boolean {
-    return this.activeClaims === 0 && (!seal.drainsYieldedTurns || this.suspendedClaims === 0);
+    return this.activeClaims === 0 && (seal.kind !== 'close' || this.suspendedClaims === 0);
   }
 
   private notifyQuiescence(): void {
@@ -385,8 +394,8 @@ export class ZLinkExecutionBarrier {
       resume: () => {
         if (state !== 'suspended') return state === 'active';
         if (
-          this.committed ||
-          (this.currentSeal !== undefined && !this.currentSeal.drainsYieldedTurns)
+          this.committedSeal !== undefined ||
+          (this.currentSeal !== undefined && this.currentSeal.kind !== 'close')
         ) {
           release();
           return false;

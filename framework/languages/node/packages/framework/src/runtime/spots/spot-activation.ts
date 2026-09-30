@@ -148,7 +148,6 @@ export interface ZLinkSpotActivationLifecycleOptions {
     objectGeneration: bigint,
     signal?: AbortSignal
   ) => Promise<boolean>;
-  readonly isSpotClosing: (activation: ZLinkSpotActivation) => boolean;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void;
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   readonly releaseLocation: (
@@ -796,12 +795,7 @@ export class ZLinkSpotActivationLifecycle {
     seal: import('../execution').ZLinkExecutionBarrierSeal,
     signal?: AbortSignal
   ): Promise<void> {
-    try {
-      await activation.waitForExecutionQuiescence(seal, signal);
-    } catch (error) {
-      activation.abortExecutionSeal(seal);
-      throw error;
-    }
+    await activation.waitForExecutionQuiescence(seal, signal);
     if (!activation.commitExecutionSeal(seal)) {
       throw new Error(`Spot '${String(activation.spotId)}' close seal is stale.`);
     }

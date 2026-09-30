@@ -323,7 +323,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             conditions: [
               { kind: 'version', key: rowKey, expected: current.value.version },
               versionCondition(descriptorKey, descriptorRead),
-              versionCondition(ownerKey(mutation.targetOwner.ownerId), targetLeaseRead)
+              leaseValueCondition(ownerKey(mutation.targetOwner.ownerId), mutation.targetOwner)
             ],
             mutations: [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord) }]
           },
@@ -373,7 +373,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
-            ...(mutation.kind === 'restore' ? [] : [versionCondition(leaseKey, lease)]),
+            ...(mutation.kind === 'restore'
+              ? []
+              : [
+                  leaseValueCondition(leaseKey, {
+                    ownerId: record.snapshot.ownerId,
+                    leaseGeneration: record.snapshot.ownerLeaseGeneration
+                  })
+                ]),
             ...(capacityRead === undefined ? [] : [conditionFor(capacityRowKey, capacityRead)])
           ],
           mutations:
@@ -744,7 +751,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
             versionCondition(targetDescriptorKey, descriptorRead),
-            versionCondition(targetLeaseKey, leaseRead),
+            leaseValueCondition(targetLeaseKey, request.targetOwner),
             conditionFor(targetCapacityKey, targetCapacityRead)
           ],
           mutations: [
@@ -937,7 +944,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         conditions: [
           { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
           versionCondition(targetDescriptorKey, descriptorRead),
-          versionCondition(targetLeaseKey, leaseRead),
+          leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
           ...[...capacityReads.entries()].map(([value, read]) => ({
             kind: 'version' as const,
             key: capacityKeys.get(value)!,
@@ -1190,7 +1197,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'missing', key: rowKey },
             versionCondition(descriptorKey, descriptorRead),
-            versionCondition(leaseKey, leaseRead),
+            leaseValueCondition(leaseKey, request.target.owner),
             conditionFor(capacityRowKey, capacityRead),
             conditionFor(OBJECT_COUNTER_KEY, objectGenerationRead),
             conditionFor(AUTHORITY_OWNER_COUNTER_KEY, authorityOwnerGenerationRead)
@@ -1288,7 +1295,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
             versionCondition(descriptorKey, descriptorRead),
-            versionCondition(leaseKey, leaseRead),
+            leaseValueCondition(leaseKey, request.target.owner),
             conditionFor(capacityRowKey, capacityRead)
           ],
           mutations: [
@@ -1355,7 +1362,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
-            versionCondition(leaseKey, leaseRead),
+            leaseValueCondition(leaseKey, {
+              ownerId: record.snapshot.ownerId,
+              leaseGeneration: record.snapshot.ownerLeaseGeneration
+            }),
             conditionFor(capacityRowKey, capacityRead)
           ],
           mutations: [
@@ -1481,7 +1491,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             { kind: 'version', key: rowKey, expected: current.value.version },
             { kind: 'missing', key: terminalRowKey },
             versionCondition(descriptorKey, descriptorRead),
-            versionCondition(leaseKey, leaseRead),
+            leaseValueCondition(leaseKey, request.target.owner),
             conditionFor(capacityRowKey, capacityRead)
           ],
           mutations: [
@@ -2346,7 +2356,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       leaseKey,
       descriptor.ownerId,
       descriptor.leaseGeneration,
-      lease,
       rowKey,
       current,
       encodeCanonicalDescriptorRecord(generation, descriptor),
@@ -2359,14 +2368,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     leaseKey: ZLinkStoreKey,
     ownerId: string,
     leaseGeneration: bigint,
-    liveLease: Extract<ZLinkStoreReadResult, { kind: 'found' }>,
     rowKey: ZLinkStoreKey,
     predecessor: ZLinkStoreReadResult,
     encodedDescriptor: Uint8Array,
     generation: bigint,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
-    let currentLease = liveLease;
     let currentRow = predecessor;
 
     for (let attempt = 0; attempt <= MAX_DESCRIPTOR_WRITE_RETRIES; attempt += 1) {
@@ -2376,10 +2383,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           : { kind: 'missing', key: rowKey };
       const result = await this.provider.write(
         {
-          conditions: [
-            { kind: 'version', key: leaseKey, expected: currentLease.value.version },
-            rowCondition
-          ],
+          conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
           mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
         },
         signal
@@ -2401,7 +2405,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return ignoredStale(result.storeNow);
       }
 
-      currentLease = refreshedLease;
       currentRow = refreshedRow;
     }
     throw new Error('Descriptor write retry loop exhausted unexpectedly.');
@@ -2521,7 +2524,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const result = await this.provider.write(
       {
         conditions: [
-          { kind: 'version', key: leaseKey, expected: lease.value.version },
+          leaseValueCondition(leaseKey, {
+            ownerId: location.ownerId,
+            leaseGeneration: locationOwnerGeneration(location)
+          }),
           rowCondition
         ],
         mutations: [
@@ -3968,6 +3974,13 @@ function versionCondition(key: ZLinkStoreKey, read: ZLinkStoreReadResult): ZLink
     throw new Error(`Required provider row '${key}' is missing.`);
   }
   return { kind: 'version', key, expected: read.value.version };
+}
+
+function leaseValueCondition(
+  key: ZLinkStoreKey,
+  owner: ZLinkLocationOwnerToken
+): ZLinkStoreCondition {
+  return { kind: 'value', key, expected: encodeOwnerRecord(owner.ownerId, owner.leaseGeneration) };
 }
 
 function emptyCapacityRecord(): CapacityRecord {

@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, StreamPacket,
-    StreamRecvMode, SubscriptionEvent, TopicMessage,
+    ConnectResult, Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor,
+    StreamPacket, StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
 fn await_send(
@@ -351,6 +351,84 @@ fn stream_packet_output_resets_and_reuses_without_double_close() {
     assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
     assert_eq!(packet.body().unwrap().as_bytes(), b"second");
     packet.close().unwrap();
+}
+
+#[test]
+#[ignore = "requires the B-6 LD_PRELOAD initialization fault-injection shim"]
+fn stream_packet_receive_propagates_message_init_failure() {
+    const FAIL_MESSAGE_INIT: &str = "ZLINK_AUDIT_FAIL_MESSAGE_INIT";
+    const MARKER_ENV: &str = "ZLINK_AUDIT_MARKER";
+
+    let ctx = Context::new().unwrap();
+    let endpoint = tcp_endpoint();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    let monitor = SocketMonitor::open(&stream).unwrap();
+    stream.bind(&endpoint).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    loop {
+        let event = monitor.recv().unwrap();
+        if event.is_accepted() || event.is_connection_ready() {
+            break;
+        }
+    }
+    write_framed_packet(&mut raw, b"fault-injected-init");
+
+    let mut packet = StreamPacket::empty();
+    unsafe { std::env::set_var(FAIL_MESSAGE_INIT, "1") };
+    let result = stream.recv_packet(&mut packet, RecvFlags::NONE);
+    unsafe { std::env::remove_var(FAIL_MESSAGE_INIT) };
+    let marker_path = std::env::var_os(MARKER_ENV).expect("fault-injection marker path");
+    let marker = std::fs::read_to_string(marker_path).expect("fault-injection shim did not run");
+    assert!(
+        !marker.is_empty()
+            && marker
+                .lines()
+                .all(|line| line == "message-init-failed-ENOMEM"),
+        "unexpected fault-injection marker: {marker:?}"
+    );
+
+    let error = result.expect_err("message initialization failure must be returned");
+    assert_eq!(error.code(), zlink::RecvResult::InternalError);
+    assert_eq!(error.native_errno(), libc::ENOMEM);
+    assert!(packet.is_empty());
+}
+
+#[test]
+fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() {
+    let ctx = Context::new().unwrap();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    stream.bind(&tcp_endpoint()).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write_framed_packet(&mut raw, b"disconnect-peer");
+
+    let mut packet = StreamPacket::empty();
+    assert!(stream
+        .recv_packet(&mut packet, RecvFlags::NONE)
+        .unwrap());
+    let peer_rid = *packet.routing_id().expect("missing STREAM routing id");
+    stream.disconnect_rid(&peer_rid).unwrap();
+
+    let mut probe = [0u8; 1];
+    assert_eq!(raw.read(&mut probe).unwrap(), 0, "client did not observe EOF");
+
+    let error = stream
+        .disconnect_rid(&peer_rid)
+        .expect_err("a removed peer must return a connect error");
+    assert_eq!(error.code(), ConnectResult::NotFound);
+    assert_eq!(error.code() as i32, 605);
 }
 
 #[test]

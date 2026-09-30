@@ -40,6 +40,7 @@ import {
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
+import { ZLinkBoundSessionService } from '../../packages/framework/src/runtime/streams/bound-session-service';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
 import { createInitialActorMessageFollowContext } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
@@ -205,14 +206,8 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     },
     locationGeneration: 11n,
     ownerLeaseGeneration: 3n,
-    get remoteBoundSessionTarget() {
+    get boundSession() {
       return remoteTarget;
-    },
-    get boundSessionTransferTarget() {
-      return undefined;
-    },
-    setRemoteBoundSessionTarget(value: typeof remoteTarget) {
-      remoteTarget = value;
     },
     beginMove() {
       events.push('move-begun');
@@ -2233,14 +2228,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setJoinedSpot(spotId: unknown) {
           this.spotId = spotId;
         },
-        setRemoteBoundSessionTarget(value: unknown) {
-          this.remoteBoundSessionTarget = value;
-        },
-        setBoundSessionTransferTarget(value: unknown) {
-          this.boundSessionTransferTarget = value;
-        },
-        setBoundSessionBindingGeneration(value: bigint) {
-          this.bindingGeneration = value;
+        installBoundSessionBinding(value: unknown) {
+          this.boundSession = value;
+          return true;
         }
       };
       return targetActor;
@@ -2651,7 +2641,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorManager: () => targetActorManager,
     actorTransfer: {
       async publishRoutedActorOwnership() {
-        assert.notEqual(targetState?.remoteBoundSessionTarget, undefined);
+        assert.notEqual(targetState?.boundSession, undefined);
         events.push('command44');
       }
     }
@@ -2964,3 +2954,91 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
   assert.fail('condition did not become true');
 }
+
+test('a retired Session relocation cannot disconnect a successor Session route', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry();
+  const events: string[] = [];
+  const context = (routingId: string) => ({
+    routingId,
+    actorSlotControls: {
+      enqueueBound: async (slot: number) => {
+        events.push(`bound:${routingId}:${slot}`);
+      },
+      enqueueUnbound: async (slot: number) => {
+        events.push(`unbound:${routingId}:${slot}`);
+      }
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  });
+  const firstContext = context('session-old');
+  const successorContext = context('session-new');
+  const actor = (bindingGeneration: bigint) => ({
+    actorId: 'actor-successor',
+    ref: { actorId: 'actor-successor', objectGeneration: 1n, bindingGeneration }
+  });
+  await registry.bind(firstContext, actor(1n), 'old-token', undefined, 'session-old');
+  const first = (await registry.route('actor-successor'))!;
+  await registry.replace(first, successorContext, actor(2n), 'new-token', undefined, 'session-new');
+  const transport = {
+    send: async () => {
+      throw new Error('unused');
+    },
+    disconnect: async (_actorId: string, options: { readonly bindingToken: string }) => {
+      events.push(`disconnect:${options.bindingToken}`);
+    }
+  };
+  const service = new ZLinkBoundSessionService(registry as never, undefined as never, {
+    transport
+  });
+
+  await service.closeSessionBinding('actor-successor', {
+    sessionRid: 'session-old',
+    bindingGeneration: 1n
+  });
+
+  assert.equal((await registry.route('actor-successor'))?.bindingToken, 'new-token');
+  assert.equal((await registry.route('actor-successor'))?.actorSlot, 1);
+  assert.equal(events.includes('disconnect:new-token'), false);
+  assert.equal(events.includes('unbound:session-new:1'), false);
+});
+
+test('an exact failed Session relocation closes its physical Session context', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry();
+  let closed = 0;
+  const context = {
+    routingId: 'session-current',
+    actorSlotControls: {
+      enqueueBound: async () => {},
+      enqueueUnbound: async () => {}
+    },
+    bindLocal() {},
+    unbindLocal() {},
+    close: async () => {
+      closed += 1;
+      await registry.cleanup(context);
+    }
+  };
+  const actor = {
+    actorId: 'actor-current',
+    ref: { actorId: 'actor-current', objectGeneration: 1n, bindingGeneration: 2n }
+  };
+  await registry.bind(context, actor, 'current-token', undefined, 'session-current');
+  const transport = {
+    send: async () => {
+      throw new Error('unused');
+    },
+    disconnect: async () => {}
+  };
+  const service = new ZLinkBoundSessionService(registry as never, undefined as never, {
+    transport
+  });
+
+  await service.closeSessionBinding('actor-current', {
+    sessionRid: 'session-current',
+    bindingGeneration: 2n
+  });
+
+  assert.equal(closed, 1);
+  assert.equal(await registry.route('actor-current'), undefined);
+});
