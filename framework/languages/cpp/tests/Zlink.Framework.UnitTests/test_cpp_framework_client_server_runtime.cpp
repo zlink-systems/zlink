@@ -46,7 +46,9 @@ void to_json (nlohmann::json &json, const network_probe_message_t &)
     json = nlohmann::json::object ();
 }
 
-void from_json (const nlohmann::json &, network_probe_message_t &) {}
+void from_json (const nlohmann::json &, network_probe_message_t &)
+{
+}
 
 struct network_probe_handler_t
 {
@@ -87,7 +89,8 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
     assert (runtime.snapshot ("slow-send").selectable);
-    const auto submitted = channels.send ("slow-send", network_probe_message_t{}).async ().result ();
+    const auto submitted =
+      channels.send ("slow-send", network_probe_message_t{}).async ().result ();
     assert (submitted);
     while (!slow_send_handler_t::completed.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < deadline)

@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace zlink::framework::runtime::client_server
 {
@@ -1500,22 +1501,31 @@ task_t<std::shared_ptr<raw_client_server_client_t>>
 client_server_location_runtime_t::select_ready (std::string channel_name,
                                                 std::chrono::steady_clock::time_point deadline)
 {
-    auto completion = std::make_shared<
-      detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>> ();
-    co_await _lane.run_task (
-      [this, channel_name = std::move (channel_name), deadline, completion] () mutable {
-          const auto channel = select_channel_locked (channel_name);
-          if (!channel)
-              throw framework_exception_t (channel.error_kind (), channel.error ()->what ());
+    using client_t = std::shared_ptr<raw_client_server_client_t>;
+    using completion_t = detail::task_completion_source_t<client_t>;
+    using selection_t = std::variant<result_t<client_t>, std::shared_ptr<completion_t>>;
+    auto selected = co_await _lane.run_task (
+      [this, channel_name = std::move (channel_name), deadline] () mutable -> selection_t {
+          auto result = select_ready_locked (channel_name);
+          if (result || result.error_kind () != framework_error_kind_t::not_found
+              || std::chrono::steady_clock::now () >= deadline)
+              return selection_t (std::in_place_index<0>, std::move (result));
+          auto completion = std::make_shared<completion_t> ();
           auto waiter = std::make_unique<ready_waiter_t> ();
           waiter->channel_name = std::move (channel_name);
           waiter->deadline = deadline;
           waiter->completion = completion;
           _ready_waiters.push_back (std::move (waiter));
-          return true;
+          return selection_t (std::in_place_index<1>, std::move (completion));
       });
+    if (std::holds_alternative<result_t<client_t>> (selected)) {
+        auto result = std::get<result_t<client_t>> (std::move (selected));
+        if (!result)
+            throw framework_exception_t (result.error_kind (), result.error ()->what ());
+        co_return std::move (result.value ());
+    }
     _wake_timer->signal ();
-    co_return co_await completion->task ();
+    co_return co_await std::get<std::shared_ptr<completion_t>> (selected)->task ();
 }
 
 result_t<client_server_location_runtime_t::client_channel_t *>
