@@ -267,9 +267,9 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
-    void livenessReprobesQuicklyUntilTheFirstAck() {
-        var liveness =
-                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
+    void livenessResendsAtConfiguredIntervalUntilTheFirstAck() {
+        Duration probeInterval = Duration.ofSeconds(2);
+        var liveness = new ZLinkServiceLivenessRegistry(probeInterval, Duration.ofSeconds(6));
         RoutingId peer = RoutingId.from("peer-first-ack");
         liveness.admit(peer, "pipe", 0);
         assertTrue(liveness.requestProbe(peer, "pipe", 0));
@@ -277,16 +277,14 @@ final class ZLinkM6ARuntimeContractTest {
         var first = liveness.tick(0);
         assertEquals(1, first.probes().size());
         long probe = first.probes().getFirst().probeId();
-        //  A lost first probe gates every outbound bound-session send, so the
-        //  pre-ready retransmit must not wait a full probe interval.
-        var fastRetry = liveness.tick(ZLinkServiceLivenessRegistry.NOT_READY_PROBE_RETRY.toNanos());
-        assertEquals(probe, fastRetry.probes().getFirst().probeId());
+        assertTrue(liveness.tick(probeInterval.toNanos() - 1).probes().isEmpty());
+        var retry = liveness.tick(probeInterval.toNanos());
+        assertEquals(probe, retry.probes().getFirst().probeId());
 
-        long ackNanos = Duration.ofMillis(300).toNanos();
+        long ackNanos = probeInterval.toNanos() + 1;
         assertTrue(liveness.acknowledge(peer, "pipe", probe, ackNanos));
-        //  Once ready, probing returns to the configured interval.
-        assertTrue(liveness.tick(ackNanos + Duration.ofSeconds(1).toNanos()).probes().isEmpty());
-        assertEquals(1, liveness.tick(ackNanos + Duration.ofSeconds(5).toNanos()).probes().size());
+        assertTrue(liveness.tick(ackNanos + probeInterval.toNanos() - 1).probes().isEmpty());
+        assertEquals(1, liveness.tick(ackNanos + probeInterval.toNanos()).probes().size());
     }
 
     @Test

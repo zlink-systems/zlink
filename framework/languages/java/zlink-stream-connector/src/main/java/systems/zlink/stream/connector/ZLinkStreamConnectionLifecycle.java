@@ -328,10 +328,11 @@ final class ZLinkStreamConnectionLifecycle {
                         configuration.endpoint().getHost(),
                         DefaultZLinkStreamConnector.resolvePort(configuration.endpoint()));
         DefaultZLinkStreamConnector.trace(
-                "connector connect-start endpoint="
-                        + configuration.endpoint()
-                        + " address="
-                        + address);
+                () ->
+                        "connector connect-start endpoint="
+                                + configuration.endpoint()
+                                + " address="
+                                + address);
         channel.connect(
                 address,
                 null,
@@ -350,7 +351,9 @@ final class ZLinkStreamConnectionLifecycle {
                                         channel, configuration.limits().receivePayload());
                         activateConnection(tcp);
                         DefaultZLinkStreamConnector.trace(
-                                "connector connect-complete endpoint=" + configuration.endpoint());
+                                () ->
+                                        "connector connect-complete endpoint="
+                                                + configuration.endpoint());
                         result.complete(null);
                     }
 
@@ -359,10 +362,11 @@ final class ZLinkStreamConnectionLifecycle {
                         timeout.cancel(false);
                         closeRawQuietly(channel);
                         DefaultZLinkStreamConnector.trace(
-                                "connector connect-failed endpoint="
-                                        + configuration.endpoint()
-                                        + " error="
-                                        + exc);
+                                () ->
+                                        "connector connect-failed endpoint="
+                                                + configuration.endpoint()
+                                                + " error="
+                                                + exc);
                         result.completeExceptionally(exc);
                     }
                 });
@@ -393,8 +397,9 @@ final class ZLinkStreamConnectionLifecycle {
                             }
                             activateConnection(ws);
                             DefaultZLinkStreamConnector.trace(
-                                    "connector connect-complete endpoint="
-                                            + configuration.endpoint());
+                                    () ->
+                                            "connector connect-complete endpoint="
+                                                    + configuration.endpoint());
                         });
     }
 
