@@ -432,6 +432,16 @@ The original request only completes once, via the reply the ClientServer
 handler returned. The downstream reply's correlation information doesn't
 replace the original ClientServer request's value.
 
+### 5.3 Application Record Contract
+
+The internal wire contract for a ClientServer application record carries
+[application metadata](02-channel-messaging.en.md#9-metadata-and-observation) in the JSON header's
+`metadata` field as a string-to-string object. A missing field is interpreted as empty metadata.
+Character, size-limit, error, and reply rules follow channel messaging §9. The total size in that
+section is the UTF-8 JSON encoding length of the entire metadata object, including keys, values, and
+structural overhead. The header's `metadata` field name and other fields are excluded from this size.
+The business payload frame carries no metadata.
+
 ## 6. Drain
 
 Server drain is a procedure that blocks new requests and finishes already-
