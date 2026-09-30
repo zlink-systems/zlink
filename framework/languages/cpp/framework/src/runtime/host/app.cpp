@@ -3876,11 +3876,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             waiters = std::move (state.termination_operation.waiters);
             state.termination_operation.waiters.clear ();
         }
+        state.runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
     }
     for (auto &waiter : waiters) {
         waiter->complete (terminal);
     }
-    state.runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
 }
 
 void app_t::stop () noexcept

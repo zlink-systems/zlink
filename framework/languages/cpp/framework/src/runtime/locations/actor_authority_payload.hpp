@@ -302,18 +302,26 @@ class reader_t
     std::size_t _offset = 0;
 };
 
-inline bool read_optional_text8 (reader_t &reader, bool *present = nullptr)
+inline bool
+read_optional_text8 (reader_t &reader, bool *present = nullptr, std::string *text = nullptr)
 {
     const auto bytes = reader.take (reader.u8 ());
     if (present)
         *present = !bytes.empty ();
-    if (bytes.empty ())
+    if (bytes.empty ()) {
+        if (text)
+            text->clear ();
         return true;
+    }
     std::string value;
     value.reserve (bytes.size ());
     for (const auto byte : bytes)
         value.push_back (static_cast<char> (std::to_integer<std::uint8_t> (byte)));
-    return valid_text8 (value);
+    if (!valid_text8 (value))
+        return false;
+    if (text)
+        *text = std::move (value);
+    return true;
 }
 
 /* The durable authority's relocation slot is independent of the steady
@@ -361,7 +369,9 @@ inline bool read_actor_authority_relocation_state (
     if (relocation_reader.u64be () == 0 || relocation_reader.take (relocation_reader.u8 ()).empty ()
         || relocation_reader.u64be () == 0)
         return false;
-    const auto expected_version = relocation_reader.text8 ();
+    std::string expected_version;
+    if (!read_optional_text8 (relocation_reader, nullptr, &expected_version))
+        return false;
     const auto phase = relocation_reader.u8 ();
     if (phase == 0 || phase > 9 || (relocation_reader.u64be () & (std::uint64_t{1} << 63)) != 0
         || relocation_reader.u8 () > 2)

@@ -19,6 +19,8 @@
 namespace zlink::framework::detail
 {
 
+class channel_runtime_state_t;
+
 class timer_resource_t
 {
   public:
@@ -92,7 +94,14 @@ class timer_runtime_t
                                  const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
                                  std::uint64_t fire_count);
 
+    // Admits and runs one fire directly.
     task_t<timer_tick_t> dispatch_fire_count_async (timer_t &timer, std::uint64_t fire_count) const;
+    // Runs a fire that post_fire_count admitted against `spot_instance`.
+    task_t<timer_tick_t>
+    dispatch_fire_count_async (timer_t &timer,
+                               std::uint64_t fire_count,
+                               std::shared_ptr<void> spot_instance,
+                               std::shared_ptr<channel_runtime_state_t> channel_runtime) const;
 
     void cancel_all () const noexcept;
     static void cancel_all (spot_context_state_t &context) noexcept;

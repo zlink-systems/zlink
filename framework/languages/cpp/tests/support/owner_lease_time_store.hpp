@@ -45,7 +45,7 @@ class owner_lease_time_store_t final : public location_store_t
                     _owner_read_in_expected_order = true;
             }
         }
-        auto result = _inner->read (std::move (key)).result ().value ();
+        auto result = co_await _inner->read (std::move (key));
         if (inject_owner_time) {
             if (auto *found = std::get_if<store_found_t> (&result)) {
                 if (_lease_view == lease_view_t::missing_expiry)
@@ -55,8 +55,7 @@ class owner_lease_time_store_t final : public location_store_t
                       found->value.store_now + (_lease_view == lease_view_t::live ? 1min : 0min);
             }
         }
-        return task_t<store_read_result_t> (
-          result_t<store_read_result_t>::success (std::move (result)));
+        co_return result;
     }
 
     task_t<store_write_result_t> write (store_write_request_t request) override
