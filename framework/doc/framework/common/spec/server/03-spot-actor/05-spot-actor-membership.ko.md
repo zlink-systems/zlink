@@ -423,6 +423,12 @@ Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체
 [Actor 모델 §6.1](04-actor-model.ko.md#61-factory와-relocation-policy-등록)과 이 문서의 다른 절은
 이 절만 가리킨다.
 
+다른 node로의 Actor Join에서 target이 보내는 승인 wire 응답은 target의 수락과 temporary queue·factory
+준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS와 그 결과의 판정은
+[Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 소유한다. 승인 응답이
+수락된 뒤 난 실패는 같은 wire 요청에 다시 응답하지 않고, 확정된 authority에 따라 Actor Join
+completion으로 전달한다.
+
 Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 반환된 call 객체에서
 `Defer()`를 호출하면 Framework는 handler가 정상적으로 끝난 뒤 다음 순서로 Join을 실행한다.
 
