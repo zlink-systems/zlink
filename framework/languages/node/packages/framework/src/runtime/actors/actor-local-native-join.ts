@@ -9,7 +9,9 @@ import type {
   RoutingId,
   ZLinkActor,
   ZLinkActorJoinOperationId,
-  ZLinkMessageSerializer
+  ZLinkMessageSerializer,
+  ZLinkSpot,
+  ZLinkSpotActorJoinResult
 } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
 import type { ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
@@ -28,7 +30,7 @@ import {
   toFrameworkRoutingId
 } from './actor-runtime-state';
 import type { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
-import type { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
+import type { ZLinkLocationLifecycle } from '../locations';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { routingIdsEqual } from '../routing-id';
 import { operationIdentityKey } from '../foundation/operation-identity';
@@ -38,14 +40,30 @@ import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 export interface ZLinkLocalNativeActorJoinOptions {
-  readonly postCommitLocation?: ZLinkPostCommitActorLocation;
+  readonly locationLifecycle?: ZLinkLocationLifecycle;
+  readonly localSpotJoin?: (
+    spotId: RoutingId,
+    actor: ZLinkActor,
+    request: Message,
+    commit: (spot: ZLinkSpot) => Promise<void>,
+    signal?: AbortSignal,
+    leaveSource?: () => Promise<void>,
+    contentType?: string
+  ) => Promise<ZLinkSpotActorJoinResult>;
+  readonly localEntryJoin?: (actor: ZLinkActor, signal?: AbortSignal) => Promise<void>;
+  readonly localSourceLeave?: (
+    actor: ZLinkActor,
+    spotId: RoutingId | undefined,
+    signal?: AbortSignal
+  ) => Promise<void>;
+  readonly reportSourceLeaveError: (error: unknown) => void;
   readonly postCommitBinder?: ZLinkPostCommitActorBinder;
   readonly completionTableProvider: () => ZLinkMeshCompletionTable | undefined;
   readonly actorJoinRelocation?: ZLinkActorJoinRelocation;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
 }
 
-/** Owns core-native actor joins and their local runtime state transition. */
+/** Selects local membership commits or remote Actor relocation. */
 export class ZLinkLocalNativeActorJoin {
   constructor(private readonly options: ZLinkLocalNativeActorJoinOptions) {}
 
@@ -62,9 +80,7 @@ export class ZLinkLocalNativeActorJoin {
     completionOperationId?: ZLinkActorJoinOperationId
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     if (signal?.aborted === true) throw createAbortError();
-    const completions = this.requireCompletions();
     const target = requireUserSpotRoute(spotRouteTarget, spotId);
-    const actorMeshName = runtimeActorMeshName(actor, state, target.routerChannelId);
     const remote = !routingIdsEqual(
       toFrameworkRoutingId(node.status().routingId),
       target.targetNodeRid
@@ -83,88 +99,7 @@ export class ZLinkLocalNativeActorJoin {
         false
       );
     }
-    const completion = await this.waitForJoinCompletion(
-      () =>
-        node.joinActorSpot(
-          actorRef,
-          toBackendRoutingId(target.targetNodeRid),
-          toBackendRoutingId(target.spotId),
-          target.targetSpotGeneration,
-          actorJoinApplicationPayload(request),
-          timeoutMs
-        ),
-      completions,
-      timeoutMs,
-      signal
-    );
-    const control = completion.kindData;
-    if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
-      closeMeshCompletion(completion);
-      const message = `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
-      //  Classify the (terminal, fine) pair instead of collapsing every non-OK
-      //  or malformed join completion to NotFound (spec 32-framework-error-model:
-      //  83-118). An OK terminal that carries no join control is a protocol
-      //  violation, not a missing route.
-      throw completion.terminalResult !== 0 || completion.failureErrno !== 0
-        ? wireReplyFailureException(completion.terminalResult, completion.failureErrno, message)
-        : createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
-            message
-          );
-    }
-    if (control.joinResult !== 0) {
-      try {
-        return {
-          accepted: false,
-          actor: toFrameworkActorRef(control.actor as never, actorMeshName),
-          reply: completion.parts[0]
-        };
-      } finally {
-        disposeParts(completion.parts.slice(1));
-      }
-    }
-    if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-      closeMeshCompletion(completion);
-      throw wireReplyFailureException(
-        completion.terminalResult,
-        completion.failureErrno,
-        `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
-      );
-    }
-
-    state.setNativeActorRef(control.actor as never);
-    state.setJoinedSpot(
-      toFrameworkRoutingId(control.location.spotId ?? target.spotId),
-      undefined,
-      control.location.membershipEpoch,
-      control.location.spotGeneration
-    );
-    // The Session owner relays from the verified Ready authority snapshot;
-    // membership coordinates alone cannot recreate a User/Instance fence.
-    state.setRemoteActorPacketTarget(target.spotKind === ZLinkSpotKind.Entry ? undefined : target);
-    if (state.actorType !== undefined) {
-      this.options.postCommitLocation?.joinedEventually(
-        state.actorType,
-        actor.context.actorId,
-        spotRouteTarget?.routerChannelId ?? '',
-        toFrameworkRoutingId(control.location.spotId ?? target.spotId),
-        control.location.spotGeneration,
-        control.location.membershipEpoch,
-        node.status().lifecycleGeneration
-      );
-    }
-    await this.options.postCommitBinder?.bind(
-      toFrameworkActorRef(control.actor as never, actorMeshName)
-    );
-    try {
-      return {
-        accepted: true,
-        actor: toFrameworkActorRef(control.actor as never, actorMeshName),
-        reply: completion.parts[0]
-      };
-    } finally {
-      disposeParts(completion.parts.slice(1));
-    }
+    return await this.joinLocal(node, actor, state, actorRef, target, request, signal);
   }
 
   async joinEntrySpot(
@@ -180,8 +115,6 @@ export class ZLinkLocalNativeActorJoin {
     completionOperationId?: ZLinkActorJoinOperationId
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     if (signal?.aborted === true) throw createAbortError();
-    const completions = this.requireCompletions();
-    const actorMeshName = runtimeActorMeshName(actor, state, '');
     const targetNodeRid = spotRouteTarget?.targetNodeRid ?? nodeRid;
     const remote =
       spotRouteTarget !== undefined &&
@@ -204,77 +137,121 @@ export class ZLinkLocalNativeActorJoin {
         true
       );
     }
-    const completion = await this.waitForJoinCompletion(
-      () =>
-        node.joinActorEntrySpot(
-          actorRef,
-          toBackendRoutingId(targetNodeRid),
-          actorJoinApplicationPayload(request),
-          timeoutMs
-        ),
-      completions,
-      timeoutMs,
-      signal
-    );
-    const control = completion.kindData;
-    if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
-      closeMeshCompletion(completion);
-      const message = `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
-      //  Classify the (terminal, fine) pair instead of collapsing to NotFound
-      //  (spec 32-framework-error-model:83-118); an OK terminal with no join
-      //  control is a protocol violation.
-      throw completion.terminalResult !== 0 || completion.failureErrno !== 0
-        ? wireReplyFailureException(completion.terminalResult, completion.failureErrno, message)
-        : createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
-            message
-          );
-    }
-    if (control.joinResult !== 0) {
-      try {
-        return {
-          accepted: false,
-          actor: toFrameworkActorRef(control.actor as never, actorMeshName),
-          reply: completion.parts[0]
-        };
-      } finally {
-        disposeParts(completion.parts.slice(1));
-      }
-    }
-    if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-      closeMeshCompletion(completion);
-      throw wireReplyFailureException(
-        completion.terminalResult,
-        completion.failureErrno,
-        `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
-      );
-    }
+    const target = spotRouteTarget ?? {
+      routerChannelId: runtimeActorMeshName(actor, state, ''),
+      targetNodeRid,
+      spotId: toFrameworkRoutingId(node.entrySpot().routingId),
+      spotKind: ZLinkSpotKind.Entry,
+      targetSpotGeneration: node.entrySpot().status().lifecycleGeneration
+    };
+    return await this.joinLocal(node, actor, state, actorRef, target, request, signal);
+  }
 
-    state.setNativeActorRef(control.actor as never);
-    state.clearJoinedSpot();
-    state.setRemoteActorPacketTarget(undefined);
-    if (state.actorType !== undefined) {
-      this.options.postCommitLocation?.leftEventually(
-        state.actorType,
-        actor.context.actorId,
-        toFrameworkRoutingId(control.location.spotId ?? spotRouteTarget?.spotId ?? nodeRid),
-        control.location.spotGeneration,
-        control.location.membershipEpoch,
-        node.status().lifecycleGeneration
+  private async joinLocal(
+    node: ZLinkBackendMeshNode,
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState,
+    actorRef: ZLinkBackendActorRef,
+    target: ZLinkSpotRouteTarget,
+    request: Message,
+    signal: AbortSignal | undefined
+  ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
+    const location = node.actorLookup(actor.context.actorId);
+    const meshName = runtimeActorMeshName(actor, state, target.routerChannelId);
+    if (routingIdsEqual(toFrameworkRoutingId(location.spotId), target.spotId)) {
+      return { accepted: true, actor: toFrameworkActorRef(actorRef, meshName) };
+    }
+    if (state.actorType === undefined)
+      throw new Error('Local Actor Join requires a registered Actor type.');
+    const actorType = state.actorType;
+    const previousSpotId = state.spotId;
+    const spotGeneration = target.targetSpotGeneration;
+    if (
+      spotGeneration === undefined ||
+      spotGeneration <= 0n ||
+      node.restoreActorAuthority === undefined
+    ) {
+      throw new Error(
+        'Local Actor Join requires a valid target generation and stateful membership runtime.'
       );
     }
-    await this.options.postCommitBinder?.bind(
-      toFrameworkActorRef(control.actor as never, actorMeshName)
-    );
-    try {
-      return {
-        accepted: true,
-        actor: toFrameworkActorRef(control.actor as never, actorMeshName),
-        reply: completion.parts[0]
-      };
-    } finally {
-      disposeParts(completion.parts.slice(1));
+    const membershipEpoch = location.membershipEpoch + 1n;
+    const commit = async (spot?: ZLinkSpot): Promise<void> => {
+      throwIfAborted(signal);
+      if (target.spotKind === ZLinkSpotKind.Entry) {
+        await this.options.locationLifecycle?.notifyActorLeftSpot(
+          actorType,
+          actor.context.actorId,
+          target.spotId,
+          spotGeneration,
+          membershipEpoch,
+          node.status().lifecycleGeneration
+        );
+      } else {
+        await this.options.locationLifecycle?.notifyActorJoinedSpot(
+          actorType,
+          actor.context.actorId,
+          meshName,
+          target.spotId,
+          spotGeneration,
+          membershipEpoch,
+          node.status().lifecycleGeneration
+        );
+      }
+      const committedActor = node.restoreActorAuthority!(
+        actor.context.actorId,
+        actorType,
+        actorRef.generation,
+        state.locationGeneration ?? actorRef.generation,
+        String(target.spotId),
+        spotGeneration,
+        membershipEpoch
+      );
+      state.setNativeActorRef(committedActor);
+      if (target.spotKind === ZLinkSpotKind.Entry) state.clearJoinedSpot();
+      else state.setJoinedSpot(target.spotId, spot, membershipEpoch, spotGeneration);
+      state.setRemoteActorPacketTarget(
+        target.spotKind === ZLinkSpotKind.Entry ? undefined : target
+      );
+    };
+    const leaveSource = async (): Promise<void> => {
+      void this.options.localSourceLeave?.(actor, previousSpotId, signal).catch((error) => {
+        this.options.reportSourceLeaveError(error);
+      });
+    };
+    let response: ZLinkSpotActorJoinResult;
+    if (target.spotKind === ZLinkSpotKind.Entry) {
+      if (this.options.localEntryJoin === undefined)
+        throw new Error('Local Entry Actor Join runtime is not configured.');
+      await commit();
+      try {
+        await this.options.localEntryJoin(actor, signal);
+      } finally {
+        await leaveSource();
+      }
+      response = { accepted: true };
+    } else {
+      if (this.options.localSpotJoin === undefined)
+        throw new Error('Local Spot Actor Join runtime is not configured.');
+      response = await this.options.localSpotJoin(
+        target.spotId,
+        actor,
+        request,
+        commit,
+        signal,
+        leaveSource,
+        frameworkPayloadContentType(request)
+      );
     }
+    if (response.accepted)
+      await this.options.postCommitBinder?.bind(
+        toFrameworkActorRef(state.nativeActorRef!, meshName)
+      );
+    return {
+      accepted: response.accepted,
+      actor: toFrameworkActorRef(state.nativeActorRef ?? actorRef, meshName),
+      reply: response.reply as Message | undefined
+    };
   }
 
   private async waitForJoinCompletion(

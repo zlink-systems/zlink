@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include <zlink/framework/contracts/errors/result.hpp>
 
 #include <service_wire_constants.hpp>
 #include <opentelemetry/metrics/meter.h>
@@ -127,7 +128,7 @@ class service_topology_registry_t
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
-    std::optional<std::vector<std::uint8_t>> select (const std::string &channel_name);
+    result_t<std::vector<std::uint8_t>> select (const std::string &channel_name);
     std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 

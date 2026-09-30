@@ -128,6 +128,7 @@ options.addClientServerChannel("payments.api").server()
     .addRequestHandler(ChargeHandler.class, Charge.class, ChargeResult.class);
 
 options.addClientServerChannel("payments.api").client()
+    .setSendTimeout(Duration.ofSeconds(2))
     .connect("payments-1:6001");
 ```
 
@@ -139,6 +140,10 @@ options.addClientServerChannel("payments.api").client()
 | `.server().setBindHost(host)` / `.setAdvertiseHost(host)` | root 기본값 | 이 Server에만 적용하는 bind·advertise host |
 | `.server().setWeight(weight)` / `.addSendHandler`/`.addRequestHandler` | RouteMesh Channel Server와 동일 | 가중치와 handler 등록 |
 | `.client().connect(endpoint)` | manual | 특정 Server에 수동 연결. 생략하면 automatic discovery로 target을 찾는다 |
+| `.client().setSendTimeout(duration)` | 1초 | client DEALER의 SNDTIMEO와 서버 준비 대기 상한 |
+
+`setSendTimeout`은 올림한 밀리초가 `1..Integer.MAX_VALUE`인 유한한 `Duration`을 받는다. 양수
+sub-millisecond 값은 1ms로 처리하며, `null`이면 1초 기본값을 사용한다.
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Automatic discovery를 사용하는 Client·Server는 Location
 Store 등록이 없으면 startup 검증에서 configuration error로 드러난다. 같은 ChannelName에 Client와
@@ -156,6 +161,7 @@ Classic fanout 전용 채널을 등록한다. `ZLinkFanoutClient.publish`(messag
 
 ```java
 options.addFanoutChannel("lobby.events")
+    .setSendTimeout(Duration.ofMillis(500))
     .enablePublisher(7001)
     .addHandlerGroup("events");
 
@@ -173,6 +179,7 @@ options.addFanoutChannel("lobby.events")
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `.enablePublisher(endpoint)` / `.enablePublisher()` / `.enablePublisher(port)` | 없음 | 이 채널의 발행자 역할과 수신 endpoint 등록 |
+| `.setSendTimeout(duration)` | 1초 | publisher socket의 SNDTIMEO |
 | `.setBindHost(host)` / `.setAdvertiseHost(host)` / `.setRoutingId(rid)` / `.setRoutingIdPrefix(prefix)` | root 기본값 또는 Framework 발급 | publisher에만 적용하는 bind·advertise host와 RID |
 | `.enableSubscriber()` | — | automatic subscriber. Location Store에서 같은 ChannelName의 유효한 publisher를 전부 찾는다 |
 | `.connect(endpoint)` | — | manual subscriber. 명시한 endpoint만 사용 |
@@ -181,6 +188,9 @@ options.addFanoutChannel("lobby.events")
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Automatic subscriber와 manual subscriber를 같은
 fanout channel에 함께 설정하면 startup 실패로 드러난다.
+
+Fanout `setSendTimeout`도 ClientServer와 같은 `Duration` 범위를 사용하며, `null`이면 1초 기본값을
+사용한다.
 
 **선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 사용한다. Reply가
 필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 사용한다.

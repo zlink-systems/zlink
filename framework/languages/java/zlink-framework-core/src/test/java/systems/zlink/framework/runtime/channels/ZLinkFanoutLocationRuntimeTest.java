@@ -445,7 +445,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -455,7 +456,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
     }

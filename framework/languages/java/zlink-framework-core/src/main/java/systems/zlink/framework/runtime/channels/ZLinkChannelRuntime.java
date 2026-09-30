@@ -820,7 +820,8 @@ public final class ZLinkChannelRuntime
 
                                 @Override
                                 public void connect(String endpoint) {
-                                    openManualClientServerConnection(channelName, endpoint);
+                                    openManualClientServerConnection(
+                                            channelName, endpoint, registration.sendTimeout());
                                 }
 
                                 @Override
@@ -846,14 +847,16 @@ public final class ZLinkChannelRuntime
                     sockets.clientServerServerDescriptor(registration.name());
             if (local != null) {
                 // Local selection still traverses DEALER -> ROUTER admission.
-                openManualClientServerConnection(registration.name(), local.endpoint());
+                openManualClientServerConnection(
+                        registration.name(), local.endpoint(), registration.sendTimeout());
             }
         }
     }
 
-    private void openManualClientServerConnection(String channelName, String endpoint) {
+    private void openManualClientServerConnection(
+            String channelName, String endpoint, Duration sendTimeout) {
         String connectionId = manualConnectionId(channelName, endpoint);
-        ZLinkBackendDealerSocket dealer = channelBackend.createDealerSocket(context);
+        ZLinkBackendDealerSocket dealer = channelBackend.createDealerSocket(context, sendTimeout);
         dealer.setChannelName(channelName);
         ZLinkClientServerServerDescriptor pending =
                 new ZLinkClientServerServerDescriptor(

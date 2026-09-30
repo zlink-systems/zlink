@@ -2564,6 +2564,10 @@ export class ZLinkFrameworkRuntimeHost
       notifyEntrySpotActorCreated: (nodeRid, actor, createRequest, signal) =>
         this.spotNodeRuntime?.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal) ??
         Promise.resolve(undefined),
+      notifyEntrySpotActorJoined: (actor, signal) =>
+        this.spotNodeRuntime?.notifyPrimaryEntrySpotActorJoined(actor, signal) ?? Promise.resolve(),
+      notifyEntrySpotActorLeft: (actor, signal) =>
+        this.spotNodeRuntime?.notifyPrimaryEntrySpotActorLeft(actor, signal) ?? Promise.resolve(),
       locationLifecycle: () => this.locationOwner.currentLifecycle,
       primaryMeshName: () => this.meshRouters.primaryMeshName(),
       actorMeshName: (actorType) => this.meshRouters.actorMeshName(actorType),

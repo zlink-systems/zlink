@@ -69,7 +69,6 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -94,7 +93,6 @@ import systems.zlink.framework.spots.ZLinkSpotCreateCall;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotCreateState;
 import systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall;
-import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
@@ -2337,35 +2335,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             }
 
             @Override
-            public CompletionStage<Boolean> isStaleRoute(
-                    String spotId, SpotTransportAddress address) {
-                var store = requireUserSpotLocationStore();
-                String key =
-                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                                spotId);
-                return store.read(key, () -> false)
-                        .thenApply(
-                                read -> {
-                                    if (!(read
-                                            instanceof
-                                            systems.zlink.framework.runtime.internal.locations
-                                                            .ZLinkAuthoritySnapshot
-                                                    snapshot)) {
-                                        return true;
-                                    }
-                                    var authority =
-                                            userSpotAuthorities
-                                                    .decode(snapshot.payload())
-                                                    .orElse(null);
-                                    return isStaleInstanceRoute(
-                                            authority,
-                                            snapshot.allocation().state(),
-                                            snapshot.authorityOwnerGeneration(),
-                                            address);
-                                });
-            }
-
-            @Override
             public CompletionStage<Void> send(
                     String spotId,
                     String stableType,
@@ -2464,28 +2433,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 });
             }
         };
-    }
-
-    static boolean isStaleInstanceRoute(
-            systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec
-                            .SpotAuthority
-                    authority,
-            systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState
-                    allocationState,
-            long authorityOwnerGeneration,
-            SpotTransportAddress address) {
-        return authority == null
-                || authority.instance().isEmpty()
-                || authority.state()
-                        != systems.zlink.framework.runtime.locations
-                                .ZLinkServiceAuthorityPayloadCodec.State.READY
-                || allocationState
-                        != systems.zlink.framework.runtime.internal.locations
-                                .ZLinkPlacementAllocationState.ACTIVE
-                || authorityOwnerGeneration != address.authorityOwnerGeneration()
-                || !authority.spotId().equals(address.spotId())
-                || !authority.nodeRid().equals(address.targetNodeRid())
-                || address.spotKind() != ZLinkSpotKind.INSTANCE;
     }
 
     private CompletionStage<InstanceActivation> activateInstanceSpot(

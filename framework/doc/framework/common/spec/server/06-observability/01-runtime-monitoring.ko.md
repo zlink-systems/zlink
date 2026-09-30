@@ -212,6 +212,10 @@ Peer state는 연결이 없는 두 경우를 구분한다.
 연결 생략과 연결 장애를 구분할 수 있다. 이 상태 하나만으로 RouteMesh를 `degraded`로
 바꾸지 않는다.
 
+RouteMesh가 그 밖의 조건에서 `ready`일 때, peer가 `connecting`·`not_connected`이거나 Location
+Store를 사용할 수 없으면 전체 state는 `degraded`다. Channel에 ready target이 없더라도 그 사실만으로
+RouteMesh 전체 state를 바꾸지 않는다.
+
 RouteMesh placement 상태는 새 object 수락 여부와 현재 active Actor·Spot 수를
 제공한다. Status는 Spot과 그 안에서 application message를 처리하는 Actor의 개수를
 각각 제공한다. 이 개수에는 status를 보고하는 MeshNode에서 활성화된 Actor·Spot만 포함한다. 현재

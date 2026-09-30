@@ -48,7 +48,6 @@ import type {
   ZLinkActorHandoffTerminalAcceptance,
   ZLinkActorHandoffTerminalAck
 } from '../actors/actor-handoff';
-import type { ZLinkNativeActorJoinSnapshot } from '../spots/spot-runtime-ports';
 import {
   ownerFence,
   type ZLinkActorMessageFollowOwnerFence
@@ -1558,29 +1557,6 @@ export class ZLinkActorTransferRuntime {
     state.setRemoteActorPacketTarget(target);
   }
 
-  async claimNativeActorLocation(
-    actor: ZLinkActor,
-    spotId: RoutingId,
-    spotMeshName: string
-  ): Promise<ZLinkNativeActorJoinSnapshot> {
-    const state = this.options.actorManager()?.getState(actor.context.actorId);
-    const previousLocation = this.options
-      .locationLifecycle()
-      ?.actorLocationSnapshot(actor.context.actorId);
-    const snapshot = {
-      spotId: state?.spotId,
-      spot: state?.spot,
-      locationSpotId: previousLocation?.spotId,
-      spotMeshName: previousLocation?.meshName,
-      actorRef: previousLocation?.actorRef,
-      spotGeneration: previousLocation?.spotGeneration,
-      membershipEpoch: previousLocation?.membershipEpoch,
-      ownerNodeGeneration: previousLocation?.ownerNodeGeneration
-    };
-    await this.claimRoutedActorLocation(actor, spotId, spotMeshName);
-    return snapshot;
-  }
-
   /**
    * Publishes the committed route of the Session seal that the relocation
    * operation carried to this target (command 44, Session–Actor binding §8.2).
@@ -1608,73 +1584,6 @@ export class ZLinkActorTransferRuntime {
   clearRoutedActor(actor: ZLinkActor): void {
     this.options.actorManager()?.getState(actor.context.actorId)?.clearJoinedSpot();
     this.options.clearRemoteActorPacketTarget(actor.context.actorId);
-  }
-
-  async rollbackNativeActorJoin(
-    actor: ZLinkActor,
-    snapshot: ZLinkNativeActorJoinSnapshot
-  ): Promise<void> {
-    const state = this.options.actorManager()?.getState(actor.context.actorId);
-    const actorType = state?.actorType;
-    const lifecycle = this.options.locationLifecycle();
-    if (snapshot.spotId === undefined) state?.clearJoinedSpot();
-    else state?.setJoinedSpot(snapshot.spotId, snapshot.spot);
-    if (state?.ownsLocation !== true || actorType === undefined || lifecycle === undefined) return;
-    if (snapshot.spotId === undefined) {
-      if (
-        snapshot.locationSpotId === undefined ||
-        snapshot.spotGeneration === undefined ||
-        snapshot.membershipEpoch === undefined ||
-        snapshot.ownerNodeGeneration === undefined
-      ) {
-        throw new Error(
-          `Actor '${actor.context.actorId}' cannot restore its Entry SPOT location without its exact generation fields.`
-        );
-      }
-      await lifecycle.notifyActorLeftSpot(
-        actorType,
-        actor.context.actorId,
-        snapshot.locationSpotId,
-        snapshot.spotGeneration,
-        snapshot.membershipEpoch,
-        snapshot.ownerNodeGeneration
-      );
-      return;
-    }
-    if (snapshot.actorRef === undefined) {
-      throw new Error(
-        `Actor '${actor.context.actorId}' cannot restore its previous SPOT location without a native ref.`
-      );
-    }
-    if (
-      snapshot.spotMeshName === undefined ||
-      snapshot.spotGeneration === undefined ||
-      snapshot.membershipEpoch === undefined ||
-      snapshot.ownerNodeGeneration === undefined
-    ) {
-      throw new Error(
-        `Actor '${actor.context.actorId}' cannot restore its previous SPOT location without its exact generation fields.`
-      );
-    }
-    const restored = await lifecycle.takeoverActorJoinedSpot(
-      actorType,
-      actor.context.actorId,
-      snapshot.actorRef,
-      snapshot.spotMeshName,
-      snapshot.spotId,
-      snapshot.spotGeneration,
-      snapshot.membershipEpoch,
-      snapshot.ownerNodeGeneration,
-      async () => state.clearAfterDestroy()
-    );
-    if (restored.status === 'conflict') {
-      throw new Error(
-        `Actor '${actor.context.actorId}' previous SPOT location could not be restored.`
-      );
-    }
-    if (restored.generation !== undefined) state.setLocationGeneration(restored.generation);
-    if (restored.claimed !== undefined)
-      state.setOwnerLeaseGeneration(restored.claimed.leaseGeneration);
   }
 
   async rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
