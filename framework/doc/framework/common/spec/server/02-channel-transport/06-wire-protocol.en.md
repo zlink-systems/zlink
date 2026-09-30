@@ -702,9 +702,9 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   reply, this request's `[reply]` leg — once the
   target's canonical capability is observed (an authority fence plus a peer admitted at
   that generation); when it is not observed for a target on a different node, each runtime
-  keeps its language-internal admission path (a transitional fallback). An Actor Join on the
-  same node uses neither this wire nor the language-internal path and follows the order of
-  [Spot and Actor membership §4](../03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order).
+  keeps its language-internal admission path (a transitional fallback).
+  [Spot and Actor membership §4](../03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order)
+  defines the path and commit order for same-node Actor Join.
   The receiver resolves the stable type from the Store Actor
   Authority row per §9, never from the wire. (An earlier revision stated C++ and .NET did
   not originate; now that the Store-backed canonical receiver exists in all four runtimes,
