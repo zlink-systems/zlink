@@ -864,22 +864,6 @@ internal sealed class ZLinkSpotRuntimeManager(
                 .ConfigureAwait(false);
     }
 
-    public async ValueTask<ZLinkSpotActorJoinResult> JoinActorAsync(
-        ZLinkFrameworkComponentState state,
-        string spotId,
-        IZLinkActor actor,
-        ZLinkMessage request,
-        CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null
-    )
-    {
-        var activation =
-            GetActivationBySpotId(state, spotId)
-            ?? throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
-
-        return await activation.JoinActorAsync(actor, request, cancellationToken, absoluteDeadline);
-    }
-
     public async ValueTask<bool> TryNotifyJoinedSpotActorDisconnectedAsync(
         ZLinkFrameworkComponentState state,
         string actorId,

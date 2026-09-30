@@ -28,7 +28,6 @@ internal sealed class ZLinkFrameworkActorFacade(
         runtime,
         registration,
         services,
-        spots,
         actorSessionManager
     );
 
@@ -59,7 +58,6 @@ internal sealed class ZLinkFrameworkActorFacade(
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node = getActorSpotNode();
         var localActivation = spots.GetActivationBySpotId(state, spotId);
-
         if (
             localActivation is null
             && node is not null
@@ -67,69 +65,75 @@ internal sealed class ZLinkFrameworkActorFacade(
         )
             return await _remoteJoiner
                 .JoinAsync(
-                    state,
                     spotId,
                     actor,
+                    actorState,
                     actorRef,
-                    node,
                     request,
                     operationId,
                     cancellationToken,
                     effectiveDeadline
                 )
                 .ConfigureAwait(false);
+        return await JoinLocalActorAsync(
+                spotId,
+                actor,
+                actorState,
+                localActivation,
+                request,
+                cancellationToken,
+                (effectiveDeadline, deadline),
+                absoluteDeadline
+            )
+            .ConfigureAwait(false);
+    }
 
+    private async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(
+        string spotId,
+        IZLinkActor actor,
+        ZLinkActorRuntimeState actorState,
+        ZLinkSpotActivation? localActivation,
+        ZLinkMessage request,
+        CancellationToken cancellationToken,
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
+        DateTimeOffset? absoluteDeadline
+    )
+    {
         var sourceActivation = actorState.Activation;
         if (localActivation is not null && ReferenceEquals(sourceActivation, localActivation))
             return new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), ZLinkMessage.Empty);
 
         if (absoluteDeadline is null)
-            return await JoinLocalActorAsync(cancellationToken).ConfigureAwait(false);
+            return await JoinLocalActorCoreAsync(cancellationToken).ConfigureAwait(false);
         return await ZLinkActorRemoteJoiner
             .ExecuteWithDeadlineAsync(
-                JoinLocalActorAsync,
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
+                JoinLocalActorCoreAsync,
+                ZLinkActorRemoteJoiner.RemainingTimeout(deadline.Monotonic),
                 cancellationToken
             )
             .ConfigureAwait(false);
 
-        async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(
+        async ValueTask<ZLinkActorJoinResult> JoinLocalActorCoreAsync(
             CancellationToken cancellationToken
         )
         {
+            var target =
+                localActivation
+                ?? throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
             ZLinkSpotActorJoinResult joinResult;
-            if (
-                localActivation is not null
-                && sourceActivation is not null
-                && !ReferenceEquals(sourceActivation, localActivation)
-            )
+            if (sourceActivation is not null)
             {
-                joinResult = await localActivation
+                joinResult = await target
                     .AdmitActorJoinFromCallerTurnAsync(actor, request, cancellationToken)
                     .ConfigureAwait(false);
                 if (joinResult.Accepted)
-                    await localActivation
-                        .CommitActorJoinFromCallerTurnAsync(
-                            actor,
-                            cancellationToken,
-                            effectiveDeadline
-                        )
+                    await target
+                        .CommitActorJoinFromCallerTurnAsync(actor, cancellationToken, deadline.Utc)
                         .ConfigureAwait(false);
             }
-            else if (localActivation is not null)
-                joinResult = await localActivation
-                    .JoinActorAsync(actor, request, cancellationToken, effectiveDeadline)
-                    .ConfigureAwait(false);
             else
-                joinResult = await spots
-                    .JoinActorAsync(
-                        state,
-                        spotId,
-                        actor,
-                        request,
-                        cancellationToken,
-                        effectiveDeadline
-                    )
+                joinResult = await target
+                    .JoinActorAsync(actor, request, cancellationToken, deadline.Utc)
                     .ConfigureAwait(false);
             var reply = joinResult.Reply ?? ZLinkMessage.Empty;
             return joinResult.Accepted
