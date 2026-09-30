@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Contracts.Messaging;
 
@@ -197,32 +198,47 @@ public sealed partial class ZLinkMessage
         if (_payload.Length == 0)
             return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
 
-        if (
-            ContentType is not null
-            && _codecs is not null
-            && _codecs.TryGetSerializer(ContentType, out var serializer)
-        )
-            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
+        // Canonical Actor Join recovery retains the fixed multipart profile
+        // while the saved sole reply part remains raw. For that profile, its
+        // declared type selects a serializer; an exact application/json registry
+        // lookup handles the payload when no type serializer matches.
+        if (_resolveSerializerByDeclaredType && _codecs is not null)
+        {
+            if (
+                ContentType is not null
+                && _codecs.TryGetSerializer(ContentType, out var exactSerializer)
+            )
+                return exactSerializer.Deserialize(
+                    ZLinkEncodedPayload.FromOwned(_payload),
+                    targetType
+                );
 
-        // Canonical Actor Join recovery retains the frozen outer multipart
-        // profile while the saved sole reply part remains the serializer's
-        // raw payload. Its public completion supplies the declared DTO type,
-        // so select the same registered serializer that normal typed encode
-        // would use instead of interpreting protobuf/messagepack bytes as
-        // framework JSON.
-        if (
-            _resolveSerializerByDeclaredType
-            && _codecs is not null
-            && _codecs.TryResolveSerializer(targetType, out _, out serializer)
-        )
-            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
+            if (ContentType == ServiceWireConstants.FrameworkMultipartContentType)
+            {
+                if (_codecs.TryResolveSerializer(targetType, out _, out var declaredSerializer))
+                    return declaredSerializer.Deserialize(
+                        ZLinkEncodedPayload.FromOwned(_payload),
+                        targetType
+                    );
 
-        if (StreamCodec is { } codec && codec != ZlinkStreamCodec.Json)
+                return ZLinkEnvelopeCodec
+                    .ResolveReceivedSerializer(DefaultContentType, _codecs)
+                    .Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
+            }
+        }
+
+        var serializer = ZLinkEnvelopeCodec.ResolveReceivedSerializer(ContentType, _codecs);
+
+        if (
+            ReferenceEquals(serializer, ZLinkFrameworkJsonPayloadCodec.ReceiveSerializer)
+            && StreamCodec is { } codec
+            && codec != ZlinkStreamCodec.Json
+        )
             throw new InvalidOperationException(
                 $"Stream payload uses codec '{codec}', but no matching codec extension is registered."
             );
 
-        return ZLinkFrameworkJsonPayloadCodec.Deserialize(_payload.Span, targetType);
+        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
     }
 
     private static object? CoerceDecodedValue(object? decoded, Type targetType)
@@ -266,9 +282,6 @@ public sealed partial class ZLinkMessage
     {
         if (codecs.TryResolveSerializer(declaredType, out var contentType, out var serializer))
             return (contentType, serializer);
-
-        if (codecs.SingleCustomSerializer() is { } custom)
-            return (custom.ContentType, custom.Serializer);
 
         return (DefaultContentType, null);
     }
