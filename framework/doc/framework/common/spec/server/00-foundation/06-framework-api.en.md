@@ -407,10 +407,12 @@ no public `selectNode`, `selectOne`, or `selectMany` stage.
 
 The Channel client looks up ChannelName in the process-local route index and selects one
 RouteMesh MeshNode or ClientServer client. A name not in the index ends with `NotFound` and
-doesn't search or relay to a different MeshNode or ClientServer client. If a registered send
+doesn't search or relay to a different MeshNode or ClientServer client. If a RouteMesh send
 path has no ready target pipe, it uses `Unavailable`; if the
 [ready target](02-glossary.en.md#ready-target) snapshot itself doesn't exist, it uses
-`NotFound`.
+`NotFound`. A ClientServer send path waits within the admission deadline as
+[Channel messaging](../02-channel-transport/02-channel-messaging.en.md#clientserver-ready-wait)
+describes, then decides the result.
 
 <a id="no-eligible-select-one-member"></a>
 When applying eligibility and drain leaves a [select-one](02-glossary.en.md#select-one)

@@ -192,7 +192,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 |---|---|
 | No Actor authority | `NotFound` |
 | No Spot authority | `NotFound` |
-| No Mesh or eligible Server | `NotFound` |
+| No Mesh or Server membership | `NotFound` |
 | No route available | `Unavailable` |
 | Admission deadline expired | `DeadlineExceeded` |
 | Runtime not accepting new admission | `ShuttingDown` |

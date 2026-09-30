@@ -177,7 +177,7 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 |---|---|
 | Actor authority 없음 | `NotFound` |
 | Spot authority 없음 | `NotFound` |
-| Mesh나 선택 가능한 Server 없음 | `NotFound` |
+| Mesh 또는 Server membership 없음 | `NotFound` |
 | 사용할 route가 없음 | `Unavailable` |
 | admission deadline 만료 | `DeadlineExceeded` |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |

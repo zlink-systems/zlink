@@ -359,8 +359,10 @@ Node direct와 channel operation은 target selection과 submit을 한 호출로 
 
 Channel client는 ChannelName을 process-local route index에서 찾아 RouteMesh MeshNode 또는 ClientServer
 client 하나를 선택한다. Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나
-ClientServer client를 검색하거나 relay하지 않는다. 등록된 송신 경로에 ready target pipe가 없으면
+ClientServer client를 검색하거나 relay하지 않는다. RouteMesh 송신 경로에 ready target pipe가 없으면
 `Unavailable`, [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면 `NotFound`를 사용한다.
+ClientServer 송신 경로는 [Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#clientserver-ready-wait)대로
+admission deadline 안에서 기다린 뒤 결과를 정한다.
 
 <a id="no-eligible-select-one-member"></a>
 [Select-one](02-glossary.ko.md#select-one) ChannelName에서 eligibility와 drain 조건을 적용한 뒤 남은
