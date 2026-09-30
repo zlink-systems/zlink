@@ -136,6 +136,51 @@ TEST (ZLinkFrameworkLocationsRedis, OpaqueLocationStoreProvidesAtomicCasAndScan)
     EXPECT_TRUE (std::holds_alternative<store_missing_t> (provider.read (key).result ().value ()));
 }
 
+TEST (ZLinkFrameworkLocationsRedis, ValueConditionUsesLiveBytesAtCommit)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    const store_key_t key{"lease"};
+    const store_key_t changed{"changed"};
+    const auto put = [&] (std::string_view value) {
+        return provider.write ({{}, {store_put_t{key, bytes (value), 30s}}}).result ().value ();
+    };
+    const auto conditional = [&] {
+        return provider
+          .write ({{store_value_condition_t{key, bytes ("owner")}},
+                   {store_put_t{changed, bytes ("committed"), std::nullopt}}})
+          .result ()
+          .value ();
+    };
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("owner")));
+    const auto initial = std::get<store_found_t> (provider.read (key).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("owner")));
+    const auto renewed = std::get<store_found_t> (provider.read (key).result ().value ());
+    EXPECT_NE (initial.value.version.value, renewed.value.version.value);
+    EXPECT_TRUE (std::holds_alternative<store_write_applied_t> (conditional ()));
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("other")));
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (conditional ()));
+    const auto before = std::get<store_found_t> (provider.read (changed).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write ({{}, {store_delete_t{key}}}).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (conditional ()));
+    const auto after = std::get<store_found_t> (provider.read (changed).result ().value ());
+    EXPECT_EQ (before.value.version.value, after.value.version.value);
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write ({{}, {store_put_t{key, bytes ("owner"), 1ms}}}).result ().value ()));
+    bool expired = false;
+    for (int attempt = 0; attempt < 1000 && !expired; ++attempt)
+        expired = std::holds_alternative<store_missing_t> (provider.read (key).result ().value ());
+    ASSERT_TRUE (expired);
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (conditional ()));
+    const auto after_expiry = std::get<store_found_t> (provider.read (changed).result ().value ());
+    EXPECT_EQ (before.value.version.value, after_expiry.value.version.value);
+}
+
 // Sol review [M] (cpp-store-record-convergence e14bce0297): the production
 // Lua point-read/CAS scripts must reject a member whose format tag isn't
 // 0x01 explicitly (22-location-store-redis.md#7's clean-break requirement --

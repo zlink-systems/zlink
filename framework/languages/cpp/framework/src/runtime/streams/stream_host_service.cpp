@@ -2388,7 +2388,7 @@ class stream_host_service_t::listener_t
         try {
             close_core_session (rid, close_reason);
             if (_core_socket) {
-                static_cast<zlink::socket_t &> (*_core_socket).disconnect_rid (rid);
+                _core_socket->disconnect_rid (rid);
             }
         }
         catch (...) {
@@ -2719,16 +2719,15 @@ class stream_host_service_t::listener_t
           });
     }
 
+    /* Queues one write on the connection's write queue; empty once the
+     * connection stops. Whoever runs the connection's io (the reader or a
+     * waiting writer) completes it. */
     template <typename Start, typename Cancel>
-    boost::system::error_code
-    run_stream_write_operation (const std::shared_ptr<tcp_connection_t> &owner,
-                                const std::atomic_bool &stop,
-                                Start &&start,
-                                Cancel &&cancel)
+    std::shared_ptr<stream_write_operation_t> queue_stream_write_operation (
+      const std::shared_ptr<tcp_connection_t> &owner, Start &&start, Cancel &&cancel)
     {
-        if (stream_stop_requested (stop, &owner->closing)) {
-            return asio::error::operation_aborted;
-        }
+        if (stream_stop_requested (*_stop, &owner->closing))
+            return {};
         auto operation = std::make_shared<stream_write_operation_t> ();
         operation->state = std::make_shared<stream_write_wait_state_t> ();
         operation->start = std::forward<Start> (start);
@@ -2750,7 +2749,17 @@ class stream_host_service_t::listener_t
                 }
             });
         }
+        return operation;
+    }
 
+    // The caller waits for its own queued write while it runs the connection io.
+    boost::system::error_code
+    wait_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
+                       const std::atomic_bool &stop,
+                       const std::shared_ptr<stream_write_operation_t> &operation)
+    {
+        if (!operation)
+            return asio::error::operation_aborted;
         std::unique_lock<std::mutex> lock (operation->state->mutex);
         while (!operation->state->completed) {
             if (stream_stop_requested (stop, &owner->closing)
@@ -3073,11 +3082,9 @@ class stream_host_service_t::listener_t
         return frame_t{decoded_header, message_from_bytes (payload_bytes)};
     }
 
-    template <typename TStream>
-    void write_frame (const std::shared_ptr<tcp_connection_t> &owner,
-                      const std::shared_ptr<TStream> &connection,
-                      const stream_header_t &header,
-                      const zlink::message_t &payload)
+    // Encodes one frame for queue_frame.
+    std::shared_ptr<std::vector<std::uint8_t>> encode_frame_bytes (const stream_header_t &header,
+                                                                   const zlink::message_t &payload)
     {
         auto encoded_frame = _runtime.encode_frame (header, payload);
         if (!encoded_frame) {
@@ -3085,13 +3092,24 @@ class stream_host_service_t::listener_t
                                          encoded_frame.error () ? encoded_frame.error ()->what ()
                                                                 : "STREAM frame encode failed");
         }
-        auto frame =
-          std::make_shared<std::vector<std::uint8_t>> (std::move (encoded_frame.value ()));
         trace_stream_host ("write-frame", _stream, header,
                            "payload_bytes=" + std::to_string (payload.size ()));
+        return std::make_shared<std::vector<std::uint8_t>> (std::move (encoded_frame.value ()));
+    }
+
+    /* Queues one frame on the connection's write queue without waiting for
+     * it; empty once the connection stops. */
+    template <typename TStream>
+    std::shared_ptr<stream_write_operation_t>
+    queue_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                 const std::shared_ptr<TStream> &connection,
+                 const stream_header_t &header,
+                 const zlink::message_t &payload)
+    {
+        auto frame = encode_frame_bytes (header, payload);
         const auto weak_connection = std::weak_ptr<TStream> (connection);
-        const auto error = run_stream_write_operation (
-          owner, *_stop,
+        return queue_stream_write_operation (
+          owner,
           [weak_connection, frame] (auto completion) mutable {
               if (const auto connection = weak_connection.lock ()) {
                   asio::async_write (
@@ -3112,30 +3130,18 @@ class stream_host_service_t::listener_t
                   });
               }
           });
-        if (error) {
-            throw boost::system::system_error (error);
-        }
-        trace_stream_host ("write-completion", _stream, header, "result=success");
     }
 
-    void write_frame (const std::shared_ptr<tcp_connection_t> &owner,
-                      const std::shared_ptr<websocket_stream_t> &connection,
-                      const stream_header_t &header,
-                      const zlink::message_t &payload)
+    std::shared_ptr<stream_write_operation_t>
+    queue_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                 const std::shared_ptr<websocket_stream_t> &connection,
+                 const stream_header_t &header,
+                 const zlink::message_t &payload)
     {
-        auto encoded_frame = _runtime.encode_frame (header, payload);
-        if (!encoded_frame) {
-            throw framework_exception_t (encoded_frame.error_kind (),
-                                         encoded_frame.error () ? encoded_frame.error ()->what ()
-                                                                : "STREAM frame encode failed");
-        }
-        auto frame =
-          std::make_shared<std::vector<std::uint8_t>> (std::move (encoded_frame.value ()));
-        trace_stream_host ("write-frame", _stream, header,
-                           "payload_bytes=" + std::to_string (payload.size ()));
+        auto frame = encode_frame_bytes (header, payload);
         const auto weak_connection = std::weak_ptr<websocket_stream_t> (connection);
-        const auto error = run_stream_write_operation (
-          owner, *_stop,
+        return queue_stream_write_operation (
+          owner,
           [weak_connection, frame] (auto completion) mutable {
               if (const auto connection = weak_connection.lock ()) {
                   connection->binary (true);
@@ -3157,6 +3163,17 @@ class stream_host_service_t::listener_t
                   });
               }
           });
+    }
+
+    // Writes one frame and waits for its completion.
+    template <typename TStream>
+    void write_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                      const std::shared_ptr<TStream> &connection,
+                      const stream_header_t &header,
+                      const zlink::message_t &payload)
+    {
+        const auto error =
+          wait_stream_write (owner, *_stop, queue_frame (owner, connection, header, payload));
         if (error) {
             throw boost::system::system_error (error);
         }
@@ -3345,18 +3362,36 @@ class stream_host_service_t::listener_t
                                                           stream_codec_t::raw,
                                                           stream_header_flags_t::none, std::nullopt,
                                                           "$zlink.heartbeat.pong", {});
-                            write_frame (owner, connection, pong, zlink::message_t{});
+                            // The reply is queued, not awaited: this reader keeps
+                            // running the connection io that completes it.
+                            (void) queue_frame (owner, connection, pong, zlink::message_t{});
                         }
                         continue;
                     }
                     std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                     if (received_frame.header.kind () == stream_message_kind_t::send
                         || received_frame.header.kind () == stream_message_kind_t::request) {
-                        auto reserved = _application_jobs->wait_for_supply_blocking ();
-                        if (!reserved)
+                        /* Permit before dispatch (Application job queue §3). While the
+                         * supply is pending this reader keeps running the connection
+                         * io, so queued writes such as heartbeat replies complete
+                         * (messaging hot path I1). The supply wakes the io. */
+                        application_job_queue_t::supply_request_t supply;
+                        std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
+                        const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
+                            if (const auto connection_owner = weak_owner.lock ())
+                                asio::post (connection_owner->io, [] {});
+                        };
+                        while (!(reserved = supply.take (*_application_jobs,
+                                                         std::chrono::milliseconds::zero (), wake))
+                               && !stream_stop_requested (*_stop, &owner->closing)) {
+                            io.restart ();
+                            const auto running = asio::make_work_guard (io);
+                            io.run_one_for (std::chrono::milliseconds (50));
+                        }
+                        if (!reserved || !*reserved)
                             break;
                         application_permit = std::make_shared<application_job_queue_t::permit_t> (
-                          std::move (*reserved));
+                          std::move (**reserved));
                         application_permit->mark_queued ();
                     }
                     detail::session_actor_manager_access_t::set_codec (

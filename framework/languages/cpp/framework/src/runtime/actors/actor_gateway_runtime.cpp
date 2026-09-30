@@ -991,51 +991,63 @@ actor_join_call_t actor_context_t::join_entry_spot_payload (const zlink::message
     auto context = std::shared_ptr<actor_context_t> (
       new actor_context_t (_state, *_actor_ref, _source_binding_generation, _mesh_name));
     context->_actor_ref = _actor_ref;
+    // The deferred join completes when the entry Spot join operation does; the
+    // barrier turn continues from that completion instead of waiting for it.
     return actor_join_call_t (
-      [context, request] (std::chrono::milliseconds timeout) mutable {
-          detail::actor_gateway_state_t::join_entry_spot_dispatcher_t dispatcher;
-          zlink::message_t effective_request = request;
-          context->_state->sync ([&] {
-              if (!context->_actor_ref
-                  || ::zlink::framework::detail::actor_ref_access_t::empty (*context->_actor_ref)) {
-                  throw framework_exception_t (framework_error_kind_t::not_found,
-                                               "actor ref is empty");
-              }
-              if (!context->_state->join_entry_spot_dispatcher) {
-                  throw framework_exception_t (
-                    framework_error_kind_t::not_found,
-                    "actor join entry spot dispatcher is not configured");
-              }
-              dispatcher = context->_state->join_entry_spot_dispatcher;
-              if (effective_request.to_string ().empty ()) {
-                  const auto found = context->_state->actors_by_id.find (
-                    std::string (context->_actor_ref->actor_id ().value ()));
-                  if (found != context->_state->actors_by_id.end ()
-                      && found->second.create_payload) {
-                      effective_request = *found->second.create_payload;
-                  }
-              }
-          });
+      actor_join_call_t::async_deferred_fn_t{
+        [context, request] (std::chrono::milliseconds timeout) mutable -> task_t<void> {
+            detail::actor_gateway_state_t::join_entry_spot_dispatcher_t dispatcher;
+            zlink::message_t effective_request = request;
+            context->_state->sync ([&] {
+                if (!context->_actor_ref
+                    || ::zlink::framework::detail::actor_ref_access_t::empty (
+                      *context->_actor_ref)) {
+                    throw framework_exception_t (framework_error_kind_t::not_found,
+                                                 "actor ref is empty");
+                }
+                if (!context->_state->join_entry_spot_dispatcher) {
+                    throw framework_exception_t (
+                      framework_error_kind_t::not_found,
+                      "actor join entry spot dispatcher is not configured");
+                }
+                dispatcher = context->_state->join_entry_spot_dispatcher;
+                if (effective_request.to_string ().empty ()) {
+                    const auto found = context->_state->actors_by_id.find (
+                      std::string (context->_actor_ref->actor_id ().value ()));
+                    if (found != context->_state->actors_by_id.end ()
+                        && found->second.create_payload) {
+                        effective_request = *found->second.create_payload;
+                    }
+                }
+            });
 
-          auto joined = dispatcher (*context->_actor_ref, effective_request, timeout);
-          if (!joined) {
-              const auto *error = joined.error ();
-              throw framework_exception_t (joined.error_kind (),
-                                           error != nullptr ? error->what ()
-                                                            : "actor join entry spot failed");
-          }
-
-          if (joined.value ().result_code == 0) {
-              context->_state->sync ([&] {
-                  *context->_actor_ref = joined.value ().actor;
-                  auto found = context->_state->actors_by_id.find (
-                    std::string (context->_actor_ref->actor_id ().value ()));
-                  if (found != context->_state->actors_by_id.end ()) {
-                      found->second.ref = *context->_actor_ref;
+            detail::task_completion_source_t<void> completed;
+            auto result = completed.task ();
+            auto joining = dispatcher (*context->_actor_ref, effective_request, timeout);
+            detail::observe_task_completion (
+              joining,
+              [context, completed] (const result_t<detail::actor_join_reply_t> &joined) mutable {
+                  if (!joined) {
+                      const auto *error = joined.error ();
+                      completed.complete (result_t<void>::failure (
+                        joined.error_kind (),
+                        error != nullptr ? error->what () : "actor join entry spot failed"));
+                      return;
                   }
+                  if (joined.value ().result_code == 0) {
+                      context->_state->sync ([&] {
+                          *context->_actor_ref = joined.value ().actor;
+                          auto found = context->_state->actors_by_id.find (
+                            std::string (context->_actor_ref->actor_id ().value ()));
+                          if (found != context->_state->actors_by_id.end ()) {
+                              found->second.ref = *context->_actor_ref;
+                          }
+                      });
+                  }
+                  completed.complete (result_t<void>::success ());
               });
-          }
-      },
+            return result;
+        }},
       [context] { return context->reserve_join_barrier (); });
 }
 

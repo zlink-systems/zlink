@@ -28,60 +28,61 @@ class in_memory_location_store_t final : public location_store_t
     task_t<store_read_result_t> read (store_key_t key) override
     {
         validate_key (key.value);
-        return _lane
-          .run ([&] {
-              const auto now = std::chrono::system_clock::now ();
-              expire (key.value, now);
-              const auto found = _values.find (key.value);
-              if (found == _values.end ())
-                  return completed<store_read_result_t> (store_missing_t{now});
-              found->second.store_now = now;
-              return completed<store_read_result_t> (store_found_t{found->second});
-          })
-          .get ();
+        return _lane.run_task ([this, key = std::move (key)] {
+            const auto now = std::chrono::system_clock::now ();
+            expire (key.value, now);
+            const auto found = _values.find (key.value);
+            if (found == _values.end ())
+                return store_read_result_t{store_missing_t{now}};
+            found->second.store_now = now;
+            return store_read_result_t{store_found_t{found->second}};
+        });
     }
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
         validate_write (request);
-        return _lane
-          .run ([&] {
-              const auto now = std::chrono::system_clock::now ();
-              for (const auto &condition : request.conditions)
-                  std::visit ([&] (const auto &value) { expire (value.key.value, now); },
-                              condition);
+        return _lane.run_task ([this, request = std::move (request)] () mutable {
+            const auto now = std::chrono::system_clock::now ();
+            for (const auto &condition : request.conditions)
+                std::visit ([&] (const auto &value) { expire (value.key.value, now); }, condition);
 
-              for (const auto &condition : request.conditions) {
-                  const auto key =
-                    std::visit ([] (const auto &value) { return value.key.value; }, condition);
-                  const auto found = _values.find (key);
-                  if (std::holds_alternative<store_missing_condition_t> (condition)) {
-                      if (found != _values.end ())
-                          return completed<store_write_result_t> (store_write_conflict_t{now});
-                      continue;
-                  }
-                  const auto &expected = std::get<store_version_condition_t> (condition).expected;
-                  if (found == _values.end () || found->second.version.value != expected.value)
-                      return completed<store_write_result_t> (store_write_conflict_t{now});
-              }
+            for (const auto &condition : request.conditions) {
+                const auto key =
+                  std::visit ([] (const auto &value) { return value.key.value; }, condition);
+                const auto found = _values.find (key);
+                if (std::holds_alternative<store_missing_condition_t> (condition)) {
+                    if (found != _values.end ())
+                        return store_write_result_t{store_write_conflict_t{now}};
+                    continue;
+                }
+                if (found == _values.end ())
+                    return store_write_result_t{store_write_conflict_t{now}};
+                if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
+                    if (found->second.version.value != version->expected.value)
+                        return store_write_result_t{store_write_conflict_t{now}};
+                } else if (found->second.bytes
+                           != std::get<store_value_condition_t> (condition).expected) {
+                    return store_write_result_t{store_write_conflict_t{now}};
+                }
+            }
 
-              store_write_applied_t applied;
-              applied.store_now = now;
-              for (auto &mutation : request.mutations) {
-                  if (auto *put = std::get_if<store_put_t> (&mutation)) {
-                      const store_version_t version{next_version ()};
-                      auto expires_at =
-                        put->retention ? std::optional{now + *put->retention} : std::nullopt;
-                      _values[put->key.value] =
-                        store_value_t{std::move (put->bytes), version, expires_at, now};
-                      applied.put_versions.push_back ({std::move (put->key), version});
-                  } else {
-                      _values.erase (std::get<store_delete_t> (mutation).key.value);
-                  }
-              }
-              return completed<store_write_result_t> (std::move (applied));
-          })
-          .get ();
+            store_write_applied_t applied;
+            applied.store_now = now;
+            for (auto &mutation : request.mutations) {
+                if (auto *put = std::get_if<store_put_t> (&mutation)) {
+                    const store_version_t version{next_version ()};
+                    auto expires_at =
+                      put->retention ? std::optional{now + *put->retention} : std::nullopt;
+                    _values[put->key.value] =
+                      store_value_t{std::move (put->bytes), version, expires_at, now};
+                    applied.put_versions.push_back ({std::move (put->key), version});
+                } else {
+                    _values.erase (std::get<store_delete_t> (mutation).key.value);
+                }
+            }
+            return store_write_result_t{std::move (applied)};
+        });
     }
 
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
@@ -198,6 +199,10 @@ class in_memory_location_store_t final : public location_store_t
                     throw std::invalid_argument (
                       "location version condition requires 1..4096 bytes");
                 encoded_size += version->expected.value.size ();
+            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
+                if (value->expected.size () > 1024u * 1024u)
+                    throw std::invalid_argument ("location value condition exceeds 1 MiB");
+                encoded_size += value->expected.size ();
             }
         }
         for (const auto &mutation : request.mutations) {

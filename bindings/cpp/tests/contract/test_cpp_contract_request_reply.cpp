@@ -7,6 +7,7 @@
 #include <cassert>
 #include <chrono>
 #include <coroutine>
+#include <exception>
 #include <future>
 #include <thread>
 
@@ -86,49 +87,6 @@ void receive_and_reply (zlink::router_socket_t &router_,
     zlink::message_t response = zlink_cpp_contract::make_message (reply_);
     received.reply ().message (response).submit ();
     assert (!response.valid ());
-}
-
-void test_blocking_request_and_reply_token_owner ()
-{
-    zlink::context_t context;
-    zlink::dealer_socket_t dealer (context);
-    zlink::router_socket_t router (context);
-    zlink::router_socket_t other_router (context);
-    dealer.set_routing_id (zlink::routing_id_t::from ("blocking-client"));
-    router.set_routing_id (zlink::routing_id_t::from ("blocking-server"));
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("blocking-request");
-    router.bind (endpoint);
-    dealer.connect (endpoint);
-
-    std::atomic<bool> owner_mismatch_rejected{false};
-    std::thread responder ([&] {
-        zlink::received_t received;
-        while (router.recv (received, zlink::recv_flags_t::dontwait) != 0)
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
-        assert (received.reply_token ().has_value ());
-        zlink::message_t rejected = zlink_cpp_contract::make_message ("wrong-owner");
-        try {
-            other_router.reply (*received.routing_id (), *received.reply_token ())
-              .message (rejected).submit ();
-        }
-        catch (const zlink::submit_error_t &error) {
-            owner_mismatch_rejected.store (
-              error.result () == zlink::submit_result_t::invalid_argument,
-              std::memory_order_release);
-        }
-        assert (rejected.valid ());
-        zlink::message_t response = zlink_cpp_contract::make_message ("blocking-reply");
-        received.reply ().message (response).submit ();
-    });
-
-    zlink::message_t request = zlink_cpp_contract::make_message ("blocking-request");
-    auto reply = dealer.request ().message (request)
-                   .timeout (std::chrono::seconds (2)).submit ();
-    responder.join ();
-    assert (owner_mismatch_rejected.load (std::memory_order_acquire));
-    assert (!request.valid ());
-    assert (reply.size () == 1);
-    assert (reply[0].to_string () == "blocking-reply");
 }
 
 void test_async_request_public_poller_progress_and_owner_transfer ()
@@ -295,16 +253,81 @@ void test_public_poller_continuation_can_close_socket ()
     assert (!dealer.valid ());
 }
 
+void test_router_multipart_receive_preserves_request_record_and_reply_owner ()
+{
+    zlink::context_t context;
+    zlink::dealer_socket_t dealer (context);
+    zlink::router_socket_t router (context);
+    zlink::router_socket_t other_router (context);
+    const zlink::routing_id_t dealer_id = zlink::routing_id_t::from ("multipart-client");
+    dealer.set_routing_id (dealer_id);
+    router.set_routing_id (zlink::routing_id_t::from ("multipart-server"));
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("multipart-request");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+
+    std::atomic<bool> owner_mismatch_rejected{false};
+    std::promise<int> request_result_promise;
+    std::future<int> request_result_future = request_result_promise.get_future ();
+    std::thread requester ([&] {
+        zlink::message_t request = zlink_cpp_contract::make_message ("multipart-request");
+        try {
+            auto reply = dealer.request ().message (request)
+                           .timeout (std::chrono::seconds (1)).submit ();
+            assert (!request.valid ());
+            assert (reply.size () == 1);
+            assert (reply[0].to_string () == "multipart-reply");
+            request_result_promise.set_value (
+              static_cast<int> (zlink::request_result_t::ok));
+        }
+        catch (const zlink::request_error_t &error) {
+            request_result_promise.set_value (static_cast<int> (error.result ()));
+        }
+        catch (...) {
+            request_result_promise.set_exception (std::current_exception ());
+        }
+    });
+
+    zlink::received_t received;
+    assert (router.recv (received) == 0);
+    assert (received.routing_id ().has_value ());
+    assert (*received.routing_id () == dealer_id);
+    assert (received.reply_token ().has_value ());
+    assert (received.is_single_part ());
+    assert (received.first_part ().to_string () == "multipart-request");
+
+    zlink::message_t rejected = zlink_cpp_contract::make_message ("wrong-owner");
+    try {
+        other_router.reply (*received.routing_id (), *received.reply_token ())
+          .message (rejected).submit ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        owner_mismatch_rejected.store (
+          error.result () == zlink::submit_result_t::invalid_argument,
+          std::memory_order_release);
+    }
+    assert (rejected.valid ());
+
+    zlink::message_t response = zlink_cpp_contract::make_message ("multipart-reply");
+    received.reply ().message (response).submit ();
+    assert (!response.valid ());
+
+    requester.join ();
+    const int request_result = request_result_future.get ();
+    assert (owner_mismatch_rejected.load (std::memory_order_acquire));
+    assert (request_result == static_cast<int> (zlink::request_result_t::ok));
+}
+
 } // namespace
 
 int main ()
 {
-    test_blocking_request_and_reply_token_owner ();
     test_async_request_public_poller_progress_and_owner_transfer ();
     test_blocking_request_progresses_with_public_poller_wait_thread ();
     test_dropped_async_result_late_completion_cleanup ();
     test_request_completion_publish_and_capture_join_once ();
     test_non_ok_request_is_typed_without_payload ();
     test_public_poller_continuation_can_close_socket ();
+    test_router_multipart_receive_preserves_request_record_and_reply_owner ();
     return 0;
 }

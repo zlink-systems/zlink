@@ -33,6 +33,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -243,6 +244,92 @@ TEST (ChannelCoreAdmission, WeightZeroServerStillRunsRequestsItAlreadyReceived)
                 EXPECT_EQ (static_cast<int> (index + 101),
                            decode_reply (serializers, reply.value ()));
         }
+    }
+    host.stop ();
+    source.close ();
+}
+
+// Messaging hot path I1: with no application permit the server stops
+// receiving, but its loop keeps its management work. A reply that a running
+// handler completes is delivered while the next request waits for a permit.
+TEST (ChannelCoreAdmission, ServerDeliversRepliesWhileItWaitsForAPermit)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    const std::string channel = "core-admission-permit-wait";
+    const std::string endpoint = unique_inproc_endpoint ();
+    const auto server_rid = zlink::routing_id_t::from ("framework-permit-wait-server");
+
+    zlink::framework::zlink_builder_t builder;
+    builder.channel (channel).enable_server ().set_routing_id (server_rid).bind (endpoint);
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    runtime.bind_serializers (serializers);
+
+    zlink::framework::service_collection_t services;
+    services.add_singleton<gated_request_handler_t> ();
+    auto provider = services.build_provider ();
+    auto &handler = provider.get_required<gated_request_handler_t> ();
+    zlink::framework::handler_registry_t handlers;
+    handlers.on_request<gated_request_handler_t, request_t, reply_t> (
+      channel, "request", &gated_request_handler_t::handle,
+      {.packet_name = request_t::packet_name});
+
+    auto jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+      zlink::framework::runtime::application_job_queue_configuration_t{
+        zlink::framework::application_job_queue_profile_t::balanced, std::nullopt, 1, 1});
+    zlink::framework::runtime::channel_host_service_t host (
+      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {}, jobs);
+    host.start (provider);
+
+    zlink::router_socket_t source (*context);
+    {
+        zlink::framework::test::completion_poller_driver_t completion_owner (source);
+        source.set_routing_id (zlink::routing_id_t::from ("framework-permit-wait-source"));
+        auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+        source.connect (endpoint);
+        ASSERT_TRUE (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+
+        const auto submit = [&] (int value) {
+            zlink::framework::runtime::messaging::envelope_header_t header;
+            header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
+            header.channel_name = channel;
+            header.message_name = request_t::packet_name;
+            header.topic = "request";
+            header.correlation_id = "permit-wait-" + std::to_string (value);
+            auto parts = zlink::framework::runtime::messaging::envelope_codec_t{}.encode_parts (
+              header, request_t{value}, serializers);
+            zlink::message_t first = parts[0];
+            zlink::message_t second = parts[1];
+            return source.request (server_rid)
+              .message (first)
+              .message (second)
+              .timeout (5s)
+              .async ()
+              .reply;
+        };
+        auto first = submit (1);
+        ASSERT_TRUE (handler.wait_until_entered (2s));
+        // Request 1 returned its permit at handler entry; the test now holds
+        // the only permit, so request 2 waits for supply.
+        auto held = jobs->try_reserve_supply ();
+        ASSERT_TRUE (held.has_value ());
+        auto second = submit (2);
+        std::this_thread::sleep_for (100ms);
+        handler.release ();
+
+        auto first_reply = std::async (std::launch::async,
+                                       [&] { return await_reply (std::move (first)).result (); });
+        const bool delivered_while_waiting = first_reply.wait_for (2s) == std::future_status::ready;
+        held.reset ();
+        const auto reply_one = first_reply.get ();
+        const auto reply_two = await_reply (std::move (second)).result ();
+        EXPECT_TRUE (delivered_while_waiting) << "the reply waited for the next request's permit";
+        ASSERT_TRUE (reply_one);
+        EXPECT_EQ (101, decode_reply (serializers, reply_one.value ()));
+        ASSERT_TRUE (reply_two);
+        EXPECT_EQ (102, decode_reply (serializers, reply_two.value ()));
     }
     host.stop ();
     source.close ();

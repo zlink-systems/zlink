@@ -1324,8 +1324,8 @@ bool serial_execution_queue_t::try_resume_suspended (
         (void) schedule_drain_locked ();
         return true;
     }
-    if (_active_lane == serial_work_lane_t::lifecycle && _active_turn
-        && _active_turn->turn == turn) {
+    if (_active_lane == serial_work_lane_t::lifecycle && _active_turn && _active_turn->turn == turn
+        && !turn->released ()) {
         _active_turn->ready_continuation = [work = std::move (work)] (auto) mutable { work (); };
         return true;
     }

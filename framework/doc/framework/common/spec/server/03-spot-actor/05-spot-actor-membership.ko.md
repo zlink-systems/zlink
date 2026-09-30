@@ -211,6 +211,8 @@ authority를 유지한다. Caller가 명시적 leave 또는 destroy를 끝낸 �
 `JoinSpot`은 이동할 User Spot의 global Spot ID를 받는다. `JoinEntrySpot`은 target node
 RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. Actor와 target
 Spot의 owner node가 다르면 같은 Join operation 안에서 Actor relocation도 수행한다.
+Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh Join record를
+제출하지 않는다.
 
 Application은 relocation 단계, target node, state adapter 또는 owner token을 직접 지정하지
 않는다. 이 값은 Framework가 현재 설정과 authority를 기준으로 결정한다.

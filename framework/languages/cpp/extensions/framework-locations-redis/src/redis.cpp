@@ -221,6 +221,9 @@ class location_store_backend_t final : public location_store_t
                 if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
                     args.push_back ("version");
                     args.push_back (version->expected.value);
+                } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
+                    args.push_back ("value");
+                    args.push_back (bytes_to_string (value->expected));
                 } else {
                     args.push_back ("missing");
                     args.push_back ({});
@@ -456,7 +459,7 @@ local time = redis.call('TIME')
 local nowMs = tonumber(time[1]) * 1000
   + math.floor(tonumber(time[2]) / 1000)
 
-local function currentVersion(keyIndex)
+local function currentRecord(keyIndex)
   local members = redis.call('ZREVRANGE', KEYS[keyIndex], 0, 0)
   if #members == 0 then return nil end
   if string.byte(members[1], 1) ~= 1 then
@@ -467,7 +470,7 @@ local function currentVersion(keyIndex)
   if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then
     return nil
   end
-  return record[3]
+  return record
 end
 
 local offset = 1
@@ -478,10 +481,12 @@ for i = 1, conditionCount do
   local kind = ARGV[offset + 1]
   local expected = ARGV[offset + 2]
   offset = offset + 3
-  local current = currentVersion(keyIndex)
+  local current = currentRecord(keyIndex)
   if kind == 'missing' then
     if current ~= nil then return {'conflict', tostring(nowMs)} end
-  elseif current ~= expected then
+  elseif current == nil
+    or (kind == 'version' and current[3] ~= expected)
+    or (kind == 'value' and current[2] ~= expected) then
     return {'conflict', tostring(nowMs)}
   end
 end
@@ -554,6 +559,10 @@ return result
                 if (version->expected.value.empty () || version->expected.value.size () > 4096)
                     throw std::invalid_argument ("version condition requires 1..4096 bytes");
                 encoded += version->expected.value.size ();
+            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
+                if (value->expected.size () > 1024u * 1024u)
+                    throw std::invalid_argument ("value condition exceeds 1 MiB");
+                encoded += value->expected.size ();
             }
         }
         for (const auto &mutation : request.mutations) {
