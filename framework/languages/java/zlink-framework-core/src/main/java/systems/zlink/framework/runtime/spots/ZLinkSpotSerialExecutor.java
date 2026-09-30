@@ -357,19 +357,32 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         laneClosed.join();
     }
 
-    Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
-        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes = new LinkedHashMap<>();
-        lanes.put("spot", spotQueue);
-        inStateLane(
+    Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> captureSpotActiveTurnSealHandle() {
+        return spotQueue.captureActiveTurnSealHandle();
+    }
+
+    CompletionStage<Map<String, ZLinkSerialExecutionQueue>> relocationLanesAsync(
+            List<String> participantActorIds) {
+        return stateLane.runNowOrQueue(
                 () -> {
+                    LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes = new LinkedHashMap<>();
+                    lanes.put("spot", spotQueue);
                     timerQueues.entrySet().stream()
                             .sorted(Map.Entry.comparingByKey())
                             .forEach(
                                     entry ->
                                             lanes.put("timer:" + entry.getKey(), entry.getValue()));
-                    return null;
+                    for (String actorId : participantActorIds) {
+                        if (lanes.putIfAbsent(
+                                        "actor:" + actorId,
+                                        actorQueueOnLane(actorId).relocationLane())
+                                != null) {
+                            throw new IllegalStateException(
+                                    "duplicate User Spot relocation lane: actor:" + actorId);
+                        }
+                    }
+                    return Collections.unmodifiableMap(lanes);
                 });
-        return Collections.unmodifiableMap(lanes);
     }
 
     private ZLinkSerialExecutionQueue timerQueue(String timerName) {
@@ -393,10 +406,12 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
 
     private ZLinkActorSerialExecutor actorQueue(String actorId) {
         Objects.requireNonNull(actorId, "actorId");
-        return inStateLane(
-                () ->
-                        actorQueues.computeIfAbsent(
-                                actorId, ignored -> new ZLinkActorSerialExecutor(serialExecutor)));
+        return inStateLane(() -> actorQueueOnLane(actorId));
+    }
+
+    private ZLinkActorSerialExecutor actorQueueOnLane(String actorId) {
+        return actorQueues.computeIfAbsent(
+                actorId, ignored -> new ZLinkActorSerialExecutor(serialExecutor));
     }
 
     private Optional<ZLinkActorSerialExecutor> actorQueueIfPresent(String actorId) {

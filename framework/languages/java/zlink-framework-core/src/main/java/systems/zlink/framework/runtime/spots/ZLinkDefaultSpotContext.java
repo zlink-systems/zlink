@@ -843,8 +843,13 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.isCurrentSpotTurn();
     }
 
-    Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
-        return serials.relocationLanes();
+    CompletionStage<Map<String, ZLinkSerialExecutionQueue>> relocationLanesAsync(
+            List<String> participantActorIds) {
+        return serials.relocationLanesAsync(participantActorIds);
+    }
+
+    Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> captureSpotActiveTurnSealHandle() {
+        return serials.captureSpotActiveTurnSealHandle();
     }
 
     ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
@@ -921,7 +926,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> awaitRelocationReadySignal(
-            Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+            Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
             BooleanSupplier cancelled) {
         Objects.requireNonNull(claim, "claim");
         Objects.requireNonNull(cancelled, "cancelled");
@@ -1102,19 +1107,27 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
             return continued;
         }
-        Optional<ZLinkUserSpotRelocationBarrier.Seal> claimed;
+        CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claimed;
         try {
             claimed = Objects.requireNonNull(waiter.claim.get(), "relocation readiness claim");
         } catch (RuntimeException failure) {
             waiter.result.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
-        waiter.result.complete(claimed);
-        CompletionStage<Void> completed =
-                claimed.isPresent()
-                        ? CompletableFuture.completedFuture(null)
-                        : runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
-        return completed;
+        return claimed.thenCompose(
+                        result -> {
+                            waiter.result.complete(result);
+                            return result.isPresent()
+                                    ? CompletableFuture.completedFuture(null)
+                                    : runRelocationReadyCompletion(
+                                            ZLinkSpotRelocationReadyOutcome.CONTINUED);
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                waiter.result.completeExceptionally(failure);
+                            }
+                        });
     }
 
     private void pollRelocationReadyCancellation(RelocationReadyWaiter waiter) {
@@ -1164,13 +1177,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     private static final class RelocationReadyWaiter {
-        private final Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim;
+        private final Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>>
+                claim;
         private final BooleanSupplier cancelled;
         private final CompletableFuture<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
                 new CompletableFuture<>();
 
         RelocationReadyWaiter(
-                Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+                Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
                 BooleanSupplier cancelled) {
             this.claim = claim;
             this.cancelled = cancelled;

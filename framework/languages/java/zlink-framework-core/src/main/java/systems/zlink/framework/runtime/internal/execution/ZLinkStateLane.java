@@ -75,12 +75,20 @@ public final class ZLinkStateLane {
     }
 
     public <T> CompletionStage<T> runAsync(Supplier<T> work) {
+        return submit(work, false);
+    }
+
+    public <T> CompletionStage<T> runNowOrQueue(Supplier<T> work) {
+        return submit(work, true);
+    }
+
+    private <T> CompletionStage<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         throwIfClosed();
 
         CompletableFuture<T> result = new CompletableFuture<>();
-        mailbox.add(
+        WorkItem turn =
                 () -> {
                     try {
                         result.complete(callWithCurrent(this, work));
@@ -91,7 +99,18 @@ public final class ZLinkStateLane {
                                         : new CompletionException(error));
                     }
                     return CompletableFuture.completedFuture(null);
-                });
+                };
+        if (runIdleTurnNow && scheduled.compareAndSet(0, 1)) {
+            try {
+                if (mailbox.isEmpty() && closed.get() == 0) {
+                    turn.run();
+                    return result;
+                }
+            } finally {
+                releaseInlineTurn();
+            }
+        }
+        mailbox.add(turn);
         scheduleDrain();
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
@@ -109,6 +128,15 @@ public final class ZLinkStateLane {
                     work.run();
                     return null;
                 });
+    }
+
+    private void releaseInlineTurn() {
+        scheduled.set(0);
+        if (!mailbox.isEmpty()) {
+            scheduleDrain();
+        } else if (closed.get() != 0) {
+            completed.complete(null);
+        }
     }
 
     public boolean tryPost(Supplier<? extends CompletionStage<Void>> work) {

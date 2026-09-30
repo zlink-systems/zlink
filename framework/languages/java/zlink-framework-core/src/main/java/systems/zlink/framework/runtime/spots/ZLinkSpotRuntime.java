@@ -4927,7 +4927,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    Optional<ZLinkUserSpotRelocationBarrier.Seal> trySealUserSpotRelocation(String spotId) {
+    CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> trySealUserSpotRelocation(
+            String spotId) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).trySeal();
     }
 
@@ -4938,11 +4939,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.relocationBarrier(spotId, actorSessions).runCapture(seal, capture);
     }
 
-    boolean abortUserSpotRelocation(String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
+    CompletionStage<Boolean> abortUserSpotRelocation(
+            String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).abort(seal);
     }
 
-    Optional<ZLinkUserSpotRelocationBarrier.Committed> commitUserSpotRelocation(
+    CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Committed>> commitUserSpotRelocation(
             String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
         return spotLifecycle.relocationBarrier(spotId, actorSessions).commit(seal);
     }

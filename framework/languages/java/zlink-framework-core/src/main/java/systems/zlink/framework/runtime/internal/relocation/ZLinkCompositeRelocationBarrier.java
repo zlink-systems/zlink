@@ -11,7 +11,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
@@ -32,107 +31,107 @@ public final class ZLinkCompositeRelocationBarrier {
     private boolean committing;
     private CompletableFuture<Void> transition;
 
-    private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+    private CompletionStage<Void> awaitTransition(CompletableFuture<Void> pending) {
+        return pending.handle((ignored, failure) -> null);
     }
 
-    private void awaitTransition(CompletableFuture<Void> pending) {
-        pending.handle((ignored, failure) -> null).join();
+    private CompletionStage<Void> finishTransition(CompletableFuture<Void> finished) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition == finished) {
+                                transition = null;
+                            }
+                        })
+                // Dependents must not inherit state-lane ownership.
+                .whenCompleteAsync(
+                        (ignored, failure) -> {
+                            if (failure == null) {
+                                finished.complete(null);
+                            } else {
+                                finished.completeExceptionally(failure);
+                            }
+                        });
     }
 
-    private void finishTransition(CompletableFuture<Void> finished) {
-        inStateLane(
-                () -> {
-                    if (transition == finished) {
-                        transition = null;
-                    }
-                    return null;
-                });
-        // Non-async CompletableFuture dependents would otherwise inherit lane
-        // ownership from the state-finalization turn.
-        finished.completeAsync(() -> null);
+    public CompletionStage<Optional<Seal>> trySeal(Map<String, ZLinkSerialExecutionQueue> lanes) {
+        return trySeal(lanes, Map.of());
     }
 
-    public Optional<Seal> trySeal(Map<String, ZLinkSerialExecutionQueue> lanes) {
-        while (true) {
-            SealStart start =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new SealStart(null, transition);
-                                }
-                                if (active != null || committing) {
-                                    return new SealStart(null, null);
-                                }
-                                if (lanes == null || lanes.isEmpty()) {
-                                    throw new IllegalArgumentException(
-                                            "at least one relocation lane is required");
-                                }
-                                if (nextGeneration == Long.MAX_VALUE) {
-                                    throw new IllegalStateException(
-                                            "composite relocation generation exhausted");
-                                }
-                                LinkedHashMap<String, ZLinkSerialExecutionQueue> snapshot =
-                                        validateLanes(lanes);
-                                CompletableFuture<Void> pending = new CompletableFuture<>();
-                                transition = pending;
-                                return new SealStart(snapshot, pending);
-                            });
-            if (start.lanes() == null) {
-                if (start.pending() == null) {
-                    return Optional.empty();
-                }
-                awaitTransition(start.pending());
-                continue;
-            }
-            return sealOutsideTurn(start.lanes(), null, start.pending());
-        }
+    public CompletionStage<Optional<Seal>> trySeal(
+            Map<String, ZLinkSerialExecutionQueue> lanes,
+            Map<String, ZLinkSerialExecutionQueue.ActiveTurnSealHandle> activeTurns) {
+        return stateLane
+                .runNowOrQueue(
+                        () -> {
+                            if (transition != null) {
+                                return new SealStart(null, transition);
+                            }
+                            if (active != null || committing) {
+                                return new SealStart(null, null);
+                            }
+                            if (lanes == null || lanes.isEmpty()) {
+                                throw new IllegalArgumentException(
+                                        "at least one relocation lane is required");
+                            }
+                            if (nextGeneration == Long.MAX_VALUE) {
+                                throw new IllegalStateException(
+                                        "composite relocation generation exhausted");
+                            }
+                            LinkedHashMap<String, ZLinkSerialExecutionQueue> snapshot =
+                                    validateLanes(lanes);
+                            CompletableFuture<Void> pending = new CompletableFuture<>();
+                            transition = pending;
+                            return new SealStart(snapshot, pending);
+                        })
+                .thenCompose(
+                        start -> {
+                            if (start.lanes() == null) {
+                                return start.pending() == null
+                                        ? CompletableFuture.completedFuture(Optional.empty())
+                                        : awaitTransition(start.pending())
+                                                .thenCompose(
+                                                        ignored -> trySeal(lanes, activeTurns));
+                            }
+                            return sealOutsideTurn(
+                                    start.lanes(), null, activeTurns, start.pending());
+                        });
     }
 
-    private Optional<Seal> sealOutsideTurn(
+    private CompletionStage<Optional<Seal>> sealOutsideTurn(
             LinkedHashMap<String, ZLinkSerialExecutionQueue> laneSnapshot,
             Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries,
+            Map<String, ZLinkSerialExecutionQueue.ActiveTurnSealHandle> activeTurns,
             CompletableFuture<Void> pending) {
         LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationSeal> seals =
                 new LinkedHashMap<>();
         try {
             for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : laneSnapshot.entrySet()) {
                 Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
-                        boundaries == null
-                                ? lane.getValue().trySealRelocation()
-                                : lane.getValue().trySealRelocation(boundaries.get(lane.getKey()));
+                        boundaries != null
+                                ? lane.getValue().trySealRelocation(boundaries.get(lane.getKey()))
+                                : activeTurns.containsKey(lane.getKey())
+                                        ? lane.getValue()
+                                                .trySealRelocation(activeTurns.get(lane.getKey()))
+                                        : lane.getValue().trySealRelocation();
                 if (sealed.isEmpty()) {
-                    try {
-                        rollback(laneSnapshot, seals);
-                    } finally {
-                        finishTransition(pending);
-                    }
-                    return Optional.empty();
+                    rollback(laneSnapshot, seals);
+                    return finishTransition(pending).thenApply(ignored -> Optional.empty());
                 }
                 seals.put(lane.getKey(), sealed.get());
             }
         } catch (RuntimeException failure) {
             try {
                 rollback(laneSnapshot, seals);
-            } finally {
-                finishTransition(pending);
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
             }
-            throw failure;
+            return finishTransition(pending)
+                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
         }
         try {
-            Seal result =
-                    inStateLane(
+            return stateLane
+                    .runAsync(
                             () -> {
                                 Seal established =
                                         new Seal(
@@ -143,10 +142,25 @@ public final class ZLinkCompositeRelocationBarrier {
                                                         new LinkedHashMap<>(seals)));
                                 active = established;
                                 return established;
-                            });
-            return Optional.of(result);
-        } finally {
-            finishTransition(pending);
+                            })
+                    .handle(
+                            (seal, failure) ->
+                                    finishTransition(pending)
+                                            .thenCompose(
+                                                    ignored ->
+                                                            failure == null
+                                                                    ? CompletableFuture
+                                                                            .completedFuture(
+                                                                                    Optional.of(
+                                                                                            seal))
+                                                                    : CompletableFuture
+                                                                            .<Optional<Seal>>
+                                                                                    failedFuture(
+                                                                                            failure)))
+                    .thenCompose(result -> result);
+        } catch (RuntimeException | Error failure) {
+            return finishTransition(pending)
+                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
         }
     }
 
@@ -189,146 +203,174 @@ public final class ZLinkCompositeRelocationBarrier {
                                 return awaitFinished(boundaries)
                                         .thenApply(finished -> Optional.empty());
                             }
-                            Optional<Seal> sealed = trySealAtReservedBoundaries(lanes, boundaries);
-                            release(boundaries);
-                            return awaitFinished(boundaries)
+                            return trySealAtReservedBoundaries(lanes, boundaries)
+                                    .whenComplete(
+                                            (result, failure) -> {
+                                                release(boundaries);
+                                            })
                                     .thenCompose(
-                                            finished -> {
-                                                if (sealed.isPresent()
-                                                        || cancelled.getAsBoolean()) {
-                                                    return CompletableFuture.completedFuture(
-                                                            sealed);
-                                                }
-                                                return attemptTurnBoundary(lanes, cancelled);
+                                            sealResult -> {
+                                                return awaitFinished(boundaries)
+                                                        .thenCompose(
+                                                                finished -> {
+                                                                    if (sealResult.isPresent()
+                                                                            || cancelled
+                                                                                    .getAsBoolean()) {
+                                                                        return CompletableFuture
+                                                                                .completedFuture(
+                                                                                        sealResult);
+                                                                    }
+                                                                    return attemptTurnBoundary(
+                                                                            lanes, cancelled);
+                                                                });
                                             });
                         });
     }
 
-    private Optional<Seal> trySealAtReservedBoundaries(
+    private CompletionStage<Optional<Seal>> trySealAtReservedBoundaries(
             Map<String, ZLinkSerialExecutionQueue> lanes,
             Map<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries) {
-        while (true) {
-            SealStart start =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new SealStart(null, transition);
-                                }
-                                if (active != null || committing) {
-                                    return new SealStart(null, null);
-                                }
-                                if (nextGeneration == Long.MAX_VALUE) {
-                                    throw new IllegalStateException(
-                                            "composite relocation generation exhausted");
-                                }
-                                CompletableFuture<Void> pending = new CompletableFuture<>();
-                                transition = pending;
-                                return new SealStart(new LinkedHashMap<>(lanes), pending);
-                            });
-            if (start.lanes() == null) {
-                if (start.pending() == null) {
-                    return Optional.empty();
-                }
-                awaitTransition(start.pending());
-                continue;
-            }
-            return sealOutsideTurn(start.lanes(), boundaries, start.pending());
-        }
-    }
-
-    public boolean abort(Seal seal) {
-        while (true) {
-            AbortStart start =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new AbortStart(null, transition);
-                                }
-                                if (committing || seal == null || seal != active) {
-                                    return new AbortStart(null, null);
-                                }
-                                CompletableFuture<Void> pending = new CompletableFuture<>();
-                                transition = pending;
-                                return new AbortStart(seal, pending);
-                            });
-            if (start.seal() == null) {
-                if (start.pending() == null) {
-                    return false;
-                }
-                awaitTransition(start.pending());
-                continue;
-            }
-            List<String> laneIds = new ArrayList<>(start.seal().lanes.keySet());
-            Collections.reverse(laneIds);
-            boolean restored = true;
-            try {
-                for (String laneId : laneIds) {
-                    restored &=
-                            start.seal()
-                                    .lanes
-                                    .get(laneId)
-                                    .abortRelocation(start.seal().seals.get(laneId));
-                }
-                if (!restored) {
-                    throw new IllegalStateException("composite relocation abort lost a lane fence");
-                }
-                inStateLane(
+        return stateLane
+                .runAsync(
                         () -> {
-                            if (active == start.seal()) {
-                                active = null;
+                            if (transition != null) {
+                                return new SealStart(null, transition);
                             }
-                            return null;
+                            if (active != null || committing) {
+                                return new SealStart(null, null);
+                            }
+                            if (nextGeneration == Long.MAX_VALUE) {
+                                throw new IllegalStateException(
+                                        "composite relocation generation exhausted");
+                            }
+                            CompletableFuture<Void> pending = new CompletableFuture<>();
+                            transition = pending;
+                            return new SealStart(new LinkedHashMap<>(lanes), pending);
+                        })
+                .thenComposeAsync(
+                        start -> {
+                            if (start.lanes() == null) {
+                                return start.pending() == null
+                                        ? CompletableFuture.completedFuture(Optional.empty())
+                                        : awaitTransition(start.pending())
+                                                .thenCompose(
+                                                        ignored ->
+                                                                trySealAtReservedBoundaries(
+                                                                        lanes, boundaries));
+                            }
+                            return sealOutsideTurn(
+                                    start.lanes(), boundaries, Map.of(), start.pending());
                         });
-                return true;
-            } finally {
-                finishTransition(start.pending());
+    }
+
+    public CompletionStage<Boolean> abort(Seal seal) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition != null) {
+                                return new AbortStart(null, transition);
+                            }
+                            if (committing || seal == null || seal != active) {
+                                return new AbortStart(null, null);
+                            }
+                            CompletableFuture<Void> pending = new CompletableFuture<>();
+                            transition = pending;
+                            return new AbortStart(seal, pending);
+                        })
+                .thenComposeAsync(start -> abortStarted(seal, start));
+    }
+
+    private CompletionStage<Boolean> abortStarted(Seal seal, AbortStart start) {
+        if (start.seal() == null) {
+            return start.pending() == null
+                    ? CompletableFuture.completedFuture(false)
+                    : awaitTransition(start.pending()).thenCompose(ignored -> abort(seal));
+        }
+        List<String> laneIds = new ArrayList<>(start.seal().lanes.keySet());
+        Collections.reverse(laneIds);
+        boolean restored = true;
+        try {
+            for (String laneId : laneIds) {
+                restored &=
+                        start.seal()
+                                .lanes
+                                .get(laneId)
+                                .abortRelocation(start.seal().seals.get(laneId));
             }
-        }
-    }
-
-    public Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>> commit(Seal seal) {
-        Optional<RelocationCommit> retained = retainCommit(seal);
-        if (retained.isEmpty()) {
-            return Optional.empty();
-        }
-        RelocationCommit commit = retained.orElseThrow();
-        RelocationCommit.Cut cut;
-        do {
-            cut = commit.cut();
-        } while (!commit.tryEstablishAndFinishCapture(cut));
-        commit.complete();
-        return Optional.of(cut.records());
-    }
-
-    public Optional<RelocationCommit> retainCommit(Seal seal) {
-        LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes;
-        while (true) {
-            RetainStart start =
-                    inStateLane(
+            if (!restored) {
+                throw new IllegalStateException("composite relocation abort lost a lane fence");
+            }
+            return stateLane
+                    .runAsync(
                             () -> {
-                                if (transition != null) {
-                                    return new RetainStart(null, transition);
+                                if (active == start.seal()) {
+                                    active = null;
                                 }
-                                if (committing || seal == null || seal != active) {
-                                    return new RetainStart(null, null);
-                                }
-                                committing = true;
-                                return new RetainStart(new LinkedHashMap<>(seal.lanes), null);
-                            });
-            if (start.lanes() != null) {
-                lanes = start.lanes();
-                break;
-            }
-            if (start.pending() == null) {
-                return Optional.empty();
-            }
-            awaitTransition(start.pending());
+                            })
+                    .handle(
+                            (ignored, failure) ->
+                                    finishTransition(start.pending())
+                                            .thenCompose(
+                                                    finished ->
+                                                            failure == null
+                                                                    ? CompletableFuture
+                                                                            .completedFuture(true)
+                                                                    : CompletableFuture
+                                                                            .<Boolean>failedFuture(
+                                                                                    failure)))
+                    .thenCompose(result -> result);
+        } catch (RuntimeException | Error failure) {
+            return finishTransition(start.pending())
+                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
+        }
+    }
+
+    public CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
+            commit(Seal seal) {
+        return retainCommit(seal)
+                .thenApplyAsync(
+                        retained -> {
+                            if (retained.isEmpty()) {
+                                return Optional.empty();
+                            }
+                            RelocationCommit commit = retained.orElseThrow();
+                            RelocationCommit.Cut cut;
+                            do {
+                                cut = commit.cut();
+                            } while (!commit.tryEstablishAndFinishCapture(cut));
+                            commit.complete();
+                            return Optional.of(cut.records());
+                        });
+    }
+
+    public CompletionStage<Optional<RelocationCommit>> retainCommit(Seal seal) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition != null) {
+                                return new RetainStart(null, transition);
+                            }
+                            if (committing || seal == null || seal != active) {
+                                return new RetainStart(null, null);
+                            }
+                            committing = true;
+                            return new RetainStart(new LinkedHashMap<>(seal.lanes), null);
+                        })
+                .thenComposeAsync(start -> retainCommitStarted(seal, start));
+    }
+
+    private CompletionStage<Optional<RelocationCommit>> retainCommitStarted(
+            Seal seal, RetainStart start) {
+        if (start.lanes() == null) {
+            return start.pending() == null
+                    ? CompletableFuture.completedFuture(Optional.empty())
+                    : awaitTransition(start.pending()).thenCompose(ignored -> retainCommit(seal));
         }
         LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
                 new LinkedHashMap<>();
         List<ZLinkRetainedSerialQueueCommit.Commit> retained = new ArrayList<>();
         try {
-            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : lanes.entrySet()) {
+            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : start.lanes().entrySet()) {
                 ZLinkRetainedSerialQueueCommit.Commit committed =
                         ZLinkRetainedSerialQueueCommit.retain(
                                         lane.getValue(), seal.seals.get(lane.getKey()))
@@ -341,15 +383,12 @@ public final class ZLinkCompositeRelocationBarrier {
                 held.put(lane.getKey(), committed.records());
             }
         } catch (RuntimeException failure) {
-            inStateLane(
-                    () -> {
-                        committing = false;
-                        return null;
-                    });
-            throw failure;
+            return stateLane
+                    .runAsync(() -> committing = false)
+                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
         }
-        boolean retainedActive =
-                inStateLane(
+        return stateLane
+                .runAsync(
                         () -> {
                             if (active != seal) {
                                 committing = false;
@@ -358,119 +397,126 @@ public final class ZLinkCompositeRelocationBarrier {
                             active = null;
                             committing = false;
                             return true;
-                        });
-        if (!retainedActive) {
-            return Optional.empty();
-        }
-        return Optional.of(new RelocationCommit(held, retained));
+                        })
+                .thenApply(
+                        retainedActive ->
+                                retainedActive
+                                        ? Optional.of(new RelocationCommit(held, retained))
+                                        : Optional.empty());
     }
 
-    public Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>> freezeIngress(
-            Seal seal) {
-        while (true) {
-            FreezeStart start =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new FreezeStart(null, transition);
-                                }
-                                if (committing || seal == null || seal != active) {
-                                    return new FreezeStart(null, null);
-                                }
-                                CompletableFuture<Void> pending = new CompletableFuture<>();
-                                transition = pending;
-                                return new FreezeStart(seal, pending);
-                            });
-            if (start.seal() == null) {
-                if (start.pending() == null) {
-                    return Optional.empty();
-                }
-                awaitTransition(start.pending());
-                continue;
+    public CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
+            freezeIngress(Seal seal) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition != null) {
+                                return new FreezeStart(null, transition);
+                            }
+                            if (committing || seal == null || seal != active) {
+                                return new FreezeStart(null, null);
+                            }
+                            CompletableFuture<Void> pending = new CompletableFuture<>();
+                            transition = pending;
+                            return new FreezeStart(seal, pending);
+                        })
+                .thenComposeAsync(start -> freezeIngressStarted(seal, start));
+    }
+
+    private CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
+            freezeIngressStarted(Seal seal, FreezeStart start) {
+        if (start.seal() == null) {
+            return start.pending() == null
+                    ? CompletableFuture.completedFuture(Optional.empty())
+                    : awaitTransition(start.pending()).thenCompose(ignored -> freezeIngress(seal));
+        }
+        try {
+            LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
+                    new LinkedHashMap<>();
+            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane :
+                    start.seal().lanes.entrySet()) {
+                held.put(
+                        lane.getKey(),
+                        lane.getValue()
+                                .freezeRelocationIngress(start.seal().seals.get(lane.getKey()))
+                                .orElseThrow(
+                                        () ->
+                                                new IllegalStateException(
+                                                        "composite relocation freeze lost a"
+                                                                + " lane fence")));
             }
-            try {
-                LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
-                        new LinkedHashMap<>();
-                for (Map.Entry<String, ZLinkSerialExecutionQueue> lane :
-                        start.seal().lanes.entrySet()) {
-                    held.put(
-                            lane.getKey(),
-                            lane.getValue()
-                                    .freezeRelocationIngress(start.seal().seals.get(lane.getKey()))
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "composite relocation freeze lost a"
-                                                                    + " lane fence")));
-                }
-                return Optional.of(Collections.unmodifiableMap(held));
-            } finally {
-                finishTransition(start.pending());
-            }
+            return finishTransition(start.pending())
+                    .thenApply(ignored -> Optional.of(Collections.unmodifiableMap(held)));
+        } catch (RuntimeException | Error failure) {
+            return finishTransition(start.pending())
+                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
         }
     }
 
     public <T> CompletionStage<T> runCapture(Seal seal, Supplier<CompletionStage<T>> capture) {
-        while (true) {
-            CaptureStart start =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new CaptureStart(false, transition);
-                                }
-                                if (committing || seal == null || seal != active) {
-                                    throw new IllegalStateException(
-                                            "capture requires the active relocation barrier"
-                                                    + " generation");
-                                }
-                                return new CaptureStart(true, null);
-                            });
-            if (start.accepted()) {
-                break;
-            }
-            awaitTransition(start.pending());
+        if (seal == null) {
+            throw new IllegalStateException(
+                    "capture requires the active relocation barrier generation");
         }
-        return Objects.requireNonNull(capture.get(), "capture result");
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition != null) {
+                                return new CaptureStart(false, transition);
+                            }
+                            if (committing || seal != active) {
+                                throw new IllegalStateException(
+                                        "capture requires the active relocation barrier"
+                                                + " generation");
+                            }
+                            return new CaptureStart(true, null);
+                        })
+                .thenComposeAsync(
+                        start ->
+                                start.accepted()
+                                        ? Objects.requireNonNull(capture.get(), "capture result")
+                                        : awaitTransition(start.pending())
+                                                .thenCompose(ignored -> runCapture(seal, capture)));
     }
 
     /** Returns the immutable accepted journal fixed by this active seal. */
-    public Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>> captured(Seal seal) {
-        List<Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal>> seals;
-        while (true) {
-            CapturedState state =
-                    inStateLane(
-                            () -> {
-                                if (transition != null) {
-                                    return new CapturedState(null, transition);
-                                }
-                                if (seal == null || seal != active) {
-                                    return new CapturedState(null, null);
-                                }
-                                return new CapturedState(
-                                        seal.lanes.keySet().stream()
-                                                .map(
-                                                        laneId ->
-                                                                Map.entry(
-                                                                        laneId,
-                                                                        seal.seals.get(laneId)))
-                                                .toList(),
-                                        null);
-                            });
-            if (state.seals() != null) {
-                seals = state.seals();
-                break;
-            }
-            if (state.pending() == null) {
-                return Optional.empty();
-            }
-            awaitTransition(state.pending());
+    public CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
+            captured(Seal seal) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (transition != null) {
+                                return new CapturedState(null, transition);
+                            }
+                            if (seal == null || seal != active) {
+                                return new CapturedState(null, null);
+                            }
+                            return new CapturedState(
+                                    seal.lanes.keySet().stream()
+                                            .map(
+                                                    laneId ->
+                                                            Map.entry(
+                                                                    laneId, seal.seals.get(laneId)))
+                                            .toList(),
+                                    null);
+                        })
+                .thenComposeAsync(state -> capturedAfterState(seal, state));
+    }
+
+    private CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
+            capturedAfterState(Seal seal, CapturedState state) {
+        if (state.seals() == null) {
+            return state.pending() == null
+                    ? CompletableFuture.completedFuture(Optional.empty())
+                    : awaitTransition(state.pending()).thenCompose(ignored -> captured(seal));
         }
         LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> captured =
                 new LinkedHashMap<>();
-        for (Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal> entry : seals) {
+        for (Map.Entry<String, ZLinkSerialExecutionQueue.RelocationSeal> entry : state.seals()) {
             captured.put(entry.getKey(), entry.getValue().captured());
         }
-        return Optional.of(Collections.unmodifiableMap(captured));
+        return CompletableFuture.completedFuture(
+                Optional.of(Collections.unmodifiableMap(captured)));
     }
 
     private static void rollback(
