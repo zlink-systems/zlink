@@ -384,9 +384,9 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | Nonblocking admission or reservation failed |
 
 After a successful request submit, exactly one terminal result is delivered by
-`zlink_completion_recv()` for each nonzero completion ID. A completion record doesn't carry
-an errno. When a binding expresses a result as an errno, it uses that result's first errno in
-this table.
+`zlink_completion_recv()` for each nonzero completion ID. A REQUEST completion has no request
+errno field. When a binding expresses a failed REQUEST result as an errno, it uses the first
+errno listed for that result in this table.
 
 ### 4. Receive result
 

@@ -370,8 +370,8 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | non-blocking admission 또는 reservation 실패 |
 
 Request submit 성공 뒤에는 nonzero completion ID마다 terminal result를 정확히 한 번
-`zlink_completion_recv()`로 전달한다. Completion record는 errno를 담지 않는다. Binding이 result를
-errno로 나타낼 때는 이 표에서 그 result의 첫 errno를 쓴다.
+`zlink_completion_recv()`로 전달한다. REQUEST completion에는 request errno 필드가 없다. Binding이
+실패한 REQUEST result를 errno로 나타낼 때는 이 표에서 해당 result의 첫 errno를 쓴다.
 
 ### 4. Receive result
 

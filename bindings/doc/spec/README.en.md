@@ -1685,9 +1685,14 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
    - A transport-style name such as `sendNoWait`, `recvNoWait`, or
      `publishNoWait` does not belong on the public surface.
 4. **Looking up `INTERNAL_ERROR` detail.**
-   - When the result code is in the `INTERNAL_ERROR` family (12, 105,
-     206, 306, 404, 505, 604, 704, and so on), the internal raw errno can
-     be looked up with `zlink_errno()`.
+   - When the result code is in the `INTERNAL_ERROR` family (12, 206,
+     306, 404, 505, 604, 704, and so on), the internal raw errno can be
+     looked up with `zlink_errno()`.
+   - A REQUEST completion result (1xx, including 105) isn't looked up with
+     `zlink_errno()`, because a completion carries no errno. The binding
+     uses the first errno of the Core
+     [Request completion result](../../../core/doc/spec/core/03-errors.en.md#3-request-completion-result)
+     table as that result's errno.
    - The binding's error type (an exception object for exception
      languages, an error value for return-based languages) exposes this
      through an `internalErrno`/`internal_errno` field (for debugging
@@ -2948,7 +2953,9 @@ Codes split into two layers.
 2. **Internal errno** — the internal raw errno looked up with
    `zlink_errno()`. Used to look up the detailed cause behind a coarse
    bucket such as `INTERNAL_ERROR`. A binding exposes this value through
-   an `internalErrno`/`internal_errno` field (for debugging only).
+   an `internalErrno`/`internal_errno` field (for debugging only). A
+   REQUEST completion result follows the `INTERNAL_ERROR` detail item
+   above.
 
 #### Public Result Enum Catalog
 
