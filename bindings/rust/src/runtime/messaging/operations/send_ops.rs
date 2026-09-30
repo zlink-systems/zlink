@@ -167,7 +167,7 @@ pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitEr
         .target
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+    let (rc, errno) = submit_owned_message(&mut op.parts, |parts, count| unsafe {
         if target.is_null() {
             ffi::zlink_send(
                 handle,
@@ -373,7 +373,7 @@ pub(super) fn submit_shared_message(
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
                 return Err(SubmitError::new(SubmitResult::InternalError, errno));
             }
-            if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part.raw_mut()) != 0 {
+            if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_msg_close(attempt.as_mut_ptr());
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
@@ -395,6 +395,30 @@ pub(super) fn submit_shared_message(
     unsafe {
         ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
     }
+    Ok((rc, errno))
+}
+
+/// Transfers builder-owned message parts to a synchronous Core terminal.
+/// Core consumes every input slot for every result.
+pub(super) fn submit_owned_message(
+    parts: &mut MessageParts,
+    submit: impl FnOnce(*mut ffi::zlink_msg_t, usize) -> i32,
+) -> Result<(i32, i32), SubmitError> {
+    if parts.is_empty() {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+
+    let count = parts.len();
+    let rc = submit(parts.as_mut_ptr(), count);
+    let errno = if rc == 0 {
+        0
+    } else {
+        unsafe { ffi::zlink_errno() }
+    };
+    parts.close_parts();
     Ok((rc, errno))
 }
 

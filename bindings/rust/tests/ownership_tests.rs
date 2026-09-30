@@ -266,6 +266,90 @@ fn request_future_preserves_more_than_1024_reply_parts() {
 }
 
 #[test]
+#[ignore = "requires the B-14 LD_PRELOAD message-copy counter shim"]
+fn blocking_send_and_reply_do_not_copy_message_parts() {
+    const OPERATION_ENV: &str = "ZLINK_AUDIT_OPERATION";
+    const MARKER_ENV: &str = "ZLINK_AUDIT_MARKER";
+
+    let ctx = Context::new().unwrap();
+
+    let receiver = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://own-sync-part-transfer").unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender.connect("inproc://own-sync-part-transfer").unwrap()
+    });
+
+    unsafe { std::env::set_var(OPERATION_ENV, "send") };
+    let send_result = sender
+        .send()
+        .message(Message::try_from(b"send-first").unwrap())
+        .message(Message::try_from(b"send-second").unwrap())
+        .submit_sync();
+    unsafe { std::env::remove_var(OPERATION_ENV) };
+    send_result.unwrap();
+
+    let mut received_send = Received::empty();
+    assert!(receiver.recv(&mut received_send, RecvFlags::NONE).unwrap());
+    assert_eq!(received_send.parts().len(), 2);
+    assert_eq!(received_send.parts()[0].as_bytes(), b"send-first");
+    assert_eq!(received_send.parts()[1].as_bytes(), b"send-second");
+
+    let router = ctx.router_socket().unwrap();
+    router.bind("inproc://own-sync-reply-transfer").unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let _dealer_completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://own-sync-reply-transfer").unwrap()
+    });
+
+    let request = dealer
+        .request()
+        .message(Message::try_from(b"request-payload").unwrap())
+        .submit()
+        .unwrap();
+    test_support::block_on(request.admitted).unwrap();
+    let reply_future = request.reply;
+
+    let mut received_request = Received::empty();
+    assert!(router.recv(&mut received_request, RecvFlags::NONE).unwrap());
+    let reply = received_request.reply();
+    let request_part = std::mem::take(&mut received_request)
+        .into_parts()
+        .into_iter()
+        .next()
+        .expect("request payload");
+
+    unsafe { std::env::set_var(OPERATION_ENV, "reply") };
+    let reply_result = reply
+        .message(request_part)
+        .message(Message::try_from(b"reply-second").unwrap())
+        .submit();
+    unsafe { std::env::remove_var(OPERATION_ENV) };
+    reply_result.unwrap();
+
+    let reply_parts = test_support::block_on(reply_future).unwrap();
+    assert_eq!(reply_parts.len(), 2);
+    assert_eq!(reply_parts[0].as_bytes(), b"request-payload");
+    assert_eq!(reply_parts[1].as_bytes(), b"reply-second");
+
+    let marker_path = std::env::var_os(MARKER_ENV).expect("fault-injection marker path");
+    let marker = std::fs::read_to_string(marker_path).expect("message-copy counter shim did not run");
+    let events = marker.lines().collect::<Vec<_>>();
+    assert!(events.contains(&"send:submit-send"));
+    assert!(events.contains(&"reply:submit-reply"));
+    assert!(events.contains(&"send:multipart-close-2"));
+    assert!(events.contains(&"reply:multipart-close-2"));
+    let send_copies = events.iter().filter(|event| **event == "send:copy").count();
+    let reply_copies = events.iter().filter(|event| **event == "reply:copy").count();
+    assert_eq!(
+        (send_copies, reply_copies),
+        (0, 0),
+        "synchronous SEND and REPLY copied message parts: {events:?}"
+    );
+}
+
+#[test]
 fn dropping_registered_timer_defers_native_destroy() {
     // Core rejects timer destruction while a poller registration remains. The
     // binding must retain the native handle and retry destruction after the
