@@ -106,8 +106,10 @@ std::optional<std::chrono::system_clock::time_point> parse_utc_deadline (std::st
     } else {
         return std::nullopt;
     }
-    return std::chrono::sys_days{date} + std::chrono::hours{*hour} + std::chrono::minutes{*minute}
-           + std::chrono::seconds{*second} + std::chrono::nanoseconds{fraction} - offset;
+    // system_clock::duration is coarser than nanoseconds on MSVC and libc++.
+    return std::chrono::floor<std::chrono::system_clock::duration> (
+      std::chrono::sys_days{date} + std::chrono::hours{*hour} + std::chrono::minutes{*minute}
+      + std::chrono::seconds{*second} + std::chrono::nanoseconds{fraction} - offset);
 }
 
 envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
