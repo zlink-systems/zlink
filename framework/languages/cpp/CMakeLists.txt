@@ -1607,6 +1607,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_relocation_seal_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+    "framework-unit;framework-contract;framework-actor;stream;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_relocation_seal_contract)
+  target_include_directories(test_cpp_framework_relocation_seal_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_session_seal_relay
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_session_seal_relay.cpp
+    "framework-unit;framework-contract;framework-actor;stream;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_session_seal_relay)
+  target_include_directories(test_cpp_framework_session_seal_relay PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(reconcile_case source no-commit target indeterminate)
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_reconcile_${reconcile_case}

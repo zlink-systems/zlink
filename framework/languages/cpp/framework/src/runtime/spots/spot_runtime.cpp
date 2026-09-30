@@ -601,10 +601,13 @@ std::string actor_request_dedup_prefix (std::string_view actor_key)
     return std::to_string (actor_key.size ()) + ":" + std::string (actor_key);
 }
 
-std::string actor_request_dedup_key (std::string_view actor_key, std::string_view request_id)
+std::string actor_request_dedup_key (std::string_view actor_key,
+                                     const runtime::protocol::wire_operation_id_t &operation)
 {
     auto result = actor_request_dedup_prefix (actor_key);
-    result.append (request_id);
+    result += std::to_string (operation.high);
+    result += ":";
+    result += std::to_string (operation.low);
     return result;
 }
 
@@ -6048,16 +6051,13 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
         metadata.values = std::move (packet.metadata);
         const auto terminal_route =
           packet.is_request ? handoff_terminal_route (metadata.values) : std::nullopt;
-        std::string replay_request_id;
-        if (packet.is_request) {
-            const auto id_it = metadata.values.find ("__zlink.actorRequestId");
-            if (id_it != metadata.values.end () && !id_it->second.empty ()) {
-                replay_request_id = id_it->second;
-                const auto claim = _state->dispatched_request_replies.claim (
-                  actor_request_dedup_key (key, replay_request_id));
-                if (claim.state != runtime::exactly_once_claim_state::claimed)
-                    continue;
-            }
+        const auto replay_operation =
+          terminal_route ? std::make_optional (terminal_route->operation) : std::nullopt;
+        if (replay_operation) {
+            const auto claim = _state->dispatched_request_replies.claim (
+              actor_request_dedup_key (key, *replay_operation));
+            if (claim.state != runtime::exactly_once_claim_state::claimed)
+                continue;
         }
         const auto kind =
           packet.is_request ? spot_handler_kind_t::actor_request : spot_handler_kind_t::actor_send;
@@ -6082,8 +6082,8 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
                                                           error.what ());
         }
-        if (!replay_request_id.empty ()) {
-            const auto dedup_key = actor_request_dedup_key (key, replay_request_id);
+        if (replay_operation) {
+            const auto dedup_key = actor_request_dedup_key (key, *replay_operation);
             if (result)
                 (void) _state->dispatched_request_replies.complete (dedup_key, result.value ());
             else
@@ -12174,27 +12174,20 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     const auto handler_kind = message_kind == stream_message_kind_t::send
                                 ? spot_handler_kind_t::actor_send
                                 : spot_handler_kind_t::actor_request;
-    // §10.2-1 exactly-once: a request preserved during the move and also retried
-    // by the sender (or replayed by the commit) carries a stable id. The first
-    // arrival dispatches; a repeat returns the cached reply (or fails retriable
-    // while that first dispatch is still in flight so the sender re-polls).
-    std::string dedup_request_id;
-    if (message_kind == stream_message_kind_t::request) {
-        const auto id_it = metadata.values.find ("__zlink.actorRequestId");
-        if (id_it != metadata.values.end () && !id_it->second.empty ()) {
-            dedup_request_id = id_it->second;
-            const auto claim = _state->dispatched_request_replies.claim (
-              actor_request_dedup_key (key, dedup_request_id));
-            if (claim.state == runtime::exactly_once_claim_state::completed) {
-                if (claim.value) {
-                    co_return result_t<std::optional<zlink::message_t>>::success (*claim.value);
-                }
-            }
-            if (claim.state == runtime::exactly_once_claim_state::pending) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::unavailable, "actor request dispatch is in flight");
-            }
-        }
+    // Submit §6: terminal identity is the complete original OperationId.
+    const auto terminal_route = message_kind == stream_message_kind_t::request
+                                  ? handoff_terminal_route (metadata.values)
+                                  : std::nullopt;
+    const auto dedup_operation =
+      terminal_route ? std::make_optional (terminal_route->operation) : std::nullopt;
+    if (dedup_operation) {
+        const auto claim = _state->dispatched_request_replies.claim (
+          actor_request_dedup_key (key, *dedup_operation));
+        if (claim.state == runtime::exactly_once_claim_state::completed && claim.value)
+            co_return result_t<std::optional<zlink::message_t>>::success (*claim.value);
+        if (claim.state == runtime::exactly_once_claim_state::pending)
+            co_return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::unavailable, "actor request dispatch is in flight");
     }
     // In-flight request window for the transfer pending sample (runtime-metrics
     // §4.3): counted from dispatch start until the reply (or error) is produced,
@@ -12265,9 +12258,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     }
     catch (const framework_exception_t &error) {
         if (actor_handoff_fence_refused && fence_divert_packet) {
-            if (!dedup_request_id.empty ()) {
+            if (dedup_operation) {
                 (void) state_owner->dispatched_request_replies.erase (
-                  actor_request_dedup_key (key, dedup_request_id));
+                  actor_request_dedup_key (key, *dedup_operation));
             }
             const auto diverted = _state->actor_transfer_coordinator.try_append_backlog (
               key, std::move (*fence_divert_packet));
@@ -12304,23 +12297,23 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                              detail::failure_origin_t::actor_transfer_in_progress,
                                              "actor transfer is in progress"));
         }
-        if (!dedup_request_id.empty ()) {
+        if (dedup_operation) {
             (void) state_owner->dispatched_request_replies.erase (
-              actor_request_dedup_key (key, dedup_request_id));
+              actor_request_dedup_key (key, *dedup_operation));
         }
         co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
     }
     catch (const std::exception &error) {
-        if (!dedup_request_id.empty ()) {
+        if (dedup_operation) {
             (void) state_owner->dispatched_request_replies.erase (
-              actor_request_dedup_key (key, dedup_request_id));
+              actor_request_dedup_key (key, *dedup_operation));
         }
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
-    if (!dedup_request_id.empty ()) {
+    if (dedup_operation) {
         (void) state_owner->dispatched_request_replies.complete (
-          actor_request_dedup_key (key, dedup_request_id), reply);
+          actor_request_dedup_key (key, *dedup_operation), reply);
     }
     co_return result_t<std::optional<zlink::message_t>>::success (std::move (reply));
 }
@@ -14919,6 +14912,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                            terminal_claimed, terminal_owner] {
                 if (terminal_claimed->exchange (true, std::memory_order_acq_rel))
                     return;
+                std::exception_ptr reply_failure;
                 try {
                     detail::channel_reply_writer_t writer;
                     const auto reply = writer.reply_raw_envelope (
@@ -14928,8 +14922,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     (void) service::reply (reply_token, reply.items ());
                 }
                 catch (...) {
+                    reply_failure = std::current_exception ();
                 }
                 (*terminal_owner) ();
+                if (reply_failure)
+                    std::rethrow_exception (reply_failure);
             };
         }
         auto relayed = [&] {
@@ -14937,10 +14934,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               .content_type = header.value ().content_type, .values = header.value ().metadata};
             if (record.kind == service::record_kind_t::actor_request
                 && !header.value ().correlation_id.empty ()) {
-                // The correlation is the request's stable id across a stale-route
-                // retry and handoff replay. Keep it in the internal metadata so
-                // the target exactly-once table sees both delivery paths as the
-                // same request.
+                // Application correlation remains distinct from the service
+                // OperationId used for terminal deduplication.
                 relay_metadata.values.insert_or_assign ("__zlink.actorRequestId",
                                                         header.value ().correlation_id);
             }

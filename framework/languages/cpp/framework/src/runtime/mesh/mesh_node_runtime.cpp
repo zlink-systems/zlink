@@ -3516,7 +3516,8 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
   const zlink::message_t &payload,
   std::chrono::milliseconds timeout,
   bool await_remote_admission,
-  std::optional<bound_session_relay_source_t> bound_session_source)
+  std::optional<bound_session_relay_source_t> bound_session_source,
+  runtime::protocol::actor_route_fence_t stale_route)
 {
     runtime::messaging::client_call_codec_t codec;
     const auto kind = header.kind () == stream_message_kind_t::send
@@ -3526,9 +3527,14 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
       codec.create_envelope (kind, "actor", std::string (header.packet_name ()), timeout);
     envelope.content_type = std::string (stream_content_type (header.codec ()));
     envelope.metadata = header.metadata ().values ();
+    if (const auto correlation = header.correlation_id ())
+        envelope.correlation_id = std::string (*correlation);
+    if (const auto flow = header.flow_id ())
+        envelope.flow_id = std::string (*flow);
+    envelope.flow_origin = header.flow_origin ();
     co_return co_await relay_application_actor (
       actor, envelope, payload, timeout, zlink::routing_id_t::from (std::uint32_t{0}),
-      runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0,
+      std::move (stale_route), 0, runtime::protocol::wire_operation_id_t{}, 0,
       await_remote_admission, std::move (bound_session_source));
 }
 
@@ -3620,6 +3626,19 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             if (header.kind == runtime::messaging::message_kind_t::request
                 && !header.correlation_id.empty ()) {
                 metadata.values.insert_or_assign ("__zlink.actorRequestId", header.correlation_id);
+            }
+            if (header.kind == runtime::messaging::message_kind_t::request
+                && (original_operation.high != 0 || original_operation.low != 0)) {
+                metadata.values[std::string (detail::actor_handoff_source_node_key)] =
+                  source_node.to_hex ();
+                metadata.values[std::string (detail::actor_handoff_parking_node_key)] =
+                  local_routing_id->to_hex ();
+                metadata.values[std::string (detail::actor_handoff_operation_high_key)] =
+                  std::to_string (original_operation.high);
+                metadata.values[std::string (detail::actor_handoff_operation_low_key)] =
+                  std::to_string (original_operation.low);
+                metadata.values[std::string (detail::actor_handoff_reply_route_key)] =
+                  std::to_string (original_reply_route_id);
             }
             metadata.values[std::string (message_follow_path_key)] =
               std::move (follow_path.value ().encoded);
