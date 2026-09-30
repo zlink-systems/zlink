@@ -6,7 +6,7 @@ const test = require('node:test');
 const fixture = path.join(__dirname, 'fixtures', 'bound-session-relocation-process.js');
 
 test(
-  'two processes retain the post-Join completion until exact command 44 route publication',
+  'two processes deliver the post-Join push before exact command 44 route publication',
   { timeout: 30_000 },
   async (t) => {
     const children = [];
@@ -28,12 +28,12 @@ test(
     assert.equal(
       completion.status,
       'submitted',
-      'retained completion push has an immediate success terminal'
+      'completion push has an immediate success terminal'
     );
     assert.deepEqual(
       await session.command('status'),
-      { writes: 0, command42: 1, command44: 0 },
-      'completion remains retained while the exact Session seal is active'
+      { writes: 1, command42: 1, command44: 0 },
+      'completion reaches the Session while its relocation seal is active'
     );
 
     assert.deepEqual(await target.command('commit'), {

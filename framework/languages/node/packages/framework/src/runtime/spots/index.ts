@@ -2755,8 +2755,8 @@ export class DefaultZLinkSpotManager {
             );
             await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
           };
-          // Session routing is an independent post-Ready branch. Callback
-          // sends are retained by the Session owner seal until this converges.
+          // Session routing is an independent post-Ready branch. The Session
+          // owner submits current-binding pushes while the route seal remains installed.
           if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
             this.options.detachedTaskRunner.runDetached(
               `actor transfer Session route ${actor.context.actorId}`,

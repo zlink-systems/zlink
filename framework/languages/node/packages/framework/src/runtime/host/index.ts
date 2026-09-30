@@ -411,6 +411,7 @@ export class ZLinkFrameworkRuntimeHost
       rewriteAuthorityPayloadForOwner
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
+      dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink),
       streamPayloadCodec: resolveStreamPayloadCodec(options.registration),
       streamCompression: options.registration.streamCompression,
       messageSerializers: options.registration.messageSerializers,
