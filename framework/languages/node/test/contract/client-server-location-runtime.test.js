@@ -1827,11 +1827,11 @@ test('periodic ClientServer discovery failures remain observable on location run
   await runtime.stop();
 });
 
-function readyWaitSockets(requestTimeoutMs) {
+function readyWaitSockets(requestTimeoutMs, sendTimeoutMs) {
   const registration = internal.createFrameworkRegistration({
     channels: {
       orders: {
-        client: { manualConnections: [] },
+        client: { manualConnections: [], sendTimeoutMs },
         requestTimeoutMs
       }
     },
@@ -1864,8 +1864,8 @@ function readyWaitSockets(requestTimeoutMs) {
   return { sockets, dealer, created, registration };
 }
 
-function readyWaitClient(t, channelTimeoutMs = 60_000) {
-  const fixture = readyWaitSockets(channelTimeoutMs);
+function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
+  const fixture = readyWaitSockets(channelTimeoutMs, sendTimeoutMs);
   const outbound = new ZLinkChannelOutboundOperations(
     fixture.sockets,
     { serializers: fixture.registration.messageSerializers },
@@ -1883,210 +1883,161 @@ function readyWaitClient(t, channelTimeoutMs = 60_000) {
   };
 }
 
-for (const knownTarget of [false, true]) {
-  test(`ClientServer call deadline bounds a short timeout with ${knownTarget ? 'a weight-zero' : 'no known'} server`, async (t) => {
-    const { request, dealer, sockets } = readyWaitClient(t);
-    if (knownTarget) {
-      sockets.admitClientServerConnection(discoveryDescriptor('server-a', 0), 'orders-a:7');
-    }
-    assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
+// Framework API #channel-selection-result and Submit/completion §7 own these expectations.
+for (const sendTimeoutMs of [undefined, 45]) {
+  test(`ClientServer readiness uses ${sendTimeoutMs ?? 'default'} send timeout independently of request timeout`, async (t) => {
+    const { request, dealer } = readyWaitClient(t, 5, sendTimeoutMs);
     const submitted = t.mock.method(dealer, 'request');
-    const startedAt = performance.now();
-    await assert.rejects(request(200), {
-      kind: framework.ZLinkFrameworkErrorKind.Unavailable
-    });
-    const elapsed = performance.now() - startedAt;
-    // The extra 50 ms permits event-loop scheduling after the 200 ms deadline, not another wait budget.
-    assert.ok(elapsed >= 200 && elapsed < 250, `200 ms call finished after ${elapsed} ms`);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let settled = false;
+    const pending = request(5);
+    pending.then(() => { settled = true; }, () => { settled = true; });
+    t.mock.timers.tick((sendTimeoutMs ?? 1_000) - 1);
+    await Promise.resolve();
+    assert.equal(settled, false);
+    t.mock.timers.tick(1);
+    await assert.rejects(pending, { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+    assert.equal(dealer.sendTimeoutMs, sendTimeoutMs ?? 1_000);
     assert.equal(submitted.mock.callCount(), 0);
   });
 }
 
-test('ClientServer call deadline gives a server admitted after 100 ms only the remaining time', async (t) => {
+for (const state of ['serving', 'retiring']) {
+  test(`ClientServer ready ${state} weight-zero member fails immediately as Unavailable`, async (t) => {
+    const { request, dealer, sockets } = readyWaitClient(t);
+    sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 0), state }, 'orders-a:7');
+    const submitted = t.mock.method(dealer, 'request');
+    const timer = t.mock.method(global, 'setTimeout');
+    await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    // The public request keepalive is the only timer; admission creates no waiting timer.
+    assert.deepEqual(timer.mock.calls.map(call => call.arguments[1]), [0x7fff_ffff]);
+    assert.equal(submitted.mock.callCount(), 0);
+  });
+}
+
+test('ClientServer readiness preserves the full request timeout after late admission', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  let nowMs = 0;
-  t.mock.method(performance, 'now', () => nowMs);
-  // A shorter Channel default must not truncate the explicit 200 ms call either.
-  const { request, dealer, admit } = readyWaitClient(t, 50);
-  let submittedAfterMs;
+  t.mock.method(Date, 'now', () => 1_000);
+  const { request, dealer, admit } = readyWaitClient(t, 5, 500);
   let submittedTimeoutMs;
-  let admittedAfterMs;
-  const startedAt = performance.now();
   dealer.request = async (parts, timeoutMs) => {
-    assert.equal(Number.isInteger(timeoutMs), true, 'binding request timeout must be integer milliseconds');
-    submittedAfterMs = performance.now() - startedAt;
     submittedTimeoutMs = timeoutMs;
     const messages = parts.map(part => zlink.Message.from(part));
     try {
       const header = channelEnvelope.decodeChannelHeader(messages);
+      assert.equal(header.deadline, new Date(1_050).toISOString());
       return channelEnvelope.encodeChannelReplyParts(header, { found: true })
         .map(part => zlink.Message.from(part));
     } finally {
       channelEnvelope.closeMessages(messages);
     }
   };
-  const admission = setTimeout(() => {
-    admittedAfterMs = performance.now() - startedAt;
-    admit();
-  }, 100);
-  t.after(() => clearTimeout(admission));
-  const pending = request(200);
-  nowMs = 100;
+  setTimeout(admit, 100);
+  const pending = request(50);
   t.mock.timers.tick(100);
   assert.deepEqual(await pending, { found: true });
-  assert.equal(admittedAfterMs, 100);
-  assert.equal(submittedTimeoutMs, 100);
-  assert.equal(submittedAfterMs + submittedTimeoutMs, 200);
+  assert.equal(submittedTimeoutMs, 50);
 });
 
-test('ClientServer call deadline still expires at submission plus timeout after late admission', async (t) => {
-  const { request, dealer, admit } = readyWaitClient(t);
+test('ClientServer request timeout has one terminal after admission and a full reply budget', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { request, dealer, admit } = readyWaitClient(t, 5, 500);
   let attempts = 0;
+  let entered;
+  const submitted = new Promise(resolve => { entered = resolve; });
   dealer.request = async (_parts, timeoutMs) => {
-    assert.equal(Number.isInteger(timeoutMs), true, 'binding request timeout must be integer milliseconds');
     attempts++;
+    entered();
+    assert.equal(timeoutMs, 50);
     await new Promise(resolve => setTimeout(resolve, timeoutMs));
     throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
   };
-  const admission = setTimeout(admit, 100);
-  t.after(() => clearTimeout(admission));
-  const startedAt = performance.now();
-  await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
-  const elapsed = performance.now() - startedAt;
-  assert.ok(elapsed >= 195 && elapsed < 250, `200 ms call finished after ${elapsed} ms`);
+  setTimeout(admit, 100);
+  const pending = request(50);
+  t.mock.timers.tick(100);
+  await submitted;
+  assert.equal(attempts, 1);
+  let settled = false;
+  pending.then(() => { settled = true; }, () => { settled = true; });
+  t.mock.timers.tick(49);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  await assert.rejects(pending, { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
   assert.equal(attempts, 1);
 });
 
-test('ClientServer call deadline rejects a target selected after the deadline without submitting', async (t) => {
-  const { request, dealer, sockets, admit } = readyWaitClient(t);
-  let nowMs = 0;
-  t.mock.method(performance, 'now', () => nowMs);
-  const select = sockets.clientDealerForOutbound.bind(sockets);
-  t.mock.method(sockets, 'clientDealerForOutbound', channelName => {
-    const selected = select(channelName);
-    nowMs = 200;
-    return selected;
-  });
-  const submitted = t.mock.method(dealer, 'request');
-  admit();
-  await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
-  assert.equal(performance.now(), 200);
-  assert.equal(submitted.mock.callCount(), 0);
-});
-
-test('ClientServer call deadline caps a long per-call ready wait at five seconds', { timeout: 7_000 }, async (t) => {
-  const { request, dealer } = readyWaitClient(t, 50);
-  const submitted = t.mock.method(dealer, 'request');
-  const startedAt = performance.now();
-  await assert.rejects(request(60_000), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
-  const elapsed = performance.now() - startedAt;
-  assert.ok(elapsed >= 5_000 && elapsed < 5_500, `5 s ready cap finished after ${elapsed} ms`);
-  assert.equal(submitted.mock.callCount(), 0);
-});
-
-test('ClientServer send target waits for admission already in flight instead of failing at once', async () => {
-  const { sockets, dealer, created } = readyWaitSockets(60_000);
-  assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
-  assert.equal(created.length, 1);
-
-  const startedAt = performance.now();
-  let admittedAfterMs;
-  const admission = setTimeout(() => {
-    admittedAfterMs = performance.now() - startedAt;
-    sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'orders-a:7');
-  }, 40);
-  const selected = await sockets.awaitClientDealerForOutbound('orders');
-  clearTimeout(admission);
-  const elapsed = performance.now() - startedAt;
-
-  assert.equal(selected, dealer);
-  // A wait that did not yield to the event loop would starve this timer, which stands in for the
-  // monitor callbacks that carry real admission, and would fail after burning the whole bound.
-  assert.equal(typeof admittedAfterMs, 'number');
-  assert.ok(elapsed < 5_000, `expected admission to end the wait early, waited ${elapsed}ms`);
-  // The wait observes admission already in flight and never starts one, so it opens no connection.
-  assert.equal(created.length, 1);
-  await sockets.dispose();
-});
-
-test('ClientServer send target waits the Channel request timeout when only a weight 0 candidate exists', async () => {
-  const { sockets } = readyWaitSockets(120);
-  sockets.admitClientServerConnection(discoveryDescriptor('server-a', 0), 'orders-a:7');
-  assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
-
-  const startedAt = performance.now();
-  const selected = await sockets.awaitClientDealerForOutbound('orders');
-  const elapsed = performance.now() - startedAt;
-
-  assert.equal(selected, undefined);
-  assert.ok(elapsed >= 120, `expected the configured request timeout to bound the wait, waited ${elapsed}ms`);
-  assert.ok(elapsed < 5_000, `expected the shorter request timeout to win over the 5s cap, waited ${elapsed}ms`);
-  await sockets.dispose();
-});
-
-test('ClientServer send target caps the readiness wait at five seconds', async () => {
-  const { sockets } = readyWaitSockets(60_000);
-
-  const startedAt = performance.now();
-  const selected = await sockets.awaitClientDealerForOutbound('orders');
-  const elapsed = performance.now() - startedAt;
-
-  assert.equal(selected, undefined);
-  assert.ok(elapsed >= 5_000, `expected the five second cap to bound the wait, waited ${elapsed}ms`);
-  assert.ok(elapsed < 8_000, `expected the cap to end the wait, waited ${elapsed}ms`);
-  await sockets.dispose();
-});
-
-for (const [direction, jumpMs] of [['forward', 10_000], ['backward', -10_000]]) {
-  test(`ClientServer readiness cap survives a wall-clock jump ${direction}`, { timeout: 10_000 }, async (t) => {
-    const { sockets } = readyWaitSockets(60_000);
-    const wallNow = Date.now.bind(Date);
-    let offsetMs = 0;
-    t.mock.method(Date, 'now', () => wallNow() + offsetMs);
-    const jump = setTimeout(() => { offsetMs = jumpMs; }, 40);
-    t.after(async () => {
-      clearTimeout(jump);
-      await sockets.dispose();
+for (const sendTimeoutMs of [undefined, 75]) {
+  test(`classic fanout PUB exposes creation send timeout ${sendTimeoutMs ?? 'default'}`, async () => {
+    const registration = internal.createFrameworkRegistration({
+      channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } }
     });
-
-    const startedAt = performance.now();
-    const selected = await sockets.awaitClientDealerForOutbound('orders', t.signal);
-    const elapsed = performance.now() - startedAt;
-
-    assert.equal(offsetMs, jumpMs);
-    assert.equal(selected, undefined);
-    assert.ok(elapsed >= 5_000, `expected the five second cap to bound the wait, waited ${elapsed}ms`);
-    assert.ok(elapsed < 8_000, `expected the cap to end the wait, waited ${elapsed}ms`);
+    const adapter = new ZLinkNodeBackendAdapterFactory().createChannelAdapter();
+    const context = adapter.createContext();
+    const sockets = new ZLinkChannelSocketRegistry(registration, adapter, context);
+    try {
+      const publisher = sockets.publisher('events');
+      assert.equal(publisher.sendTimeoutMs, sendTimeoutMs ?? 1_000);
+      assert.equal(sockets.publisher('events'), publisher);
+      assert.equal(publisher.sendTimeoutMs, sendTimeoutMs ?? 1_000);
+    } finally {
+      await sockets.dispose();
+      await context.dispose();
+    }
   });
 }
 
-test('ClientServer outbound reports no selectable target as Unavailable', async () => {
+for (const sendTimeoutMs of [0, -1, Infinity, 2_147_483_648]) {
+  test(`classic fanout publisher rejects invalid send timeout ${sendTimeoutMs}`, () => {
+    assert.throws(() => internal.createFrameworkRegistration({
+      channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } }
+    }), /sendTimeoutMs/);
+  });
+}
+
+test('ClientServer readiness wakes on discovery admission and unregisters after selection', async (t) => {
+  const { sockets, dealer, created } = readyWaitSockets(5, 500);
+  t.after(() => sockets.dispose());
+  const selected = t.mock.method(sockets, 'clientDealerForOutbound');
+  const drains = t.mock.method(sockets, 'drainSocketMonitors');
+  const pending = sockets.awaitClientDealerForOutbound('orders');
+  sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'orders-a:7');
+  assert.equal(await pending, dealer);
+  const calls = selected.mock.callCount();
+  sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 100), descriptorRevision: 2n }, 'orders-a:7');
+  assert.equal(selected.mock.callCount(), calls);
+  assert.equal(drains.mock.callCount(), 0);
+  assert.equal(created.length, 1);
+});
+
+test('ClientServer readiness cancellation and shutdown release change listeners', async (t) => {
+  const { sockets } = readyWaitSockets(5, 500);
+  const selected = t.mock.method(sockets, 'clientDealerForOutbound');
+  const controller = new AbortController();
+  const cancelled = sockets.awaitClientDealerForOutbound('orders', controller.signal);
+  controller.abort();
+  await assert.rejects(cancelled, { name: 'AbortError' });
+  const calls = selected.mock.callCount();
+  sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 100), state: 'preparing' }, 'orders-a:7');
+  assert.equal(selected.mock.callCount(), calls);
+  const shutdown = sockets.awaitClientDealerForOutbound('orders');
+  const rejected = assert.rejects(shutdown, { kind: framework.ZLinkFrameworkErrorKind.ShuttingDown });
+  await sockets.dispose();
+  await rejected;
+});
+
+test('ClientServer outbound without ready targets reports admission DeadlineExceeded', async () => {
   const registration = internal.createFrameworkRegistration({
-    channels: {
-      orders: {
-        client: { manualConnections: [] },
-        requestTimeoutMs: 60
-      }
-    },
+    channels: { orders: { client: { manualConnections: [], sendTimeoutMs: 30 }, requestTimeoutMs: 5 } },
     locations: { useInMemoryStores: true }
   });
-  const manager = new internal.ZLinkChannelRuntimeManager(
-    registration,
-    {},
-    { nativeInstance: {}, shutdown() {}, async dispose() {} }
-  );
-
-  assert.deepEqual(
-    await manager.send('orders', 'Notice', { id: 1 }),
-    { status: submissionResult.ZLinkSubmitStatus.RouteNotConnected }
-  );
-  await assert.rejects(
-    () => manager.request('orders', 'Lookup', { id: 1 }, 60),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
-      && !('isRetriable' in error)
-  );
-  await manager.dispose();
+  const manager = new internal.ZLinkChannelRuntimeManager(registration, {}, { nativeInstance: {}, shutdown() {}, async dispose() {} });
+  try {
+    assert.deepEqual(await manager.send('orders', 'Notice', { id: 1 }), { status: submissionResult.ZLinkSubmitStatus.TimedOut });
+    await assert.rejects(() => manager.request('orders', 'Lookup', { id: 1 }, 5), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+  } finally {
+    await manager.dispose();
+  }
 });
 
 test('ClientServer outbound reports a missing Client role as NotConfigured', async () => {

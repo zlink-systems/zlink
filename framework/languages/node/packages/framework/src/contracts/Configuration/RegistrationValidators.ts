@@ -232,6 +232,10 @@ function validateChannelCapabilities(
       requireSocketOptions(`channel '${channelName}' server`, channel.server);
     }
     if (channel.publisher !== undefined) {
+      requireValidSendTimeoutMs(
+        `channel '${channelName}' publisher sendTimeoutMs`,
+        channel.publisher.sendTimeoutMs
+      );
       requireEndpoint(`channel '${channelName}' publisher`, channel.publisher.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' publisher`,

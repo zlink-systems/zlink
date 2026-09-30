@@ -150,7 +150,11 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
       << "peer did not receive the runtime weight-zero descriptor update";
     const protocol::application_payload_t rejected{"WeightRequest", "application/json",
                                                    bytes ("request")};
-    EXPECT_FALSE (await_task (source.request_to_channel ("X", rejected, 2s, [] (auto, auto) {})));
+    const auto rejected_request =
+      source.request_to_channel ("X", rejected, 2s, [] (auto, auto) {}).result ();
+    EXPECT_FALSE (rejected_request);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable,
+               rejected_request.error_kind ());
 
     target_node.set_channel_weight ("X", 100);
     ASSERT_TRUE (pump_until (

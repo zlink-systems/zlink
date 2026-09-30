@@ -39,7 +39,7 @@ public sealed class RouteMeshReceiveFlowTests
 
         var lease = await queue.AcquireAsync(CancellationToken.None);
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowPaused);
-        lease.ReleaseForHandlerStart();
+        await lease.ReleaseForHandlerStartAsync();
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowResumed);
 
         await node.DisposeAsync();

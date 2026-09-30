@@ -138,6 +138,7 @@ struct raw_client_server_client_options_t
     zlink::poller_t *transport_poller = nullptr;
     std::uintptr_t transport_poller_slot = 0;
     std::shared_ptr<application_job_queue_t> application_jobs;
+    std::optional<std::chrono::milliseconds> send_timeout;
 };
 
 class raw_client_server_client_t
@@ -166,8 +167,7 @@ class raw_client_server_client_t
     task_t<std::size_t> last_pump_bytes_task () const;
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
-    task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload,
-                                         std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload);
     task_t<client_server_request_completion_t>
     request (const protocol::application_payload_t &payload, std::chrono::milliseconds timeout);
     std::size_t pending_request_count () const noexcept;

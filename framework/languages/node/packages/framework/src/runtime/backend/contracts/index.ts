@@ -435,27 +435,6 @@ export interface ZLinkBackendActorRecvInfo {
   readonly flags: number;
 }
 
-export interface ZLinkBackendActorJoinInfo {
-  readonly sourceActor: ZLinkBackendActorRef;
-  readonly targetActor: ZLinkBackendActorRef;
-  readonly sourceNodeRid: RoutingId;
-  readonly sourceSpotId: RoutingId;
-  readonly targetNodeRid: RoutingId;
-  readonly targetSpotId: RoutingId;
-  readonly joinEpoch: bigint;
-  readonly flags: number;
-}
-
-export interface ZLinkBackendActorJoinRequest {
-  readonly info: ZLinkBackendActorJoinInfo;
-  readonly message: Message;
-}
-
-export interface ZLinkBackendActorJoinReplyOperation {
-  message(message: Message): ZLinkBackendActorJoinReplyOperation;
-  submit(): void;
-}
-
 export interface ZLinkBackendSpotDispatchInfo {
   readonly event: ZLinkBackendSpotDispatchEvent;
   readonly subjectKind?: number;
@@ -563,6 +542,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
 }
 
 export interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
+  sendTimeoutMs: number;
   sendHighWaterMark: number;
   noDrop: boolean;
   publish(topic: string, message: Message | readonly Message[]): void;
@@ -734,11 +714,6 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
     payload: Message | readonly Message[],
     timeoutMs?: number
   ): Promise<readonly Message[]>;
-  recvActorJoin(flags: ZLinkBackendRecvFlags): ZLinkBackendActorJoinRequest | null;
-  replyActorJoin(
-    request: ZLinkBackendActorJoinRequest,
-    joinResultCode: number
-  ): ZLinkBackendActorJoinReplyOperation;
   dispose(): Promise<void>;
 }
 
