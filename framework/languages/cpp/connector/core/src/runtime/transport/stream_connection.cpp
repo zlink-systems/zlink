@@ -321,11 +321,9 @@ void connect_tls_async (
 
 bool is_transport_connected (const connector_state_t &state)
 {
-    // The lifecycle state and connection pointer are protected by the caller's
-    // transport/lifecycle lock. Calling the serialized transport query here
-    // would pump the shared io_context while that lock is held and can run a
-    // completion that needs the same lock.
-    return state.state == connection_state_t::connected && state.connection != nullptr;
+    // Lifecycle owns admission and adopts the transport when Connected is
+    // committed. Callers hold transport_mutex and only observe that transport.
+    return state.connection != nullptr;
 }
 
 } // namespace zlink::stream_connector::detail

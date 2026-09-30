@@ -5,6 +5,7 @@ if(NOT _zlink_framework_version_line_count EQUAL 1
     OR NOT _zlink_framework_version_line MATCHES "^ZLINK_FRAMEWORK_VERSION=[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "C++ Framework VERSION must contain one ZLINK_FRAMEWORK_VERSION=X.Y.Z line")
 endif()
+
 string(REPLACE "ZLINK_FRAMEWORK_VERSION=" "" _zlink_framework_version
   "${_zlink_framework_version_line}")
 project(zlink_stream_connector_cpp VERSION ${_zlink_framework_version} LANGUAGES CXX)
@@ -234,3 +235,68 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/zlink_stream_connector_cppConfig.cmak
 
 add_subdirectory(core)
 add_subdirectory(e2e-client)
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  enable_testing()
+  add_executable(test_connector_lifecycle tests/test_connector_lifecycle.cpp)
+  target_compile_features(test_connector_lifecycle PRIVATE cxx_std_20)
+  target_link_libraries(test_connector_lifecycle PRIVATE zlink::stream_connector Threads::Threads)
+  zlink_framework_cpp_add_boost_headers(test_connector_lifecycle)
+  set(_lifecycle_test_modes closed close_connect refused timeout)
+  if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
+    target_compile_definitions(test_connector_lifecycle PRIVATE
+      ZLINK_CONNECTOR_LIFECYCLE_TLS
+      ZLINK_STREAM_CONNECTOR_TEST_CERT="${ZLINK_HTTP_CLIENT_TEST_CERT}"
+      ZLINK_STREAM_CONNECTOR_TEST_KEY="${ZLINK_HTTP_CLIENT_TEST_KEY}")
+    target_link_libraries(test_connector_lifecycle PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    list(APPEND _lifecycle_test_modes tls)
+  endif()
+  foreach(_engine godot axmol unreal)
+    if(TARGET zlink_${_engine}_stream_connector)
+      string(TOUPPER "${_engine}" _engine_upper)
+      target_compile_definitions(test_connector_lifecycle PRIVATE ZLINK_CONNECTOR_LIFECYCLE_${_engine_upper})
+      target_link_libraries(test_connector_lifecycle PRIVATE zlink_${_engine}_stream_connector)
+      list(APPEND _lifecycle_test_modes ${_engine})
+    endif()
+  endforeach()
+  foreach(_mode IN LISTS _lifecycle_test_modes)
+    add_test(NAME test_connector_lifecycle_${_mode}
+      COMMAND test_connector_lifecycle ${_mode})
+    set_tests_properties(test_connector_lifecycle_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  add_executable(test_connector_protocol tests/test_connector_protocol.cpp)
+  target_compile_features(test_connector_protocol PRIVATE cxx_std_20)
+  target_link_libraries(test_connector_protocol PRIVATE zlink::stream_connector Threads::Threads)
+  zlink_framework_cpp_add_boost_headers(test_connector_protocol)
+  foreach(_mode named-response named-error valid-response valid-error)
+    add_test(NAME test_connector_protocol_${_mode} COMMAND test_connector_protocol ${_mode})
+    set_tests_properties(test_connector_protocol_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  add_executable(test_connector_callback_failure tests/test_connector_callback_failure.cpp)
+  target_compile_features(test_connector_callback_failure PRIVATE cxx_std_20)
+  target_link_libraries(test_connector_callback_failure PRIVATE zlink::stream_connector Threads::Threads)
+  add_test(NAME test_connector_callback_failure COMMAND test_connector_callback_failure)
+  set_tests_properties(test_connector_callback_failure PROPERTIES
+    LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  add_executable(test_connector_error_surface tests/test_connector_error_surface.cpp)
+  target_compile_features(test_connector_error_surface PRIVATE cxx_std_20)
+  target_link_libraries(test_connector_error_surface PRIVATE
+    zlink::stream_connector_throwing zlink::stream_e2e_client Threads::Threads)
+  zlink_framework_cpp_add_boost_headers(test_connector_error_surface)
+  foreach(_mode task-value task-void nested core-future e2e-future)
+    add_test(NAME test_connector_error_surface_${_mode} COMMAND test_connector_error_surface ${_mode})
+    set_tests_properties(test_connector_error_surface_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+endif()
