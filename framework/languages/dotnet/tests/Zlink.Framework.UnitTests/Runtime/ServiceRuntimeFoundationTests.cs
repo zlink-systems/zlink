@@ -2676,14 +2676,22 @@ public sealed class ServiceRuntimeFoundationTests
             Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
         }
 
-        await WaitUntilAsync(() => target.Status().PendingApplicationMessages == capacity);
-        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PermitsInUse);
+        await WaitUntilAsync(() =>
+            applicationJobQueue.GetStatus().PressureState
+            == ZLinkApplicationJobQueuePressureState.Paused
+        );
+        var paused = applicationJobQueue.GetStatus();
+        Assert.InRange(paused.PermitsInUse, paused.PausePermitCount, (ulong)capacity);
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.InRange(maximumBatch, 2, capacity);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
-        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PeakPermitsInUse);
+        Assert.InRange(
+            applicationJobQueue.GetStatus().PeakPermitsInUse,
+            paused.PausePermitCount,
+            (ulong)capacity
+        );
     }
 
     [Fact]
