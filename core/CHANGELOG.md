@@ -27,6 +27,18 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
   after writing the topic frame. HWM is checked once at record start for each
   pipe whose filter matches, and an accepted record is written to completion
   (#1157).
+- `zlink_close` no longer waits forever when a monitor detach races with the
+  async mailbox owner stopping. The stop request and its acknowledgement are
+  decided under one lock, so a completed handoff cannot become pending again
+  (#1209).
+- A transport pair is published as READY only after its connection ID is set.
+  The READY monitor event carries the ID fixed at that decision instead of
+  reading it again, so it no longer reports connection ID 0 (#1209).
+- CONNECTED and ACCEPTED monitor events are recorded before the engine is
+  attached, so they no longer arrive after the HANDSHAKE and READY events of the
+  same connection (tcp, ipc, tls, ws) (#1209).
+- The XSUB receive path no longer takes a subscription mutex. Subscription
+  changes and snapshots are serialized by the socket's existing turn (#1202).
 
 ## [1.11.0]
 
