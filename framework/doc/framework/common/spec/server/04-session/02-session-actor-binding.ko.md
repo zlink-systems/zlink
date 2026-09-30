@@ -190,8 +190,8 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`
-record로 Actor owner에 전달한다. Payload는 local·remote 여부와 관계없이 target Actor
-application queue에 직접 추가한다. Current Spot은 authority 검증에 사용하지만 callback
+record로 Actor owner에 전달한다. Relocation seal이 없으면 payload를 local·remote 여부와 관계없이 target Actor의
+application queue에 직접 추가한다. Seal 중에는 §8.1에 따라 Session owner가 보관하고 route 적용 또는 abort 뒤 제출한다. Current Spot은 authority 검증에 사용하지만 callback
 실행 문맥이 아니다. Session callback thread에서 Actor handler를 실행하지 않으며 서로
 다른 Actor를 session의 실행 문맥으로 직렬화하지 않는다. Actor 사이의 실행 순서는
 [Actor 모델](../03-spot-actor/04-actor-model.ko.md)의 실행 모드(`PerActor`·`SpotWide`)가
@@ -458,8 +458,8 @@ sequenceDiagram
 
 Actor가 다른 MeshNode로 이동해도 physical STREAM connection과 Session scope는 Session
 owner process에 유지된다. Socket, transport handle과 Session callback state를 target
-Actor process로 이동하거나 복제하지 않는다. Session의 책임은 이동 중 해당 binding을
-닫아 두고, 이동 결과에 맞춰 route를 한 번 바꾼 뒤 다시 여는 것이다. Session은
+Actor process로 이동하거나 복제하지 않는다. Session은 이동 중 해당 binding에
+seal을 설치하고, 이동 결과에 맞춰 Actor route를 한 번 바꾼 뒤 seal을 해제한다. Session은
 relocation target을 선택하거나 Actor·Spot의 준비 상태를 판정하지 않으며 Location
 Store를 읽거나 변경하지 않는다.
 
@@ -471,7 +471,8 @@ queue 병합의 전체 순서는
 
 - **relocation seal과 retired binding 거부는 서로 다른 전이다.** §6의 retired binding 거부는 current
   binding을 새 session으로 교체한 뒤 이전 generation의 ingress를 막는다. Relocation seal은 같은 binding의
-  Actor route를 옮기는 동안 Session message를 보관한다. 두 규칙은 함께 적용되며 서로를 대신하지 않는다.
+  Actor route를 옮기는 동안 Session에서 Actor로 가는 message를 보관한다. Actor에서 Session으로 가는 push는
+  보관하지 않고 [§5](#5-bind와-relay)의 binding 판정만 거쳐 곧바로 제출한다. 두 규칙은 함께 적용되며 서로를 대신하지 않는다.
 
 ### 8.1 Seal, held message와 route 전환
 
@@ -494,8 +495,14 @@ runtime은 준비를 끝낸 뒤 예상 source owner와 generation으로 Location
 
 Session route
 변경에는 numeric high-water, message별 ACK journal 또는 relocation 전용 capacity
-조건을 사용하지 않는다. Seal 중 도착한 message는 aggregate가 보관하지만 개별 message
-크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
+조건을 사용하지 않는다. Seal 중 Session에서 Actor로 도착한 message는 aggregate가 보관하며 개별 message
+크기와 transport 제한은 그대로 적용한다.
+
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 admission 경계에서 수락한 one-way relay는
+호출자가 seal 해제를 기다리지 않으며, 수락으로 완료됐으므로 이후 deadline과 취소가 적용되지 않는다. Relay request는
+기존 correlation, deadline과 취소를 유지한다. 보관한 one-way relay를 route 적용이나 abort 뒤 제출하지 못하거나
+seal timeout으로 정리하면, 이미 끝난 호출자 결과는 바꾸지 않고 그 message의 flow에 한 번 기록한다
+([Message-flow tracing §6](../06-observability/03-message-flow-tracing.ko.md#6-완료-실패와-수명)).
 
 Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 
@@ -778,6 +785,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Command 44가 `SessionRelocationSealTimeout`(기본 3,000 ms) 안에 오지 않으면 physical session이
   닫히고 그 binding의 held message는 전달되지 않는다.
 - Timeout 뒤 또는 중복으로 온 command 44는 route를 다시 바꾸지 않고 Warning만 남긴다.
+- Actor relocation으로 binding이 seal된 동안 current binding 판정을 통과한 Actor→Session push는 route update나
+  seal 해제를 기다리지 않고 STREAM session에 제출된다.
 - Relay-ready 전에 target이 명시적으로 실패하면 held message가 source route로 처리되고 connection은
   유지된다.
 - Relay-ready 뒤 source route 재개는 공통 relocation §4.4의 source `Preserve` fence 결과를 따른다. Fence 판정 중 seal timeout은 기존대로 처리한다.
