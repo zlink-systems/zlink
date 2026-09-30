@@ -175,6 +175,91 @@ final class ZLinkClientServerReadyWaitTest {
         }
     }
 
+    @Test
+    void noReadyServerSendEndsAsDeadlineExceededAtFamilyTimeout() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            long started = fixture.time.nanoTime();
+            var failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    fixture.runtime
+                                            .sendToChannel("orders", new Request("cold"))
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
+            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
+            assertEquals(0, fixture.businessRequests.get());
+        }
+    }
+
+    @Test
+    void unregisteredChannelEndsAsNotFoundWithoutAdmissionWait() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            long started = fixture.time.nanoTime();
+            var requestFailure =
+                    assertThrows(
+                            systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                            () ->
+                                    fixture.runtime
+                                            .requestToChannel("missing", new Request("missing"))
+                                            .submit(Reply.class));
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, requestFailure.kind());
+            var sendFailure =
+                    assertThrows(
+                            systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                            () ->
+                                    fixture.runtime
+                                            .sendToChannel("missing", new Request("missing"))
+                                            .submit());
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, sendFailure.kind());
+            assertEquals(started, fixture.time.nanoTime());
+            assertEquals(0, fixture.businessRequests.get());
+        }
+    }
+
+    @Test
+    void readyWeightZeroAndDrainingFailWithoutAdmissionWait() throws Exception {
+        for (var state :
+                List.of(ZLinkFrameworkRuntimeState.SERVING, ZLinkFrameworkRuntimeState.DRAINING)) {
+            for (boolean pending : List.of(false, true)) {
+                try (Fixture fixture = new Fixture(Duration.ofSeconds(2), pending)) {
+                    fixture.admitWithEligibility(
+                            state == ZLinkFrameworkRuntimeState.SERVING ? 0 : 100, state);
+                    long started = fixture.time.nanoTime();
+                    var failure =
+                            assertThrows(
+                                    CompletionException.class,
+                                    () ->
+                                            fixture.runtime
+                                                    .requestToChannel(
+                                                            "orders", new Request("ineligible"))
+                                                    .submit(Reply.class)
+                                                    .toCompletableFuture()
+                                                    .join());
+                    assertEquals(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
+                                    .kind());
+                    var sendFailure =
+                            assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () ->
+                                            fixture.runtime
+                                                    .sendToChannel(
+                                                            "orders", new Request("ineligible"))
+                                                    .submit()
+                                                    .toCompletableFuture()
+                                                    .join());
+                    assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, sendFailure.kind());
+                    assertEquals(started, fixture.time.nanoTime());
+                    assertEquals(0, fixture.businessRequests.get());
+                }
+            }
+        }
+    }
+
     private static void assertDeadlineExceeded(ZLinkRequestCall call) {
         CompletionException failure =
                 assertThrows(
@@ -216,6 +301,10 @@ final class ZLinkClientServerReadyWaitTest {
         private final ZLinkChannelRuntime runtime;
 
         private Fixture(Duration channelTimeout) throws Exception {
+            this(channelTimeout, false);
+        }
+
+        private Fixture(Duration channelTimeout, boolean pending) throws Exception {
             ZLinkBackendDealerSocket dealer =
                     (ZLinkBackendDealerSocket)
                             Proxy.newProxyInstance(
@@ -287,6 +376,7 @@ final class ZLinkClientServerReadyWaitTest {
                         @Override
                         public void close() {}
                     };
+            AtomicInteger createdDealers = new AtomicInteger();
             ZLinkChannelBackendAdapter backend =
                     (ZLinkChannelBackendAdapter)
                             Proxy.newProxyInstance(
@@ -295,7 +385,27 @@ final class ZLinkClientServerReadyWaitTest {
                                     (proxy, method, args) ->
                                             switch (method.getName()) {
                                                 case "createContext" -> context;
-                                                case "createDealerSocket" -> dealer;
+                                                case "createDealerSocket" -> {
+                                                    if (createdDealers.getAndIncrement() == 0)
+                                                        yield dealer;
+                                                    yield Proxy.newProxyInstance(
+                                                            getClass().getClassLoader(),
+                                                            new Class<?>[] {
+                                                                ZLinkBackendDealerSocket.class
+                                                            },
+                                                            (ignoredProxy,
+                                                                    socketMethod,
+                                                                    socketArgs) ->
+                                                                    socketMethod
+                                                                                    .getName()
+                                                                                    .equals(
+                                                                                            "request")
+                                                                            ? new CompletableFuture<
+                                                                                    ZLinkBackendReceived>()
+                                                                            : socketMethod.invoke(
+                                                                                    dealer,
+                                                                                    socketArgs));
+                                                }
                                                 default ->
                                                         throw new UnsupportedOperationException(
                                                                 method.toString());
@@ -361,7 +471,11 @@ final class ZLinkClientServerReadyWaitTest {
                                             });
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
             options.setDefaultRequestTimeout(channelTimeout);
-            options.addClientServerChannel("orders").client().connect("inproc://ready-wait");
+            var client =
+                    options.addClientServerChannel("orders")
+                            .client()
+                            .connect("inproc://ready-wait");
+            if (pending) client.connect("inproc://pending");
             runtime =
                     new ZLinkChannelRuntime(
                             backend,
@@ -386,6 +500,10 @@ final class ZLinkClientServerReadyWaitTest {
         }
 
         private void admit() {
+            admitWithEligibility(100, ZLinkFrameworkRuntimeState.SERVING);
+        }
+
+        private void admitWithEligibility(int weight, ZLinkFrameworkRuntimeState state) {
             (helloRequests.get() == 1 ? admission : secondAdmission)
                     .complete(
                             received(
@@ -397,8 +515,8 @@ final class ZLinkClientServerReadyWaitTest {
                                                             1,
                                                             1,
                                                             "inproc://ready-wait",
-                                                            100,
-                                                            ZLinkFrameworkRuntimeState.SERVING,
+                                                            weight,
+                                                            state,
                                                             "default",
                                                             "server",
                                                             1,

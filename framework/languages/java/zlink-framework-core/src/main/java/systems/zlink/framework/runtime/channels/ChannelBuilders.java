@@ -62,6 +62,12 @@ public final class ChannelBuilders {
             registration.addClientManualEndpoint(endpoint);
             return this;
         }
+
+        @Override
+        public ZLinkClientServerChannelClientBuilder setSendTimeout(Duration value) {
+            registration.setSendTimeout(value);
+            return this;
+        }
     }
 
     private static final class ClientServerServer implements ZLinkClientServerChannelServerBuilder {
@@ -240,6 +246,12 @@ public final class ChannelBuilders {
         @Override
         public FanoutChannelBuilder setNoDrop(boolean noDrop) {
             registration.setNoDrop(noDrop);
+            return this;
+        }
+
+        @Override
+        public FanoutChannelBuilder setSendTimeout(Duration value) {
+            registration.setSendTimeout(value);
             return this;
         }
 
