@@ -936,11 +936,13 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
           remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
                                                                   zlink::message_t{})
                  : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{});
+        const auto source_drained =
+          run_serial_turn (source, "entry-return-source-leave-observed", [] {});
         const auto current = node->actor_spot_ids.find (key);
         test.require (joined && joined.value ().result_code == 0
                         && current != node->actor_spot_ids.end () && current->second == entry_id
                         && source->actor_count == 0 && entry->actor_count == 1
-                        && joined_callbacks.load (std::memory_order_acquire) == 1
+                        && joined_callbacks.load (std::memory_order_acquire) == 1 && source_drained
                         && leave_callbacks.load (std::memory_order_acquire) == 1,
                       remote ? "remote User Spot to Entry Spot return must commit without "
                                "admission and run target joined/source leave exactly once"
