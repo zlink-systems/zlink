@@ -33,13 +33,9 @@ grep -rn "](.*plan/" --include='*.md' framework/doc/framework core/doc bindings/
 
 ## 문장과 용어
 
-- 결론과 조건을 먼저 설명하고, 처음 나오는 개념은 하는 일을 쉬운 문장으로 풀어 쓴다.
-- 한국어 문서에서 `language-exchange`, `문서작성`과 영어 명사를 연속으로 붙인 압축 표현을 쓰지 않는다.
-- actor, session, 연결과 상태를 사람이나 생물처럼 표현하지 않는다. `산다`, `살아 있다`, `붙는다`,
-  `물려 있다`, `돈다` 대신 `존재한다`, `유지된다`, `연결한다`, `설정된다`, `동작한다`를 사용한다.
-- `canonical`, `surface`, `shape`, `path` 같은 추상어보다 실제로 보장하는 동작을 적는다.
-- API와 함수의 일대일 설명은 긴 산문 목록 대신 짧은 code example의 해당 호출 옆 주석에 둔다.
-  예제의 핵심 계약은 코드 주석만 읽어도 알 수 있게 한다.
+- 문장과 용어는 [`principal/documentation/documentation-principles.ko.md`](./principal/documentation/documentation-principles.ko.md)를
+  따른다. 결론 먼저(7.10), 용어 도입(7.2·7.12), 명사 나열 풀기(7.4), 비유·의인화 금지(7.7), 검증 가능한
+  서술(7.8), API 설명은 코드 예제의 줄 주석으로 옮기는 규칙이 그 문서에 있다.
 - 공개 API와 내부 source comment는
   [`principal/source-comment-principles.ko.md`](./principal/source-comment-principles.ko.md)를 따른다.
 
