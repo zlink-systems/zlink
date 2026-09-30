@@ -1424,50 +1424,35 @@ test('initial managed stream actor bind removes its provisional route and surfac
   assert.deepEqual(socket.unboundActors, ['actor-confirm-nack-observed']);
 });
 
-test('fire-and-forget remote actor session bind retry exhaustion reports a typed DeadlineExceeded', async () => {
-  //  Spec 32-framework-error-model: DeadlineExceeded(7) — classification only;
-  //  the fire-and-forget send still reports through the error sink instead of
-  //  throwing.
-  const reported = [];
+test('fire-and-forget remote actor session bind propagates its first send failure', async () => {
   const sendFailure = new Error('route send failed');
+  let sendCalls = 0;
   const relay = new ZLinkActorPacketRelay({
     routeTransport: {
-      sendToSpot: async () => { throw sendFailure; }
+      async sendToSpot() {
+        sendCalls += 1;
+        throw sendFailure;
+      }
     },
     streamBindingRuntime: () => ({ find() {} }),
     meshRouters: {},
     actorManager: () => undefined,
     spotManager: () => undefined,
     spotNodeRuntime: () => undefined,
-    errorSink: () => ({
-      reportRuntimeTaskException(taskName, error) {
-        reported.push({ taskName, error });
-      }
-    })
+    errorSink: () => ({ reportRuntimeTaskException() {} })
   });
 
-  //  Enter the retry loop with the deadline already elapsed so exhaustion is
-  //  observed without altering the production retry timing or bounds.
-  relay.retryRemoteSessionBindingSend(
-    { routerChannelId: 'actor.route', targetNodeRid: 'actor-node', spotId: 'actor-node' },
-    { actorId: 'actor-bind-deadline' },
-    performance.now() - 1,
-    1
+  await assert.rejects(
+    relay.confirmRemoteSessionBinding(
+      { nodeRid: 'actor-node', actorId: 'actor-bind-send-failure', meshName: 'actor.route' },
+      'session-node',
+      'session-rid',
+      undefined,
+      { waitForAcknowledgement: false }
+    ),
+    error => error === sendFailure
   );
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(reported.length, 1);
-  assert.equal(reported[0].taskName, 'remote session binding send');
-  const error = reported[0].error;
-  assert.ok(error instanceof framework.ZLinkFrameworkException);
-  assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-  assert.equal(
-    framework.internalFrameworkErrorKind(error),
-    framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-  );
-  assert.equal(error.cause, sendFailure);
-  assert.match(error.message, /retries exceeded their deadline/);
+  assert.equal(sendCalls, 1);
 });
 
 // Session–Actor binding §5·§6: the Actor binding control (command 38) installs the binding; the

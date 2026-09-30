@@ -40,7 +40,6 @@ import { streamMetadataMap } from '../actors/bound-session-wire';
 import { decodeRoutingId, normalizeRoutingId, routingIdsEqual } from '../routing-id';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
-import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
 import type { ZLinkBoundSessionResponseTarget } from '../streams';
 import type {
@@ -62,10 +61,6 @@ import {
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import { ZLinkRemoteActorPacketTargetStore } from './remote-actor-packet-target-store';
 import type { ZLinkStoreLocationResolvers } from '../locations';
-
-const REMOTE_SESSION_BIND_RETRY_DEADLINE_MS = 30_000;
-const REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS = 25;
-const REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS = 1_000;
 
 export interface ZLinkActorPacketRelayOptions {
   readonly requestTimeoutMs?: number;
@@ -510,12 +505,9 @@ export class ZLinkActorPacketRelay {
       payload: encodeRemoteActorSessionBinding({ sessionNodeRid, sessionRid })
     });
     if (options?.waitForAcknowledgement === false) {
-      await this.retryRemoteSessionBindingSend(
-        withDefaultSpotKind(target),
-        request,
-        performance.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
-        REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS
-      );
+      await this.options.routeTransport.sendToSpot(withDefaultSpotKind(target), request, {
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+      });
       return;
     }
     const reply = await this.requestRemoteTarget<{
@@ -587,44 +579,6 @@ export class ZLinkActorPacketRelay {
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
     });
-  }
-
-  private async retryRemoteSessionBindingSend(
-    target: ZLinkSpotRouteTarget,
-    request: unknown,
-    deadline: number,
-    delayMs: number
-  ): Promise<void> {
-    try {
-      await this.options.routeTransport.sendToSpot(target, request, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-      });
-    } catch (error) {
-      if (performance.now() >= deadline) {
-        //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
-        //  exhaustion on the one-way bind send remains diagnostics-only but
-        //  the caller waits for its bounded submission terminal so later
-        //  application relay cannot overtake it.
-        this.options
-          .errorSink()
-          .reportRuntimeTaskException(
-            'remote session binding send',
-            createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-              'Remote actor session binding send retries exceeded their deadline.',
-              error
-            )
-          );
-        return;
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-      await this.retryRemoteSessionBindingSend(
-        target,
-        request,
-        deadline,
-        Math.min(delayMs * 2, REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS)
-      );
-    }
   }
 
   async relayRemoteActorPacket(
