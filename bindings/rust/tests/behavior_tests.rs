@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, StreamPacket,
-    StreamRecvMode, SubscriptionEvent, TopicMessage,
+    ConnectResult, Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor,
+    StreamPacket, StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
 fn await_send(
@@ -217,6 +217,47 @@ fn pub_sub_roundtrip() {
 }
 
 #[test]
+fn sub_receives_topics_beyond_inline_buffer() {
+    let ctx = Context::new().unwrap();
+    let xpub = ctx.xpub_socket().unwrap();
+    xpub.bind("inproc://beh-pubsub-long-topic").unwrap();
+
+    let sub_sock = ctx.sub_socket().unwrap();
+    sub_sock.connect("inproc://beh-pubsub-long-topic").unwrap();
+    sub_sock.set_subscription("t").unwrap();
+
+    let mut event = SubscriptionEvent::empty();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
+            Ok(false) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(true) => {
+                assert!(event.is_subscribed());
+                assert_eq!(event.topic(), "t");
+                break;
+            }
+            Ok(false) => panic!("subscription event was not received"),
+            Err(error) => panic!("subscription event receive failed: {error}"),
+        }
+    }
+
+    for topic_len in [300, 70_000] {
+        let topic = "t".repeat(topic_len);
+        xpub.publish(&topic)
+            .message(Message::try_from(b"payload").unwrap())
+            .submit()
+            .unwrap();
+
+        let mut received = TopicMessage::empty();
+        assert!(sub_sock.subscribe(&mut received, RecvFlags::NONE).unwrap());
+        assert_eq!(received.topic(), topic);
+        assert_eq!(received.parts()[0].as_bytes(), b"payload");
+    }
+}
+
+#[test]
 fn sub_try_subscribe_empty() {
     let ctx = Context::new().unwrap();
     let sub_sock = ctx.sub_socket().unwrap();
@@ -272,26 +313,32 @@ fn xpub_try_receive_subscription_event_empty() {
     assert!(!result.unwrap());
 }
 
-// Core returns RECV_BUFFER_TOO_SMALL (ENOBUFS) for a topic longer than the
-// caller buffer; the binding projects that result instead of an errno guess.
 #[test]
-fn xpub_subscription_event_projects_core_buffer_too_small() {
+fn xpub_receives_subscription_topics_beyond_inline_buffer() {
     let ctx = Context::new().unwrap();
     let xpub = ctx.xpub_socket().unwrap();
     xpub.bind("inproc://beh-xpub-long-topic").unwrap();
     let sub = ctx.sub_socket().unwrap();
     sub.connect("inproc://beh-xpub-long-topic").unwrap();
-    sub.set_subscription(&"t".repeat(300)).unwrap();
-
     let mut event = SubscriptionEvent::empty();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
-            Ok(false) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            Ok(received) => panic!("expected BUFFER_TOO_SMALL, received={received}"),
-            Err(error) => {
-                assert_eq!(error.code(), zlink::RecvResult::BufferTooSmall);
-                break;
+
+    for topic_len in [300, 70_000] {
+        let topic = "t".repeat(topic_len);
+        sub.set_subscription(&topic).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
+                Ok(false) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(true) => {
+                    assert!(event.is_subscribed());
+                    assert_eq!(event.topic(), topic);
+                    break;
+                }
+                Ok(false) => panic!("subscription event was not received"),
+                Err(error) => panic!("subscription event receive failed: {error}"),
             }
         }
     }
@@ -351,6 +398,86 @@ fn stream_packet_output_resets_and_reuses_without_double_close() {
     assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
     assert_eq!(packet.body().unwrap().as_bytes(), b"second");
     packet.close().unwrap();
+}
+
+#[test]
+#[ignore = "requires the B-6 LD_PRELOAD initialization fault-injection shim"]
+fn stream_packet_receive_propagates_message_init_failure() {
+    const FAIL_MESSAGE_INIT: &str = "ZLINK_AUDIT_FAIL_MESSAGE_INIT";
+    const MARKER_ENV: &str = "ZLINK_AUDIT_MARKER";
+
+    let ctx = Context::new().unwrap();
+    let endpoint = tcp_endpoint();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    let monitor = SocketMonitor::open(&stream).unwrap();
+    stream.bind(&endpoint).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    loop {
+        let event = monitor.recv().unwrap();
+        if event.is_accepted() || event.is_connection_ready() {
+            break;
+        }
+    }
+    write_framed_packet(&mut raw, b"fault-injected-init");
+
+    let mut packet = StreamPacket::empty();
+    unsafe { std::env::set_var(FAIL_MESSAGE_INIT, "1") };
+    let result = stream.recv_packet(&mut packet, RecvFlags::NONE);
+    unsafe { std::env::remove_var(FAIL_MESSAGE_INIT) };
+    let marker_path = std::env::var_os(MARKER_ENV).expect("fault-injection marker path");
+    let marker = std::fs::read_to_string(marker_path).expect("fault-injection shim did not run");
+    assert!(
+        !marker.is_empty()
+            && marker
+                .lines()
+                .all(|line| line == "message-init-failed-ENOMEM"),
+        "unexpected fault-injection marker: {marker:?}"
+    );
+
+    let error = result.expect_err("message initialization failure must be returned");
+    assert_eq!(error.code(), zlink::RecvResult::InternalError);
+    assert_eq!(error.native_errno(), libc::ENOMEM);
+    assert!(packet.is_empty());
+}
+
+#[test]
+fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() {
+    let ctx = Context::new().unwrap();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    stream.bind(&tcp_endpoint()).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write_framed_packet(&mut raw, b"disconnect-peer");
+
+    let mut packet = StreamPacket::empty();
+    assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
+    let peer_rid = *packet.routing_id().expect("missing STREAM routing id");
+    stream.disconnect_rid(&peer_rid).unwrap();
+
+    let mut probe = [0u8; 1];
+    assert_eq!(
+        raw.read(&mut probe).unwrap(),
+        0,
+        "client did not observe EOF"
+    );
+
+    let error = stream
+        .disconnect_rid(&peer_rid)
+        .expect_err("a removed peer must return a connect error");
+    assert_eq!(error.code(), ConnectResult::NotFound);
+    assert_eq!(error.code() as i32, 605);
 }
 
 #[test]

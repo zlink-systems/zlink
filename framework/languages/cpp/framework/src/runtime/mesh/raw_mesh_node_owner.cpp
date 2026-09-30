@@ -907,11 +907,11 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
     mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
     auto selected = _topology.select (channel_name);
     if (!selected) {
-        co_return false;
+        throw *selected.error ();
     }
-    co_return co_await request_to_target (std::move (*selected), application_payload, timeout,
-                                          std::move (callback), channel_name, correlation, true,
-                                          std::move (request_metric));
+    co_return co_await request_to_target (std::move (selected.value ()), application_payload,
+                                          timeout, std::move (callback), channel_name, correlation,
+                                          true, std::move (request_metric));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_target (
@@ -1643,9 +1643,9 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_channel_result (
 {
     auto selected = _topology.select (channel_name);
     if (!selected) {
-        co_return zlink::submit_result_t::not_found;
+        throw *selected.error ();
     }
-    co_return co_await send_with_header_result (std::move (*selected),
+    co_return co_await send_with_header_result (std::move (selected.value ()),
                                                 protocol::encode_channel_send_header (channel_name),
                                                 application_payload, {}, true);
 }
@@ -3326,12 +3326,10 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
-        port = _lane
-                 .run ([this] {
-                     std::lock_guard lock (_lifecycle_mutex);
-                     return _port;
-                 })
-                 .get ();
+        {
+            std::lock_guard lock (_lifecycle_mutex);
+            port = _port;
+        }
     }
     catch (...) {
         return false;

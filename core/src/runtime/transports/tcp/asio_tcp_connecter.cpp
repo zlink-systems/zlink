@@ -5,7 +5,6 @@
 
 #include "transports/tcp/asio_tcp_connecter.hpp"
 #include "engine/asio/asio_poller.hpp"
-#include "engine/asio/asio_raw_engine.hpp"
 #include "engine/asio/asio_zmp_engine.hpp"
 #include "core/io_thread.hpp"
 #include "core/session_base.hpp"
@@ -310,22 +309,18 @@ void zlink::asio_tcp_connecter_t::create_engine (fd_t fd_, const std::string &lo
     endpoint_pair.connection_id = _attempt_endpoint_pair.connection_id.load ();
 
     //  Create the engine object for this connection using true proactor mode.
-    i_engine *engine = NULL;
-    if (options.type == ZLINK_CORE_SOCKET_STREAM)
-        engine = new (std::nothrow) asio_raw_engine_t (fd_, options, endpoint_pair);
-    else
-        engine = new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair);
+    i_engine *engine = new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair);
     alloc_assert (engine);
+
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
 
     //  Attach the engine to the corresponding session object.
     send_attach (_session, engine);
 
     //  Shut the connecter down.
     terminate ();
-
-    _socket_ptr->event_connected (
-      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
-      options.transport_pair_generation);
 }
 
 bool zlink::asio_tcp_connecter_t::tune_socket (fd_t fd_)

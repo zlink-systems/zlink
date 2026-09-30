@@ -26,7 +26,31 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
-abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoCloseable {
+abstract class SpotActivationBase<C extends SpotDispatchLine> {
+    static <T> CompletionStage<T> finishCleanup(Throwable failure, CompletionStage<T> cleanup) {
+        Throwable primary = unwrapCloseFailure(failure);
+        return cleanup.handle(
+                (value, cleanupFailure) -> {
+                    Throwable secondary = unwrapCloseFailure(cleanupFailure);
+                    if (primary != null) {
+                        if (secondary != null && secondary != primary)
+                            primary.addSuppressed(secondary);
+                        throw new java.util.concurrent.CompletionException(primary);
+                    }
+                    if (secondary != null)
+                        throw new java.util.concurrent.CompletionException(secondary);
+                    return value;
+                });
+    }
+
+    private static Throwable unwrapCloseFailure(Throwable failure) {
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        return failure;
+    }
+
     final ZLinkSpotRuntime host;
     final ZLinkSpotHandlerInvoker handlerInvoker;
     final Object spotSurface;
@@ -58,10 +82,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         if (closeCoordinator == candidate && !candidate.committed()) {
             closeCoordinator = null;
         }
-    }
-
-    final synchronized boolean closeCommitted() {
-        return closeCoordinator != null && closeCoordinator.committed();
     }
 
     final synchronized CompletionStage<Void> closingCallback(
@@ -97,6 +117,16 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
         return appendSpotHandler(tail, operation);
+    }
+
+    CompletionStage<Void> appendSpotHandler(
+            CompletionStage<Void> tail,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        CompletionStage<Void> submitted = appendSpotHandler(tail, payloadBytes, operation);
+        if (admission != null) admission.complete(null);
+        return submitted;
     }
 
     abstract CompletionStage<Void> appendActorLifecycle(
@@ -149,68 +179,99 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
 
     final CompletionStage<Void> dispatchActorMessages(
             List<ZLinkBackendActorReceived> actorMessages) {
+        return dispatchActorMessages(actorMessages, Supplier::get);
+    }
+
+    final CompletionStage<Void> dispatchActorMessages(
+            List<ZLinkBackendActorReceived> actorMessages,
+            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
+                    admission) {
         List<CompletionStage<Void>> dispatches = new ArrayList<>();
         int index = 0;
-        while (index < actorMessages.size() || pendingActorHeader != null) {
-            ActorMessageRead read = host.readActorMessage(actorMessages, index, pendingActorHeader);
-            index = read.nextIndex();
-            pendingActorHeader = read.nextPendingHeader();
-            if (!read.complete()) {
-                return CompletableFuture.completedFuture(null);
-            }
-            boolean pendingHeader = read.fromPendingHeader();
-            ZLinkBackendActorReceived headerPart = read.headerPart();
-            ZLinkBackendActorReceived bodyPart = read.bodyPart();
-            ActorPacketFrames.Header packetHeader = ActorPacketFrames.decode(headerPart);
-            if (!host.actorSessions().available()) {
-                host.closePendingActorHeader(headerPart, pendingHeader);
-                continue;
-            }
-            Optional<ZLinkActor> localActor =
-                    host.actorSessions().localActor(headerPart.actor().actorId());
-            if (localActor.isEmpty()) {
-                host.reportSpotActorHandlerMissing(
-                        packetHeader,
-                        context.spotId(),
-                        headerPart.actor().actorId(),
-                        headerPart.sourceNodeRid());
-                if (packetHeader.requestSeq().isPresent()) {
-                    ZLinkBackendActorReceived headerCopy =
-                            pendingHeader ? headerPart : host.copyActorReceived(headerPart);
-                    host.replyActorDispatchError(
-                            context,
-                            packetHeader,
-                            headerCopy,
-                            headerPart.actor().actorId(),
-                            new ZLinkConfigurationException(
-                                    "SPOT actor is not registered locally: "
-                                            + headerPart.actor().actorId()),
-                            "actor missing error reply failed");
-                } else {
-                    host.closePendingActorHeader(headerPart, pendingHeader);
+        try {
+            while (index < actorMessages.size() || pendingActorHeader != null) {
+                ActorMessageRead read =
+                        host.readActorMessage(actorMessages, index, pendingActorHeader);
+                index = read.nextIndex();
+                pendingActorHeader = read.nextPendingHeader();
+                if (!read.complete()) {
+                    break;
                 }
-                continue;
+                boolean pendingHeader = read.fromPendingHeader();
+                ZLinkBackendActorReceived headerPart = read.headerPart();
+                ZLinkBackendActorReceived bodyPart = read.bodyPart();
+                try {
+                    ActorPacketFrames.Header packetHeader = ActorPacketFrames.decode(headerPart);
+                    if (!host.actorSessions().available()) {
+                        host.closePendingActorHeader(headerPart, pendingHeader);
+                        continue;
+                    }
+                    Optional<ZLinkActor> localActor =
+                            host.actorSessions().localActor(headerPart.actor().actorId());
+                    if (localActor.isEmpty()) {
+                        host.reportSpotActorHandlerMissing(
+                                packetHeader,
+                                context.spotId(),
+                                headerPart.actor().actorId(),
+                                headerPart.sourceNodeRid());
+                        if (packetHeader.requestSeq().isPresent()) {
+                            ZLinkBackendActorReceived headerCopy =
+                                    pendingHeader ? headerPart : host.copyActorReceived(headerPart);
+                            host.replyActorDispatchError(
+                                    context,
+                                    packetHeader,
+                                    headerCopy,
+                                    headerPart.actor().actorId(),
+                                    new ZLinkConfigurationException(
+                                            "SPOT actor is not registered locally: "
+                                                    + headerPart.actor().actorId()),
+                                    "actor missing error reply failed");
+                        } else {
+                            host.closePendingActorHeader(headerPart, pendingHeader);
+                        }
+                        continue;
+                    }
+                    ZLinkActor actor = localActor.get();
+                    if (host.dispatchActorControlPacket(
+                            packetHeader, headerPart, actor, pendingHeader)) {
+                        continue;
+                    }
+                    // Admit every Actor packet to its own Actor queue before waiting
+                    // for any handler stage. The Spot-wide execution gate is acquired
+                    // by the queued turn, so a yielded Actor does not block admission
+                    // of another Actor's turn.
+                    var permit = host.reserveApplicationJob();
+                    if (permit == null) {
+                        host.closePendingActorHeader(headerPart, pendingHeader);
+                        continue;
+                    }
+                    try (var ignored =
+                            systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobContext.enter(permit)) {
+                        dispatches.add(
+                                admission
+                                        .apply(
+                                                () ->
+                                                        dispatchResolvedActorPacket(
+                                                                actor, packetHeader, read))
+                                        .whenComplete(
+                                                (done, failure) ->
+                                                        host.closePendingActorHeader(
+                                                                headerPart, pendingHeader)));
+                    } finally {
+                        permit.abandonReservation();
+                    }
+                } catch (RuntimeException | Error failure) {
+                    host.closePendingActorHeader(headerPart, pendingHeader);
+                    throw failure;
+                }
             }
-            ZLinkActor actor = localActor.get();
-            if (host.dispatchActorControlPacket(packetHeader, headerPart, actor, pendingHeader)) {
-                continue;
+        } catch (RuntimeException | Error failure) {
+            if (pendingActorHeader != null) {
+                pendingActorHeader.close();
+                pendingActorHeader = null;
             }
-            // Admit every Actor packet to its own Actor queue before waiting
-            // for any handler stage. The Spot-wide execution gate is acquired
-            // by the queued turn, so a yielded Actor does not block admission
-            // of another Actor's turn.
-            var permit = host.reserveApplicationJob();
-            if (permit == null) {
-                host.closePendingActorHeader(headerPart, pendingHeader);
-                continue;
-            }
-            try (var ignored =
-                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .enter(permit)) {
-                dispatches.add(dispatchResolvedActorPacket(actor, packetHeader, read));
-            } finally {
-                permit.abandonReservation();
-            }
+            dispatches.add(CompletableFuture.failedFuture(failure));
         }
         return CompletableFuture.allOf(
                 dispatches.stream()
@@ -222,9 +283,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {
-            if (host.isClosing()) {
-                return tail;
-            }
             var permit = host.reserveApplicationJob();
             if (permit == null) {
                 return tail;
@@ -279,6 +337,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
 
     final CompletionStage<Void> dispatchSpotRouteHandler(
             ZLinkBackendReceived received, ParsedPacket packet) {
+        return dispatchSpotRouteHandler(received, packet, null);
+    }
+
+    final CompletionStage<Void> dispatchSpotRouteHandler(
+            ZLinkBackendReceived received, ParsedPacket packet, CompletableFuture<Void> admission) {
         //  Shared envelope requests carry content type and application
         //  metadata in the JSON header (cross-language canonical form);
         //  legacy raw parts fall back to the backend-carried values.
@@ -386,7 +449,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                             })
                     .whenComplete(
                             (ignored, error) -> {
-                                if (error != null && !host.isClosing()) {
+                                if (error != null) {
                                     host.replySpotRouteDispatchError(
                                             received,
                                             packet.packetName(),
@@ -463,7 +526,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                                                                         throw decodeFailure;
                                                                     }
                                                                 }));
-                                    });
+                                    },
+                                    admission);
                         })
                 .whenComplete(
                         (ignored, error) -> {
@@ -592,9 +656,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
     final CompletionStage<Void> dispatchSpotSubscription(ZLinkBackendTopicMessage received) {
         boolean leaseReleaseScheduled = false;
         try {
-            if (host.isDraining()) {
-                return CompletableFuture.completedFuture(null);
-            }
             if (received.parts().isEmpty()) {
                 host.reportSpotSubscriptionDropped(
                         received.topic(),

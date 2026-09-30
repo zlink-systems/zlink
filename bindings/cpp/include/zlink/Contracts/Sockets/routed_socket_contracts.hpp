@@ -31,10 +31,6 @@ class router_socket_t : public routed_message_socket_t
     // reused without reallocation.
     int recv (received_t &out_, recv_flags_t flags_ = recv_flags_t::none);
 
-    int recv (routing_id_t &source_rid_out_,
-              message_t &part_out_,
-              recv_flags_t flags_ = recv_flags_t::none);
-
     request_operation_t request (const routing_id_t &routing_id_);
     reply_operation_t reply (const routing_id_t &routing_id_, reply_token_t reply_token_);
 

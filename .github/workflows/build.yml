@@ -92,20 +92,17 @@ jobs:
       - name: Install OpenSSL
         shell: pwsh
         run: |
-          choco install openssl --no-progress
-          $opensslRoot = "C:\Program Files\OpenSSL"
-          if (Test-Path $opensslRoot) {
-            echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
-            Write-Host "OpenSSL installed at $opensslRoot"
-          } else {
-            # Try fallback path
-            $opensslRoot = "C:\Program Files\OpenSSL-Win64"
-            if (Test-Path $opensslRoot) {
-              echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
-            } else {
-              Write-Error "OpenSSL installation failed or path incorrect"
-            }
+          # OpenSSL 3 from the runner's vcpkg. The Chocolatey package moved to
+          # OpenSSL 4 and its installer URLs are removed upstream, while the
+          # Core archive and the .NET package ship libssl-3/libcrypto-3 DLLs.
+          & (Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe") install openssl:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install openssl failed with exit code $LASTEXITCODE" }
+          $opensslRoot = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed/x64-windows"
+          if (-not (Test-Path (Join-Path $opensslRoot "bin/libcrypto-3-x64.dll"))) {
+            throw "OpenSSL 3 DLLs not found under $opensslRoot/bin"
           }
+          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          Write-Host "OpenSSL installed at $opensslRoot"
 
       - name: Verify Windows test configuration
         shell: pwsh

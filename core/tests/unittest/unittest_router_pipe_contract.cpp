@@ -1745,7 +1745,7 @@ void test_dist_message_preflight_consumes_published_credit_before_owner_wake ()
     zlink::msg_t blocked;
     TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
     const zlink::pipe_message_admission_t blocked_admission =
-      dist.check_hwm (&blocked);
+      dist.check_publish_record_hwm (false);
 
     zlink::msg_t received;
     TEST_ASSERT_SUCCESS_ERRNO (received.init ());
@@ -1757,7 +1757,7 @@ void test_dist_message_preflight_consumes_published_credit_before_owner_wake ()
     // owns active membership, so its message-aware preflight can recover
     // immediately without waiting for an otherwise redundant mailbox turn.
     const zlink::pipe_message_admission_t recovered_admission =
-      dist.check_hwm (&blocked);
+      dist.check_publish_record_hwm (false);
     const bool sent_before_owner_wake =
       recovered_admission == zlink::pipe_message_admission_ready;
     if (sent_before_owner_wake)

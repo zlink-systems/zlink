@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.util.Optional;
@@ -34,7 +35,7 @@ final class ZLinkChannelSpotCallsTest {
         assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, typed.kind());
         //  The local resolve failure is framework-generated, so it stays a
         //  stale-route control signal under the narrowed marker check.
-        Assertions.assertTrue(SpotCallAddresses.isStaleRoute(typed));
+        Assertions.assertTrue(SpotTransportAddressResolver.isStaleRoute(typed));
     }
 
     //  D5: stale-route control requires kind NOT_FOUND plus the
@@ -43,19 +44,19 @@ final class ZLinkChannelSpotCallsTest {
     @Test
     void staleRouteRequiresFrameworkOriginMarker() {
         Assertions.assertTrue(
-                SpotCallAddresses.isStaleRoute(
+                SpotTransportAddressResolver.isStaleRoute(
                         ZLinkFrameworkErrorOrigin.framework(
                                 ZLinkFrameworkErrorKind.NOT_FOUND, "stale route")));
         Assertions.assertFalse(
-                SpotCallAddresses.isStaleRoute(
+                SpotTransportAddressResolver.isStaleRoute(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.NOT_FOUND,
                                 "application entity not found")));
         Assertions.assertFalse(
-                SpotCallAddresses.isStaleRoute(
+                SpotTransportAddressResolver.isStaleRoute(
                         ZLinkFrameworkErrorOrigin.framework(
                                 ZLinkFrameworkErrorKind.REJECTED, "sealed admission")));
         Assertions.assertFalse(
-                SpotCallAddresses.isStaleRoute(new IllegalStateException("unrelated")));
+                SpotTransportAddressResolver.isStaleRoute(new IllegalStateException("unrelated")));
     }
 }

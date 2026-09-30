@@ -357,14 +357,21 @@ Public messaging은 typed payload를 받고 Framework가 packet name과 codec을
 Node direct와 channel operation은 target selection과 submit을 한 호출로 수행한다. 공개 `selectNode`,
 `selectOne`, `selectMany` 단계는 제공하지 않는다.
 
+<a id="channel-selection-result"></a>
 Channel client는 ChannelName을 process-local route index에서 찾아 RouteMesh MeshNode 또는 ClientServer
-client 하나를 선택한다. Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나
-ClientServer client를 검색하거나 relay하지 않는다. 등록된 송신 경로에 ready target pipe가 없으면
-`Unavailable`, [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면 `NotFound`를 사용한다.
+client 하나를 선택한다. 선택 결과는 이 절이 정한다.
+
+- Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나 ClientServer client를 검색하거나 relay하지 않는다.
+- RouteMesh 송신 경로는 기다리지 않는다. [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면
+  `NotFound`, ready target pipe가 없으면 `Unavailable`로 끝난다.
+- ClientServer 송신 경로는 ready target이 없으면 admission deadline
+  ([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)) 안에서
+  기다린다([Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#clientserver-ready-wait)). 그 안에
+  ready target이 생기지 않으면 `DeadlineExceeded`로 끝난다.
 
 <a id="no-eligible-select-one-member"></a>
-[Select-one](02-glossary.ko.md#select-one) ChannelName에서 eligibility와 drain 조건을 적용한 뒤 남은
-member가 하나도 없으면 `Unavailable`이다. Request와 one-way send가 같은 kind로 끝난다.
+[Select-one](02-glossary.ko.md#select-one) ChannelName에 ready target이 있지만 eligibility와 drain 조건을 적용한
+뒤 남은 member가 하나도 없으면 두 경로 모두 기다리지 않고 `Unavailable`로 끝난다. Request와 one-way send가 같은 kind로 끝난다.
 [Weight](02-glossary.ko.md#weight)가 `0`이거나 draining이어서 후보에서 빠진 경우가 여기에 해당하며,
 송신 경로와 connection은 그대로 있으므로 `NotFound`가 아니다. 후보 집합은 weight를 다시 높이거나
 drain이 끝나면 채워진다.
@@ -393,8 +400,9 @@ Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 Server package의 one-way send·publish·명시적 STREAM reply는
 [비동기 실행 정책](../01-execution/01-submit-and-completion.ko.md)의 async-only admission 계약을 따른다. Public call은
 즉시 한 번만 시도하는 동기 terminator를 함께 제공하지 않는다. 별도 stream connector package의 send
-builder는 connector package 계약을 따른다. Request timeout은 reply 대기에만 적용하고 send timeout은
-transport admission 대기에 적용한다.
+builder는 connector package 계약을 따른다. Send timeout은 transport admission 대기에, request timeout은
+reply 대기에 적용한다. Global object request의 admission 대기와 timeout budget은
+[Submit과 완료 §7·§9](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)가 정한다.
 최초 non-blocking transport submit이 즉시 수락되면 Framework scheduler나 별도 work queue에 추가하지
 않고 이미 완료되었거나 resolved된 언어별 awaitable을 반환한다.
 

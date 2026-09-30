@@ -193,3 +193,26 @@ def test_request_tokenless_backpressure_preserves_core_error(
             context.close()
 
     asyncio.run(exercise())
+
+
+def test_request_errno_matches_core_representative():
+    # Core 03-errors §3의 REQUEST result별 대표 errno와 같아야 한다.
+    from zlink.contracts.errors.codes import ErrorCode
+
+    expected = {
+        zlink.RequestResult.TIMED_OUT: errno.ETIMEDOUT,
+        zlink.RequestResult.NOT_FOUND: errno.ENOENT,
+        zlink.RequestResult.TERMINATED: ErrorCode.ETERM,
+        zlink.RequestResult.PROTOCOL_ERROR: errno.EPROTO,
+        zlink.RequestResult.INTERNAL_ERROR: errno.EIO,
+        zlink.RequestResult.REJECTED: errno.EACCES,
+        zlink.RequestResult.CONFLICT: errno.EEXIST,
+        zlink.RequestResult.BUSY: errno.EBUSY,
+        zlink.RequestResult.NOT_CONNECTED: errno.ENOTCONN,
+        zlink.RequestResult.INVALID_ARGUMENT: errno.EINVAL,
+        zlink.RequestResult.INVALID_STATE: ErrorCode.EFSM,
+        zlink.RequestResult.NOT_SUPPORTED: errno.ENOTSUP,
+        zlink.RequestResult.BACKPRESSURED: errno.EAGAIN,
+    }
+    for result, value in expected.items():
+        assert routed_async._request_errno(result) == value

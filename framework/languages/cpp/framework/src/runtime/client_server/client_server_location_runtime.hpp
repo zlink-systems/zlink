@@ -77,17 +77,22 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     struct client_channel_t;
     struct pump_task_state_t;
     struct ready_waiter_t;
+    struct snapshot_connection_t;
+    struct snapshot_source_t;
+    struct worker_lane_snapshot_t;
 
     void start_server (const channel_snapshot_t &channel,
                        const std::optional<location_owner_token_t> &publication_owner);
     void start_client (const channel_snapshot_t &channel);
     void run ();
     void reconcile ();
-    void reconcile_channel (client_channel_t &channel);
+    task_t<void> reconcile_task ();
+    task_t<void> reconcile_channel_task (client_channel_t &channel);
     bool publish_servers ();
-    void pump ();
-    void refresh_client_pump_snapshot ();
-    void publish_snapshot_changes ();
+    task_t<bool> publish_servers_task ();
+    task_t<void> pump ();
+    task_t<worker_lane_snapshot_t> refresh_client_pump_snapshot ();
+    task_t<void> publish_snapshot_changes ();
     task_t<void> dispatch_server (std::shared_ptr<raw_client_server_server_t> owner);
     void stop_servers () noexcept;
     void stop_clients () noexcept;
@@ -95,19 +100,18 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<void> send (const std::string &channel_name,
                        std::string packet_name,
                        std::string content_type,
-                       zlink::message_t message,
-                       std::chrono::milliseconds timeout);
+                       zlink::message_t message);
     task_t<zlink::message_t> request (const std::string &channel_name,
                                       std::string packet_name,
                                       std::string content_type,
                                       zlink::message_t message,
                                       std::chrono::milliseconds timeout);
-    task_t<std::shared_ptr<raw_client_server_client_t>>
-    select_ready (const std::string &channel_name, std::chrono::steady_clock::time_point deadline);
+    task_t<std::shared_ptr<raw_client_server_client_t>> select_ready (std::string channel_name);
+    result_t<client_channel_t *> select_channel_locked (const std::string &channel_name);
     result_t<std::shared_ptr<raw_client_server_client_t>>
-    select_ready_locked (const std::string &channel_name);
-    void complete_ready_waiters (std::chrono::steady_clock::time_point now);
-    std::optional<std::chrono::steady_clock::time_point> next_ready_waiter_deadline () const;
+    select_ready_locked (const std::string &channel_name,
+                         std::chrono::steady_clock::time_point deadline);
+    task_t<void> complete_ready_waiters ();
 
     static std::uint64_t make_lifecycle_generation ();
     static std::uint32_t
@@ -120,8 +124,11 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     static client_server_server_descriptor_t
     to_descriptor (const protocol::client_server_server_admission_t &admission,
                    const location_owner_token_t &owner);
-    bool owner_is_live (const client_server_server_descriptor_t &descriptor) const;
-    client_server_channel_snapshot_t build_snapshot_locked (const std::string &channel_name) const;
+    task_t<bool> owner_is_live_task (client_server_server_descriptor_t descriptor) const;
+    snapshot_source_t snapshot_source_locked (const std::string &channel_name) const;
+    task_t<client_server_channel_snapshot_t> snapshot_task (std::string channel_name) const;
+    task_t<client_server_channel_snapshot_t> build_snapshot_task (snapshot_source_t source) const;
+    client_server_channel_snapshot_t build_snapshot (snapshot_source_t source) const;
     static bool snapshot_equivalent (const client_server_channel_snapshot_t &left,
                                      const client_server_channel_snapshot_t &right) noexcept;
 

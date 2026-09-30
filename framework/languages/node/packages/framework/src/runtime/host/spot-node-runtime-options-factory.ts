@@ -52,6 +52,7 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
   constructor(private readonly options: ZLinkSpotNodeRuntimeOptionsFactoryOptions) {}
 
   create(): ZLinkSpotNodeRuntimeManagerOptions {
+    const spotRouterChannelIdForMesh = this.options.meshRouters.spotRouterChannelIdByMesh();
     return {
       registration: this.options.registration,
       primaryMeshName: this.options.meshRouters.primaryMeshName(),
@@ -59,7 +60,9 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       context: this.options.context,
       channelClient: new DefaultZLinkChannelClient(
         this.options.registration,
-        this.options.channelTransport
+        this.options.channelTransport,
+        this.options.routeTransport,
+        spotRouterChannelIdForMesh
       ),
       fanoutClient: new DefaultZLinkFanoutClient(
         this.options.registration,
@@ -70,7 +73,7 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
         this.options.spotPublisherTransport
       ),
       routedTransport: this.options.routeTransport,
-      spotRouterChannelIdForMesh: this.options.meshRouters.spotRouterChannelIdByMesh(),
+      spotRouterChannelIdForMesh,
       providerResolver: this.options.providerResolver,
       dispatchErrors: this.options.dispatchErrors,
       runtimeEventPublisher: this.options.runtimeEventPublisher,

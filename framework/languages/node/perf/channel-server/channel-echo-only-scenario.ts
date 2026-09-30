@@ -1,0 +1,88 @@
+import { Inject, Injectable } from '@nestjs/common';
+import type { ZLinkClientServerRuntime, ZLinkMessageContext, ZLinkRouteClient, ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
+import { PerfClock } from '../shared/clock';
+import { DecimalText, PerfEchoReply, PerfEchoRequest, RoleConfig } from '../shared/contracts';
+import { Measurement } from '../shared/measurement';
+import { PayloadPattern } from '../shared/payload';
+import { runLoops, until } from '../server-support/wait';
+
+// §11.2: two Channel processes, manual RouteMesh or ClientServer, no Store/objects.
+// Source public request -> typed identity/full-byte validation is one operation.
+// JSON payloads: 1024/4096, request/ordinary. Connector/Actor/Spot/worker/fanout metrics do not apply.
+export class ChannelEchoOnlyScenario {
+  private sequences: number[] = [];
+
+  constructor(
+    private readonly client: ZLinkRouteClient, private readonly measurement: Measurement, private readonly config: RoleConfig,
+    private readonly meshRuntime: ZLinkRouteMeshRuntime, private readonly channelRuntime: ZLinkClientServerRuntime
+  ) {}
+
+  async prepare(): Promise<void> {
+    const { config, measurement } = this;
+    const timeoutMs = config.workload.setupTimeoutMs;
+    try {
+      // observe() is a change stream, not an initial snapshot (monitoring §6): query public status until setup evidence is ready.
+      await until(() => {
+        if (config.topology === 'routemesh') {
+          const status = this.meshRuntime.snapshot(config.meshName!);
+          return status.isReady && status.channels.some((channel) => channel.channelName === config.channelName && channel.isReady && channel.readyTargetCount > 0);
+        }
+        const status = this.channelRuntime.snapshot(config.channelName!);
+        return status.isReady && status.readyTargetCount > 0;
+      }, timeoutMs, 'the Channel target to be ready');
+      this.sequences = new Array<number>(config.workload.logicalStreams as number).fill(0);
+      const request = measurement.request(0, ++this.sequences[0], true);
+      const reply = await this.client.requestToChannel(config.channelName!, request).timeout(config.workload.requestTimeoutMs)
+        .submit<PerfEchoReply>(AbortSignal.timeout(timeoutMs));
+      PayloadPattern.validateIdentity(request, reply);
+      measurement.pattern.validate(reply.payload);
+      measurement.setupEvidence = [{ kind: 'typedProbeEcho', source: 'ZLinkRouteClient.requestToChannel.submit<PerfEchoReply>',
+        observedValue: { correlationId: request.correlationId, receivedTicks: reply.receivedTicks, clockDomainId: reply.clockDomainId } }];
+    } catch (error) {
+      measurement.recordDiagnostic(error);
+    }
+  }
+
+  run = (): Promise<void> => runLoops(this.config.workload.logicalStreams as number, this.config.workload.inflight, (stream) => this.loop(stream));
+
+  private async loop(stream: number): Promise<void> {
+    const { config, measurement } = this;
+    while (measurement.canIssue) {
+      let request = measurement.request(stream, ++this.sequences[stream]);
+      const started = measurement.beginOperation();
+      if (started === undefined) break;
+      request = request.with({ sentTicks: DecimalText.of(started) });
+      try {
+        const reply = await this.client.requestToChannel(config.channelName!, request).timeout(config.workload.requestTimeoutMs).submit<PerfEchoReply>();
+        PayloadPattern.validateIdentity(request, reply);
+        measurement.pattern.validate(reply.payload);
+        measurement.completeOperation(started);
+      } catch (error) {
+        measurement.completeOperation(started, error);
+      }
+    }
+  }
+}
+
+@Injectable()
+export class ChannelEchoHandler {
+  constructor(@Inject(Measurement) private readonly measurement: Measurement) {}
+
+  async handle(request: PerfEchoRequest, _context: ZLinkMessageContext): Promise<PerfEchoReply> {
+    const received = PerfClock.now();
+    const measurement = this.measurement;
+    measurement.handlerEnter();
+    try {
+      measurement.validateRequest(request);
+      const reply = PayloadPattern.reply(request, received);
+      measurement.recordReply(request);
+      if (measurement.phase === 'setup') measurement.setupEvidence = [{ kind: 'typedProbeReply', source: 'ZLinkRequestHandler<PerfEchoRequest,PerfEchoReply>', observedValue: request.correlationId }];
+      return reply;
+    } catch (error) {
+      measurement.recordDiagnostic(error);
+      throw error;
+    } finally {
+      measurement.handlerExit();
+    }
+  }
+}

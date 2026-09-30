@@ -364,6 +364,7 @@ owns physical pipe selection and replacement.
 - A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a client-to-server direction.
 - The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
 - Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections.
+- [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the internal wire representation of ClientServer application metadata.
 - Reusing a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service Liveness
@@ -627,8 +628,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 - The Session owner validates only current Session identity, binding generation,
   ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
   high-water or re-read Actor authority.
-- Requests and pushes arriving after the seal are held by the Session owner until route
-  change or abort. No relocation-specific record-count or byte bound is added.
+- The Session owner's seal handling and the scope of held messages follow
+  [Session–Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). No relocation-specific record-count or byte bound is added.
 - Ordinary server messages arriving on the source object route keep being relayed to the
   target temporary queue. This uses ordering and retransmission of the same TCP
   connection, without a per-message ACK or durable journal.
@@ -701,8 +702,11 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   `actorJoin`(28) as `[request]` — wiring `receiveChunkLimitBytes` into the command 20
   reply, this request's `[reply]` leg — once the
   target's canonical capability is observed (an authority fence plus a peer admitted at
-  that generation); when it is not, each runtime keeps its language-internal admission path
-  (a transitional fallback). The receiver resolves the stable type from the Store Actor
+  that generation); when it is not observed for a target on a different node, each runtime
+  keeps its language-internal admission path (a transitional fallback).
+  [Spot and Actor membership §4](../03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order)
+  defines the path and commit order for same-node Actor Join.
+  The receiver resolves the stable type from the Store Actor
   Authority row per §9, never from the wire. (An earlier revision stated C++ and .NET did
   not originate; now that the Store-backed canonical receiver exists in all four runtimes,
   origination is unified across all four.)

@@ -274,16 +274,24 @@ impl PollerStorage {
         if rc == 0 {
             return Ok(0);
         }
-        let registrations = self.sockets.lock().expect("poller sockets");
         let mut written = 0usize;
         for src in raw_events.iter().take(rc as usize) {
             let mut revents = src.events;
-            let registration = registrations.get(&(src.socket as usize));
-            if revents & (crate::POLLOUT | POLLCOMPLETION) != 0
-                && registration.is_some_and(|item| item.events & POLLCOMPLETION != 0)
+            let registration = if revents & (crate::POLLOUT | POLLCOMPLETION) != 0 {
+                self.sockets
+                    .lock()
+                    .expect("poller sockets")
+                    .get(&(src.socket as usize))
+                    .map(|item| (item.events, item.completion_owner.as_ref().map(Arc::clone)))
+            } else {
+                None
+            };
+            if registration
+                .as_ref()
+                .is_some_and(|(events, _)| events & POLLCOMPLETION != 0)
             {
                 let drained = registration
-                    .and_then(|item| item.completion_owner.as_ref())
+                    .and_then(|(_, owner)| owner)
                     .map(|owner| owner.drain())
                     .transpose()?
                     .unwrap_or(0);

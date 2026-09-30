@@ -68,11 +68,11 @@
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
 #include <zlink/stream_connector_throwing.hpp>
 #include <zlink/stream_connector/contracts/calls/zlink_stream_calls.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 #include <zlink/stream_connector/contracts/compression.hpp>
 #include <zlink/stream_connector/contracts/connector.hpp>
 #include <zlink/stream_connector/contracts/result.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 #include <zlink/stream_connector/contracts/version.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_assert.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
@@ -436,7 +436,8 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::location_
                               std::chrono::milliseconds>);
 static_assert (std::is_same_v<zlink::framework::store_condition_t,
                               std::variant<zlink::framework::store_missing_condition_t,
-                                           zlink::framework::store_version_condition_t>>);
+                                           zlink::framework::store_version_condition_t,
+                                           zlink::framework::store_value_condition_t>>);
 static_assert (
   std::is_same_v<zlink::framework::store_mutation_t,
                  std::variant<zlink::framework::store_put_t, zlink::framework::store_delete_t>>);

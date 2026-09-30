@@ -58,8 +58,13 @@ async function main(): Promise<void> {
   if (config.client === undefined) throw new Error('Client configuration is required.');
   const scenario = config.client.scenarios;
   if (scenario === undefined) throw new Error('A special scenario name is required.');
-  if (scenario === 'B4-C2-C3')
+  if (scenario === 'B4-C3')
     await runFailureTransition(config.client.gatewayEndpoint, config.client.opsEndpoint);
+  else if (scenario === 'C2')
+    await runGracefulDisconnect(
+      config.client.opsEndpoint,
+      config.client.targetNodeId ?? NodeIds.east
+    );
   else if (scenario === 'LAYOUT') await runLayoutProbe(config.client.opsEndpoint);
   else if (scenario === 'PAIR') await runOpsProbe(config.client.opsEndpoint);
   else if (scenario === 'C4') await runSpotAlert(config.client.opsEndpoint);
@@ -118,7 +123,6 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
       .timeout(20_000)
       .submit();
     zlinkStreamAssert.ensure(targetNode.registered, 'ZW-C3 did not begin from Registered=true.');
-    zlinkStreamAssert.ensure(targetNode.connected, 'ZW-C2 did not begin from Connected=true.');
     const unregistered = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
       .where(
@@ -126,15 +130,7 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
       )
       .timeout(60_000)
       .submit();
-    const disconnected = ops
-      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where(
-        (message) => message.payload.nodeId === targetNode.nodeId && !message.payload.connected
-      )
-      .timeout(60_000)
-      .submit();
-    console.log(`scenario ZW-B4-C2-C3 armed node=${targetNode.nodeId}`);
-    await withScenarioContext('ZW-C2 runtime disconnected status', disconnected);
+    console.log(`scenario ZW-B4-C3 armed node=${targetNode.nodeId}`);
     const expired = source
       .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where(
@@ -160,10 +156,32 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
     );
     console.log(`crash-boundary=${previousOwnerTerminal.error} actor=${targetJoin.playerId}`);
     console.log('scenario ZW-B4 passed');
-    console.log('scenario ZW-C2 passed');
     console.log('scenario ZW-C3 passed');
   } finally {
     await closeAll(source, target, ops);
+  }
+}
+
+async function runGracefulDisconnect(opsEndpoint: string, targetNodeId: string): Promise<void> {
+  const ops = connector(opsEndpoint);
+  try {
+    await ops.connect();
+    const nodes = await watch(ops);
+    const targetNode = nodes.nodes.find((node) => node.nodeId === targetNodeId);
+    zlinkStreamAssert.ensure(
+      targetNode?.connected === true,
+      'ZW-C2 did not begin from Connected=true.'
+    );
+    const disconnected = ops
+      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where((message) => message.payload.nodeId === targetNodeId && !message.payload.connected)
+      .timeout(60_000)
+      .submit();
+    console.log(`scenario ZW-C2 armed node=${targetNodeId}`);
+    await withScenarioContext('ZW-C2 runtime disconnected status', disconnected);
+    console.log('scenario ZW-C2 passed');
+  } finally {
+    await closeAll(ops);
   }
 }
 

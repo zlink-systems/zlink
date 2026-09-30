@@ -11,7 +11,9 @@ public final class NativeErrorCodes {
     public static final int EDEADLK = 35;
     public static final int ENOMEM = 12;
     public static final int EFAULT = 14;
+    public static final int EACCES = 13;
     public static final int EBUSY = 16;
+    public static final int EEXIST = 17;
     public static final int EINVAL = 22;
     public static final int EPROTO = 71;
     public static final int EADDRINUSE = 98;
@@ -21,6 +23,7 @@ public final class NativeErrorCodes {
     public static final int EHOSTUNREACH = 113;
     public static final int ESHUTDOWN = 108;
     public static final int ETIMEDOUT = 110;
+    public static final int EIO = 5;
     public static final int ENOBUFS = 105;
     public static final int ESTALE = 116;
     public static final int ECANCELED = 125;

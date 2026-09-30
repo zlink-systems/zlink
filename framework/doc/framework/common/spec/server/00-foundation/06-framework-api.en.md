@@ -405,16 +405,24 @@ Public messaging takes a typed payload, and Framework determines the packet name
 Node direct and channel operations perform target selection and submit in one call. There's
 no public `selectNode`, `selectOne`, or `selectMany` stage.
 
+<a id="channel-selection-result"></a>
 The Channel client looks up ChannelName in the process-local route index and selects one
-RouteMesh MeshNode or ClientServer client. A name not in the index ends with `NotFound` and
-doesn't search or relay to a different MeshNode or ClientServer client. If a registered send
-path has no ready target pipe, it uses `Unavailable`; if the
-[ready target](02-glossary.en.md#ready-target) snapshot itself doesn't exist, it uses
-`NotFound`.
+RouteMesh MeshNode or ClientServer client. This section decides the selection result.
+
+- A name not in the index ends with `NotFound` and doesn't search or relay to a different
+  MeshNode or ClientServer client.
+- A RouteMesh send path doesn't wait. If the [ready target](02-glossary.en.md#ready-target)
+  snapshot itself doesn't exist, it ends with `NotFound`; if there's no ready target pipe, it
+  ends with `Unavailable`.
+- A ClientServer send path with no ready target waits within the admission deadline
+  ([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules))
+  ([Channel messaging](../02-channel-transport/02-channel-messaging.en.md#clientserver-ready-wait)).
+  If no ready target appears within it, it ends with `DeadlineExceeded`.
 
 <a id="no-eligible-select-one-member"></a>
-When applying eligibility and drain leaves a [select-one](02-glossary.en.md#select-one)
-ChannelName with no member at all, the result is `Unavailable`, and a request and a one-way
+When a [select-one](02-glossary.en.md#select-one) ChannelName has a ready target but applying
+eligibility and drain leaves no member at all, both paths end with `Unavailable` without
+waiting, and a request and a one-way
 send end with the same kind. A member dropped because its [weight](02-glossary.en.md#weight) is
 `0` or because it is draining falls here; the send path and the connection are still there, so
 it is not `NotFound`. The candidate set refills when the weight rises again or the drain ends.
@@ -449,8 +457,10 @@ The server package's one-way send/publish/explicit STREAM reply follows the asyn
 admission contract of the
 [Async Execution Policy](../01-execution/01-submit-and-completion.en.md). Public calls don't also
 provide a synchronous terminator that tries once immediately. The separate stream connector
-package's send builder follows the connector package's contract. Request timeout applies
-only to waiting for a reply; send timeout applies to waiting for transport admission. If the
+package's send builder follows the connector package's contract. Send timeout applies to
+waiting for transport admission, and request timeout to waiting for a reply. The admission
+wait and timeout budget of a global object request are set by
+[Submit and completion §§7, 9](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules). If the
 initial non-blocking transport submit is accepted immediately, an already-completed or
 resolved language-specific awaitable is returned without adding to the framework scheduler
 or a separate work queue.

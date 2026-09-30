@@ -109,7 +109,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // Retires an admitted peer lifetime by (RID, lifecycle generation). Core
     // queues a successor admission of the same RID behind this explicit
     // predecessor disconnect on every member that admitted the old lifetime.
-    void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration);
+    void DisconnectPeerLifetime(RoutingId peerRid, string endpoint, ulong lifecycleGeneration);
 
     IZLinkBackendSpot CreateSpot();
 

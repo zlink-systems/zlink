@@ -242,8 +242,18 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         traceJoinSent();
         Message requestPart = Message.from(request);
         ZLinkSpot<?> localSpot = services.spotResolver().apply(spotId);
-        if (localSpot == null
-                && (services.routedTransport() != null || services.transferTransport() != null)
+        if (localSpot != null) {
+            return manage(
+                    services.actors()
+                            .joinLocalActor(context.actor(), spotId, requestPart)
+                            .thenApply(
+                                    result ->
+                                            ZLinkActorJoinResults.decode(
+                                                    result, context.actorRef(), context.meshName()))
+                            .whenComplete((result, failure) -> requestPart.close())
+                            .whenComplete((result, failure) -> traceJoinReplyReceived(failure)));
+        }
+        if ((services.routedTransport() != null || services.transferTransport() != null)
                 && (internalRouteChannel != null || services.remoteAddressResolver() != null)) {
             return manage(
                     joinRemoteRoutedSpot(requestPart, operationId, deadlineNanos)
@@ -251,10 +261,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             .thenCompose(this::decodeCanonicalJoinResult)
                             .whenComplete((r, e) -> traceJoinReplyReceived(e)));
         }
-        CompletionStage<SpotTransportAddress> target =
-                localSpot != null
-                        ? CompletableFuture.completedFuture(localAddress())
-                        : resolveRemoteAddress(spotId);
+        CompletionStage<SpotTransportAddress> target = resolveRemoteAddress(spotId);
         return manage(
                 target.handle(
                                 (address, error) -> {
@@ -280,18 +287,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                     }
                                 })
                         .thenCompose(stage -> stage)
-                        .whenComplete(
-                                (result, error) -> {
-                                    if (localSpot != null && error != null) {
-                                        services.actors().cancelLocalJoin(context.actor());
-                                    }
-                                })
                         .thenCompose(
                                 result ->
-                                        completeLocalJoin(localSpot, result)
-                                                .thenCompose(
-                                                        ignored ->
-                                                                applyRemoteActorMigration(result))
+                                        applyRemoteActorMigration(result)
                                                 .thenCompose(
                                                         ignored -> decodeJoinResultAsync(result)))
                         .whenComplete((r, e) -> traceJoinReplyReceived(e)));
@@ -311,10 +309,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         //  directly; reserving another lifecycle boundary from inside this
         //  operation would queue behind this very turn and deadlock.
         bounded.deferredActiveTurnSeal =
-                services.actors()
-                        .actorRelocationLane(context.actorRef().actorId())
-                        .captureActiveTurnSealHandle()
-                        .orElse(null);
+                ZLinkSerialExecutionQueue.captureCurrentActiveTurnSealHandle().orElse(null);
         // A deferred Join is an infrastructure/lifecycle operation. It must
         // not inherit the application execution context of the handler that
         // registered it; otherwise a synchronous barrier activation can make
@@ -437,16 +432,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private void rejectSameGateWait() {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectCurrentActorJoinWait(context.actorRef().actorId());
-    }
-
-    private CompletionStage<Void> completeLocalJoin(
-            ZLinkSpot<?> localSpot, ZLinkBackendActorJoinResult result) {
-        if (localSpot == null
-                || result.result() != ZLinkBackendRequestResult.OK
-                || result.joinResultCode() != 0) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return services.actors().completeLocalJoinFromCaller(context.actor());
     }
 
     private void traceJoinSent() {
@@ -893,7 +878,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
 
     private CompletionStage<SpotTransportAddress> resolveRemoteAddress(String spotId) {
         if (services.remoteAddressResolver() == null) {
-            return CompletableFuture.completedFuture(localAddress());
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            "local Join target is unavailable: " + spotId));
         }
         return resolveHandle(services.remoteAddressResolver(), spotId)
                 .thenCompose(services.remoteAddressResolver()::resolve)
@@ -909,11 +897,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             }
                             return address.get();
                         });
-    }
-
-    private SpotTransportAddress localAddress() {
-        return new SpotTransportAddress(
-                "", context.actorRef().nodeRid(), spotId, 0L, 0L, ZLinkSpotKind.USER);
     }
 
     private static CompletionStage<SpotHandle> resolveHandle(

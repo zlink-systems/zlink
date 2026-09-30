@@ -765,16 +765,34 @@ int main ()
     gate.require (messaging_test.find ("\"errorMessage\":\"missing handler\"") != std::string::npos,
                   "E2E-CP-33", "RL-D4 has no raw camelCase errorMessage assertion");
 
-    /* IMP-CP-06 — recovery re-registers local rows before applying disconnect diff. */
-    gate.require (location_auto_connect.find ("owner_lease_usable") != std::string::npos,
-                  "IMP-CP-06", "auto-connect recovery has no heartbeat defer boundary");
-    gate.require (location_auto_connect.find ("republish_after_store_recovery")
-                    != std::string::npos,
-                  "IMP-CP-06", "auto-connect recovery does not republish local rows");
-    gate.require (location_auto_connect.find (
-                    "invalidate_all_routes_after_store_recovery ();\n            return;")
-                    != std::string::npos,
-                  "IMP-CP-06", "recovery diff races the first provider heartbeat");
+    /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
+    const auto complete_recovery_snapshot =
+      location_auto_connect.find ("} while (page.continuation_token);");
+    const auto recovery_owner_check =
+      location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
+    const auto recovery_republish =
+      location_auto_connect.find ("republish_after_store_recovery ()", recovery_owner_check);
+    const auto recovery_invalidation = location_auto_connect.find (
+      "invalidate_all_routes_after_store_recovery ();", recovery_republish);
+    const auto recovery_diff =
+      location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
+    gate.require (
+      complete_recovery_snapshot != std::string::npos && recovery_owner_check != std::string::npos
+        && recovery_republish != std::string::npos && recovery_invalidation != std::string::npos
+        && recovery_diff != std::string::npos
+        && location_auto_connect.find (
+             "loop.recovery_started_at = std::chrono::steady_clock::now ()", recovery_republish)
+             != std::string::npos
+        && location_auto_connect.find ("< _runtime->options ().owner_lease_ttl", recovery_diff)
+             != std::string::npos
+        && location_auto_connect.find ("for (const auto &[key, target] : desired)", recovery_diff)
+             != std::string::npos
+        && location_auto_connect.find (
+             "invalidate_all_routes_after_store_recovery ();\n            return;",
+             recovery_republish)
+             == std::string::npos,
+      "IMP-CP-06",
+      "auto-connect recovery must defer missing-target removal and connect new targets");
     gate.require (location_auto_connect.find ("_runtime->options ().polling_interval")
                       != std::string::npos
                     && location_auto_connect.find ("sleep_for (std::chrono::milliseconds (100))")
@@ -939,12 +957,13 @@ int main ()
         && spot_runtime.find ("detail::report_logical_multicast_failure") != std::string::npos,
       "CPP-DISP-004", "logical multicast failures after dequeue are not observable");
 
-    /* CPP-DISP-006 — close and idle-eviction admission share the node owner;
-     * the unified Actor token carries that lease through handler terminal. */
+    /* CPP-DISP-006 — close and idle-eviction admission share one seal decided
+     * on the node owner; the unified Actor token carries that lease through
+     * handler terminal. */
     gate.require (
-      spot_runtime.find ("auto queue = state_sync ([this] {") != std::string::npos
-        && spot_runtime.find ("if (callback_admission_closed || idle_eviction_in_progress || "
-                              "close_reservation != 0)")
+      spot_runtime.find ("bool spot_context_state_t::admit_core (bool claim) noexcept")
+          != std::string::npos
+        && spot_runtime.find ("return state_sync ([this, claim] { return admit_core (claim); });")
              != std::string::npos
         && spot_runtime.find ("class actor_dispatch_admission_token_t final") != std::string::npos
         && spot_runtime.find ("admission_token->acquire_dispatch_phase") != std::string::npos
@@ -952,8 +971,7 @@ int main ()
         && spot_runtime.find ("admission_token ? admission_token->handler_terminal ()")
              != std::string::npos
         && spot_runtime.find ("const bool admission_preclaimed =") != std::string::npos
-        && spot_runtime.find ("!admission_preclaimed && !state->enter_callback ()")
-             != std::string::npos
+        && spot_runtime.find ("!admission_preclaimed && !state->admit (true)") != std::string::npos
         && spot_runtime.find ("&& state->close_reservation == 0") != std::string::npos
         && spot_runtime.find ("return queue->try_post_async") != std::string::npos,
       "CPP-DISP-006",
@@ -1268,15 +1286,9 @@ int main ()
                   "Actor dispatch does not separate general-message admission from exact Message "
                   "Follow and bound-session admission");
 
-    /* CPP-SESS-001 — a STREAM-originated Actor relay creates a fresh
-     * downstream request correlation. Reusing the upstream STREAM correlation
-     * would collide with the target exactly-once table when a replacement
-     * session retries the same packet. */
-    gate.require (
-      mesh_node_runtime.find ("codec.create_envelope (kind") != std::string::npos
-        && mesh_node_runtime.find ("envelope.correlation_id") == std::string::npos,
-      "CPP-SESS-001",
-      "STREAM Actor relay reuses an upstream correlation instead of creating a fresh request id");
+    /* CPP-SESS-001: binding §5 requires the original request correlation.
+     * The public request wire regression in session_seal_relay verifies this
+     * behavior instead of a source assertion about correlation generation. */
 
     /* CPP-SESS-004 — replacement callback completion must schedule the close
      * with an asynchronous timer. Sleeping in the callback would hold the

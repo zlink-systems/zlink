@@ -129,6 +129,10 @@ result_t<void> validate_header (const stream_header_t &header)
     }
     const bool is_reply =
       header.kind == message_kind_t::response || header.kind == message_kind_t::error;
+    if (is_reply && !header.name.empty ()) {
+        return result_t<void>::failure (error_code_t::validation_failed,
+                                        "Response and error packet names must be empty.");
+    }
     if ((!is_reply && header.name.empty ())
         || header.name.size () > std::numeric_limits<std::uint8_t>::max ()) {
         return result_t<void>::failure (error_code_t::validation_failed,
@@ -152,11 +156,6 @@ result_t<void> validate_header (const stream_header_t &header)
 result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_t &source) const
 {
     auto header = source;
-    if ((header.kind == message_kind_t::response || header.kind == message_kind_t::error)
-        && !header.name.empty ()) {
-        return result_t<std::vector<std::uint8_t>>::failure (
-          error_code_t::validation_failed, "Response and error packet names must be empty.");
-    }
     if (header.request_seq) {
         set_flag (header.flags, header_flags_t::has_request_seq);
     } else {
@@ -314,7 +313,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
                                                    "Helper header contains trailing bytes.");
     }
     if (auto validation = validate_header (header); !validation) {
-        return result_t<stream_header_t>::failure (validation.error ()->code,
+        return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    validation.error ()->message);
     }
     return result_t<stream_header_t>::success (std::move (header));

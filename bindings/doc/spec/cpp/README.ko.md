@@ -451,7 +451,7 @@ current·pending·queue count를 유지하고 budgeted/completion peak를 각 cu
 `0`은 Core monitor 기본값을 선택하고, 양수는 정확한 monitor queue byte HWM으로
 변환 없이 전달한다. Message-count overload나 alias는 없다.
 
-`recv(received_t&)`, `subscribe(topic_message_t&)`, `recv(message_t&)`, `subscribe_part(...)`의
+`recv(received_t&)`, `subscribe(topic_message_t&)`의
 출력 객체는 C++ copy·`close()`·소멸자로 part와 routing/topic/request metadata의 수명을 관리한다.
 수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 

@@ -64,16 +64,18 @@ void test_immediately_admitted_async_send ()
     sender.options ().send_timeout (std::chrono::seconds (5));
     zlink::message_t probe = zlink_cpp_contract::make_message ("ready");
     sender.send ().message (probe).submit ();
-    zlink::message_t received_probe;
+    zlink::received_t received_probe;
     assert (receiver.recv (received_probe) == 0);
-    assert (received_probe.to_string () == "ready");
+    assert (received_probe.is_single_part ());
+    assert (received_probe.first_part ().to_string () == "ready");
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("async");
     await_send (sender.send ().message (outbound).async ().admitted).get ();
     assert (!outbound.valid ());
-    zlink::message_t inbound;
+    zlink::received_t inbound;
     assert (receiver.recv (inbound) == 0);
-    assert (inbound.to_string () == "async");
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "async");
 }
 
 bool has_event (zlink::poll_event_flag_t actual_,
@@ -136,9 +138,10 @@ void test_backpressured_async_send_retries_from_public_poller ()
       receiver, zlink::poll_event_flag_t::pollin);
     assert (zlink::poll (&probe_item, 1, remaining) == 1);
     assert (has_event (probe_item.revents, zlink::poll_event_flag_t::pollin));
-    zlink::message_t received_probe;
+    zlink::received_t received_probe;
     assert (receiver.recv (received_probe, zlink::recv_flags_t::dontwait) == 0);
-    assert (received_probe.to_string () == "pair-ready");
+    assert (received_probe.is_single_part ());
+    assert (received_probe.first_part ().to_string () == "pair-ready");
 
     // Registration installs this public poller as the completion owner before
     // async(). Exact-token completion readiness is consumed only after credit
@@ -171,12 +174,13 @@ void test_backpressured_async_send_retries_from_public_poller ()
     // Restore credit without touching the owning poller. Core publishes the
     // first WRITABLE token as soon as the sender observes the credit edge; the
     // refill below consumes that credit again before the owner drains it.
+    zlink::received_t received;
     for (size_t index = 0; index != accepted; ++index) {
-        zlink::message_t received;
         assert (receiver.recv (received) == 0);
+        assert (received.is_single_part ());
         std::string payload = "fill-" + std::to_string (index);
         payload.resize (payload_size, 'f');
-        assert (received.to_string () == payload);
+        assert (received.first_part ().to_string () == payload);
     }
     size_t refilled = 0;
     for (; refilled != accepted; ++refilled) {
@@ -199,9 +203,9 @@ void test_backpressured_async_send_retries_from_public_poller ()
     assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
 
     for (size_t index = 0; index != refilled; ++index) {
-        zlink::message_t received;
         assert (receiver.recv (received) == 0);
-        assert (received.to_string () == filler);
+        assert (received.is_single_part ());
+        assert (received.first_part ().to_string () == filler);
     }
 
     // The binding has no private send-progress thread. Until the public poller
@@ -221,9 +225,9 @@ void test_backpressured_async_send_retries_from_public_poller ()
     assert (pending->ready ());
     pending->get ();
 
-    zlink::message_t received;
     assert (receiver.recv (received) == 0);
-    assert (received.to_string () == expected);
+    assert (received.is_single_part ());
+    assert (received.first_part ().to_string () == expected);
 
     zlink::poll_item_t no_duplicate = zlink::poll_item_t::from_socket (
       receiver, zlink::poll_event_flag_t::pollin);
@@ -292,8 +296,10 @@ void test_pending_send_socket_close_is_typed_terminal ()
 
     zlink::message_t probe = zlink_cpp_contract::make_message ("ready");
     sender.send ().message (probe).submit ();
-    zlink::message_t received_probe;
+    zlink::received_t received_probe;
     assert (receiver.recv (received_probe) == 0);
+    assert (received_probe.is_single_part ());
+    assert (received_probe.first_part ().to_string () == "ready");
 
     zlink::poller_t poller;
     poller.add (sender, zlink::poll_event_flag_t::pollcompletion, 92);
@@ -373,6 +379,7 @@ void test_pending_routed_send_target_removal_is_not_found ()
 
     assert (!pending->ready ());
 
+    zlink::socket_monitor_t monitor = router.monitor_open (zlink::monitor_event::disconnected);
     router.disconnect_rid (dealer_id);
     zlink::poll_event_t event{};
     assert (poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
@@ -386,6 +393,18 @@ void test_pending_routed_send_target_removal_is_not_found ()
           && error.internal_errno () == ENOENT;
     }
     assert (not_found);
+
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      monitor, static_cast<uint64_t> (zlink::monitor_event::disconnected), 5000));
+    bool missing_rid_is_connect_error = false;
+    try {
+        router.disconnect_rid (dealer_id);
+    }
+    catch (const zlink::connect_error_t &error) {
+        missing_rid_is_connect_error =
+          error.result () == zlink::connect_result_t::not_found && error.code () == 605;
+    }
+    assert (missing_rid_is_connect_error);
     poller.close ();
 }
 

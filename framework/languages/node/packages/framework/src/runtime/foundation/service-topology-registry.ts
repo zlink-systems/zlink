@@ -236,7 +236,11 @@ export class ServiceTopologyRegistry {
   hasKnownChannelTarget(channelName: string): boolean {
     requireText(channelName, 'channelName');
     return [this.local, ...this.knownByRid.values()].some(
-      (descriptor) => selectableChannel(descriptor, channelName) !== undefined
+      (descriptor) =>
+        (descriptor.state === 'serving' ||
+          descriptor.state === 'retiring' ||
+          descriptor.state === 'draining') &&
+        findChannel(descriptor, channelName) !== undefined
     );
   }
 

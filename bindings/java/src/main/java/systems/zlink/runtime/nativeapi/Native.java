@@ -977,38 +977,40 @@ public final class Native {
         }
     }
 
-    public static int subscribe(MemorySegment subject, MemorySegment sourceRidOut,
-                                MemorySegment partsOut,
-                                MemorySegment partCountOut,
-                                MemorySegment topicIdOut,
-                                MemorySegment topicIdLenOut,
+    public static int subscribe(MemorySegment subject, RecvScratch recvScratch,
                                 int flags) {
         try {
             NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
             scratch.reset();
-            long topicCapacity = topicIdLenOut == null
-                || topicIdLenOut.address() == 0
-                ? 0L : Math.max(0L,
-                    topicIdLenOut.get(ValueLayout.JAVA_LONG, 0));
             MethodHandle receiver = (flags & SEND_DONT_WAIT) != 0
                 ? MH_SUBSCRIBE_CRITICAL : MH_SUBSCRIBE;
+            long topicCapacity = recvScratch.topicCapacity();
             for (;;) {
                 int rc = (int) receiver.invokeExact(subject,
-                    scratch.nodeRidPtrOut, topicIdOut, topicCapacity,
-                    topicIdLenOut, scratch.parts(), scratch.capacity(),
-                    scratch.countOut, flags);
-                if (rc != RecvResult.BUFFER_TOO_SMALL.value()
-                    || scratch.requiredCount() <= scratch.capacity()) {
-                    if (rc == RecvResult.OK.value()) {
-                        copyRoutingIdOut(sourceRidOut,
-                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
-                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
-                        partCountOut.set(ValueLayout.JAVA_LONG, 0,
-                            scratch.requiredCount());
-                    }
+                    scratch.nodeRidPtrOut, recvScratch.topicOut,
+                    topicCapacity, recvScratch.topicLenOut, scratch.parts(),
+                    scratch.capacity(), scratch.countOut, flags);
+                if (rc == RecvResult.OK.value()) {
+                    copyRoutingIdOut(recvScratch.sourceRidOut,
+                        scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                    recvScratch.partsOut.set(ValueLayout.ADDRESS, 0,
+                        scratch.parts());
+                    recvScratch.partCountOut.set(ValueLayout.JAVA_LONG, 0,
+                        scratch.requiredCount());
                     return rc;
                 }
-                scratch.grow(scratch.requiredCount());
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()) {
+                    return rc;
+                }
+                if (recvScratch.growTopicBufferIfRequired()) {
+                    topicCapacity = recvScratch.topicCapacity();
+                    continue;
+                }
+                if (scratch.requiredCount() > scratch.capacity()) {
+                    scratch.grow(scratch.requiredCount());
+                    continue;
+                }
+                return rc;
             }
         } catch (Throwable t) {
             throw new RuntimeException("zlink_subscribe failed", t);
@@ -1016,23 +1018,27 @@ public final class Native {
     }
 
     public static int subscriptionEvent(MemorySegment subject,
-                                        MemorySegment sourceRidOut,
-                                        MemorySegment subscribedOut,
-                                        MemorySegment topicIdOut,
-                                        MemorySegment topicIdLenOut,
-                                        int flags) {
+                                        RecvScratch recvScratch, int flags) {
         NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            int rc = (int) MH_XPUB_RECV.invokeExact(subject,
-              scratch.nodeRidPtrOut,
-              subscribedOut, topicIdOut,
-              topicIdLenOut.get(ValueLayout.JAVA_LONG, 0), topicIdLenOut,
-              flags);
-            if (rc == RecvResult.OK.value()) {
-                NativeRoutingIds.copyTo(sourceRidOut,
+            long topicCapacity = recvScratch.topicCapacity();
+            for (;;) {
+                int rc = (int) MH_XPUB_RECV.invokeExact(subject,
+                    scratch.nodeRidPtrOut, recvScratch.subscribedOut,
+                    recvScratch.topicOut, topicCapacity, recvScratch.topicLenOut,
+                    flags);
+                if (rc != RecvResult.OK.value()) {
+                    if (rc == RecvResult.BUFFER_TOO_SMALL.value()
+                        && recvScratch.growTopicBufferIfRequired()) {
+                        topicCapacity = recvScratch.topicCapacity();
+                        continue;
+                    }
+                    return rc;
+                }
+                NativeRoutingIds.copyTo(recvScratch.routingIdOut,
                     scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                return rc;
             }
-            return rc;
         } catch (Throwable t) {
             throw new RuntimeException("zlink_xpub_recv failed", t);
         }

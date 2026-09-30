@@ -1235,15 +1235,16 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
 
     const auto tictactoe_client =
       read_text_file (cpp_root / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
-    EXPECT_NE (tictactoe_client.find ("use_default_codec (zlink::stream_connector::codec_t::json)"),
+    EXPECT_NE (tictactoe_client.find (
+                 "connector_options.typed_codec = zlink::stream_connector::json_typed_codec ()"),
                std::string::npos)
       << "TicTacToe typed stream requests must use the framework JSON connector path";
 
     const auto deliverydispatch_client = read_text_file (
       cpp_root / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
-    EXPECT_NE (
-      deliverydispatch_client.find ("use_default_codec (zlink::stream_connector::codec_t::json)"),
-      std::string::npos)
+    EXPECT_NE (deliverydispatch_client.find (
+                 "connector_options.typed_codec = zlink::stream_connector::json_typed_codec ()"),
+               std::string::npos)
       << "DeliveryDispatch typed stream requests must use the framework JSON connector path";
 
     const auto deliverydispatch_runner =
@@ -1360,7 +1361,8 @@ TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
       << "Bingo domain state must not depend on protobuf runtime types";
     EXPECT_EQ (session.find ("stream_codec_t"), std::string::npos)
       << "Bingo session code must not select the framework-owned bound stream codec";
-    EXPECT_NE (client.find (".codecs ().use (zlink::framework_codecs::protobuf ())"),
+    EXPECT_NE (client.find (
+                 "std::make_shared<const zlink::framework_codecs::protobuf_codec_extension_t> ()"),
                std::string::npos)
       << "Bingo client connectors must enable the Protobuf stream codec";
 }
@@ -1802,12 +1804,10 @@ TEST (CppFrameworkSampleParity, BingoHostsUseRouteMeshCapabilities)
     EXPECT_NE (
       session_factory.find ("options.codecs ().use (zlink::framework_codecs::protobuf ())"),
       std::string::npos);
-    EXPECT_NE (
-      client_main.find ("core_client1.codecs ().use (zlink::framework_codecs::protobuf ())"),
-      std::string::npos);
-    EXPECT_NE (
-      client_main.find ("core_client2.codecs ().use (zlink::framework_codecs::protobuf ())"),
-      std::string::npos);
+    EXPECT_NE (client_main.find (".typed_codec = std::make_shared"), std::string::npos);
+    EXPECT_NE (client_main.find (
+                 "std::make_shared<const zlink::framework_codecs::protobuf_codec_extension_t> ()"),
+               std::string::npos);
     EXPECT_EQ (client.find (".add_protobuf"), std::string::npos);
     EXPECT_EQ (api_framework.find (".add_message_pack"), std::string::npos);
     EXPECT_EQ (play_factory.find (".add_message_pack"), std::string::npos);
@@ -2032,23 +2032,6 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
     const nlohmann::json amount_wire = amount;
     EXPECT_TRUE (amount_wire.is_number ());
     EXPECT_EQ (amount_wire.get<zlink::samples::shoppingmall::decimal_t> (), amount);
-}
-
-TEST (CppFrameworkSampleParity, ChannelSendBackpressureUsesIndependentDefault)
-{
-    const auto source = read_text_file (
-      cpp_language_root () / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
-    const auto submit_send = source.find ("channel_outbound_exchange_t::submit_send");
-    ASSERT_NE (submit_send, std::string::npos);
-    const auto submit_send_body = source.substr (submit_send);
-
-    EXPECT_NE (source.find ("default_send_wait_timeout = std::chrono::milliseconds (1000)"),
-               std::string::npos)
-      << "one-way send backpressure must use the contract's 1000ms default";
-    EXPECT_NE (submit_send_body.find ("resolve_send_wait_timeout"), std::string::npos)
-      << "one-way send must use its own backpressure policy";
-    EXPECT_EQ (submit_send_body.find ("resolve_channel_wait_timeout"), std::string::npos)
-      << "one-way send must not reuse request/reply timeout policy";
 }
 
 TEST (CppFrameworkSampleParity, ClientScenariosUseBlockingHttpSubmit)

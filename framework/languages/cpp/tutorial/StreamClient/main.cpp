@@ -44,6 +44,7 @@ int main ()
         // the Framework, and speaks to the port the stream node opened. Every call
         // here is the connector's blocking form.
         sc::connector_options_t options;
+        options.typed_codec = sc::json_typed_codec ();
         options.endpoint = "tcp://127.0.0.1:7421";
         options.connect_timeout = std::chrono::seconds (5);
         options.request_timeout = std::chrono::seconds (5);
@@ -51,7 +52,6 @@ int main ()
         options.dispatch_mode = sc::dispatch_mode_t::immediate;
 
         auto connector = sc::connector_factory_t::create (options);
-        connector.codecs ().enable_codec (sc::codec_t::json).use_default_codec (sc::codec_t::json);
 
         require (connector.connect (), "connect");
         std::cout << "connected: " << std::boolalpha << connector.is_connected () << std::endl;

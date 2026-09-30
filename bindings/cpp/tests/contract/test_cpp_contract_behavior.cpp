@@ -94,6 +94,39 @@ void test_stream_packet_reset_and_reuse ()
     assert (packet.empty ());
 }
 
+void test_stream_disconnect_rid_closes_peer_and_returns_connect_not_found ()
+{
+    zlink::context_t context;
+    zlink::stream_socket_t server (context);
+    zlink::socket_monitor_t monitor = server.monitor_open ();
+    server.options ().recv_mode (zlink::stream_recv_mode_t::packet);
+    server.bind ("tcp://127.0.0.1:0");
+    const std::string endpoint = server.options ().last_endpoint ();
+    zlink_cpp_contract::raw_tcp_client_t client (endpoint);
+    assert (zlink_cpp_contract::wait_stream_connected (monitor));
+
+    const std::vector<unsigned char> frame =
+      zlink_cpp_contract::encode_stream_packet_frame ("disconnect-peer");
+    client.send_all (reinterpret_cast<const char *> (frame.data ()), frame.size ());
+    zlink::stream_packet_t packet;
+    assert (server.recv_packet (packet));
+    const auto peer_rid = packet.routing_id ();
+    assert (peer_rid.has_value ());
+
+    server.disconnect_rid (*peer_rid);
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      monitor, static_cast<uint64_t> (zlink::monitor_event::disconnected), 2000));
+
+    try {
+        server.disconnect_rid (*peer_rid);
+        assert (false && "disconnect_rid must report a removed peer");
+    }
+    catch (const zlink::connect_error_t &error) {
+        assert (error.result () == zlink::connect_result_t::not_found);
+        assert (error.code () == 605);
+    }
+}
+
 void test_pull_no_data_surfaces ()
 {
     zlink::context_t context;
@@ -114,6 +147,7 @@ int main ()
 {
     test_receive_reuses_caller_storage_capacity ();
     test_stream_packet_reset_and_reuse ();
+    test_stream_disconnect_rid_closes_peer_and_returns_connect_not_found ();
     test_pull_no_data_surfaces ();
     return 0;
 }

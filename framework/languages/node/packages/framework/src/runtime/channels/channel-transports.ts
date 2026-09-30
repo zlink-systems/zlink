@@ -1021,7 +1021,7 @@ function directSpotRouteFence(
     target.authorityStoreVersion === undefined
   ) {
     throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
+      ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
       `Spot '${String(target.spotId)}' has no complete Ready authority fence.`
     );
   }

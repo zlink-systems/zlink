@@ -21,8 +21,6 @@ import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkSpotActorLifecycleDrain } from './spot-actor-lifecycle-drain';
 import { ZLinkSpotActorPacketDrain, type ZLinkActorDispatchPart } from './spot-actor-packet-drain';
-import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
-import { ZLinkSpotNativeActorJoinAdmission } from './spot-native-actor-join-admission';
 import { ZLinkSpotRoutedFrameDispatch } from './spot-routed-frame-dispatch';
 import { ZLinkSpotSubscriptionDispatch } from './spot-subscription-dispatch';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
@@ -62,11 +60,11 @@ interface ZLinkSpotActorAdmissionRuntime {
         readonly kind: 'enabled';
         readonly runtime: ZLinkSpotActorTransferRuntime;
       };
-  readonly commitNativeActor?: (actor: ZLinkActor) => Promise<void>;
   readonly commitActorDeparture?: (actorId: string) => void;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
 }
 
@@ -75,8 +73,7 @@ interface ZLinkSpotActorPacketRuntime {
   readonly bindRemoteSession?: (
     actor: ZLinkBackendActorRef,
     sourceNodeRid: RoutingId,
-    sourceSessionRid: RoutingId,
-    declaredTarget?: ZLinkRemoteBoundSessionTarget
+    sourceSessionRid: RoutingId
   ) => void;
   readonly replyNoBind?: (
     info: ZLinkBackendActorRecvInfo,
@@ -93,7 +90,6 @@ interface ZLinkSpotActorJoinDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
   readonly serial: ZLinkSpotSerialTurnExecutor;
-  readonly isSpotClosing?: () => boolean;
   readonly actors: ZLinkSpotActorAdmissionRuntime;
   readonly packets?: ZLinkSpotActorPacketRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
@@ -105,13 +101,10 @@ interface ZLinkSpotActorJoinDispatchOptions {
 }
 
 export class ZLinkSpotActorJoinDispatch {
-  private draining = false;
-  private redrainRequested = false;
   private readonly nativeSpotId: string;
   private readonly subscriptions: ZLinkSpotSubscriptionDispatch;
   private readonly actorLifecycleDrain: ZLinkSpotActorLifecycleDrain;
   private readonly actorPacketDrain: ZLinkSpotActorPacketDrain;
-  private readonly nativeActorJoinAdmission: ZLinkSpotNativeActorJoinAdmission;
   private readonly routedFrames: ZLinkSpotRoutedFrameDispatch;
   private readonly nativeSpot: ZLinkBackendSpot;
 
@@ -136,20 +129,9 @@ export class ZLinkSpotActorJoinDispatch {
       waitIdle: waitSpotDispatchIdle,
       flowEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     });
-    this.nativeActorJoinAdmission = new ZLinkSpotNativeActorJoinAdmission({
-      nativeSpot: options.nativeSpot,
-      serial: options.serial,
-      resolveActor: actors.resolveActor,
-      getTarget: actors.getTarget,
-      defaultAccept: actors.defaultAccept,
-      commitAcceptedActor: actors.commitNativeActor,
-      messageSerializers: options.messageSerializers,
-      dispatchErrors: options.dispatchErrors
-    });
     this.routedFrames = new ZLinkSpotRoutedFrameDispatch({
       nativeSpotId: this.nativeSpotId,
       serial: options.serial,
-      isSpotClosing: options.isSpotClosing,
       resolveActor: actors.resolveActor,
       getTarget: () => actors.getTarget() as ZLinkActorJoinAdmissionTarget & ZLinkSpot,
       defaultAccept: actors.defaultAccept,
@@ -159,7 +141,7 @@ export class ZLinkSpotActorJoinDispatch {
       bindRemoteSession:
         options.packets?.bindRemoteSession === undefined
           ? undefined
-          : (actor, sourceNodeRid, sourceSessionRid, declaredTarget) =>
+          : (actor, sourceNodeRid, sourceSessionRid) =>
               options.packets!.bindRemoteSession!(
                 {
                   actorId: actor.actorId,
@@ -167,8 +149,7 @@ export class ZLinkSpotActorJoinDispatch {
                   nodeRid: actor.nodeRid
                 },
                 sourceNodeRid,
-                sourceSessionRid,
-                declaredTarget
+                sourceSessionRid
               ),
       routedBoundSessionReceiver: options.boundSessionRuntime?.receiveRoutedBoundSession.bind(
         options.boundSessionRuntime
@@ -223,10 +204,6 @@ export class ZLinkSpotActorJoinDispatch {
       return;
     }
     this.nativeSpot.setDispatchHandler((info) => {
-      if (info.event === ZLinkBackendSpotDispatchEvent.ActorJoinReadable) {
-        this.runDetached('spot actor join drain', () => this.drain());
-        return;
-      }
       if (info.event === ZLinkBackendSpotDispatchEvent.SubscribeReadable) {
         this.runDetached('spot subscription drain', () => this.subscriptions.drain());
         return;
@@ -277,39 +254,6 @@ export class ZLinkSpotActorJoinDispatch {
       return;
     }
     void callback().catch(() => undefined);
-  }
-
-  private async drain(): Promise<void> {
-    if (this.draining) {
-      this.redrainRequested = true;
-      return;
-    }
-    this.draining = true;
-    try {
-      do {
-        this.redrainRequested = false;
-        await this.drainAvailableActorJoins();
-      } while (this.redrainWasRequested());
-    } finally {
-      this.draining = false;
-    }
-  }
-
-  private redrainWasRequested(): boolean {
-    return this.redrainRequested;
-  }
-
-  private async drainAvailableActorJoins(): Promise<void> {
-    for (;;) {
-      const request = this.nativeSpot.recvActorJoin(ZLINK_RECV_DONT_WAIT);
-      if (request === null) {
-        await waitSpotDispatchIdle();
-        return;
-      }
-      await this.options.serial.executeLifecycleOperation(() =>
-        this.nativeActorJoinAdmission.admit(request, this.options.isSpotClosing?.() === true)
-      );
-    }
   }
 }
 

@@ -225,8 +225,7 @@ final class ReceivePlane {
         }
         int errno = Native.errno();
         RecvResult result = RecvResult.fromValue(rc);
-        if (allowNoData && (result == RecvResult.NO_DATA
-            || result == RecvResult.BUSY)) {
+        if (allowNoData && result == RecvResult.NO_DATA) {
             return null;
         }
         throw new ZlinkRecvException(result, errno);

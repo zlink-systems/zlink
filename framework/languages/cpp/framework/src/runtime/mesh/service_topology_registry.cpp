@@ -211,6 +211,15 @@ service_node_descriptor_t service_topology_registry_t::local_descriptor () const
     return _lane.run ([this] { return _local; }).get ();
 }
 
+task_t<std::tuple<service_node_descriptor_t,
+                  std::vector<admitted_peer_t>,
+                  std::vector<service_node_descriptor_t>>>
+service_topology_registry_t::monitoring_snapshot_async () const
+{
+    return _lane.run_task (
+      [this] { return std::tuple{_local, peers_on_lane (), not_required_peers_on_lane ()}; });
+}
+
 peer_admission_result_t service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                                             std::vector<std::uint8_t> connection_id)
 {
@@ -330,29 +339,31 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
 
 std::vector<admitted_peer_t> service_topology_registry_t::peers () const
 {
-    return _lane
-      .run ([this] {
-          std::vector<admitted_peer_t> result;
-          result.reserve (_peers.size ());
-          for (const auto &[_, peer] : _peers) {
-              result.push_back (peer);
-          }
-          return result;
-      })
-      .get ();
+    return _lane.run_checked ([this] { return peers_on_lane (); }).get ();
 }
 
 std::vector<service_node_descriptor_t> service_topology_registry_t::not_required_peers () const
 {
-    return _lane
-      .run ([this] {
-          std::vector<service_node_descriptor_t> result;
-          result.reserve (_not_required_peers.size ());
-          for (const auto &[_, descriptor] : _not_required_peers)
-              result.push_back (descriptor);
-          return result;
-      })
-      .get ();
+    return _lane.run_checked ([this] { return not_required_peers_on_lane (); }).get ();
+}
+
+std::vector<admitted_peer_t> service_topology_registry_t::peers_on_lane () const
+{
+    std::vector<admitted_peer_t> result;
+    result.reserve (_peers.size ());
+    for (const auto &[_, peer] : _peers)
+        result.push_back (peer);
+    return result;
+}
+
+std::vector<service_node_descriptor_t>
+service_topology_registry_t::not_required_peers_on_lane () const
+{
+    std::vector<service_node_descriptor_t> result;
+    result.reserve (_not_required_peers.size ());
+    for (const auto &[_, descriptor] : _not_required_peers)
+        result.push_back (descriptor);
+    return result;
 }
 
 std::optional<admitted_peer_t>
@@ -517,18 +528,21 @@ void service_topology_registry_t::rebuild_channel_selections ()
     }
 }
 
-std::optional<std::vector<std::uint8_t>>
+result_t<std::vector<std::uint8_t>>
 service_topology_registry_t::select (const std::string &channel_name)
 {
     if (channel_name.empty ()) {
-        return std::nullopt;
+        return result_t<std::vector<std::uint8_t>>::failure (
+          framework_error_kind_t::not_found, "RouteMesh has no ready channel target snapshot");
     }
     return _lane
-      .run ([&, this] () -> std::optional<std::vector<std::uint8_t>> {
+      .run ([&, this] () -> result_t<std::vector<std::uint8_t>> {
           const auto found = _selection_state.find (channel_name);
           if (found == _selection_state.end ()) {
               record_selection_failure (channel_name);
-              return std::nullopt;
+              return result_t<std::vector<std::uint8_t>>::failure (
+                framework_error_kind_t::not_found,
+                "RouteMesh has no ready channel target snapshot");
           }
           auto &state = found->second;
 
@@ -536,7 +550,8 @@ service_topology_registry_t::select (const std::string &channel_name)
               const auto selected_index = state.precomputed_schedule[state.precomputed_cursor++];
               if (state.precomputed_cursor == state.precomputed_schedule.size ())
                   state.precomputed_cursor = state.precomputed_cycle_start;
-              return state.ordered_node_ids[selected_index];
+              return result_t<std::vector<std::uint8_t>>::success (
+                state.ordered_node_ids[selected_index]);
           }
 
           const admitted_peer_t *selected = nullptr;
@@ -560,12 +575,28 @@ service_topology_registry_t::select (const std::string &channel_name)
           }
           if (selected == nullptr) {
               record_selection_failure (channel_name);
-              return std::nullopt;
+              const bool has_ready_target =
+                std::any_of (_peers.begin (), _peers.end (), [&channel_name] (const auto &entry) {
+                    const auto &descriptor = entry.second.descriptor;
+                    if (descriptor.state != service_node_state_t::serving
+                        && descriptor.state != service_node_state_t::draining
+                        && descriptor.state != service_node_state_t::retiring)
+                        return false;
+                    return std::any_of (descriptor.channels.begin (), descriptor.channels.end (),
+                                        [&channel_name] (const auto &channel) {
+                                            return channel.name == channel_name;
+                                        });
+                });
+              return result_t<std::vector<std::uint8_t>>::failure (
+                has_ready_target ? framework_error_kind_t::unavailable
+                                 : framework_error_kind_t::not_found,
+                "RouteMesh has no selectable channel member");
           }
 
           auto &selected_value = state.cumulative[selected->descriptor.node_routing_id];
           selected_value -= static_cast<std::int64_t> (state.total_weight);
-          return selected->descriptor.node_routing_id;
+          return result_t<std::vector<std::uint8_t>>::success (
+            selected->descriptor.node_routing_id);
       })
       .get ();
 }

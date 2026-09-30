@@ -205,16 +205,15 @@ final class ZLinkChannelSocketRegistry {
     private ZLinkBackendDealerSocket clientForOutboundCore(String channelName) {
         Set<ClientServerConnection> physical = Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
+        physical.removeIf(
+                connection ->
+                        !connection.ready()
+                                || !connection.descriptor().channelName().equals(channelName));
         List<ClientServerConnection> admitted =
                 physical.stream()
                         .filter(
                                 connection ->
-                                        connection.ready()
-                                                && connection
-                                                        .descriptor()
-                                                        .channelName()
-                                                        .equals(channelName)
-                                                && connection.descriptor().weight() > 0
+                                        connection.descriptor().weight() > 0
                                                 && connection.descriptor().state()
                                                         == systems.zlink.framework.runtime.host
                                                                 .ZLinkFrameworkRuntimeState.SERVING)
@@ -235,6 +234,11 @@ final class ZLinkChannelSocketRegistry {
             total = Math.addExact(total, connection.descriptor().weight());
         }
         if (total == 0) {
+            if (!physical.isEmpty()) {
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "client/server channel has no eligible server: " + channelName);
+            }
             return unmanagedBackendClientMode ? clients.get(channelName) : null;
         }
         Map<String, Long> currentByServer =
@@ -287,14 +291,15 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit) {
         long started = nanoTime.getAsLong();
-        // This operation's timeout is fixed on its first turn, even if channel
-        // registration changes during the existing bounded readiness wait.
+        // Registrations are finalized before this registry accepts submissions.
+        ChannelRegistration registration = registrations.get(channelName);
+        // The request timeout starts after Core admission. Before a ClientServer
+        // target is ready, the family send timeout bounds the admission wait.
         Duration[] timeout = {null};
         while (true) {
             boolean interrupted = Thread.currentThread().isInterrupted();
             Supplier<CompletionStage<T>> attempt =
                     () -> {
-                        ChannelRegistration registration = registrations.get(channelName);
                         if (timeout[0] == null) {
                             timeout[0] =
                                     requestTimeoutCore(
@@ -310,14 +315,17 @@ final class ZLinkChannelSocketRegistry {
                                         "ClientServer metadata is not available");
                             }
                             ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
-                            Duration remaining =
-                                    timeout[0].minusNanos(nanoTime.getAsLong() - started);
                             if (target != null) {
-                                return clientSubmit.apply(target, remaining);
+                                return clientSubmit.apply(target, timeout[0]);
                             }
-                            long readyBound =
-                                    Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5));
-                            if (nanoTime.getAsLong() - started >= readyBound || interrupted) {
+                            long elapsed = nanoTime.getAsLong() - started;
+                            if (elapsed >= registration.sendTimeout().toNanos()) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "client/server channel admission timed out: "
+                                                + channelName);
+                            }
+                            if (interrupted) {
                                 boolean unavailable =
                                         hasUnavailableClientServerConnectionCore(channelName);
                                 throw new ZLinkFrameworkException(
@@ -355,8 +363,7 @@ final class ZLinkChannelSocketRegistry {
             // An existing turn cannot block admission callbacks queued behind it.
             stateLane.throwIfReentrant();
             long remaining =
-                    Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5))
-                            - (nanoTime.getAsLong() - started);
+                    registration.sendTimeout().toNanos() - (nanoTime.getAsLong() - started);
             parkNanos.accept(
                     Math.min(
                             TimeUnit.MILLISECONDS.toNanos(READY_POLL_INTERVAL_MILLIS),

@@ -220,8 +220,8 @@ static_assert (!has_routed_send_t<zlink::pair_socket_t>::value,
 static_assert (has_send_builder_t<zlink::pair_socket_t>::value,
                "pair_socket_t must expose send builder");
 static_assert (has_receive_t<zlink::pair_socket_t>::value, "pair_socket_t must expose recv");
-static_assert (has_single_part_recv_t<zlink::pair_socket_t>::value,
-               "pair_socket_t must expose single-part recv");
+static_assert (!has_single_part_recv_t<zlink::pair_socket_t>::value,
+               "pair_socket_t must not expose single-part recv");
 static_assert (!has_raw_common_option_set_t<zlink::pair_socket_t>::value,
                "pair_socket_t must not expose raw common option setters");
 static_assert (!has_raw_common_option_get_t<zlink::pair_socket_t>::value,
@@ -231,15 +231,17 @@ static_assert (!has_routed_send_t<zlink::dealer_socket_t>::value,
 static_assert (has_send_builder_t<zlink::dealer_socket_t>::value,
                "dealer_socket_t must expose send builder");
 static_assert (has_receive_t<zlink::dealer_socket_t>::value, "dealer_socket_t must expose recv");
-static_assert (has_single_part_recv_t<zlink::dealer_socket_t>::value,
-               "dealer_socket_t must expose single-part recv");
+static_assert (!has_single_part_recv_t<zlink::dealer_socket_t>::value,
+               "dealer_socket_t must not expose single-part recv");
 static_assert (!has_routed_send_t<zlink::router_socket_t>::value,
                "router_socket_t must not expose direct routed send");
 static_assert (has_routed_send_builder_t<zlink::router_socket_t>::value,
                "router_socket_t must expose routed send builder");
 static_assert (has_receive_t<zlink::router_socket_t>::value, "router_socket_t must expose recv");
-static_assert (has_routed_single_part_recv_t<zlink::router_socket_t>::value,
-               "router_socket_t must expose routed single-part recv");
+static_assert (!has_single_part_recv_t<zlink::router_socket_t>::value,
+               "router_socket_t must not expose single-part recv");
+static_assert (!has_routed_single_part_recv_t<zlink::router_socket_t>::value,
+               "router_socket_t must not expose routed single-part recv");
 static_assert (!has_recv_spot_t<zlink::router_socket_t>::value,
                "router_socket_t must not expose recv_spot");
 static_assert (has_publish_builder_t<zlink::pub_socket_t>::value,
@@ -259,8 +261,8 @@ static_assert (!has_connect_t<zlink::stream_socket_t>::value,
                "stream_socket_t must not expose connect");
 static_assert (!has_disconnect_t<zlink::stream_socket_t>::value,
                "stream_socket_t must not expose disconnect");
-static_assert (!has_disconnect_rid_t<zlink::stream_socket_t>::value,
-               "stream_socket_t must not expose disconnect_rid");
+static_assert (has_disconnect_rid_t<zlink::stream_socket_t>::value,
+               "stream_socket_t must expose disconnect_rid");
 
 void test_pair_send_recv_single_part ()
 {
@@ -287,48 +289,6 @@ void test_pair_send_recv_single_part ()
     assert (inbound.parts ()[0].to_string () == "ping");
 }
 
-void test_pair_send_recv_single_part_direct ()
-{
-    zlink::context_t ctx;
-    zlink::pair_socket_t left (ctx);
-    zlink::pair_socket_t right (ctx);
-    zlink::socket_monitor_t left_monitor = left.monitor_open ();
-    zlink::socket_monitor_t right_monitor = right.monitor_open ();
-
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("pair-direct");
-    left.bind (endpoint);
-    right.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      left_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      right_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-
-    zlink::message_t outbound = zlink_cpp_contract::make_message ("direct");
-    right.send ().message (outbound).submit ();
-
-    zlink::message_t inbound;
-    assert (left.recv (inbound) == 0);
-    assert (inbound.to_string () == "direct");
-}
-
-void test_pair_direct_recv_no_data_preserves_output ()
-{
-    zlink::context_t ctx;
-    zlink::pair_socket_t socket (ctx);
-
-    zlink::message_t existing = zlink_cpp_contract::make_message ("keep");
-    const int rc = socket.recv (existing, zlink::recv_flags_t::dontwait);
-    assert (rc == static_cast<int> (zlink::recv_result_t::no_data));
-    assert (existing.valid ());
-    assert (existing.to_string () == "keep");
-
-    zlink::message_t invalid;
-    invalid.close ();
-    const int invalid_rc = socket.recv (invalid, zlink::recv_flags_t::dontwait);
-    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data));
-    assert (!invalid.valid ());
-}
-
 void test_dealer_unified_send_awaitable_builder ()
 {
     zlink::context_t ctx;
@@ -353,71 +313,11 @@ void test_dealer_unified_send_awaitable_builder ()
     dealer.send ().message (outbound).submit ();
     assert (!outbound.valid ());
 
-    zlink::routing_id_t source =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
-    zlink::message_t inbound;
-    assert (router.recv (source, inbound) == 0);
-    assert (source == dealer_id);
-    assert (inbound.to_string () == "direct");
-}
-
-void test_pair_direct_recv_multipart_failure_preserves_output ()
-{
-    zlink::context_t ctx;
-    zlink::pair_socket_t left (ctx);
-    zlink::pair_socket_t right (ctx);
-    zlink::socket_monitor_t left_monitor = left.monitor_open ();
-    zlink::socket_monitor_t right_monitor = right.monitor_open ();
-
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("pair-direct-multipart-fail");
-    left.bind (endpoint);
-    right.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      left_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      right_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-
-    zlink::message_t first = zlink_cpp_contract::make_message ("first");
-    zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    right.send ().message (first).message (second).submit ();
-
-    zlink::message_t inbound = zlink_cpp_contract::make_message ("keep");
-    const int rc = left.recv (inbound);
-    assert (rc == -1);
-    assert (errno == EMSGSIZE);
-    assert (inbound.valid ());
-    assert (inbound.to_string () == "keep");
-}
-
-void test_router_recv_single_part_direct ()
-{
-    zlink::context_t ctx;
-    zlink::router_socket_t router (ctx);
-    zlink::dealer_socket_t dealer (ctx);
-    zlink::socket_monitor_t router_monitor = router.monitor_open ();
-    zlink::socket_monitor_t dealer_monitor = dealer.monitor_open ();
-
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("router-direct");
-    const zlink::routing_id_t dealer_id =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("dealer-a"), 8);
-    dealer.set_routing_id (dealer_id);
-
-    router.bind (endpoint);
-    dealer.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-
-    zlink::message_t outbound = zlink_cpp_contract::make_message ("routed");
-    dealer.send ().message (outbound).submit ();
-
-    zlink::routing_id_t source =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
-    zlink::message_t inbound;
-    assert (router.recv (source, inbound) == 0);
-    assert (source == dealer_id);
-    assert (inbound.to_string () == "routed");
+    zlink::received_t inbound;
+    assert (router.recv (inbound) == 0);
+    assert (inbound.routing_id ().has_value ());
+    assert (*inbound.routing_id () == dealer_id);
+    assert (inbound.first_part ().to_string () == "direct");
 }
 
 void test_router_send_builder_owns_target_rid ()
@@ -452,16 +352,18 @@ void test_router_send_builder_owns_target_rid ()
 
     zlink::message_t hello_a = zlink_cpp_contract::make_message ("hello-a");
     dealer_a.send ().message (hello_a).submit ();
-    zlink::routing_id_t source =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
-    zlink::message_t inbound;
-    assert (router.recv (source, inbound) == 0);
-    assert (source == dealer_a_id);
+    zlink::received_t inbound;
+    assert (router.recv (inbound) == 0);
+    assert (inbound.routing_id ().has_value ());
+    assert (*inbound.routing_id () == dealer_a_id);
+    assert (inbound.first_part ().to_string () == "hello-a");
 
     zlink::message_t hello_b = zlink_cpp_contract::make_message ("hello-b");
     dealer_b.send ().message (hello_b).submit ();
-    assert (router.recv (source, inbound) == 0);
-    assert (source == dealer_b_id);
+    assert (router.recv (inbound) == 0);
+    assert (inbound.routing_id ().has_value ());
+    assert (*inbound.routing_id () == dealer_b_id);
+    assert (inbound.first_part ().to_string () == "hello-b");
 
     zlink::routing_id_t target = dealer_a_id;
     zlink::message_t outbound = zlink_cpp_contract::make_message ("owned-target");
@@ -470,13 +372,15 @@ void test_router_send_builder_owns_target_rid ()
 
     std::move (pending).submit ();
 
-    zlink::message_t routed_to_a;
+    zlink::received_t routed_to_a;
     assert (dealer_a.recv (routed_to_a) == 0);
-    assert (routed_to_a.to_string () == "owned-target");
+    assert (routed_to_a.is_single_part ());
+    assert (routed_to_a.first_part ().to_string () == "owned-target");
 
-    zlink::message_t routed_to_b;
+    zlink::received_t routed_to_b;
     const int dealer_b_rc = dealer_b.recv (routed_to_b, zlink::recv_flags_t::dontwait);
     assert (dealer_b_rc == static_cast<int> (zlink::recv_result_t::no_data));
+    assert (routed_to_b.parts ().empty ());
 }
 
 void test_router_recv_received_single_part_large ()
@@ -520,10 +424,10 @@ void test_router_recv_received_single_part_large ()
 
     inbound.send ().message (part).submit ();
 
-    zlink::message_t echoed;
+    zlink::received_t echoed;
     assert (dealer.recv (echoed) == 0);
-    assert (echoed.valid ());
-    assert (echoed.size () == payload_size);
+    assert (echoed.is_single_part ());
+    assert (echoed.first_part ().size () == payload_size);
 }
 
 void test_router_recv_received_multipart ()
@@ -578,66 +482,6 @@ void test_router_recv_received_multipart ()
     assert (!inbound.routing_id ().has_value ());
     assert (inbound.parts ().empty ());
     assert (inbound.parts ().capacity () == reusable_capacity);
-}
-
-void test_router_direct_recv_no_data_preserves_output ()
-{
-    zlink::context_t ctx;
-    zlink::router_socket_t router (ctx);
-
-    const zlink::routing_id_t placeholder =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
-    zlink::routing_id_t source = placeholder;
-    zlink::message_t existing = zlink_cpp_contract::make_message ("keep");
-
-    const int rc = router.recv (source, existing, zlink::recv_flags_t::dontwait);
-    assert (rc == static_cast<int> (zlink::recv_result_t::no_data));
-    assert (source == placeholder);
-    assert (existing.valid ());
-    assert (existing.to_string () == "keep");
-
-    zlink::message_t invalid;
-    invalid.close ();
-    const int invalid_rc = router.recv (source, invalid, zlink::recv_flags_t::dontwait);
-    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data));
-    assert (source == placeholder);
-    assert (!invalid.valid ());
-}
-
-void test_router_direct_recv_multipart_failure_preserves_output ()
-{
-    zlink::context_t ctx;
-    zlink::router_socket_t router (ctx);
-    zlink::dealer_socket_t dealer (ctx);
-    zlink::socket_monitor_t router_monitor = router.monitor_open ();
-    zlink::socket_monitor_t dealer_monitor = dealer.monitor_open ();
-
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("router-direct-multipart-fail");
-    const zlink::routing_id_t dealer_id =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("dealer-b"), 8);
-    dealer.set_routing_id (dealer_id);
-
-    router.bind (endpoint);
-    dealer.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
-
-    zlink::message_t first = zlink_cpp_contract::make_message ("first");
-    zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    dealer.send ().message (first).message (second).submit ();
-
-    const zlink::routing_id_t placeholder =
-      zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
-    zlink::routing_id_t source = placeholder;
-    zlink::message_t inbound = zlink_cpp_contract::make_message ("keep");
-    const int rc = router.recv (source, inbound);
-    assert (rc == -1);
-    assert (errno == EMSGSIZE);
-    assert (source == placeholder);
-    assert (inbound.valid ());
-    assert (inbound.to_string () == "keep");
 }
 
 void test_pair_send_recv_multipart_capacity_retry ()
@@ -894,16 +738,10 @@ void test_subscription_at_grows_on_core_buffer_too_small ()
 int main ()
 {
     test_pair_send_recv_single_part ();
-    test_pair_send_recv_single_part_direct ();
-    test_pair_direct_recv_no_data_preserves_output ();
     test_dealer_unified_send_awaitable_builder ();
-    test_pair_direct_recv_multipart_failure_preserves_output ();
-    test_router_recv_single_part_direct ();
     test_router_send_builder_owns_target_rid ();
     test_router_recv_received_single_part_large ();
     test_router_recv_received_multipart ();
-    test_router_direct_recv_no_data_preserves_output ();
-    test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart_capacity_retry ();
     test_pair_multipart_invalid_part_returns_lvalues ();
     test_concurrent_pair_multipart_records_remain_atomic ();

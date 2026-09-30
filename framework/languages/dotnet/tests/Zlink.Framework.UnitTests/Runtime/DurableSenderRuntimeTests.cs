@@ -7,14 +7,16 @@ namespace Zlink.Framework.UnitTests;
 public sealed partial class StatefulServiceRuntimeTests
 {
     [Theory]
-    [InlineData(true, false, false)]
-    [InlineData(false, false, false)]
-    [InlineData(true, true, false)]
-    [InlineData(true, true, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, true, true, true)]
+    [InlineData(false, false, false, false)]
     public async Task DurableSenderIntentRemovalEndsUnavailableWhilePhysicalDisconnectReplays(
         bool removeIntent,
         bool removeExpectationFirst,
-        bool ownerDisconnects
+        bool ownerDisconnects,
+        bool observeExpectation
     )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -44,12 +46,13 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetBind(targetEndpoint);
         var createTarget = new RecordingActorCreateOperationTarget("mesh");
         target.SetActorCreateOperationTarget(createTarget);
-        source.SetPeerExpectation(
-            target.RoutingId,
-            targetEndpoint,
-            ZLinkServiceSecurityIdentity.Plaintext,
-            target.Status().LifecycleGeneration
-        );
+        if (observeExpectation)
+            source.SetPeerExpectation(
+                target.RoutingId,
+                targetEndpoint,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                target.Status().LifecycleGeneration
+            );
         source.Start();
         target.Start();
         // The source has an inbound peer, so closing the target's outbound
@@ -61,7 +64,6 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
-        var operation = source.AllocateOperationId();
         var timeout = TimeSpan.FromSeconds(5);
         var reservation = new ObjectReservationFence(
             "lifecycle-reservation",
@@ -84,43 +86,66 @@ public sealed partial class StatefulServiceRuntimeTests
                 "lifecycle-actor",
                 "Sample.LifecycleActor",
                 reservation,
-                new ZLinkCreationOperationId(
-                    source.RoutingId,
-                    source.Status().LifecycleGeneration,
-                    41,
-                    43
-                ),
                 deadlineUnixMs,
-                operation,
+                out var operation,
                 timeout
             )
         );
         await WaitUntilAsync(() => Volatile.Read(ref replySubmissions) == 1);
         Assert.Equal(1, createTarget.CreateCount);
+        var terminalBeforeRouteLoss = removeExpectationFirst && !ownerDisconnects;
         if (removeExpectationFirst)
         {
             source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
-            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
+            if (terminalBeforeRouteLoss)
+            {
+                var completion = Assert.Single(
+                    DrainRecords(source),
+                    record =>
+                        record.OperationId == operation && record.Kind == MeshRecordKind.Completion
+                );
+                Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
+            }
+            else
+            {
+                Assert.DoesNotContain(
+                    DrainRecords(source),
+                    record => record.OperationId == operation
+                );
+            }
         }
         if (ownerDisconnects)
             source.DisconnectPeer(target.RoutingId);
         else
             target.DisconnectPeer(source.RoutingId);
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 0);
-        if (!removeIntent)
+        if (!removeIntent && observeExpectation)
             await WaitUntilAsync(() => deadlineTime.ActiveTimerCount > 0);
 
         if (removeIntent)
         {
-            if (!ownerDisconnects)
-            {
-                // The owner also revisits removal when a previously admitted
-                // peer disappears after its expectation was already removed.
+            if (!ownerDisconnects && !removeExpectationFirst)
                 source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
+            if (terminalBeforeRouteLoss)
+            {
+                Assert.DoesNotContain(
+                    DrainRecords(source),
+                    record => record.OperationId == operation
+                );
             }
-            var (completion, parts) = DrainCompletion(source, operation);
-            ZLinkMessageParts.DisposeAll(parts);
-            Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
+            else
+            {
+                var completion = Assert.Single(
+                    DrainRecords(source),
+                    record =>
+                        record.OperationId == operation && record.Kind == MeshRecordKind.Completion
+                );
+                Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
+            }
+        }
+        else
+        {
+            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
         }
         if (ownerDisconnects)
             source.ConnectPeer(targetEndpoint, target.RoutingId);
@@ -136,6 +161,7 @@ public sealed partial class StatefulServiceRuntimeTests
         }
         else
         {
+            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
             deadlineTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
             var (completion, parts) = DrainCompletion(source, operation);
             ZLinkMessageParts.DisposeAll(parts);

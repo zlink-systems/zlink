@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -15,14 +16,20 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             dealer = state.Context.CreateDealerSocket();
-            ApplySocketConfig(dealer.Options, channel.Client!.SocketConfig);
+            ApplySocketConfig(
+                dealer.Options,
+                channel.Client!.SocketConfig,
+                registration.DefaultSocketSendTimeout
+            );
             dealer.Options.Probe = true;
             bundle = new ZLinkChannelRuntimeBundle(
                 dealer,
                 dealer.Connect,
                 dealer.Disconnect,
                 socketRole: "client",
-                receiveFlowRegistration: state.ApplicationJobQueue.RegisterReceiveFlowSocket(dealer)
+                receiveFlowRegistration: await state
+                    .ApplicationJobQueue.RegisterReceiveFlowSocketAsync(dealer)
+                    .ConfigureAwait(false)
             );
 
             bundle.OwnManualConnectionAttachment(
@@ -51,7 +58,7 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
     {
         IRouterSocket? router = null;
         ZLinkChannelRuntimeBundle? bundle = null;
-        IDisposable? receiveFlowRegistration = null;
+        IAsyncDisposable? receiveFlowRegistration = null;
         try
         {
             router = state.Context.CreateRouterSocket();
@@ -60,7 +67,9 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             ApplySocketConfig(router.Options, channel.Server!.SocketConfig);
             router.Options.Mandatory = true;
             router.Options.Handover = true;
-            receiveFlowRegistration = state.ApplicationJobQueue.RegisterReceiveFlowSocket(router);
+            receiveFlowRegistration = await state
+                .ApplicationJobQueue.RegisterReceiveFlowSocketAsync(router)
+                .ConfigureAwait(false);
             router.Bind(
                 ZLinkNetworkEndpointResolver.Bind(
                     explicitEndpoint: null,
@@ -98,8 +107,12 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         }
         catch (Exception initializationFailure)
         {
-            receiveFlowRegistration?.Dispose();
-            await ThrowAfterCleanupAsync(initializationFailure, bundle, router)
+            await ThrowAfterCleanupAsync(
+                    initializationFailure,
+                    bundle,
+                    router,
+                    receiveFlowRegistration
+                )
                 .ConfigureAwait(false);
             throw new InvalidOperationException(
                 "Unreachable after startup cleanup failure propagation."
@@ -168,7 +181,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             publisher = state.Context.CreatePublisherSocket();
-            ApplyPublisherSocketConfig(publisher.Options, channel);
+            ApplyPublisherSocketConfig(
+                publisher.Options,
+                channel,
+                registration.DefaultSocketSendTimeout
+            );
             var publisherRegistration =
                 channel.Publisher
                 ?? throw new InvalidOperationException(
@@ -226,17 +243,22 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             registration.NetworkOptions
         );
 
-    internal static void ApplySocketConfig(CommonSocketOptions socket, IZLinkSocketConfig config)
+    internal static void ApplySocketConfig(
+        CommonSocketOptions socket,
+        IZLinkSocketConfig config,
+        TimeSpan? defaultSendTimeout = null
+    )
     {
-        ZLinkBackendSocketOptionsMapper.Apply(socket, config);
+        ZLinkBackendSocketOptionsMapper.Apply(socket, config, defaultSendTimeout);
     }
 
     internal static void ApplyPublisherSocketConfig(
         PubSocketOptions socket,
-        ZLinkChannelRegistration channel
+        ZLinkChannelRegistration channel,
+        TimeSpan? defaultSendTimeout = null
     )
     {
-        ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
+        ApplySocketConfig(socket, channel.Publisher!.SocketConfig, defaultSendTimeout);
         socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
     }
 
@@ -255,10 +277,17 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
     private static async ValueTask ThrowAfterCleanupAsync(
         Exception initializationFailure,
         IAsyncDisposable? composite,
-        IAsyncDisposable? standalone
+        IAsyncDisposable? standalone,
+        IAsyncDisposable? receiveFlowRegistration = null
     )
     {
         var failures = new ZLinkFailureCollector(initializationFailure);
+        if (receiveFlowRegistration is not null)
+            await failures
+                .CaptureAsync(() =>
+                    ZLinkReceiveFlowController.DisposeRegistrationAsync(receiveFlowRegistration)
+                )
+                .ConfigureAwait(false);
         if (composite is not null)
             await failures.CaptureAsync(composite.DisposeAsync).ConfigureAwait(false);
         else if (standalone is not null)

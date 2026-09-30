@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: nextTurn } = require('node:timers/promises');
+const { setTimeout: delay } = require('node:timers/promises');
 const { ZLinkNodeRawMeshBackend } =
   require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const { ZLinkNodeRawBindingPort } =
@@ -55,21 +56,27 @@ function fixture(registrationFailure) {
     get state() { return { receives, released, registrations, routeObservations, closed }; },
     notify(count) {
       pending += count;
-      readable();
+      readable(true, false);
     },
+    notifyRoute() { readable(false, true); },
     untilDrained() { return new Promise(resolve => { drained = resolve; }); },
     untilRoutesObserved() { return new Promise(resolve => { routesObserved = resolve; }); }
   };
 }
 
-test('RouteMesh registers readiness at startup and idle maintenance never receives', async () => {
+test('RouteMesh observes routes only on route readiness and idle maintenance never receives', async () => {
   const f = fixture();
   f.backend.start();
   try {
     assert.equal(f.state.registrations, 1);
-    await f.untilRoutesObserved();
-    await f.untilRoutesObserved();
-    assert.ok(f.state.routeObservations > 1, 'idle route observation must still progress');
+    await delay(10);
+    assert.equal(f.state.routeObservations, 0);
+    const observed = f.untilRoutesObserved();
+    f.notifyRoute();
+    await observed;
+    assert.equal(f.state.routeObservations, 1);
+    await delay(10);
+    assert.equal(f.state.routeObservations, 1);
     assert.equal(f.state.receives, 0);
   } finally { f.backend.close(); }
 });
@@ -86,9 +93,9 @@ test('one readiness notification drains beyond a batch to no-data with the host 
     assert.ok(f.state.receives >= 131, 'the receive result, not the notification, ends the drain');
     assert.equal(f.queue.snapshot().permitsInUse, 0n);
     const receives = f.state.receives;
-    await f.untilRoutesObserved();
-    await f.untilRoutesObserved();
+    await delay(10);
     assert.equal(f.state.receives, receives, 'no-data ends receive work until another notification');
+    assert.equal(f.state.routeObservations, 0, 'receive readiness does not observe routes');
   } finally { f.backend.close(); }
 });
 

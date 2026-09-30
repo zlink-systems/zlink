@@ -20,7 +20,23 @@ public sealed partial class ZlinkSubmitException
 public sealed partial class ZlinkRequestException
 {
     internal ZlinkRequestException(RequestResult result)
-        : base((int)result, 0)
+        : base((int)result, result switch
+        {
+            RequestResult.TimedOut => (int)global::Systems.Zlink.ErrorCode.ETimedOut,
+            RequestResult.NotFound => (int)global::Systems.Zlink.ErrorCode.ENoent,
+            RequestResult.Terminated => (int)global::Systems.Zlink.ErrorCode.Eterm,
+            RequestResult.ProtocolError => (int)global::Systems.Zlink.ErrorCode.EProto,
+            RequestResult.InternalError => (int)global::Systems.Zlink.ErrorCode.EIo,
+            RequestResult.Rejected => (int)global::Systems.Zlink.ErrorCode.EAccess,
+            RequestResult.Conflict => (int)global::Systems.Zlink.ErrorCode.EExist,
+            RequestResult.Busy => (int)global::Systems.Zlink.ErrorCode.EBusy,
+            RequestResult.NotConnected => (int)global::Systems.Zlink.ErrorCode.ENotConn,
+            RequestResult.InvalidArgument => (int)global::Systems.Zlink.ErrorCode.EInval,
+            RequestResult.InvalidState => (int)global::Systems.Zlink.ErrorCode.Efsm,
+            RequestResult.NotSupported => (int)global::Systems.Zlink.ErrorCode.ENotSup,
+            RequestResult.Backpressured => (int)global::Systems.Zlink.ErrorCode.EAgain,
+            _ => 0
+        })
     {
         Result = (ErrorCode)(int)result;
     }

@@ -9,7 +9,7 @@ using System.Text;
 
 namespace Zlink.HttpClient.UnitTests;
 
-/// <summary>Generates ephemeral self-signed certificates for TLS tests.</summary>
+/// <summary>Generates self-signed certificates for TLS tests.</summary>
 internal static class TestCertificates
 {
     public static X509Certificate2 CreateSelfSigned(string commonName)
@@ -26,9 +26,14 @@ internal static class TestCertificates
         san.AddIpAddress(IPAddress.Loopback);
         san.AddDnsName("localhost");
         request.CertificateExtensions.Add(san.Build());
-        return request.CreateSelfSigned(
+        using var generated = request.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddDays(-1),
             DateTimeOffset.UtcNow.AddDays(1)
+        );
+        return new X509Certificate2(
+            generated.Export(X509ContentType.Pfx),
+            (string?)null,
+            X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.Exportable
         );
     }
 

@@ -1,10 +1,8 @@
 import type { ActorRef } from '../../contracts';
-import type { ServiceSessionBindingAdmissionResult } from '../foundation/service-session-binding-ingress-port';
 import type {
   ZLinkActorSessionAuthorityFence,
   ZLinkActorSessionRelocationClaim,
   ZLinkActorSessionRelocationSnapshot,
-  ZLinkActorSessionRetainedOutbound,
   ZLinkActorSessionRouteFence
 } from './actor-session-binding-registry';
 
@@ -19,12 +17,6 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     actorId: string,
     sealId: string
   ): Promise<ZLinkActorSessionRelocationSnapshot | undefined>;
-  retainRelocationOutbound(
-    actorId: string,
-    operation: ZLinkActorSessionRetainedOutbound,
-    sealId?: string
-  ): Promise<ServiceSessionBindingAdmissionResult>;
-  discardRelocationOutbound(actorId: string, sealId: string, error: unknown): Promise<void>;
   applyRelocation(
     actorId: string,
     sealId: string,

@@ -160,7 +160,7 @@ function Wait-ZoneWorldOwnerLog {
     throw "No zone owner logged '$Pattern'."
 }
 
-function Get-ZoneWorldRoutingId {
+function Get-ZoneWorldRoutingIds {
     param(
         [Parameter(Mandatory = $true)][string]$NodeId,
         [int]$FirstLine = 1
@@ -168,10 +168,38 @@ function Get-ZoneWorldRoutingId {
 
     $path = Get-ZoneWorldLogPath "ops"
     $pattern = "node status observed\. node=$([regex]::Escape($NodeId)), rid=([^ ,]+)"
-    $matches = @(Get-Content -LiteralPath $path | Select-Object -Skip ($FirstLine - 1) |
-        Select-String -Pattern $pattern)
-    if ($matches.Count -eq 0) { throw "Ops did not report a routing id for $NodeId." }
-    return $matches[-1].Matches[0].Groups[1].Value
+    return @(Get-Content -LiteralPath $path | Select-Object -Skip ($FirstLine - 1) |
+        Select-String -Pattern $pattern | ForEach-Object { $_.Matches[0].Groups[1].Value })
+}
+
+function Get-ZoneWorldRoutingId {
+    param(
+        [Parameter(Mandatory = $true)][string]$NodeId,
+        [int]$FirstLine = 1
+    )
+
+    $rids = @(Get-ZoneWorldRoutingIds $NodeId -FirstLine $FirstLine)
+    if ($rids.Count -eq 0) { throw "Ops did not report a routing id for $NodeId." }
+    return $rids[-1]
+}
+
+function Wait-ZoneWorldRoutingIdChange {
+    param(
+        [Parameter(Mandatory = $true)][string]$NodeId,
+        [Parameter(Mandatory = $true)][string]$PreviousRid,
+        [int]$FirstLine,
+        [int]$Attempts = 600
+    )
+
+    for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
+        $rids = @(Get-ZoneWorldRoutingIds $NodeId -FirstLine $FirstLine)
+        if ($rids.Count -gt 0) {
+            $rid = $rids[-1]
+            if ($rid -ne $PreviousRid) { return $rid }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Ops did not report a replacement routing id for $NodeId."
 }
 
 function Test-ZoneWorldRoutingId {
@@ -678,7 +706,7 @@ try {
     }
 
     if ($G4Child) {
-        $oldRid = $node2Rid
+        $oldRid = Get-ZoneWorldRoutingId "zone-node-2"
         $run = Start-ZoneWorldClient "ZW-G4"
         Wait-ZoneWorldLog $run.Name "scenario ZW-G4 armed node=zone-node-2" -Attempts 600
         Wait-ZoneWorldLog "zone-node-2" "crash-boundary join pending" -Attempts 600
@@ -686,7 +714,7 @@ try {
         Complete-ZoneWorldClient $run
         $firstReplacementOpsLine = Get-ZoneWorldNextLogLine "ops"
         Start-ZoneWorldNode "zone-node-2"
-        $crashRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstReplacementOpsLine
+        $crashRid = Wait-ZoneWorldRoutingIdChange "zone-node-2" $oldRid -FirstLine $firstReplacementOpsLine
         if (-not (Test-ZoneWorldRoutingId $crashRid) -or $crashRid -eq $oldRid) {
             throw "ZW-G4 crash replacement did not publish a new canonical RID."
         }
@@ -806,13 +834,12 @@ try {
     }
 
     if (Test-ZoneWorldScenario "ZW-G3") {
-        $oldRid = $node2Rid
+        $oldRid = Get-ZoneWorldRoutingId "zone-node-2"
         Stop-ZoneWorldNode "zone-node-2" -Graceful
         $firstOpsLine = Get-ZoneWorldNextLogLine "ops"
         Start-ZoneWorldRole "zone-node-2-replacement" $ZoneNodeProject "zone-node-2-replacement" | Out-Null
         Wait-ZoneWorldLog "zone-node-2-replacement" "topology=ready" -Attempts 600
-        Wait-ZoneWorldLog "ops" "node status observed. node=zone-node-2, rid=zn-" -FirstLine $firstOpsLine -Attempts 600
-        $replacementRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstOpsLine
+        $replacementRid = Wait-ZoneWorldRoutingIdChange "zone-node-2" $oldRid -FirstLine $firstOpsLine
         $passed = (Test-ZoneWorldRoutingId $replacementRid) -and $replacementRid -ne $oldRid
         # The fresh-object half of the verdict is a mesh placement probe, not a spawn into the
         # fixed ZW-A1 zone: the crash scenarios above leave every zone registered to a dead

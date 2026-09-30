@@ -97,7 +97,6 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                         ((ZLinkServiceTopologyRegistry) field(local, "topology"))
                                 .peer(peerRid)
                                 .isEmpty());
-                assertTrue(((java.util.Map<?, ?>) field(local, "admittedPeerChannels")).isEmpty());
                 assertTrue(((java.util.Map<?, ?>) field(local, "peerIntentRoutingIds")).isEmpty());
                 assertTrue(((java.util.Set<?>) field(local, "rejectedPeers")).isEmpty());
             } else {

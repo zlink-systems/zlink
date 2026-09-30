@@ -109,12 +109,12 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     internal int SessionCount => AwaitStateLane(_sessions.GetCountAsync());
 
-    internal void RequestStop()
+    internal async ValueTask RequestStopAsync()
     {
         _stopSource.Cancel();
         _sessionIngress.RequestStop();
         _controlIngress.RequestStop();
-        AwaitStateLane(_sessions.RequestStopAsync());
+        await _sessions.RequestStopAsync().ConfigureAwait(false);
     }
 
     internal ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken) =>
@@ -128,24 +128,45 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        var task = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_disposeTask is not null)
-                    return _disposeTask;
-                using (ExecutionContext.SuppressFlow())
-                    _disposeTask = Task.Run(DisposeCoreAsync);
-                return _disposeTask;
-            })
+        var task = Volatile.Read(ref _disposeTask);
+        if (task is not null)
+            return new ValueTask(task);
+
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
         );
-        return new ValueTask(task);
+        task = Interlocked.CompareExchange(ref _disposeTask, completion.Task, null);
+        if (task is not null)
+            return new ValueTask(task);
+
+        Func<Task> dispose = async () =>
+        {
+            try
+            {
+                await DisposeCoreAsync().ConfigureAwait(false);
+                completion.TrySetResult();
+            }
+            catch (Exception error)
+            {
+                completion.TrySetException(error);
+            }
+        };
+        try
+        {
+            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() => Task.Run(dispose));
+        }
+        catch (Exception error)
+        {
+            completion.TrySetException(error);
+        }
+        return new ValueTask(completion.Task);
     }
 
     private async Task DisposeCoreAsync()
     {
         var sessions = await _sessions.StopAsync().ConfigureAwait(false);
         var failures = new List<Exception>();
-        Capture(RequestStop);
+        await CaptureAsync(RequestStopAsync).ConfigureAwait(false);
         await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
         await CaptureAsync(_sessionIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
@@ -410,7 +431,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             ApplicationJobAdmission = admission,
                         };
                         admission = null;
-                        if (!TryAdmitFrame(sourceRoutingId, frame))
+                        if (!await TryAdmitFrameAsync(sourceRoutingId, frame).ConfigureAwait(false))
                             throw new ZLinkStreamPeerAdmissionException(
                                 "STREAM packet could not enter the session queue."
                             );
@@ -422,7 +443,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         admission?.Dispose();
                         if (routingId is { } sourceRoutingId)
                         {
-                            HandlePeerReceiveFailure(sourceRoutingId, exception);
+                            await HandlePeerReceiveFailureAsync(sourceRoutingId, exception)
+                                .ConfigureAwait(false);
                         }
                         else
                             throw;
@@ -466,9 +488,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private void HandlePeerReceiveFailure(RoutingId routingId, Exception exception)
+    private async Task HandlePeerReceiveFailureAsync(RoutingId routingId, Exception exception)
     {
-        MarkDisconnectedRoutingId(routingId);
+        await MarkDisconnectedRoutingIdAsync(routingId).ConfigureAwait(false);
         try
         {
             Socket.DisconnectPeer(routingId);
@@ -484,7 +506,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException($"stream-recv-peer:{NodeName}", exception);
     }
 
-    private bool TryAdmitFrame(RoutingId routingId, ZLinkStreamInboundFrame frame)
+    private async Task<bool> TryAdmitFrameAsync(RoutingId routingId, ZLinkStreamInboundFrame frame)
     {
         var header =
             frame.Header
@@ -493,7 +515,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             frame.Payload
             ?? throw new InvalidOperationException("STREAM frame payload ownership was lost.");
 
-        if (_stopSource.IsCancellationRequested || AwaitStateLane(_sessions.IsStoppingAsync()))
+        if (
+            _stopSource.IsCancellationRequested
+            || await _sessions.IsStoppingAsync().ConfigureAwait(false)
+        )
         {
             frame.Dispose();
             return true;
@@ -502,14 +527,21 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         try
         {
             var admitted = IsApplicationPacket(header)
-                ? AdmitApplicationPacket(
-                    routingId,
-                    frame,
-                    header,
-                    payload,
-                    frame.ApplicationJobAdmission
-                )
-                : AdmitControlPacket(routingId, header, payload, frame.ApplicationJobAdmission);
+                ? await AdmitApplicationPacketAsync(
+                        routingId,
+                        frame,
+                        header,
+                        payload,
+                        frame.ApplicationJobAdmission
+                    )
+                    .ConfigureAwait(false)
+                : await AdmitControlPacketAsync(
+                        routingId,
+                        header,
+                        payload,
+                        frame.ApplicationJobAdmission
+                    )
+                    .ConfigureAwait(false);
             if (admitted)
                 frame.Detach();
             return admitted;
@@ -527,7 +559,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private bool AdmitApplicationPacket(
+    private async Task<bool> AdmitApplicationPacketAsync(
         RoutingId routingId,
         ZLinkStreamInboundFrame frame,
         Message header,
@@ -536,7 +568,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     )
     {
         applicationJobAdmission?.MarkQueued();
-        if (AwaitStateLane(_sessions.TryGetAsync(routingId)) is { } existing)
+        if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } existing)
         {
             var admission = existing.TryEnqueuePacket(header, payload, applicationJobAdmission);
             if (admission == ZLinkSerialPostAdmission.Accepted)
@@ -576,14 +608,14 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         throw new ZLinkStreamPeerAdmissionException("STREAM session ingress queue is closed.");
     }
 
-    private bool AdmitControlPacket(
+    private async Task<bool> AdmitControlPacketAsync(
         RoutingId routingId,
         Message header,
         Message payload,
         ZLinkApplicationJobQueueLease? applicationJobAdmission
     )
     {
-        if (AwaitStateLane(_sessions.TryGetAsync(routingId)) is { } existing)
+        if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } existing)
         {
             var admission = existing.TryEnqueueControlPacket(
                 header,
@@ -644,9 +676,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private void OnMonitorEvent(ZLinkBackendSocketMonitorEvent monitorEvent)
+    private async Task OnMonitorEventAsync(ZLinkBackendSocketMonitorEvent monitorEvent)
     {
-        if (AwaitStateLane(_sessions.IsStoppingAsync()))
+        if (await _sessions.IsStoppingAsync().ConfigureAwait(false))
             return;
 
         switch (monitorEvent.NativeEvent)
@@ -654,7 +686,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             case ZLinkSocketNativeEventType.ConnectionReady:
                 if (monitorEvent.RoutingId is RoutingId readyRoutingId)
                 {
-                    ClearDisconnectedRoutingId(readyRoutingId);
+                    await ClearDisconnectedRoutingIdAsync(readyRoutingId).ConfigureAwait(false);
                     var connectedAdmission = _controlIngress.ExecuteControl(
                         async cancellationToken =>
                         {
@@ -667,15 +699,20 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                                     monitorEvent.LocalAddr,
                                     monitorEvent.RemoteAddr
                                 );
-                                ReportControlAdmission(
-                                    "stream-session-connected",
-                                    sessionAdmission
-                                );
+                                await ReportControlAdmissionAsync(
+                                        "stream-session-connected",
+                                        sessionAdmission
+                                    )
+                                    .ConfigureAwait(false);
                             }
                             await ValueTask.CompletedTask;
                         }
                     );
-                    ReportControlAdmission("stream-monitor-connected", connectedAdmission);
+                    await ReportControlAdmissionAsync(
+                            "stream-monitor-connected",
+                            connectedAdmission
+                        )
+                        .ConfigureAwait(false);
                 }
                 break;
             case ZLinkSocketNativeEventType.Accepted:
@@ -683,7 +720,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             case ZLinkSocketNativeEventType.Disconnected:
                 if (monitorEvent.RoutingId is { } disconnectedRoutingId)
                 {
-                    MarkDisconnectedRoutingId(disconnectedRoutingId);
+                    await MarkDisconnectedRoutingIdAsync(disconnectedRoutingId)
+                        .ConfigureAwait(false);
                 }
                 var disconnectedAdmission = _controlIngress.ExecuteControl(async _ =>
                 {
@@ -700,18 +738,28 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             )
                         );
                 });
-                ReportControlAdmission("stream-session-disconnected", disconnectedAdmission);
+                await ReportControlAdmissionAsync(
+                        "stream-session-disconnected",
+                        disconnectedAdmission
+                    )
+                    .ConfigureAwait(false);
                 break;
         }
     }
 
-    private void ReportControlAdmission(string operation, ZLinkSerialPostAdmission admission)
+    private async Task ReportControlAdmissionAsync(
+        string operation,
+        ZLinkSerialPostAdmission admission
+    )
     {
         if (admission == ZLinkSerialPostAdmission.Accepted)
             return;
         if (
             admission == ZLinkSerialPostAdmission.Closed
-            && (_stopSource.IsCancellationRequested || AwaitStateLane(_sessions.IsStoppingAsync()))
+            && (
+                _stopSource.IsCancellationRequested
+                || await _sessions.IsStoppingAsync().ConfigureAwait(false)
+            )
         )
             return;
 
@@ -724,38 +772,34 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         );
     }
 
-    private void MarkDisconnectedRoutingId(RoutingId routingId)
+    private ValueTask MarkDisconnectedRoutingIdAsync(RoutingId routingId)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
+        return _lane.RunAsync(() =>
+        {
+            if (_disconnectedRoutingIds.ContainsKey(routingId))
+                return;
+            while (_disconnectedRoutingIdOrder.Count >= DisconnectedRoutingIdLimit)
             {
-                if (_disconnectedRoutingIds.ContainsKey(routingId))
-                    return;
-                while (_disconnectedRoutingIdOrder.Count >= DisconnectedRoutingIdLimit)
-                {
-                    var oldest = _disconnectedRoutingIdOrder.First;
-                    if (oldest is null)
-                        break;
-                    _disconnectedRoutingIdOrder.RemoveFirst();
-                    _disconnectedRoutingIds.Remove(oldest.Value);
-                }
+                var oldest = _disconnectedRoutingIdOrder.First;
+                if (oldest is null)
+                    break;
+                _disconnectedRoutingIdOrder.RemoveFirst();
+                _disconnectedRoutingIds.Remove(oldest.Value);
+            }
 
-                var node = _disconnectedRoutingIdOrder.AddLast(routingId);
-                _disconnectedRoutingIds.Add(routingId, node);
-            })
-        );
+            var node = _disconnectedRoutingIdOrder.AddLast(routingId);
+            _disconnectedRoutingIds.Add(routingId, node);
+        });
     }
 
-    private void ClearDisconnectedRoutingId(RoutingId routingId)
+    private ValueTask ClearDisconnectedRoutingIdAsync(RoutingId routingId)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (!_disconnectedRoutingIds.Remove(routingId, out var node))
-                    return;
-                _disconnectedRoutingIdOrder.Remove(node);
-            })
-        );
+        return _lane.RunAsync(() =>
+        {
+            if (!_disconnectedRoutingIds.Remove(routingId, out var node))
+                return;
+            _disconnectedRoutingIdOrder.Remove(node);
+        });
     }
 
     private sealed class ZLinkStreamPeerAdmissionException(string message)
@@ -775,7 +819,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 }
 
                 backoff.Reset();
-                OnMonitorEvent(monitorEvent);
+                await OnMonitorEventAsync(monitorEvent).ConfigureAwait(false);
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {

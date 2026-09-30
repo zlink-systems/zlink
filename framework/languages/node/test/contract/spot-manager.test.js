@@ -63,7 +63,7 @@ test('Close seal waits for an accepted Yielded turn and permits its continuation
   await entered.promise;
   await Promise.resolve();
   // A Spot Close seal drains yielded turns; a relocation seal does not.
-  const seal = barrier.seal(true);
+  const seal = barrier.seal('close');
   let quiescent = false;
   const wait = barrier.waitForQuiescence(seal).then(() => { quiescent = true; });
   await Promise.resolve();
@@ -328,39 +328,6 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
   );
 
   assert.equal(dispatched, true);
-});
-
-test('Mesh actor ingress records the validated bound-session generation before dispatch', async () => {
-  const entryNodeRid = zlink.RoutingId.from('entry-node');
-  const observed = [];
-  const manager = new framework.DefaultZLinkSpotManager({
-    spotFactories: [],
-    entryNodeRidProvider: () => entryNodeRid,
-    actorBindingGenerationObserver(actorId, generation) {
-      observed.push({ actorId, generation });
-    },
-    async dispatchEntryActorPacket() {
-      assert.deepEqual(observed, [{ actorId: 'actor-1', generation: 23n }]);
-    }
-  });
-
-  await manager.dispatchMeshActor('test.mesh',
-    {
-      spotId: entryNodeRid,
-      actor: {
-        nodeRid: entryNodeRid,
-        actorId: 'actor-1',
-        generation: 1n
-      }
-    },
-    {
-      kind: framework.ReceiveKind.ActorSend,
-      sourceBindingGeneration: 23n,
-      parts: []
-    }
-  );
-
-  assert.deepEqual(observed, [{ actorId: 'actor-1', generation: 23n }]);
 });
 
 test('spot actor leave rejoins the actor original remote Entry Spot', async () => {
@@ -1264,6 +1231,67 @@ test('User Close commits before a later Join and rejects that Join', async () =>
   }
 });
 
+test('User Close seal rejects a formal remote Actor Join at Mesh ingress', async () => {
+  const closingEntered = createDeferred();
+  const finishClosing = createDeferred();
+  let joinCalls = 0;
+  class RoomSpot {
+    async onActorJoin() { joinCalls++; return { accepted: true }; }
+    async onClosing() { closingEntered.resolve(); await finishClosing.promise; }
+  }
+  const spotId = zlink.RoutingId.from('closing-remote-join');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [RoomSpot],
+    createNativeSpot: (_meshName, id) => formalNativeSpot(id)
+  });
+  await manager.getOrCreate('test.mesh', RoomSpot, spotId);
+  const close = manager.closeUserWithAuthority('test.mesh', spotId, async (onCommitted) => {
+    onCommitted();
+    return { release: async () => undefined };
+  });
+  const message = zlink.Message.from(JSON.stringify({
+    packetName: '__zlink.actor.join_spot.request',
+    phase: 'admission',
+    transferId: 'closing-remote-transfer',
+    actorId: 'remote-player',
+    actorType: 'PlayerActor',
+    actorNodeRid: 'source-node',
+    actorGeneration: '1',
+    routerChannelId: 'test.mesh',
+    request: Buffer.from('join-room').toString('base64'),
+    handoffBacklog: []
+  }));
+  try {
+    await closingEntered.promise;
+    await assert.rejects(
+      () => manager.dispatchMeshActorJoin('test.mesh', {
+        ownerKind: framework.ReadyOwnerKind.Spot,
+        spotId,
+        actor: null
+      }, {
+        kind: framework.ReceiveKind.SpotControl,
+        kindData: {
+          kind: 'actorControl',
+          currentActor: {
+            nodeRid: zlink.RoutingId.from('source-node'),
+            actorId: 'remote-player',
+            generation: 1n
+          },
+          currentSpotGeneration: 1n
+        },
+        parts: [message],
+        replyActorJoin: () => assert.fail('sealed remote Join must not reply as accepted')
+      }),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+    );
+    assert.equal(joinCalls, 0);
+  } finally {
+    message.close();
+    finishClosing.resolve();
+  }
+  assert.equal(await close, true);
+});
+
 test('Relocation seal prevents Close CAS and preserves admission', async () => {
   const spotId = zlink.RoutingId.from('relocating-close-conflict');
   let authorityCalls = 0;
@@ -1327,7 +1355,7 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
       events.push(`onClosing:turn=${activation.serial.isCurrentTurn}`);
       laterLifecycle = activation.serial.executeLifecycleOperation(() => {
         events.push('later-lifecycle');
-      });
+      }).then(() => undefined, (error) => error);
       await new Promise((resolve) => setImmediate(resolve));
       events.push('onClosing:end');
     }
@@ -1346,8 +1374,8 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
   activation = manager.activations.activationForClose('test.mesh', spotId);
   assert.equal(await manager.close('test.mesh', spotId), true);
-  await laterLifecycle.catch(() => undefined);
-  assert.deepEqual(events.slice(0, 3), [
+  assert.equal((await laterLifecycle).kind, framework.ZLinkFrameworkErrorKind.Rejected);
+  assert.deepEqual(events, [
     'onClosing:turn=true',
     'onClosing:end',
     'authority-released'
@@ -1406,7 +1434,7 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
 
   await Promise.resolve();
   assert.equal(initialized, 1);
-  assert.equal(manager.isInstanceClosing('test.mesh', spotId), true);
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
   releaseClosing.resolve({
     release: async () => undefined
   });
@@ -1812,6 +1840,40 @@ test('ZLinkSpotManager create request uses configured custom serializer without 
   assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
   assert.deepEqual(decoded, [{ text: 'open' }]);
   assert.deepEqual(created.reply, { text: 'created' });
+});
+
+test('ZLinkSpotManager create request decodes with a registered application/json serializer', async () => {
+  const decoded = [];
+  class CodecSpot {
+    async onCreate(request) {
+      decoded.push(request.decode());
+      return { accepted: true };
+    }
+  }
+
+  const serializer = {
+    serialize(value) {
+      return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify({ value })));
+    },
+    deserialize(payload) {
+      return {
+        codec: 'registered-json',
+        value: JSON.parse(Buffer.from(payload.data()).toString()).value
+      };
+    }
+  };
+  const registration = framework.createFrameworkRegistration({
+    codecs: { serializers: [{ contentType: 'application/json', serializer }] }
+  });
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [CodecSpot],
+    messageSerializers: registration.messageSerializers
+  });
+
+  const created = await manager.create('test.mesh', CodecSpot, { text: 'open' });
+
+  assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
+  assert.deepEqual(decoded, [{ codec: 'registered-json', value: { text: 'open' } }]);
 });
 
 test('ZLinkSpotManager preserves binary serializer content type through onCreate', async () => {
@@ -2683,7 +2745,7 @@ test('ZLinkSpotManager rejects unregistered spot factories', async () => {
   );
 });
 
-test('spot manager local actor join awaits entry leave before commit and joined callback', async () => {
+test('spot manager local actor join commits and runs target lifecycle before one-way source leave', async () => {
   const events = [];
   let finishLeave;
   class StageSpot {
@@ -2725,7 +2787,7 @@ test('spot manager local actor join awaits entry leave before commit and joined 
     events.push('commit');
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events, ['join:alice:hello', 'entry-left:alice']);
+  assert.deepEqual(events, ['join:alice:hello', 'commit', 'joined:alice', 'entry-left:alice']);
   finishLeave();
   const result = await pending;
 
@@ -2733,9 +2795,9 @@ test('spot manager local actor join awaits entry leave before commit and joined 
   assert.equal(JSON.parse(result.reply.getString()), 'joined');
   assert.deepEqual(events, [
     'join:alice:hello',
-    'entry-left:alice',
     'commit',
-    'joined:alice'
+    'joined:alice',
+    'entry-left:alice'
   ]);
   request.close();
   result.reply.close();
@@ -2773,8 +2835,9 @@ test('formal Entry Spot LEFT control invokes the Entry Spot lifecycle callback',
   assert.deepEqual(events, ['entry-left:alice']);
 });
 
-test('user Spot join rejects a public operation that waits for its current Spot gate', async () => {
+test('source leave gate error is reported after target commit without blocking accepted Join', async () => {
   const events = [];
+  const errors = [];
   class RoomSpot {
     constructor(context) {
       this.context = context;
@@ -2797,6 +2860,7 @@ test('user Spot join rejects a public operation that waits for its current Spot 
   let manager;
   manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [RoomSpot],
+    dispatchErrors: { report(event) { errors.push(event.error); } },
     entrySpotCallbacks: {
       onLeaveActor(actor) {
         return manager.executeOnSpot(RoomSpot, actor.sourceSpotId, (source) =>
@@ -2826,15 +2890,16 @@ test('user Spot join rejects a public operation that waits for its current Spot 
     manager.admitActorJoin('room-b', actor, request, () => {
       events.push('commit:room-b:alice');
     }));
-  await assert.rejects(move, (error) => {
-    assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
-    return true;
-  });
-  assert.deepEqual(events, ['admit:room-b:alice']);
+  const result = await move;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(result.accepted, true);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  assert.deepEqual(events, ['admit:room-b:alice', 'commit:room-b:alice', 'joined:room-b:alice']);
   request.close();
 });
 
-test('spot manager rolls local membership back when joined callback fails', async () => {
+test('spot manager retains committed membership when target joined callback fails', async () => {
   const events = [];
   let committed = false;
   class StageSpot {
@@ -2880,8 +2945,8 @@ test('spot manager rolls local membership back when joined callback fails', asyn
     /joined failed/
   );
 
-  assert.equal(committed, false);
-  assert.deepEqual(events, ['admission', 'entry-left', 'commit', 'joined', 'rollback']);
+  assert.equal(committed, true);
+  assert.deepEqual(events, ['admission', 'commit', 'joined', 'entry-left']);
   await closeUserSpot(manager, 'test.mesh', 'stage-rollback');
   request.close();
 });
@@ -3413,7 +3478,6 @@ test('formal remote Actor transfer to Entry Spot materializes state before commi
         return { actor, actorRef: { actorId, nodeRid: entryNodeRid, generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     },
     detachedTaskRunner: {
@@ -3525,7 +3589,6 @@ test('formal remote Actor transfer admits the target before reading referenced s
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }
   });
@@ -3711,7 +3774,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
           }
         };
       },
-      rememberRoutedActorTransferTarget() {},
       bindRoutedActorRef() {},
       commitRoutedActor() {},
       async commitRoutedActorAuthority() {
@@ -3724,7 +3786,7 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       async openRoutedActorSession() {
         events.push('session-route-opened');
       },
-      async deliverDeferredJoinAccepted(completion, joinedActor, _currentRef, execute) {
+      async deliverDeferredJoinCompletion(completion, joinedActor, _currentRef, execute) {
         assert.equal(completion, deferredJoinCompletion);
         assert.equal(joinedActor, actor);
         await execute(async () => {
@@ -3931,7 +3993,6 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }
   });

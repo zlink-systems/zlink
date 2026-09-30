@@ -435,6 +435,11 @@ void run_immediate_reconnect_request_case (transport_t transport_,
     bind_endpoint (server, transport_, endpoint, sizeof (endpoint),
                    "immediate");
     void *client = new_socket (ZLINK_SOCKET_DEALER);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_int_option (client, ZLINK_OPT_RECONNECT_IVL, reconnect_ivl_ms);
     void *monitor = open_client_monitor (client);
 
@@ -561,21 +566,15 @@ void test_tcp_unregistered_server_disconnect_progresses ()
 void test_stream_disconnect_reconnect_without_application_poll ()
 {
     void *server = new_socket (ZLINK_SOCKET_STREAM);
-    void *client = new_socket (ZLINK_SOCKET_STREAM);
     const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
                                sizeof (mode)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_stream_option (client, ZLINK_STREAM_OPT_RECV_MODE, &mode,
-                               sizeof (mode)));
-    set_int_option (client, ZLINK_OPT_RECONNECT_IVL, reconnect_ivl_ms);
-    void *monitor = open_client_monitor (client);
+    void *monitor = open_client_monitor (server);
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+    fd_t client_fd = connect_socket (endpoint);
     event_observation_t event;
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
@@ -584,13 +583,14 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     const zlink_routing_id_t original_rid = event.event.routing_id;
     TEST_ASSERT_EQUAL_UINT (4, original_rid.size);
 
-    // The server has neither a monitor nor an application poller/data receiver
-    // to process the pipe termination acknowledgement after this call returns.
+    // No application poller or data receiver processes the server pipe.
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint));
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_DISCONNECTED, original_connection_id, false,
       event_timeout_ms, &event));
+    close (client_fd);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    client_fd = connect_socket (endpoint);
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
     TEST_ASSERT_NOT_EQUAL (0, event.event.connection_id);
@@ -598,8 +598,8 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     TEST_ASSERT_EQUAL_UINT (4, event.event.routing_id.size);
     TEST_ASSERT_TRUE (memcmp (original_rid.data, event.event.routing_id.data,
                              original_rid.size) != 0);
+    close (client_fd);
     TEST_ASSERT_EQUAL_INT (0, zlink_close (monitor));
-    close_socket (client);
     close_socket (server);
 }
 

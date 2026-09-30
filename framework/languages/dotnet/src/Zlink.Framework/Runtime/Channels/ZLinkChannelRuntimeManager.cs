@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelRuntimeManager(
@@ -199,25 +201,22 @@ internal sealed class ZLinkChannelRuntimeManager(
                     backendAdapterFactory.CreateMonitoringAdapter(),
                     state.Context,
                     channel.Client!.SocketConfig,
-                    channel.Client.SocketConfig.SendTimeout
-                        ?? registration.DefaultSocketSendTimeout,
+                    ZLinkBackendSocketOptionsMapper
+                        .ResolveSendTimeout(
+                            channel.Client.SocketConfig,
+                            registration.DefaultSocketSendTimeout
+                        )!
+                        .Value,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );
-                // The lane turn only registers the runtime and reads the local server; the
-                // identity snapshot is awaited after the turn ends.
+                // The lane turn registers the runtime and reads the local server.
                 var localServer = AwaitStateLane(
                     state.RunStateAsync(() =>
                     {
                         state.ClientServerClientRuntimes.Add(entry.Key, runtime);
-                        runtime.OwnManualConnectionAttachment(
-                            channel.Client.ManualConnections.Attach(
-                                runtime.AddManual,
-                                runtime.RemoveManual
-                            )
-                        );
                         return
                             !registration.Locations.Enabled
                             && channel.HasClientServerServer
@@ -231,6 +230,9 @@ internal sealed class ZLinkChannelRuntimeManager(
                                 )
                             : null;
                     })
+                );
+                runtime.OwnManualConnectionAttachment(
+                    channel.Client.ManualConnections.Attach(runtime.AddManual, runtime.RemoveManual)
                 );
                 if (localServer is not null)
                     await runtime.AddLocalAsync(localServer).ConfigureAwait(false);

@@ -11,12 +11,14 @@ import type {
 import type { ZLinkActorSourceTransfer } from './actor-source-transfer';
 import { ZLinkActorRuntimeState, toFrameworkRoutingId } from './actor-runtime-state';
 import { lookupNativeActorRef } from './actor-native-lookup';
-import { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { ZLinkLocalNativeActorJoin } from './actor-local-native-join';
 import { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 
-export interface ZLinkActorNativeJoinCoordinatorOptions {
+export interface ZLinkActorNativeJoinCoordinatorOptions extends Pick<
+  import('./actor-local-native-join').ZLinkLocalNativeActorJoinOptions,
+  'localSpotJoin' | 'localEntryJoin' | 'localSourceLeave' | 'reportSourceLeaveError'
+> {
   readonly messageFlow?: () =>
     import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined;
   readonly node: ZLinkBackendMeshNode | (() => ZLinkBackendMeshNode);
@@ -46,16 +48,12 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   }
 
   constructor(private readonly options: ZLinkActorNativeJoinCoordinatorOptions) {
-    const postCommitLocation =
-      options.locationLifecycle === undefined
-        ? undefined
-        : new ZLinkPostCommitActorLocation({
-            lifecycle: options.locationLifecycle,
-            reportError: options.postCommitErrorReporter,
-            signal: options.shutdownSignal
-          });
     this.localJoin = new ZLinkLocalNativeActorJoin({
-      postCommitLocation,
+      locationLifecycle: options.locationLifecycle,
+      localSpotJoin: options.localSpotJoin,
+      localEntryJoin: options.localEntryJoin,
+      localSourceLeave: options.localSourceLeave,
+      reportSourceLeaveError: options.reportSourceLeaveError,
       postCommitBinder:
         options.remoteActorBinder === undefined
           ? undefined

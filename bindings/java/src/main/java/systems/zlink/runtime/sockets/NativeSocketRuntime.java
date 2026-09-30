@@ -45,7 +45,6 @@ import java.util.Optional;
  */
 final class NativeSocketRuntime implements AutoCloseable {
     static final int DEFAULT_IO_BUFFER_SIZE = 8192;
-    static final int TOPIC_CAPACITY = 256;
     private final SocketCore socketCore;
     private final TopicPlane topicPlane;
     private final ReceivePlane receivePlane;
@@ -865,14 +864,14 @@ final class NativeSocketRuntime implements AutoCloseable {
         return value;
     }
 
-    static int normalizeTopicLength(MemorySegment topic, int capacity,
-                                            long reportedLength) {
+    static int normalizeTopicLength(MemorySegment topic,
+                                    long reportedLength) {
         long len = reportedLength;
         if (len < 0)
             len = 0;
-        if (len > capacity)
-            len = capacity;
-        int bounded = (int) len;
+        if (len > topic.byteSize())
+            len = topic.byteSize();
+        int bounded = Math.toIntExact(len);
         if (bounded > 0 && topic.get(ValueLayout.JAVA_BYTE, bounded - 1) == 0)
             bounded--;
         return bounded;

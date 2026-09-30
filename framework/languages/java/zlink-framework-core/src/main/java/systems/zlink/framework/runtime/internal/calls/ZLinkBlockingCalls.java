@@ -12,16 +12,26 @@ import java.util.function.Supplier;
 
 /** Application-thread blocking terminals over the existing submission and completion owners. */
 public final class ZLinkBlockingCalls {
+    private static final ThreadLocal<Boolean> INFRASTRUCTURE_THREAD = new ThreadLocal<>();
+
     private ZLinkBlockingCalls() {}
+
+    /** Marks a dedicated infrastructure thread once, before its executor starts running work. */
+    public static void markInfrastructureThread() {
+        INFRASTRUCTURE_THREAD.set(true);
+    }
+
+    public static Runnable infrastructureTask(Runnable task) {
+        return () -> {
+            markInfrastructureThread();
+            task.run();
+        };
+    }
 
     public static <T> T submit(Supplier<? extends CompletionStage<T>> submission) {
         // Check before invoking the supplier: even claiming the call's single-use gate
         // would make a rejected runtime-context invocation observable to a later caller.
-        if (isRuntimeExecutionContext()) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                    "Blocking submission is only valid on an application thread");
-        }
+        requireMayBlock();
         try {
             return submission.get().toCompletableFuture().join();
         } catch (CompletionException failure) {
@@ -39,9 +49,19 @@ public final class ZLinkBlockingCalls {
         }
     }
 
+    public static void requireMayBlock() {
+        if (isRuntimeExecutionContext()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Blocking submission is only valid on an application thread");
+        }
+    }
+
     private static boolean isRuntimeExecutionContext() {
-        return ZLinkApplicationJobContext.current().isPresent()
+        return Boolean.TRUE.equals(INFRASTRUCTURE_THREAD.get())
+                || ZLinkApplicationJobContext.current().isPresent()
                 || ZLinkSuspendInvocationContext.currentApplicationExecution() != null
+                || ZLinkSuspendInvocationContext.currentSerialExecutionTurn() != null
                 || ZLinkStateLane.current() != null;
     }
 }

@@ -12,6 +12,29 @@ public sealed class test_binding_core_parity
     private static readonly string FillerPayload =
         "filler" + new string('p', 65_536);
 
+    [Theory]
+    [InlineData(RequestResult.TimedOut, 110)]
+    [InlineData(RequestResult.NotFound, 2)]
+    [InlineData(RequestResult.Terminated, 156384765)]
+    [InlineData(RequestResult.ProtocolError, 71)]
+    [InlineData(RequestResult.InternalError, 5)]
+    [InlineData(RequestResult.Rejected, 13)]
+    [InlineData(RequestResult.Conflict, 17)]
+    [InlineData(RequestResult.Busy, 16)]
+    [InlineData(RequestResult.NotConnected, 107)]
+    [InlineData(RequestResult.InvalidArgument, 22)]
+    [InlineData(RequestResult.InvalidState, 156384763)]
+    [InlineData(RequestResult.NotSupported, 95)]
+    [InlineData(RequestResult.Backpressured, 11)]
+    public void request_result_uses_first_core_errno(
+        RequestResult result, int expectedErrno)
+    {
+        var error = (ZlinkRequestException)CompletionOwnerTestAccess.Create(
+            typeof(ZlinkRequestException), result);
+
+        Assert.Equal(expectedErrno, error.NativeErrno);
+    }
+
     [Fact]
     public async Task request_without_timeout_uses_the_socket_request_timeout_option()
     {
@@ -35,6 +58,7 @@ public sealed class test_binding_core_parity
                 TimeSpan.FromSeconds(3)));
         watch.Stop();
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.Equal(110, error.NativeErrno);
         // The binding has no 5 s default of its own; Core applied the option.
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3));
     }

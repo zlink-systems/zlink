@@ -148,7 +148,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
 
 for (const absent of [false, true]) {
   test(`raw session delivery close completes through the session owner (RID absent=${absent})`, async () => {
-    const fixture = sessionFixture(absent ? new zlink.ConfigError(zlink.ConfigResult.NotFound, 2) : undefined);
+    const fixture = sessionFixture(absent ? new zlink.ConnectError(zlink.ConnectResult.NotFound, 2) : undefined);
     try {
       await fixture.bind();
       await fixture.bindNext();
@@ -172,7 +172,7 @@ for (const absent of [false, true]) {
 }
 
 test('STREAM explicit close treats an absent RID as completed and cleans the session once', async () => {
-  const fixture = sessionFixture(new zlink.ConfigError(zlink.ConfigResult.NotFound, 2));
+  const fixture = sessionFixture(new zlink.ConnectError(zlink.ConnectResult.NotFound, 2));
   try {
     await fixture.bind();
     await fixture.session.context.close();
@@ -185,9 +185,9 @@ test('STREAM explicit close treats an absent RID as completed and cleans the ses
 });
 
 for (const error of [
-  new zlink.ConfigError(zlink.ConfigResult.Busy, 16),
-  new zlink.ConfigError(zlink.ConfigResult.InternalError, 2),
-  Object.assign(new Error('not a binding ConfigError'), { result: 706, code: 706, nativeErrno: 2 })
+  new zlink.ConnectError(zlink.ConnectResult.Busy, 16),
+  new zlink.ConnectError(zlink.ConnectResult.InternalError, 2),
+  Object.assign(new Error('not a binding ConnectError'), { result: 605, code: 605, nativeErrno: 2 })
 ]) {
   test(`STREAM close preserves other disconnect failures: ${error.name}/${error.result}`, async () => {
     const fixture = sessionFixture(error);
@@ -232,7 +232,7 @@ test('raw bound delivery survives a RID already removed by installed Core', { ti
     socket.disconnectRid(routingId);
     await disconnected;
     assert.throws(() => socket.disconnectRid(routingId), error =>
-      error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.NotFound && error.nativeErrno === 2);
+      error instanceof zlink.ConnectError && error.result === zlink.ConnectResult.NotFound && error.nativeErrno === 2);
     assert.equal(await fixture.deliver(), 'application');
     fixture.session.enqueueDisconnected();
     fixture.session.enqueueDisconnected();

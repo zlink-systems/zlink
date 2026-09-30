@@ -511,7 +511,9 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
+            calls.add("create.dealer.sendTimeout." + sendTimeout);
             return new FakeDealerSocket(calls, "dealer");
         }
 
@@ -523,7 +525,9 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
+            calls.add("create.publisher.sendTimeout." + sendTimeout);
             return new FakePublisherSocket(calls, "publisher");
         }
 

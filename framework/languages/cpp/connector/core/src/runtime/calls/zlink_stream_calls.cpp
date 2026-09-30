@@ -78,14 +78,17 @@ const char *message_kind_name (message_kind_t kind)
     return "unknown";
 }
 
+/* Trace details are producers so that a disabled trace builds no string. */
+template <typename Detail>
 void trace_request (const char *stage,
                     std::optional<std::uint64_t> seq,
                     const std::string &name,
-                    const std::string &detail = {})
+                    Detail &&make_detail)
 {
     if (!stream_trace_enabled ()) {
         return;
     }
+    const std::string detail = std::forward<Detail> (make_detail) ();
     static std::mutex trace_mutex;
     std::lock_guard<std::mutex> lock (trace_mutex);
     std::cerr << "zlink-cpp-stream-trace stage=" << stage << " seq=";
@@ -103,14 +106,14 @@ void trace_request (const char *stage,
     std::cerr << '\n';
 }
 
-void trace_connector_write (const connector_state_t &state,
-                            const char *stage,
-                            std::string_view detail = {})
+/* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. */
+template <typename Detail>
+void trace_connector_write (const connector_state_t &state, const char *stage, Detail &&make_detail)
 {
-    /* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. */
     if (!stream_trace_enabled ()) {
         return;
     }
+    const std::string detail = std::forward<Detail> (make_detail) ();
     static std::mutex trace_mutex;
     std::lock_guard<std::mutex> lock (trace_mutex);
     std::cerr << "zlink-cpp-stream-trace side=client connector=" << state.connector_id
@@ -126,11 +129,6 @@ result_t<void> validate_packet_limits (const connector_state_t &state, const pac
     if (metadata_codec_t::encoded_size (packet.metadata) > max_metadata_size) {
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "stream connector metadata is too large");
-    }
-    if (packet.codec != codec_t::raw
-        && state.enabled_codecs.find (packet.codec) == state.enabled_codecs.end ()) {
-        return result_t<void>::failure (error_code_t::validation_failed,
-                                        "stream connector codec is not enabled");
     }
     if (packet.compressed) {
         if (!state.compression_codec) {
@@ -648,7 +646,7 @@ try_take_inbound_frame (connector_state_t &state,
       header.kind, header.request_seq, reply_to_pending, std::move (packet.value ())});
 }
 
-void kick_async_write (std::shared_ptr<connector_state_t> state, std::string reason);
+void kick_async_write (std::shared_ptr<connector_state_t> state, const char *reason);
 
 void complete_pending_request (std::shared_ptr<connector_state_t> state,
                                std::uint64_t request_seq,
@@ -664,7 +662,8 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         auto found = state->pending_requests.find (request_seq);
         if (found == state->pending_requests.end ()) {
-            trace_request ("pending-complete-missing", request_seq, {});
+            trace_request ("pending-complete-missing", request_seq, {},
+                           [] { return std::string (); });
             return;
         }
         packet_name = found->second.packet.name;
@@ -674,10 +673,11 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         cancel_timer (found->second.timeout_timer);
         state->pending_requests.erase (found);
     }
-    trace_request ("pending-complete", request_seq, packet_name,
-                   succeeded
-                     ? "result=success"
-                     : "result=failure error=" + std::to_string (static_cast<int> (error_code)));
+    trace_request ("pending-complete", request_seq, packet_name, [&] {
+        return std::string (succeeded ? "result=success"
+                                      : "result=failure error="
+                                          + std::to_string (static_cast<int> (error_code)));
+    });
     if (reply_hook_ids) {
         *reply_hook_ids = capture_reply_hook_ids (state);
     }
@@ -913,11 +913,13 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             if (value.reply_to_pending) {
                 claimed_replies.insert (*value.request_seq);
             }
-            trace_connector_write (
-              *state, "read-dispatch",
-              "seq=" + (value.request_seq ? std::to_string (*value.request_seq) : std::string ("-"))
-                + " name=" + value.envelope.packet.name
-                + " kind=" + message_kind_name (value.kind));
+            trace_connector_write (*state, "read-dispatch", [&] {
+                return std::string (
+                  "seq="
+                  + (value.request_seq ? std::to_string (*value.request_seq) : std::string ("-"))
+                  + " name=" + value.envelope.packet.name
+                  + " kind=" + message_kind_name (value.kind));
+            });
             /* §5.2: pending request 매칭은 request_seq가 정본이다. packet name은 대조
        * 조건이 아니므로 이름이 달라도 응답을 버리지 않는다. */
             if (value.packet_error) {
@@ -960,11 +962,12 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         reschedule =
           is_transport_connected (*state) && !state->close_requested.load () && !transport_error;
         if (!reschedule) {
-            trace_connector_write (
-              *state, "read-pump-stop",
-              std::string ("connected=") + (is_transport_connected (*state) ? "true" : "false")
-                + " close=" + (state->close_requested.load () ? "true" : "false")
-                + " transport_error=" + (transport_error ? "true" : "false"));
+            trace_connector_write (*state, "read-pump-stop", [&] {
+                return std::string (
+                  std::string ("connected=") + (is_transport_connected (*state) ? "true" : "false")
+                  + " close=" + (state->close_requested.load () ? "true" : "false")
+                  + " transport_error=" + (transport_error ? "true" : "false"));
+            });
         }
     }
 
@@ -1008,29 +1011,31 @@ void schedule_request_pump (std::shared_ptr<connector_state_t> state)
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->read_in_progress || state->close_requested.load ()
             || !is_transport_connected (*state)) {
-            trace_connector_write (
-              *state, "read-start-skip",
-              std::string ("in_progress=") + (state->read_in_progress ? "true" : "false")
-                + " close=" + (state->close_requested.load () ? "true" : "false")
-                + " connected=" + (is_transport_connected (*state) ? "true" : "false"));
+            trace_connector_write (*state, "read-start-skip", [&] {
+                return std::string (
+                  std::string ("in_progress=") + (state->read_in_progress ? "true" : "false")
+                  + " close=" + (state->close_requested.load () ? "true" : "false")
+                  + " connected=" + (is_transport_connected (*state) ? "true" : "false"));
+            });
             return;
         }
         state->read_in_progress = true;
         connection = state->connection;
     }
-    trace_connector_write (*state, "read-start");
+    trace_connector_write (*state, "read-start", [] { return std::string (); });
     connection->async_read_some (
       8192, [state, connection] (boost::system::error_code error,
                                  std::vector<std::uint8_t> bytes) mutable {
-          trace_connector_write (*state, "read-completion",
-                                 error ? "result=failure error=" + error.message ()
-                                       : "result=success bytes=" + std::to_string (bytes.size ()));
+          trace_connector_write (*state, "read-completion", [&] {
+              return std::string (error ? "result=failure error=" + error.message ()
+                                        : "result=success bytes=" + std::to_string (bytes.size ()));
+          });
           process_inbound_buffer (state, error, std::move (bytes), connection);
       });
 }
 
 void start_next_async_write (std::shared_ptr<connector_state_t> state);
-void kick_async_write (std::shared_ptr<connector_state_t> state, std::string reason);
+void kick_async_write (std::shared_ptr<connector_state_t> state, const char *reason);
 
 /* §5.2: an accepted operation takes the next place in the connection's write
  * order. The frames are written one at a time in that order, so an operation
@@ -1084,16 +1089,16 @@ void finish_reserved_write (std::shared_ptr<connector_state_t> state,
     }
 }
 
-void kick_async_write (std::shared_ptr<connector_state_t> state, std::string reason)
+void kick_async_write (std::shared_ptr<connector_state_t> state, const char *reason)
 {
-    trace_connector_write (*state, "write-kick", "reason=" + reason);
+    trace_connector_write (*state, "write-kick", [&] { return std::string ("reason=") + reason; });
     auto executor = state->write_strand;
     auto work_state = std::move (state);
-    boost::asio::post (
-      executor, [state = std::move (work_state), reason = std::move (reason)] () mutable {
-          trace_connector_write (*state, "write-kick-dispatch", "reason=" + reason);
-          start_next_async_write (std::move (state));
-      });
+    boost::asio::post (executor, [state = std::move (work_state), reason] () mutable {
+        trace_connector_write (*state, "write-kick-dispatch",
+                               [&] { return std::string ("reason=") + reason; });
+        start_next_async_write (std::move (state));
+    });
 }
 
 void enqueue_async_write (std::shared_ptr<connector_state_t> state, std::vector<std::uint8_t> frame)
@@ -1106,16 +1111,18 @@ void enqueue_async_write (std::shared_ptr<connector_state_t> state, std::vector<
      * connected transport. connection_ended fails every write accepted on
      * the connection it ends, so no write outlives its connection. */
         if (!is_transport_connected (*state)) {
-            trace_connector_write (*state, "write-dropped",
-                                   "bytes=" + std::to_string (frame_size) + " connected=false");
+            trace_connector_write (*state, "write-dropped", [&] {
+                return std::string ("bytes=" + std::to_string (frame_size) + " connected=false");
+            });
             return;
         }
         (void) accept_write_locked (*state, pending_write_t{std::move (frame)});
         queued = state->write_queue.size ();
     }
-    trace_connector_write (*state, "write-queued",
-                           "bytes=" + std::to_string (frame_size)
-                             + " write_queue=" + std::to_string (queued));
+    trace_connector_write (*state, "write-queued", [&] {
+        return std::string ("bytes=" + std::to_string (frame_size)
+                            + " write_queue=" + std::to_string (queued));
+    });
     kick_async_write (std::move (state), "queued");
 }
 
@@ -1170,10 +1177,11 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
      * work fails the writes still queued without writing them. */
         if (state->active_write || state->write_queue.empty () || !state->write_queue.front ().ready
             || state->close_requested.load (std::memory_order_acquire)) {
-            trace_connector_write (
-              *state, "write-start-skip",
-              "in_progress=" + std::string (state->active_write ? "true" : "false")
-                + " write_queue=" + std::to_string (state->write_queue.size ()));
+            trace_connector_write (*state, "write-start-skip", [&] {
+                return std::string (
+                  "in_progress=" + std::string (state->active_write ? "true" : "false")
+                  + " write_queue=" + std::to_string (state->write_queue.size ()));
+            });
             return;
         }
         state->active_write = std::move (state->write_queue.front ());
@@ -1189,25 +1197,29 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
     }
 
     if (immediate_failure) {
-        trace_connector_write (
-          *state, "write-start",
-          "result=skipped error="
-            + std::to_string (static_cast<int> (immediate_failure->error ()->code)));
+        trace_connector_write (*state, "write-start", [&] {
+            return std::string (
+              "result=skipped error="
+              + std::to_string (static_cast<int> (immediate_failure->error ()->code)));
+        });
         finish_async_write (state, write_id, {}, std::move (*immediate_failure));
         return;
     }
 
     try {
         const auto frame_size = frame.size ();
-        trace_connector_write (*state, "write-start", "bytes=" + std::to_string (frame_size));
+        trace_connector_write (*state, "write-start", [&] {
+            return std::string ("bytes=" + std::to_string (frame_size));
+        });
         connection->async_write (std::move (frame), [state, connection, write_id, frame_size] (
                                                       boost::system::error_code error) mutable {
             auto complete = [state, connection, write_id, frame_size, error] () mutable {
-                trace_connector_write (*state, "write-completion",
-                                       error
-                                         ? "result=failure bytes=" + std::to_string (frame_size)
-                                             + " error=" + error.message ()
-                                         : "result=success bytes=" + std::to_string (frame_size));
+                trace_connector_write (*state, "write-completion", [&] {
+                    return std::string (error
+                                          ? "result=failure bytes=" + std::to_string (frame_size)
+                                              + " error=" + error.message ()
+                                          : "result=success bytes=" + std::to_string (frame_size));
+                });
                 if (error) {
                     finish_async_write (state, write_id, connection,
                                         result_t<void>::failure (state->close_requested.load ()
@@ -1355,6 +1367,7 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
         if (state->connection != observed_connection) {
             return false;
         }
+        state->connection.reset ();
         close_bound_actors (state);
         publish_error (*state, error);
         change_state (state, connection_state_t::disconnected, error);
@@ -1434,15 +1447,12 @@ void submit_send_with (std::shared_ptr<connector_state_t> state,
         } else {
             write_id = reserve_write_locked (
               *state, [state, outbound, complete] (result_t<void> result) mutable {
-                  trace_request ("send-write-completion", std::nullopt, outbound->name,
-                                 result
-                                   ? "result=success"
-                                   : "result=failure error="
-                                       + std::to_string (static_cast<int> (result.error ()->code)));
-                  if (result) {
-                      std::lock_guard<std::mutex> lock (state->transport_mutex);
-                      state->sent_packets.push_back (std::move (*outbound));
-                  }
+                  trace_request ("send-write-completion", std::nullopt, outbound->name, [&] {
+                      return std::string (
+                        result ? "result=success"
+                               : "result=failure error="
+                                   + std::to_string (static_cast<int> (result.error ()->code)));
+                  });
                   complete (std::move (result));
               });
         }
@@ -1453,7 +1463,8 @@ void submit_send_with (std::shared_ptr<connector_state_t> state,
     }
     auto encoded =
       encode_packet_frame (*state, message_kind_t::send, *outbound, std::nullopt, actor_binding);
-    trace_request ("send-submit", std::nullopt, outbound->name, "kind=send");
+    trace_request ("send-submit", std::nullopt, outbound->name,
+                   [&] { return std::string ("kind=send"); });
     finish_reserved_write (std::move (state), write_id, std::move (encoded));
 }
 
@@ -1556,10 +1567,12 @@ void submit_request_async (std::shared_ptr<void> state_handle,
         } else {
             seq = state->next_request_seq++;
             request_packet_name = packet.name;
-            trace_request ("submit", seq, request_packet_name, "mode=async");
+            trace_request ("submit", seq, request_packet_name,
+                           [&] { return std::string ("mode=async"); });
             auto timeout_timer =
               post_runtime_operation_after (state, timeout, [state, seq, request_packet_name] {
-                  trace_request ("request-timeout", seq, request_packet_name);
+                  trace_request ("request-timeout", seq, request_packet_name,
+                                 [] { return std::string (); });
                   complete_pending_request (
                     state, seq,
                     result_t<request_reply_t>::failure (error_code_t::request_timeout,
@@ -1570,11 +1583,12 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                                      deliver_direct, reply_hook_ids});
             write_id = reserve_write_locked (*state, [state, seq, request_packet_name] (
                                                        result_t<void> written) mutable {
-                trace_request ("request-write-completion", seq, request_packet_name,
-                               written
-                                 ? "result=success"
-                                 : "result=failure error="
-                                     + std::to_string (static_cast<int> (written.error ()->code)));
+                trace_request ("request-write-completion", seq, request_packet_name, [&] {
+                    return std::string (
+                      written ? "result=success"
+                              : "result=failure error="
+                                  + std::to_string (static_cast<int> (written.error ()->code)));
+                });
                 if (!written) {
                     complete_pending_request (
                       state, seq,
@@ -1651,23 +1665,13 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
              * next Manual pump even if the callback registers its handler. */
             passed_arrival = delivery.arrival - 1;
             if (delivery.run) {
-                try {
-                    delivery.run ();
-                }
-                catch (...) {
-                }
+                invoke_user_callback (*state, "connector callback failed", delivery.run);
             }
             continue;
         }
-        try {
+        invoke_user_callback (*state, "packet callback failed", [&] {
             dispatch_packet (*state, packet->envelope, packet->handlers);
-        }
-        catch (const std::exception &error) {
-            publish_error (*state, {error_code_t::user_callback_failed, error.what ()});
-        }
-        catch (...) {
-            publish_error (*state, {error_code_t::user_callback_failed, "packet callback failed"});
-        }
+        });
         passed_arrival = packet->envelope.arrival;
     }
     return result_t<void>::success ();

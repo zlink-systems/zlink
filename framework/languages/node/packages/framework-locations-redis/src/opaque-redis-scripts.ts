@@ -53,10 +53,12 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 // conditions/mutations, in the order fixed by ARGV[1]/ARGV[2].
 // ARGV[1] = JSON conditions: ['missing', keyIndex, originalKey]
 //           | ['version', keyIndex, originalKey, expectedVersion]
+//           | ['value', keyIndex, originalKey, expectedBytesArgIndex]
 // ARGV[2] = JSON mutation metadata (no raw bytes, JSON must stay text-safe):
 //           ['put', keyIndex, originalKey, retentionMsOrFalse]
 //           | ['delete', keyIndex, originalKey]
-// ARGV[3..] = one raw-bytes argument per 'put' mutation, in mutation order.
+// ARGV[3..] = raw expected bytes for 'value' conditions, then raw bytes for
+//             'put' mutations, each in request order.
 export const OPAQUE_WRITE_SCRIPT =
   PROLOGUE +
   DECODE_HELPERS +
@@ -121,6 +123,10 @@ for _, condition in ipairs(conditions) do
     local currentVersion = record and record[3] or nil
     if condition[1] == 'missing' then
         if currentVersion ~= nil then return {'conflict', nowMs} end
+    elseif condition[1] == 'value' then
+        if not record or record[2] ~= ARGV[condition[4]] then
+            return {'conflict', nowMs}
+        end
     elseif currentVersion ~= condition[4] then
         return {'conflict', nowMs}
     end
@@ -138,6 +144,9 @@ end
 
 local sequence = tostring(redis.call('INCR', sequenceKey))
 local byteArg = 3
+for _, condition in ipairs(conditions) do
+    if condition[1] == 'value' then byteArg = byteArg + 1 end
+end
 local result = {'applied', nowMs}
 for _, mutation in ipairs(mutations) do
     local rowKey = KEYS[mutation[2] + 6]

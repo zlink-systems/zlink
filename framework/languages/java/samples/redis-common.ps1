@@ -364,51 +364,37 @@ function Invoke-ZlinkSampleGradleBuild {
     }
 
     try {
-        $temporarySettingsPath = $null
+        $buildArguments = $Arguments
+        $buildRoot = $null
         if ($SettingsPath) {
-            $settingsSourcePath = Join-Path (Get-Location) $SettingsPath
-            $settingsTargetPath = Join-Path (Get-Location) "settings.gradle.kts"
+            $sampleDir = (Get-Location).Path
+            $settingsSourcePath = Join-Path $sampleDir $SettingsPath
             if (-not (Test-Path -LiteralPath $settingsSourcePath -PathType Leaf)) {
                 throw "Missing standalone Gradle settings: $settingsSourcePath"
             }
-            if (Test-Path -LiteralPath $settingsTargetPath) {
-                # A run killed hard leaves the staged copy behind. The staged copy
-                # is ours only while it is a plain file byte-identical to the
-                # standalone source; anything else is the developer's own settings
-                # file and is never replaced.
-                $existingSettings = Get-Item -LiteralPath $settingsTargetPath -Force
-                $stagedCopy = ($existingSettings -is [System.IO.FileInfo]) -and
-                    -not ($existingSettings.Attributes.HasFlag(
-                        [System.IO.FileAttributes]::ReparsePoint)) -and
-                    (Get-FileHash -LiteralPath $settingsSourcePath -Algorithm SHA256).Hash -eq
-                        (Get-FileHash -LiteralPath $settingsTargetPath -Algorithm SHA256).Hash
-                if (-not $stagedCopy) {
-                    throw "Refusing to replace existing $settingsTargetPath"
-                }
-                [Console]::Error.WriteLine(
-                    "Taking over the $settingsTargetPath left by an interrupted run.")
-                Remove-Item -LiteralPath $settingsTargetPath -Force
-            }
-            Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath
-            $temporarySettingsPath = $settingsTargetPath
+            $buildRoot = (Resolve-Path -LiteralPath (Join-Path $sampleDir "../..")).Path
+            $language = Split-Path (Split-Path $sampleDir -Parent) -Leaf
+            $sample = Split-Path $sampleDir -Leaf
+            $buildArguments = @($Arguments | ForEach-Object {
+                if ($_.StartsWith(":")) { ":${language}:${sample}${_}" } else { $_ }
+            })
+            Push-Location $buildRoot
         }
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             # Windows PowerShell wraps legitimate Gradle stderr warnings as
             # NativeCommandError records. The native exit code remains the verdict.
             $ErrorActionPreference = "Continue"
-            & $GradleExecutable @Arguments
+            & $GradleExecutable @buildArguments
             $gradleExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
         if ($gradleExitCode -ne 0) {
-            throw "Gradle build failed: $($Arguments -join ' ')"
+            throw "Gradle build failed: $($buildArguments -join ' ')"
         }
     } finally {
-        if ($temporarySettingsPath) {
-            Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
-        }
+        if ($buildRoot) { Pop-Location }
         $lockStream.Dispose()
     }
 }

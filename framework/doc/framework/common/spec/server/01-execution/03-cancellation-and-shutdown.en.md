@@ -127,6 +127,27 @@ activation barrier opening all race, the pending operation and payload
 reservation are cleaned up exactly once.
 
 
+### 5.1 Ending Waits on an Application Completion Source
+
+The owner of the registering execution context ends waits that the runtime registers and owns
+for an [asynchronous result completed by the application](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names).
+Application waits that the runtime doesn't register and own require cooperative shutdown;
+their cleanup and shutdown outcome follow the bounded teardown rules in
+[Host relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
+
+- A normal drain waits for that result like already-accepted work until the deadline defined by
+  [Host relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
+- On a forced stop, the owner ends each wait that hasn't resumed yet with `ShuttingDown` exactly
+  once and observes that turn's cleanup while retaining its execution authority. This happens
+  before running a closing callback that shares the turn's gate and before cleaning up a scope
+  used by that turn. Cleanup observation stays within §14's bounded teardown; subsequent resource
+  cleanup order and the shutdown outcomes for failure or deadline expiry follow §14.
+- This `ShuttingDown` is the observation result of that wait. It doesn't change the original
+  result and doesn't affect waits on the same completion source in another host or outside the
+  runtime.
+- A later completion only settles the original result and doesn't resume an already-ended wait
+  again. The completion call doesn't fail because an execution context has stopped.
+
 ## 6. Verification Requirements
 
 Verify the following using only the public surface — each language's

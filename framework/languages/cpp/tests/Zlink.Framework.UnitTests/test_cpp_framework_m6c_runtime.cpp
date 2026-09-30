@@ -936,11 +936,13 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
           remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
                                                                   zlink::message_t{})
                  : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{});
+        const auto source_drained =
+          run_serial_turn (source, "entry-return-source-leave-observed", [] {});
         const auto current = node->actor_spot_ids.find (key);
         test.require (joined && joined.value ().result_code == 0
                         && current != node->actor_spot_ids.end () && current->second == entry_id
                         && source->actor_count == 0 && entry->actor_count == 1
-                        && joined_callbacks.load (std::memory_order_acquire) == 1
+                        && joined_callbacks.load (std::memory_order_acquire) == 1 && source_drained
                         && leave_callbacks.load (std::memory_order_acquire) == 1,
                       remote ? "remote User Spot to Entry Spot return must commit without "
                                "admission and run target joined/source leave exactly once"
@@ -2333,15 +2335,16 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     single_target.authority_owner_generation = 2;
     single_target.node_id = "target";
     const relocation_restore_identity_t single_identity{"single-root", 1, digest_with (1)};
-    test.require (single.restore_relocation (single_frozen, single_target, single_identity)
-                      == stateful_error_t::generation_stale
-                    && single_restore_count == 0 && single.inventory ().empty (),
-                  "stale single restore must not publish application Spot state");
+    test.require (
+      single.restore_relocation (single_frozen, single_target, single_identity).result ().value ()
+          == stateful_error_t::generation_stale
+        && single_restore_count == 0 && single.inventory ().empty (),
+      "stale single restore must not publish application Spot state");
 
     single_frozen.owner.object_generation = 2;
     single_target.object_generation = 2;
     const auto fresh_single =
-      single.restore_relocation (single_frozen, single_target, single_identity);
+      single.restore_relocation (single_frozen, single_target, single_identity).result ().value ();
     const auto single_inventory = single.inventory ();
     test.require (fresh_single == stateful_error_t::none && single_restore_count == 1
                     && single_inventory.size () == 1
@@ -2394,6 +2397,8 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     const relocation_restore_identity_t aggregate_identity{"aggregate-root", 2, digest_with (2)};
     test.require (
       aggregate.restore_relocation_aggregate (participants, aggregate_targets, aggregate_identity)
+            .result ()
+            .value ()
           == stateful_error_t::generation_stale
         && aggregate_restore_count == 0 && aggregate.inventory ().empty (),
       "one stale Actor must reject the aggregate before Spot publication");
@@ -2401,7 +2406,9 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     participants[1].owner.object_generation = 2;
     aggregate_targets[1].object_generation = 2;
     const auto fresh_aggregate =
-      aggregate.restore_relocation_aggregate (participants, aggregate_targets, aggregate_identity);
+      aggregate.restore_relocation_aggregate (participants, aggregate_targets, aggregate_identity)
+        .result ()
+        .value ();
     const auto aggregate_inventory = aggregate.inventory ();
     test.require (fresh_aggregate == stateful_error_t::none && aggregate_restore_count == 1
                     && aggregate_inventory.size () == 2
@@ -2462,16 +2469,18 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     not_newer.authority_owner_generation = spot.authority_owner_generation;
     auto not_newer_frozen = frozen;
     not_newer_frozen.owner.authority_owner_generation = spot.authority_owner_generation - 1;
-    test.require (objects.restore_relocation (not_newer_frozen, not_newer, identity)
-                    == stateful_error_t::conflict,
-                  "a restore at or behind the remnant's authority must still conflict");
+    test.require (
+      objects.restore_relocation (not_newer_frozen, not_newer, identity).result ().value ()
+        == stateful_error_t::conflict,
+      "a restore at or behind the remnant's authority must still conflict");
 
     restore_succeeds = false;
-    test.require (objects.restore_relocation (frozen, returning, identity)
+    test.require (objects.restore_relocation (frozen, returning, identity).result ().value ()
                     == stateful_error_t::conflict,
                   "a failing return restore must roll its own staging back");
     restore_succeeds = true;
-    const auto retried = objects.restore_relocation (frozen, returning, identity);
+    const auto retried =
+      objects.restore_relocation (frozen, returning, identity).result ().value ();
     const auto returned_inventory = objects.inventory ();
     test.require (retried == stateful_error_t::none && returned_inventory.size () == 1
                     && returned_inventory.front ().owner == returning,
@@ -2511,8 +2520,10 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
     restored_target.node_id = "target";
     const relocation_restore_identity_t identity{"rollback-root", 3, digest_with (3)};
     stateful_error_t restore_result = stateful_error_t::none;
-    std::thread restoring (
-      [&] { restore_result = target.restore_relocation (frozen, restored_target, identity); });
+    std::thread restoring ([&] {
+        restore_result =
+          target.restore_relocation (frozen, restored_target, identity).result ().value ();
+    });
     {
         std::unique_lock lock (callback_mutex);
         callback_condition.wait (lock, [&] { return callback_entered; });
@@ -2533,7 +2544,7 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
           return std::vector<std::uint8_t>{};
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
-    test.require (target.restore_relocation (frozen, restored_target, identity)
+    test.require (target.restore_relocation (frozen, restored_target, identity).result ().value ()
                       == stateful_error_t::none
                     && target.inventory ().size () == 1,
                   "callback failure rollback must release the fresh retry");
@@ -3215,6 +3226,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     test.require (
       sealed.error == stateful_error_t::none
         && restored.restore_relocation (sealed.seal.participants.front (), relocated, identity, {})
+               .result ()
+               .value ()
              == stateful_error_t::none,
       "late ingress target must restore before boundary");
     const foundation::call_id_t occupied{src.lifecycle_generation, 77};
@@ -4640,7 +4653,9 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
                                     .node_id = "target"};
 
     const auto materialized =
-      runtime.materialize_relocation_state (frozen, target_actor, std::nullopt, {});
+      runtime.materialize_relocation_state (frozen, target_actor, std::nullopt, {})
+        .result ()
+        .value ();
     test.require (materialized && entry_relocation_test_actor_t::create_count == 1
                     && entry_relocation_test_entry_spot_t::joined_count == 1,
                   "a standalone Actor relocation unit (target_spot=nullopt) must "
@@ -4732,7 +4747,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
                                     .mesh_name = "mesh",
                                     .node_id = "node-a"};
     test.require (
-      runtime.materialize_relocation_state (first_frozen, first_target, std::nullopt, {}),
+      runtime.materialize_relocation_state (first_frozen, first_target, std::nullopt, {})
+        .result ()
+        .value (),
       "fixture must first materialize the Actor on node A");
 
     const auto key = std::string ("entry-relocation-test-actor:returning-entry-actor");
@@ -4786,7 +4803,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     auto returning_target = first_target;
     returning_target.authority_owner_generation = 4;
     const auto returned =
-      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {});
+      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {})
+        .result ()
+        .value ();
 
     const auto cleanup = std::find_if (
       state->pending_remote_source_cleanups.begin (), state->pending_remote_source_cleanups.end (),
@@ -4818,7 +4837,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     auto route_only_target = returning_target;
     route_only_target.authority_owner_generation = 6;
     const auto route_only_returned =
-      runtime.materialize_relocation_state (route_only_frozen, route_only_target, std::nullopt, {});
+      runtime.materialize_relocation_state (route_only_frozen, route_only_target, std::nullopt, {})
+        .result ()
+        .value ();
     test.require (route_only_returned && entry_relocation_test_actor_t::create_count == 3
                     && entry_relocation_test_entry_spot_t::joined_count == 3
                     && entry_relocation_test_entry_spot_t::leave_count == 1
@@ -4844,7 +4865,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     auto orphan_target = route_only_target;
     orphan_target.authority_owner_generation = 8;
     const auto orphan_returned =
-      runtime.materialize_relocation_state (orphan_frozen, orphan_target, std::nullopt, {});
+      runtime.materialize_relocation_state (orphan_frozen, orphan_target, std::nullopt, {})
+        .result ()
+        .value ();
     test.require (orphan_returned && entry_relocation_test_actor_t::create_count == 4
                     && entry_relocation_test_entry_spot_t::joined_count == 4
                     && state->actor_instances.contains (key)
@@ -4925,7 +4948,9 @@ void test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (te
                                     .node_id = "target"};
 
     const auto materialized =
-      runtime.materialize_relocation_state (frozen, target_actor, std::nullopt, {});
+      runtime.materialize_relocation_state (frozen, target_actor, std::nullopt, {})
+        .result ()
+        .value ();
     test.require (!materialized && entry_relocation_test_actor_t::create_count == 0,
                   "a standalone Actor relocation unit must fail explicitly (not "
                   "crash) when the target node has no local Entry Spot to resolve");
@@ -5037,7 +5062,8 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
       [&] (const frozen_object_state_t &, const object_ref_t &target,
            const std::optional<object_ref_t> &parent, std::stop_token) {
           materialized = target == restore_target && !parent;
-          return materialized;
+          return zlink::framework::task_t<bool> (
+            zlink::framework::result_t<bool>::success (materialized));
       },
       [&] (const std::vector<object_ref_t> &targets) {
           lifecycle_committed = targets == std::vector<object_ref_t>{restore_target};
@@ -5063,7 +5089,9 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
                               {3, std::vector<std::uint8_t> (4, 0x43)}},
       .timers = {}};
     const auto restored =
-      progressive_restore.restore_relocation (frozen, restore_target, restore_identity);
+      progressive_restore.restore_relocation (frozen, restore_target, restore_identity)
+        .result ()
+        .value ();
     stateful_error_t relay_ingress = stateful_error_t::conflict;
     stateful_error_t temporary_ingress = stateful_error_t::conflict;
     stateful_error_t pre_commit_claim_error = stateful_error_t::conflict;
@@ -5123,7 +5151,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
       [&] (const frozen_object_state_t &, const object_ref_t &, const std::optional<object_ref_t> &,
            std::stop_token) {
           ++aggregate_materialized;
-          return true;
+          return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
       },
       [&] (const std::vector<object_ref_t> &) {
           ++aggregate_commit_count;
@@ -5159,8 +5187,11 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
     }
     const relocation_restore_identity_t aggregate_identity{"aggregate-progressive-root", 2,
                                                            digest_with (0x62)};
-    const auto aggregate_restored = aggregate_restore.restore_relocation_aggregate (
-      aggregate_frozen, aggregate_targets, aggregate_identity);
+    const auto aggregate_restored =
+      aggregate_restore
+        .restore_relocation_aggregate (aggregate_frozen, aggregate_targets, aggregate_identity)
+        .result ()
+        .value ();
     const auto aggregate_committed = aggregate_restored == stateful_error_t::none
                                        ? aggregate_restore.commit_relocation_restore_aggregate (
                                            aggregate_targets, aggregate_identity)
@@ -5534,7 +5565,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     stateful_error_t target_restore_result = stateful_error_t::conflict;
     std::thread target_restoring ([&] {
         target_restore_result =
-          target_hold.restore_relocation (target_frozen, target_ref, target_identity);
+          target_hold.restore_relocation (target_frozen, target_ref, target_identity)
+            .result ()
+            .value ();
     });
     {
         std::unique_lock lock (target_mutex);
@@ -5602,7 +5635,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     stateful_error_t abort_restore_result = stateful_error_t::conflict;
     std::thread abort_restoring ([&] {
         abort_restore_result =
-          target_abort.restore_relocation (abort_frozen, abort_target, abort_identity);
+          target_abort.restore_relocation (abort_frozen, abort_target, abort_identity)
+            .result ()
+            .value ();
     });
     {
         std::unique_lock lock (abort_mutex);
@@ -5632,6 +5667,8 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target_abort.restore_relocation (abort_frozen, abort_target, abort_identity)
+                        .result ()
+                        .value ()
                       == stateful_error_t::none
                     && target_abort.commit_relocation_restore (abort_target, abort_identity)
                          == stateful_error_t::none

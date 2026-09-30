@@ -74,6 +74,14 @@ internal sealed class ZLinkSpotNodeCatalog(
     /// <summary>Spots activated on this MeshNode, counted without copying the catalog.</summary>
     internal int ActiveSpotCount => AwaitStateLane(_lane.RunAsync(() => _spots.Count));
 
+    internal ValueTask<string[]> SnapshotPendingCloseNamesAsync() =>
+        _lane.RunAsync(() =>
+            _closing
+                .Where(static entry => !entry.Value.Task.IsCompleted)
+                .Select(static entry => entry.Key.Value)
+                .ToArray()
+        );
+
     internal void StartIdleEviction()
     {
         if (_instanceSpotIdleTimeout <= TimeSpan.Zero)
@@ -108,10 +116,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                 activating += _generatedSpotCreations
                     .Where(entry => IsStableTypeLocked(entry.Key, stableType))
                     .Sum(static entry => entry.Value);
-                var closing = _closing.Count(entry =>
-                    IsClosingEntry(entry.Value)
-                    && _instanceSpotTypes.TryGetValue(entry.Key, out var currentType)
-                    && StringComparer.Ordinal.Equals(currentType, stableType)
+                var closing = _instanceSpotTypes.Count(entry =>
+                    StringComparer.Ordinal.Equals(entry.Value, stableType)
+                    && IsClosingLocked(entry.Key.Value)
                 );
                 return new ZLinkInstanceSpotCatalogSnapshot(
                     checked((ulong)active),
@@ -1622,19 +1629,10 @@ internal sealed class ZLinkSpotNodeCatalog(
         TaskCompletionSource<bool>? Transaction
     );
 
-    // AsyncState of a Close transaction: null for operational cleanup (idle
-    // eviction, drain, shutdown); ExplicitClose for a Spot Close of spec §7.
-    private sealed class ExplicitClose
-    {
-        public bool Committed { get; set; }
-    }
-
-    // The one closing predicate that lookup and admission read.
-    private static bool IsClosingEntry(TaskCompletionSource<bool> transaction) =>
-        transaction.Task.AsyncState is not ExplicitClose explicitClose || explicitClose.Committed;
-
+    // Lookup reads the Spot's admission seal (spec 06 §7 step 2, §9); the seal,
+    // not the catalog, decides whether new work is admitted.
     private bool IsClosingLocked(string spotId) =>
-        _closing.TryGetValue(spotId, out var transaction) && IsClosingEntry(transaction);
+        _spots.TryGetValue(spotId, out var activation) && activation.HasClosingSeal;
 
     private CloseRegistration RegisterCloseLocked(string spotId, ulong? objectGeneration)
     {
@@ -1644,10 +1642,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             ThrowIfOtherIncarnation(spotId, expected, current.ObjectGeneration);
         if (_closing.TryGetValue(spotId, out var pending))
             return new CloseRegistration(null, pending);
-        // A Spot Close (named incarnation) becomes visible as closing only once
-        // it commits Closing; operational cleanup is closing from registration.
         var transaction = new TaskCompletionSource<bool>(
-            objectGeneration is null ? null : new ExplicitClose(),
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         _closing.Remove(spotId);
@@ -1934,14 +1929,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             return false;
         }
 
-        // From here lookup and admission read this Spot as closing.
-        await _lane
-            .RunAsync(() => ((ExplicitClose)transaction.Task.AsyncState!).Committed = true)
-            .ConfigureAwait(false);
-
-        // Steps 2–4. Closing is committed and never returns to Ready.
+        // Steps 2–4. Closing is committed and never returns to Ready. The seal
+        // is set in this step, before anything else runs on this turn.
         await activation.AwaitCloseDrainAsync(cancellationToken).ConfigureAwait(false);
-        activation.CloseAdmissionForClose();
         await activation
             .InvokeExplicitClosingAsync(
                 ZLinkSpotCloseReason.ExplicitClose,

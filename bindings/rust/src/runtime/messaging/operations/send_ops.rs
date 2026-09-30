@@ -96,9 +96,18 @@ pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError
     let flags = op.flags.bits();
     let mut topic_buf = [0u8; 256];
     let bytes = op.topic.as_str().as_bytes();
-    topic_buf[..bytes.len()].copy_from_slice(bytes);
+    let mut long_topic_buf = Vec::new();
+    let topic_ptr = if bytes.len() < topic_buf.len() {
+        topic_buf[..bytes.len()].copy_from_slice(bytes);
+        topic_buf.as_ptr().cast()
+    } else {
+        long_topic_buf.reserve_exact(bytes.len() + 1);
+        long_topic_buf.extend_from_slice(bytes);
+        long_topic_buf.push(0);
+        long_topic_buf.as_ptr().cast()
+    };
     let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
-        ffi::zlink_publish(op.handle, topic_buf.as_ptr().cast(), parts, count, flags)
+        ffi::zlink_publish(op.handle, topic_ptr, parts, count, flags)
     })?;
     check_submit_result(rc, errno)
 }
@@ -119,21 +128,15 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
     let entry = owner.register_send(context)?;
     match submit_send_attempt(&mut op, context) {
         Ok(SendAttempt::Admitted) => {
-            if entry.is_some() {
-                owner.unregister(context);
-            }
+            owner.unregister(context);
             Ok(SendSubmission {
                 result: SubmitResult::Ok,
                 admitted: Box::pin(std::future::ready(Ok(()))),
             })
         }
         Ok(SendAttempt::Waiting(completion_id)) => {
-            let published = match &entry {
-                Some(entry) => owner.publish_send_token(entry, completion_id),
-                None => Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY)),
-            };
-            if let Err(error) = published {
-                if entry.is_some_and(|entry| entry.detach()) {
+            if let Err(error) = owner.publish_send_token(&entry, completion_id) {
+                if entry.detach() {
                     owner.unregister(context);
                 }
                 return Err(error);
@@ -143,24 +146,22 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
                 admitted: Box::pin(SendFuture {
                     operation: Some(op),
                     context,
-                    entry,
+                    entry: Some(entry),
                     waiting_for_writable: true,
                     finished: false,
                 }),
             })
         }
         Err(failure) => {
-            if let Some(entry) = entry {
-                let removable = match failure.live_token {
-                    Some(completion_id) => {
-                        let _ = owner.publish_send_token(&entry, completion_id);
-                        entry.detach()
-                    }
-                    None => true,
-                };
-                if removable {
-                    owner.unregister(context);
+            let removable = match failure.live_token {
+                Some(completion_id) => {
+                    let _ = owner.publish_send_token(&entry, completion_id);
+                    entry.detach()
                 }
+                None => true,
+            };
+            if removable {
+                owner.unregister(context);
             }
             Err(failure.error)
         }
@@ -175,7 +176,7 @@ pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitEr
         .target
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+    let (rc, errno) = submit_owned_message(&mut op.parts, |parts, count| unsafe {
         if target.is_null() {
             ffi::zlink_send(
                 handle,
@@ -381,7 +382,7 @@ pub(super) fn submit_shared_message(
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
                 return Err(SubmitError::new(SubmitResult::InternalError, errno));
             }
-            if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part.raw_mut()) != 0 {
+            if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_msg_close(attempt.as_mut_ptr());
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
@@ -403,6 +404,30 @@ pub(super) fn submit_shared_message(
     unsafe {
         ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
     }
+    Ok((rc, errno))
+}
+
+/// Transfers builder-owned message parts to a synchronous Core terminal.
+/// Core consumes every input slot for every result.
+pub(super) fn submit_owned_message(
+    parts: &mut MessageParts,
+    submit: impl FnOnce(*mut ffi::zlink_msg_t, usize) -> i32,
+) -> Result<(i32, i32), SubmitError> {
+    if parts.is_empty() {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+
+    let count = parts.len();
+    let rc = submit(parts.as_mut_ptr(), count);
+    let errno = if rc == 0 {
+        0
+    } else {
+        unsafe { ffi::zlink_errno() }
+    };
+    parts.close_parts();
     Ok((rc, errno))
 }
 
@@ -505,6 +530,10 @@ mod writable_wait_tests {
         assert!(!is_writable_wait(backpressured, 0, 7));
         assert!(!is_writable_wait(backpressured, libc::EAGAIN, 0));
         assert!(!is_writable_wait(SubmitResult::Ok as i32, libc::EAGAIN, 7));
-        assert!(!is_writable_wait(SubmitResult::NotConnected as i32, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(
+            SubmitResult::NotConnected as i32,
+            libc::EAGAIN,
+            7
+        ));
     }
 }

@@ -18,6 +18,7 @@ import {
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
 } from '../diagnostics/runtime-observation-queue';
 import { createDeadlineExceededError } from '../abort';
+import { debugPendingWorkNames } from '../execution/state-lane';
 import {
   runtimeStateIsReady,
   topologyRuntimeIsReady
@@ -907,6 +908,10 @@ function peerUnavailableReason(state: ZLinkPeerState): ZLinkTopologyReason | und
 }
 
 function drainFailureReason(error: unknown): ZLinkDrainForceReason {
+  if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+    const pending = debugPendingWorkNames();
+    if (pending.length > 0) console.error('[zlink.runtime.drain.pending]', pending);
+  }
   const name = error instanceof Error ? error.name : '';
   if (name === 'ZLinkDrainingStatePublishError') return 'drain_state_publish_failed';
   if (

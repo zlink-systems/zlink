@@ -26,7 +26,7 @@ public sealed class RouteMeshReceiveFlowTests
         var router = context.GetRouter(nodeRid);
 
         var duplicateStates = new List<ReceiveFlowState>();
-        using (queue.RegisterReceiveFlowSocket(router, duplicateStates.Add))
+        await using (queue.RegisterReceiveFlowSocket(router, duplicateStates.Add))
             Assert.Empty(duplicateStates);
 
         await using var dealer = context.CreateDealerSocket();
@@ -39,13 +39,13 @@ public sealed class RouteMeshReceiveFlowTests
 
         var lease = await queue.AcquireAsync(CancellationToken.None);
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowPaused);
-        lease.ReleaseForHandlerStart();
+        await lease.ReleaseForHandlerStartAsync();
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowResumed);
 
         await node.DisposeAsync();
 
         var afterCloseStates = new List<ReceiveFlowState>();
-        using var afterCloseRegistration = queue.RegisterReceiveFlowSocket(
+        await using var afterCloseRegistration = queue.RegisterReceiveFlowSocket(
             router,
             afterCloseStates.Add
         );

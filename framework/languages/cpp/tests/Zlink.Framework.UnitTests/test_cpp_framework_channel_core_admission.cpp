@@ -33,6 +33,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <future>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -248,6 +250,92 @@ TEST (ChannelCoreAdmission, WeightZeroServerStillRunsRequestsItAlreadyReceived)
     source.close ();
 }
 
+// Messaging hot path I1: with no application permit the server stops
+// receiving, but its loop keeps its management work. A reply that a running
+// handler completes is delivered while the next request waits for a permit.
+TEST (ChannelCoreAdmission, ServerDeliversRepliesWhileItWaitsForAPermit)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    const std::string channel = "core-admission-permit-wait";
+    const std::string endpoint = unique_inproc_endpoint ();
+    const auto server_rid = zlink::routing_id_t::from ("framework-permit-wait-server");
+
+    zlink::framework::zlink_builder_t builder;
+    builder.channel (channel).enable_server ().set_routing_id (server_rid).bind (endpoint);
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    runtime.bind_serializers (serializers);
+
+    zlink::framework::service_collection_t services;
+    services.add_singleton<gated_request_handler_t> ();
+    auto provider = services.build_provider ();
+    auto &handler = provider.get_required<gated_request_handler_t> ();
+    zlink::framework::handler_registry_t handlers;
+    handlers.on_request<gated_request_handler_t, request_t, reply_t> (
+      channel, "request", &gated_request_handler_t::handle,
+      {.packet_name = request_t::packet_name});
+
+    auto jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+      zlink::framework::runtime::application_job_queue_configuration_t{
+        zlink::framework::application_job_queue_profile_t::balanced, std::nullopt, 1, 1});
+    zlink::framework::runtime::channel_host_service_t host (
+      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {}, jobs);
+    host.start (provider);
+
+    zlink::router_socket_t source (*context);
+    {
+        zlink::framework::test::completion_poller_driver_t completion_owner (source);
+        source.set_routing_id (zlink::routing_id_t::from ("framework-permit-wait-source"));
+        auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+        source.connect (endpoint);
+        ASSERT_TRUE (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+
+        const auto submit = [&] (int value) {
+            zlink::framework::runtime::messaging::envelope_header_t header;
+            header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
+            header.channel_name = channel;
+            header.message_name = request_t::packet_name;
+            header.topic = "request";
+            header.correlation_id = "permit-wait-" + std::to_string (value);
+            auto parts = zlink::framework::runtime::messaging::envelope_codec_t{}.encode_parts (
+              header, request_t{value}, serializers);
+            zlink::message_t first = parts[0];
+            zlink::message_t second = parts[1];
+            return source.request (server_rid)
+              .message (first)
+              .message (second)
+              .timeout (5s)
+              .async ()
+              .reply;
+        };
+        auto first = submit (1);
+        ASSERT_TRUE (handler.wait_until_entered (2s));
+        // Request 1 returned its permit at handler entry; the test now holds
+        // the only permit, so request 2 waits for supply.
+        auto held = jobs->try_reserve_supply ();
+        ASSERT_TRUE (held.has_value ());
+        auto second = submit (2);
+        std::this_thread::sleep_for (100ms);
+        handler.release ();
+
+        auto first_reply = std::async (std::launch::async,
+                                       [&] { return await_reply (std::move (first)).result (); });
+        const bool delivered_while_waiting = first_reply.wait_for (2s) == std::future_status::ready;
+        held.reset ();
+        const auto reply_one = first_reply.get ();
+        const auto reply_two = await_reply (std::move (second)).result ();
+        EXPECT_TRUE (delivered_while_waiting) << "the reply waited for the next request's permit";
+        ASSERT_TRUE (reply_one);
+        EXPECT_EQ (101, decode_reply (serializers, reply_one.value ()));
+        ASSERT_TRUE (reply_two);
+        EXPECT_EQ (102, decode_reply (serializers, reply_two.value ()));
+    }
+    host.stop ();
+    source.close ();
+}
+
 TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadiness)
 {
     // The server appears only after the framework's former private readiness
@@ -269,7 +357,7 @@ TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadine
       {.packet_name = request_t::packet_name});
 
     zlink::framework::zlink_builder_t client_builder;
-    client_builder.channel (channel).enable_client ().connect (endpoint);
+    client_builder.channel (channel).enable_client ().send_timeout (10s).connect (endpoint);
     auto client_runtime =
       zlink::framework::detail::channel_runtime_t::from (client_builder.message_bus ());
     client_runtime.bind_core_context (context);
@@ -314,6 +402,129 @@ TEST (ChannelCoreAdmissionContract, ClientClassifiesByBindingTypedResultOnly)
     EXPECT_EQ (std::string::npos, source.find ("internal_errno ()"));
     EXPECT_EQ (std::string::npos, source.find ("ready_count"));
     EXPECT_EQ (std::string::npos, source.find ("wait_for_connection_ready"));
+}
+
+TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    const std::string channel = "core-admission-reply-budget";
+    const auto endpoint = unique_inproc_endpoint ();
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    zlink::framework::service_collection_t services;
+    services.add_singleton<gated_request_handler_t> ();
+    auto provider = services.build_provider ();
+    zlink::framework::handler_registry_t handlers;
+    handlers.on_request<gated_request_handler_t, request_t, reply_t> (
+      channel, "request", &gated_request_handler_t::handle,
+      {.packet_name = request_t::packet_name});
+    zlink::framework::zlink_builder_t client;
+    client.channel (channel).enable_client ().connect (endpoint);
+    auto client_runtime = zlink::framework::detail::channel_runtime_t::from (client.message_bus ());
+    client_runtime.bind_core_context (context);
+    client_runtime.bind_serializers (serializers);
+    zlink::framework::zlink_builder_t server;
+    server.channel (channel).enable_server ().bind (endpoint);
+    auto server_runtime = zlink::framework::detail::channel_runtime_t::from (server.message_bus ());
+    server_runtime.bind_core_context (context);
+    server_runtime.bind_serializers (serializers);
+    zlink::framework::runtime::channel_host_service_t host (
+      server.message_bus (), server_runtime.channel_snapshots (), handlers, serializers, {});
+    std::thread late_server ([&] {
+        std::this_thread::sleep_for (200ms);
+        host.start (provider);
+    });
+    const auto reply = client.request_client (channel)
+                         .request (request_t{7})
+                         .timeout (50ms)
+                         .async<reply_t> ()
+                         .result ();
+    late_server.join ();
+    host.stop ();
+    ASSERT_TRUE (reply) << (reply.error () != nullptr ? reply.error ()->what () : "no error");
+    EXPECT_EQ (107, reply.value ().value);
+}
+
+TEST (ChannelCoreAdmission, MissingServerExpiresAtDefaultAdmissionTimeout)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    zlink::framework::zlink_builder_t builder;
+    const std::string channel = "core-admission-missing";
+    builder.channel (channel).enable_client ().connect (unique_inproc_endpoint ());
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+    runtime.bind_serializers (serializers);
+    const auto started = std::chrono::steady_clock::now ();
+    const auto result = builder.request_client (channel)
+                          .request (request_t{7})
+                          .timeout (10s)
+                          .async<reply_t> ()
+                          .result ();
+    const auto elapsed = std::chrono::steady_clock::now () - started;
+    EXPECT_FALSE (result);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, result.error_kind ());
+    EXPECT_GE (elapsed, 900ms);
+    EXPECT_LT (elapsed, 3s);
+}
+
+TEST (ChannelCoreAdmission, SendAdmissionDefaultIsIndependentOfRequestTimeout)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    zlink::framework::zlink_builder_t builder;
+    const std::string channel = "core-send-admission-missing";
+    auto configured = builder.channel (channel);
+    configured.default_request_timeout (10s);
+    configured.enable_client ().connect (unique_inproc_endpoint ());
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+    runtime.bind_serializers (serializers);
+    const auto started = std::chrono::steady_clock::now ();
+    const auto result = builder.message_bus ().send (channel, request_t{7}).async ().result ();
+    const auto elapsed = std::chrono::steady_clock::now () - started;
+    EXPECT_FALSE (result);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, result.error_kind ());
+    EXPECT_GE (elapsed, 900ms);
+    EXPECT_LT (elapsed, 3s);
+}
+
+TEST (ChannelCoreAdmission, SendTimeoutConfigurationRoundsUpAndRejectsInvalidValues)
+{
+    zlink::framework::zlink_builder_t builder;
+    auto client = builder.channel ("send-timeout-values").enable_client ();
+    EXPECT_FALSE (client.snapshot ().send_timeout);
+    client.send_timeout (1us);
+    ASSERT_TRUE (client.snapshot ().send_timeout);
+    EXPECT_EQ (1ms, *client.snapshot ().send_timeout);
+    client.send_timeout (1500us);
+    EXPECT_EQ (2ms, *client.snapshot ().send_timeout);
+    const auto maximum = (std::numeric_limits<int>::max) ();
+    client.send_timeout (std::chrono::milliseconds (maximum));
+    EXPECT_EQ (std::chrono::milliseconds (maximum), *client.snapshot ().send_timeout);
+    EXPECT_THROW (client.send_timeout (0ms), std::invalid_argument);
+    EXPECT_THROW (client.send_timeout (-1ms), std::invalid_argument);
+    EXPECT_THROW (client.send_timeout (std::chrono::milliseconds (
+                    static_cast<std::chrono::milliseconds::rep> (maximum) + 1)),
+                  std::invalid_argument);
+    EXPECT_THROW (client.send_timeout (std::chrono::duration<double, std::milli> (
+                    (std::numeric_limits<double>::infinity) ())),
+                  std::invalid_argument);
+    EXPECT_THROW (client.send_timeout (std::chrono::duration<double, std::milli> (
+                    (std::numeric_limits<double>::quiet_NaN) ())),
+                  std::invalid_argument);
+    zlink::framework::service_collection_t services;
+    zlink::framework::handler_registry_t handlers;
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_framework_options_t options (services, handlers, serializers, builder);
+    auto configured_client = options.add_client_server_channel ("client-timeout-values").client ();
+    EXPECT_NO_THROW (configured_client.set_send_timeout (1us));
+    EXPECT_THROW (configured_client.set_send_timeout (0ms), std::invalid_argument);
+    auto publisher = options.add_fanout_channel ("publisher-timeout-values");
+    EXPECT_NO_THROW (publisher.set_send_timeout (1500us));
+    EXPECT_THROW (publisher.set_send_timeout (-1ms), std::invalid_argument);
 }
 
 } // namespace

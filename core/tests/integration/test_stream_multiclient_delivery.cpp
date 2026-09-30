@@ -281,68 +281,12 @@ void run_delivery (bool websocket_, bool local_close_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
-
-void run_connector_reconnect ()
-{
-    net::io_context io;
-    tcp::acceptor listener (io, tcp::endpoint (tcp::v4 (), 0));
-    void *connector = test_context_socket (ZLINK_SOCKET_STREAM);
-    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_stream_option (
-      connector, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof (mode)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
-      connector, ZLINK_OPT_RCVTIMEO, &timeout_ms, sizeof (timeout_ms)));
-    zlink_socket_monitor_open_options_t options = {};
-    options.events = ZLINK_EVENT_DISCONNECTED;
-    void *monitor = zlink_socket_monitor_open (connector, &options);
-    TEST_ASSERT_NOT_NULL (monitor);
-    const std::string endpoint = "tcp://127.0.0.1:"
-                                 + std::to_string (listener.local_endpoint ().port ());
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_connect (connector, endpoint.c_str ()));
-    std::set<uint64_t> disconnected_connections;
-    for (unsigned int cycle = 0; cycle != 3; ++cycle) {
-        tcp::socket peer (io);
-        bool accepted = false;
-        listener.async_accept (peer, [&accepted] (boost::system::error_code ec_) {
-            accepted = !ec_;
-        });
-        io.restart ();
-        io.run_for (std::chrono::milliseconds (timeout_ms));
-        TEST_ASSERT_TRUE (accepted);
-        // Receive a packet through each new physical connection before closing
-        // it. The connector's default IMMEDIATE=0 keeps its pipe on reconnect.
-        net::write (peer, net::buffer (packet (0, cycle, 0, 1)));
-        zlink_msg_t header, body;
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&header));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
-        const zlink_routing_id_t *source_rid = NULL;
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_stream_recv_packet (
-          connector, &source_rid, &header, &body, ZLINK_RECV_FLAGS_NONE));
-        const zlink_routing_id_t rid = *source_rid;
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&header));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&body));
-        peer.close ();
-        const zlink_monitor_event_t event = receive_edge (
-          monitor, ZLINK_EVENT_DISCONNECTED);
-        if (event.event == 0) {
-            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
-            test_context_socket_close_zero_linger (connector);
-            TEST_FAIL_MESSAGE ("Reconnected STREAM transport lost DISCONNECTED");
-        }
-        TEST_ASSERT_EQUAL_MEMORY (rid.data, event.routing_id.data, 4);
-        TEST_ASSERT_TRUE (disconnected_connections.insert (event.connection_id).second);
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
-    test_context_socket_close_zero_linger (connector);
-}
 }
 
 void test_stream_tcp_peer_close_delivery () { run_delivery (false, false); }
 void test_stream_tcp_disconnect_delivery () { run_delivery (false, true); }
 void test_stream_ws_peer_close_delivery () { run_delivery (true, false); }
 void test_stream_ws_disconnect_delivery () { run_delivery (true, true); }
-void test_stream_tcp_connector_reconnect () { run_connector_reconnect (); }
 
 int main ()
 {
@@ -355,7 +299,6 @@ int main ()
     RUN_SELECTED (test_stream_tcp_disconnect_delivery);
     RUN_SELECTED (test_stream_ws_peer_close_delivery);
     RUN_SELECTED (test_stream_ws_disconnect_delivery);
-    RUN_SELECTED (test_stream_tcp_connector_reconnect);
 #undef RUN_SELECTED
     return UNITY_END ();
 }

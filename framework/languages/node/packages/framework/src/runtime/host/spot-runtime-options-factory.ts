@@ -78,6 +78,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
   constructor(private readonly options: ZLinkSpotRuntimeOptionsFactoryOptions) {}
 
   create(actorTransferRuntime: ZLinkActorTransferRuntime): Partial<ZLinkSpotManagerOptions> {
+    const spotRouterChannelIdForMesh = this.options.meshRouters.spotRouterChannelIdByMesh();
     return {
       nodeRid: undefined,
       nodeRidProvider: (meshName) => this.meshNodeRoutingId(meshName),
@@ -128,9 +129,20 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog);
       },
+      executeEntryActor: (meshName, actorId, operation) => {
+        const runtime = this.options.spotNodeRuntime();
+        if (runtime === undefined) {
+          throw new ZLinkConfigurationException(
+            'Entry Spot Actor completion requires the MeshNode runtime.'
+          );
+        }
+        return runtime.executeEntryActor(meshName, actorId, operation);
+      },
       channelClient: new DefaultZLinkChannelClient(
         this.options.registration,
-        this.options.channelTransport
+        this.options.channelTransport,
+        this.options.routeTransport,
+        spotRouterChannelIdForMesh
       ),
       fanoutClient: new DefaultZLinkFanoutClient(
         this.options.registration,
@@ -142,15 +154,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
       ),
       routedTransport: this.options.routeTransport,
       addressTransport: this.options.addressTransport,
-      spotRouterChannelIdForMesh: this.options.meshRouters.spotRouterChannelIdByMesh(),
-      channelMeshNameForChannel: (channelName) => {
-        const matches = [...this.options.registration.spotNodes.entries()]
-          .filter(([, node]) =>
-            Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, channelName)
-          )
-          .map(([meshName]) => meshName);
-        return matches.length === 1 ? matches[0] : undefined;
-      },
+      spotRouterChannelIdForMesh,
       messageSerializers: this.options.registration.messageSerializers,
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       detachedTaskRunner: this.options.detachedTaskRunner,
@@ -274,11 +278,6 @@ export class ZLinkSpotRuntimeOptionsFactory {
           ZLinkSpotRelocationCoordinationMode.FrameworkManaged
         );
       },
-      actorBindingGenerationObserver: (actorId, generation) =>
-        this.options
-          .actorManager()
-          ?.getState(actorId)
-          ?.setBoundSessionBindingGeneration(generation),
       actorTransferRuntime,
       boundSessionRuntime: this.options.boundSessionRelay.boundSessions,
       actorHandoffRuntime: this.options.actorHandoff,

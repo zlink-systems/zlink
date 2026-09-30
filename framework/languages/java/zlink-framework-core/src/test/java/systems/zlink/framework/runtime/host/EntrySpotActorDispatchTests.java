@@ -96,6 +96,35 @@ final class EntrySpotActorDispatchTests {
     private static final ZLinkMessageSerializer PROTOBUF_SERIALIZER = new ProbeProtobufSerializer();
 
     @Test
+    void spotShutdownFromSerialTurnReturnsWithoutBlockingOnInfrastructure() throws Exception {
+        TestBackend backend = startBackend();
+        systems.zlink.framework.execution.ZLinkSerialExecutionQueue serial =
+                new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            AtomicReference<CompletionStage<Void>> closing = new AtomicReference<>();
+            serial.enqueue(
+                            () -> {
+                                assertTrue(
+                                        systems.zlink.framework.runtime.internal.handlers
+                                                        .ZLinkSuspendInvocationContext
+                                                        .currentSerialExecutionTurn()
+                                                != null);
+                                closing.set(
+                                        ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
+                                                        runtime.spotManager())
+                                                .closeAsync());
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            closing.get().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        } finally {
+            serial.close();
+        }
+    }
+
+    @Test
     void entrySpotActorDispatchNoBindRequestRepliesViaNoBindAndDoesNotBindSession()
             throws Exception {
         TestBackend backend = startBackend();
@@ -486,6 +515,7 @@ final class EntrySpotActorDispatchTests {
             ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
             DecodedFrame frame = decodeFrame(reply.parts().get(0));
             assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header().kind());
+            assertTrue(backend.node.boundSessionReplies.isEmpty());
         }
     }
 
@@ -1433,7 +1463,8 @@ final class EntrySpotActorDispatchTests {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -1443,7 +1474,8 @@ final class EntrySpotActorDispatchTests {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 

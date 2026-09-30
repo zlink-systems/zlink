@@ -130,6 +130,54 @@ public sealed class RelocationBehaviorConformanceTests
     }
 
     [Fact]
+    public async Task Sweeping_completed_aborts_keeps_active_empty_target_attempt_open()
+    {
+        var owner = new ZLinkStandaloneActorRelocationRuntime(null!, null!, null!);
+        var ownerType = owner.GetType();
+        var keyType = ownerType.GetNestedType("AttemptKey", BindingFlags.NonPublic)!;
+        var key = Activator.CreateInstance(keyType, 1UL, 2UL, 1UL)!;
+        var acquire = ownerType.GetMethod(
+            "AcquireTargetAttempt",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        var lease = Assert.IsAssignableFrom<IDisposable>(acquire.Invoke(owner, [key]));
+        try
+        {
+            var slot = lease
+                .GetType()
+                .GetProperty("Slot", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(lease)!;
+            var sweep = ownerType.GetMethod(
+                "SweepCompletedTargetAbortsAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )!;
+            await Assert.IsType<ValueTask>(sweep.Invoke(owner, null)).AsTask();
+
+            Assert.True(
+                Assert.IsType<bool>(
+                    slot.GetType()
+                        .GetMethod("TryAcquire", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(slot, null)
+                )
+            );
+            slot.GetType()
+                .GetMethod("Release", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(slot, null);
+            Assert.False(
+                Assert.IsType<bool>(
+                    slot.GetType()
+                        .GetProperty("CanRemove", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(slot)
+                )
+            );
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task ActorJoin_overlapping_prepare_timeout_keeps_original_waiter_owned()
     {
         var trace = new RelocationBehaviorTrace();
@@ -1170,6 +1218,12 @@ public sealed class RelocationBehaviorConformanceTests
             if (ReferenceEquals(delivery, sourceFailure.Task))
                 throw await sourceFailure.Task;
             Assert.Equal(1, stream.WriteCount);
+            await WaitUntilAsync(
+                () =>
+                    source.Runtime.TryGetSessionActorBinding(actorId, out var binding)
+                    && binding.AppliedCanonicalRelocationRoute is not null,
+                TimeSpan.FromSeconds(2)
+            );
             Assert.True(source.Runtime.TryGetSessionActorBinding(actorId, out var routedBinding));
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
             Assert.Equal(targetProtocolErrorsBeforeJoin, targetMonitor.Status().ProtocolErrors);
@@ -1575,8 +1629,8 @@ public sealed class RelocationBehaviorConformanceTests
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate) =>
-        await WaitUntilAsync(() => ValueTask.FromResult(predicate()));
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan? timeout = null) =>
+        await WaitUntilAsync(() => ValueTask.FromResult(predicate()), timeout);
 
     private static Task InvokeActorGenerationResetAsync(
         ZLinkFrameworkRuntime runtime,
@@ -1660,9 +1714,12 @@ public sealed class RelocationBehaviorConformanceTests
         }
     }
 
-    private static async Task WaitUntilAsync(Func<ValueTask<bool>> predicate)
+    private static async Task WaitUntilAsync(
+        Func<ValueTask<bool>> predicate,
+        TimeSpan? timeout = null
+    )
     {
-        var deadlineTimeout = TimeSpan.FromSeconds(15);
+        var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(15);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {

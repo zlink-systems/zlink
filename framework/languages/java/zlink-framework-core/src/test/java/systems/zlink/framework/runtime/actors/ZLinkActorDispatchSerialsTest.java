@@ -2,23 +2,115 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorDispatchSerialsTest {
+    @Test
+    void retainedCommitWaitsForBusySpotOwnerWithoutBlockingCaller() throws Exception {
+        ZLinkSpotSerialExecutor spot = (ZLinkSpotSerialExecutor) actorTarget();
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(spot);
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        var seal = spot.trySealActorRelocation("actor-1").orElseThrow();
+        Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
+        laneField.setAccessible(true);
+        ZLinkStateLane lane = (ZLinkStateLane) laneField.get(spot);
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        assertTrue(
+                lane.tryPost(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        }));
+        entered.join();
+        try {
+            var retained = dispatches.retainCommitAsync("actor-1", seal).toCompletableFuture();
+            assertFalse(retained.isDone());
+            release.complete(null);
+            var commit = retained.join().orElseThrow();
+            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit.Cut
+                    cut;
+            do {
+                cut = commit.cut();
+            } while (!commit.tryEstablishAndFinishCapture(cut));
+            commit.complete();
+        } finally {
+            release.complete(null);
+        }
+    }
+
+    @Test
+    void teardownRemovalFailureCompletesTerminalExceptionally() {
+        ZLinkActorDispatchTarget spot = actorTarget();
+        IllegalStateException removalFailure = new IllegalStateException("remove failed");
+        ZLinkActorDispatchTarget failing =
+                (ZLinkActorDispatchTarget)
+                        Proxy.newProxyInstance(
+                                ZLinkActorDispatchTarget.class.getClassLoader(),
+                                new Class<?>[] {ZLinkActorDispatchTarget.class},
+                                (proxy, method, args) ->
+                                        method.getName().equals("removeActorQueueAsync")
+                                                ? CompletableFuture.failedFuture(removalFailure)
+                                                : method.invoke(spot, args));
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(failing));
+        CompletionStage<Void> teardown =
+                dispatches.beginTeardown("actor-1", () -> CompletableFuture.completedFuture(null));
+        CompletionException terminal =
+                assertThrows(
+                        CompletionException.class, () -> teardown.toCompletableFuture().join());
+        assertSame(removalFailure, terminal.getCause());
+    }
+
+    @Test
+    void teardownKeepsAdmissionClosedUntilSpotRemovalFinishes() {
+        ZLinkActorDispatchTarget spot = actorTarget();
+        CompletableFuture<Void> removeEntered = new CompletableFuture<>();
+        CompletableFuture<Void> removal = new CompletableFuture<>();
+        ZLinkActorDispatchTarget delayed =
+                (ZLinkActorDispatchTarget)
+                        Proxy.newProxyInstance(
+                                ZLinkActorDispatchTarget.class.getClassLoader(),
+                                new Class<?>[] {ZLinkActorDispatchTarget.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("removeActorQueueAsync")) {
+                                        removeEntered.complete(null);
+                                        return removal;
+                                    }
+                                    return method.invoke(spot, args);
+                                });
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(delayed));
+        CompletionStage<Void> teardown =
+                dispatches.beginTeardown("actor-1", () -> CompletableFuture.completedFuture(null));
+        removeEntered.join();
+        try {
+            assertFalse(teardown.toCompletableFuture().isDone());
+            assertThrows(IllegalStateException.class, () -> dispatches.prepare("actor-1"));
+        } finally {
+            removal.complete(null);
+        }
+        teardown.toCompletableFuture().join();
+    }
+
     @Test
     void queuedBarrierWaitsForActiveActorDispatch() {
         ZLinkActorDispatchSerials dispatches = new ZLinkActorDispatchSerials();
@@ -206,11 +298,12 @@ final class ZLinkActorDispatchSerialsTest {
 
         owner.set(spotA);
         enqueueLazy(dispatches, order, "before-remove").toCompletableFuture().join();
+        dispatches.awaitQuiescence().toCompletableFuture().join();
         var seal = dispatches.trySeal("actor-1").orElseThrow();
         dispatches.commit("actor-1", seal).orElseThrow();
 
         owner.set(null);
-        dispatches.remove("actor-1");
+        dispatches.removeAsync("actor-1").toCompletableFuture().join();
         owner.set(spotA);
         enqueueLazy(dispatches, order, "after-remove").toCompletableFuture().join();
 
@@ -230,7 +323,7 @@ final class ZLinkActorDispatchSerialsTest {
         dispatches.commit("actor-1", seal).orElseThrow();
 
         owner.set(null);
-        dispatches.remove("actor-1");
+        dispatches.removeAsync("actor-1").toCompletableFuture().join();
         owner.set(spotA);
         enqueueLazy(dispatches, order, "after-remove").toCompletableFuture().join();
 
@@ -260,6 +353,7 @@ final class ZLinkActorDispatchSerialsTest {
             String step) {
         owner.set(target);
         enqueueLazy(dispatches, order, step).toCompletableFuture().join();
+        dispatches.awaitQuiescence().toCompletableFuture().join();
         var seal = dispatches.trySeal("actor-1").orElseThrow();
         dispatches.commit("actor-1", seal).orElseThrow();
         dispatches

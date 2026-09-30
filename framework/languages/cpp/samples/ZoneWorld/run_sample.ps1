@@ -104,6 +104,7 @@ function Wait-RoleExit([string]$Name, [int]$TimeoutMilliseconds) {
         throw "$Name timed out after $([int]($TimeoutMilliseconds / 1000)) seconds."
     }
     $exitCode = $process.ExitCode
+    if ($exitCode -ne 0) { Write-Warning "$Name exited with code $exitCode." }
     Remove-TrackedProcess $process
     [void]$RoleProcesses.Remove($Name)
     return $exitCode
@@ -260,7 +261,8 @@ try {
         sample_cpp_framework_zoneworld_zone_node `
         sample_cpp_framework_zoneworld_gateway `
         sample_cpp_framework_zoneworld_ops `
-        sample_cpp_framework_zoneworld_client
+        sample_cpp_framework_zoneworld_client `
+        sample_cpp_framework_zoneworld_session_route_proxy
     if ($LASTEXITCODE -ne 0) { throw "ZoneWorld sample build failed with exit code $LASTEXITCODE." }
 
     if (-not $B8Child -and -not $G4Child) {

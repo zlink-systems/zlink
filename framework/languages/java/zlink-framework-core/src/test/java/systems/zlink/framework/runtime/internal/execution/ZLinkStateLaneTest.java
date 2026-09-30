@@ -8,6 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,6 +25,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
+    @Test
+    void synchronousWaitGuardUsesExistingExecutionContext() {
+        assertTrue(ZLinkStateLane.assertMayBlock());
+        ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);
+        lane.runAsync(
+                        () -> {
+                            assertEquals(
+                                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                    assertThrows(
+                                                    ZLinkFrameworkException.class,
+                                                    ZLinkStateLane::assertMayBlock)
+                                            .kind());
+                            return null;
+                        })
+                .toCompletableFuture()
+                .join();
+        try (var ignored = ZLinkSuspendInvocationContext.enterSerialExecutionTurn(lane)) {
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertThrows(ZLinkFrameworkException.class, ZLinkStateLane::assertMayBlock)
+                            .kind());
+        }
+    }
+
     @Test
     void directExecutorReturnsCompletedTurnsWithoutAnotherCompletionTask() {
         ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);

@@ -57,7 +57,7 @@ const (
 	ReceiveFlowPaused  ReceiveFlowState = 1
 )
 
-const recvTopicBufferCap = 64 * 1024
+const initialTopicBufferSize = 64 * 1024
 
 type PairSocket struct {
 	*directSocket
@@ -444,6 +444,10 @@ func (s *StreamSocket) Bind(endpoint string) error {
 
 func (s *StreamSocket) Unbind(endpoint string) error {
 	return s.core.Unbind(endpoint)
+}
+
+func (s *StreamSocket) DisconnectRID(peerRID RoutingID) error {
+	return s.core.socketCore.DisconnectRID(peerRID)
 }
 
 func (s *StreamSocket) Close() error {

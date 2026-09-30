@@ -109,15 +109,18 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         sealTimerAdmission();
         CompletionStage<Void> acceptedTurns =
                 initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
-        return acceptedTurns.thenCompose(ignored -> runLifecycle(operation));
+        return acceptedTurns.thenCompose(
+                ignored ->
+                        dispatchQueue.enqueuePreviouslyAccepted(
+                                () -> host.runWithOutbound(outbound, operation)));
     }
 
     void sealTimerAdmission() {
         timers.freeze();
     }
 
-    void closeTimers() {
-        timers.close();
+    CompletionStage<Void> closeTimersAsync() {
+        return timers.closeAsync();
     }
 
     void closeHandlerInstances() {
@@ -128,10 +131,16 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         backendSpot.close();
     }
 
-    void closeResources() {
-        closeTimers();
-        closeHandlerInstances();
-        closeBackendSpot();
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                closeBackendSpot();
+                            }
+                        });
     }
 
     CompletionStage<Void> awaitQuiescence() {
@@ -210,15 +219,26 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     @Override
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(payloadBytes, operation, null);
+    }
+
+    CompletionStage<Void> enqueueDispatch(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         host.ensureOwnerAdmissionOpen();
-        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation));
+        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation), admission);
+    }
+
+    void sealClosingAdmission() {
+        dispatchQueue.sealClosingAdmission();
     }
 
     @Override
     public CompletionStage<Void> enqueueInfrastructureDispatch(
             Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
-        return infrastructureQueue.enqueue(operation);
+        return infrastructureQueue.enqueue(operation, null);
     }
 
     @Override

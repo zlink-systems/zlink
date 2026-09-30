@@ -21,6 +21,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreValue;
+import systems.zlink.framework.locationprovider.ZLinkStoreValueCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersion;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
@@ -191,16 +192,19 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         local expected = ARGV[arg + 1]
                         local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
                         local current = nil
+                        local currentValue = nil
                         if #members > 0 then
                             local record = unpackTagged(members[1])
                             local expiresAt = tonumber(record[4])
                             if record[5] ~= true
                                 and (expiresAt == 0 or expiresAt > nowMs) then
                                 current = record[3]
+                                currentValue = record[2]
                             end
                         end
                         if (kind == 'missing' and current ~= nil)
-                            or (kind == 'version' and current ~= expected) then
+                            or (kind == 'version' and current ~= expected)
+                            or (kind == 'value' and currentValue ~= expected) then
                             return { 'conflict', nowMs }
                         end
                         arg = arg + 2
@@ -606,6 +610,14 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             } else if (condition instanceof ZLinkStoreVersionCondition version) {
                 key = version.key();
                 encodedBytes += validateVersion(version.expected());
+            } else if (condition instanceof ZLinkStoreValueCondition value) {
+                key = value.key();
+                byte[] expected = Objects.requireNonNull(value.expected(), "value.expected");
+                if (expected.length > MAXIMUM_VALUE_BYTES) {
+                    throw new IllegalArgumentException(
+                            "A Location Store value can contain at most 1 MiB.");
+                }
+                encodedBytes += expected.length;
             } else {
                 throw new IllegalArgumentException("Unknown Location Store condition.");
             }
@@ -671,6 +683,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             if (condition instanceof ZLinkStoreMissingCondition) {
                 arguments.add(bytes("missing"));
                 arguments.add(bytes(""));
+            } else if (condition instanceof ZLinkStoreValueCondition value) {
+                arguments.add(bytes("value"));
+                arguments.add(value.expected());
             } else {
                 ZLinkStoreVersionCondition version = (ZLinkStoreVersionCondition) condition;
                 arguments.add(bytes("version"));

@@ -4,6 +4,9 @@ use crate::error::{
 };
 use crate::ffi;
 
+const ETERM: i32 = 156_384_765;
+const EFSM: i32 = 156_384_763;
+
 pub(crate) fn last_errno() -> i32 {
     unsafe { ffi::zlink_errno() }
 }
@@ -52,8 +55,24 @@ pub(crate) fn config_result_from_native(result: ffi::zlink_config_result_t) -> C
 }
 
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
-    // Completion records carry the Core result, but no native errno.
-    RequestError::new(code, 0)
+    // Core REQUEST completion에는 errno가 없으므로 Core 표의 첫 errno를 사용한다.
+    let native_errno = match code {
+        RequestResult::Ok => 0,
+        RequestResult::TimedOut => libc::ETIMEDOUT,
+        RequestResult::NotFound => libc::ENOENT,
+        RequestResult::Terminated => ETERM,
+        RequestResult::ProtocolError => libc::EPROTO,
+        RequestResult::InternalError => libc::EIO,
+        RequestResult::Rejected => libc::EACCES,
+        RequestResult::Conflict => libc::EEXIST,
+        RequestResult::Busy => libc::EBUSY,
+        RequestResult::NotConnected => libc::ENOTCONN,
+        RequestResult::InvalidArgument => libc::EINVAL,
+        RequestResult::InvalidState => EFSM,
+        RequestResult::NotSupported => libc::ENOTSUP,
+        RequestResult::Backpressured => libc::EAGAIN,
+    };
+    RequestError::new(code, native_errno)
 }
 
 pub(crate) fn config_validation_error() -> ConfigError {
@@ -229,19 +248,29 @@ mod tests {
     }
 
     #[test]
-    fn request_completion_does_not_invent_native_errno() {
-        assert_eq!(
-            request_error_from_result(RequestResult::Rejected).native_errno(),
-            0
-        );
-        assert_eq!(
-            request_error_from_result(RequestResult::Conflict).native_errno(),
-            0
-        );
-        assert_eq!(
-            request_error_from_result(RequestResult::InvalidState).native_errno(),
-            0
-        );
+    fn request_completion_projects_representative_core_errno() {
+        let cases = [
+            (RequestResult::Ok, 0),
+            (RequestResult::TimedOut, libc::ETIMEDOUT),
+            (RequestResult::NotFound, libc::ENOENT),
+            (RequestResult::Terminated, ETERM),
+            (RequestResult::ProtocolError, libc::EPROTO),
+            (RequestResult::InternalError, libc::EIO),
+            (RequestResult::Rejected, libc::EACCES),
+            (RequestResult::Conflict, libc::EEXIST),
+            (RequestResult::Busy, libc::EBUSY),
+            (RequestResult::NotConnected, libc::ENOTCONN),
+            (RequestResult::InvalidArgument, libc::EINVAL),
+            (RequestResult::InvalidState, EFSM),
+            (RequestResult::NotSupported, libc::ENOTSUP),
+            (RequestResult::Backpressured, libc::EAGAIN),
+        ];
+
+        for (result, expected_errno) in cases {
+            let error = request_error_from_result(result);
+            assert_eq!(error.code(), result);
+            assert_eq!(error.native_errno(), expected_errno);
+        }
     }
 
     #[test]

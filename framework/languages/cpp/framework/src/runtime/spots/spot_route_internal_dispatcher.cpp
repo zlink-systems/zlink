@@ -64,8 +64,12 @@ submit_source_actor_leave_async (spot_node_runtime_t runtime,
     // and never published into mesh spot routing, so a spot-addressed send
     // (send_spot_mesh_parts_exact) cannot resolve it -- only the
     // destination node's routing id is needed here.
-    (void) co_await runtime.send_actor_leave_notification (source_node_rid,
-                                                           std::move (*leave_parts));
+    const auto submitted =
+      co_await runtime.send_actor_leave_notification (source_node_rid, std::move (*leave_parts));
+    if (submitted != zlink::submit_result_t::ok) {
+        throw framework_exception_t (runtime::messaging::map_submit_result_error_kind (submitted),
+                                     "source Actor leave notification was not submitted");
+    }
 }
 
 } // namespace
@@ -320,6 +324,63 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
                       result.value () ? result.value ()->to_bytes () : std::vector<std::uint8_t>{}};
                   completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
                     serializers->get<spot_actor_packet_route_reply_t> ().serialize (reply))));
+              });
+            return true;
+        }
+        // Admission and disconnect run on the target Spot's lifecycle lane and
+        // reply from its completion (handler turn and execution gate §7).
+        if (header.message_name == spot_actor_admission_route_request_t::packet_name) {
+            auto request = _serializers->get<spot_actor_admission_route_request_t> ().deserialize (
+              detail::encoded_payload_from_raw (body.value ()));
+            auto runtime = _runtime;
+            auto admitted = std::make_shared<task_t<spot_actor_join_result_t>> (
+              runtime.admit_remote_actor_to_spot (
+                request.transfer_id, actor_ref_from_spot_route (request),
+                spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
+                zlink::message_t::from (request.payload), request.completion_operation_id_high,
+                request.completion_operation_id_low, request.actor_authority_owner_generation,
+                request.actor_node_generation, request.expected_owner_lease_generation));
+            ::zlink::framework::detail::observe_task_completion (
+              *admitted,
+              [admitted, serializers = _serializers, completion = std::move (completion)] (
+                const result_t<spot_actor_join_result_t> &result) mutable {
+                  if (!result) {
+                      completion (detail::propagate_failure<zlink::message_t> (
+                        result, "remote actor admission failed"));
+                      return;
+                  }
+                  const auto reply = spot_actor_admission_route_reply_t{
+                    .accepted = result.value ().accepted,
+                    .payload =
+                      result.value ().reply
+                        ? detail::message_to_raw (*result.value ().reply, *serializers).to_bytes ()
+                        : std::vector<std::uint8_t>{},
+                    .completion_root_reference = {},
+                    .completion_root_checksum = 0};
+                  completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
+                    serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
+              });
+            return true;
+        }
+        if (header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
+            auto request = _serializers->get<spot_actor_disconnect_route_request_t> ().deserialize (
+              detail::encoded_payload_from_raw (body.value ()));
+            auto disconnected = std::make_shared<task_t<void>> (
+              _runtime.notify_actor_disconnected_erased (actor_ref_from_spot_route (request)));
+            ::zlink::framework::detail::observe_task_completion (
+              *disconnected,
+              [disconnected, serializers = _serializers,
+               completion = std::move (completion)] (const result_t<void> &result) mutable {
+                  if (!result) {
+                      completion (result_t<zlink::message_t>::failure (
+                        result.error_kind (), result.error ()
+                                                ? result.error ()->what ()
+                                                : "remote actor disconnect notify failed"));
+                      return;
+                  }
+                  completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
+                    serializers->get<spot_actor_disconnect_route_reply_t> ().serialize (
+                      spot_actor_disconnect_route_reply_t{}))));
               });
             return true;
         }
@@ -809,30 +870,19 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
               _serializers->get<actor_bound_session_route_reply_t> ().serialize (
                 actor_bound_session_route_reply_t{.accepted = true})));
         }
-        if (header.message_name == spot_actor_admission_route_request_t::packet_name) {
-            auto request = _serializers->get<spot_actor_admission_route_request_t> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ()));
-            auto runtime = _runtime;
-            auto admitted = runtime.admit_remote_actor_to_spot (
-              request.transfer_id, actor_ref_from_spot_route (request),
-              spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
-              zlink::message_t::from (request.payload), request.completion_operation_id_high,
-              request.completion_operation_id_low, request.actor_authority_owner_generation,
-              request.actor_node_generation, request.expected_owner_lease_generation);
-            if (!admitted) {
-                return detail::propagate_failure<zlink::message_t> (
-                  admitted, "remote actor admission failed");
-            }
-            const auto reply = spot_actor_admission_route_reply_t{
-              .accepted = admitted.value ().accepted,
-              .payload =
-                admitted.value ().reply
-                  ? detail::message_to_raw (*admitted.value ().reply, *_serializers).to_bytes ()
-                  : std::vector<std::uint8_t>{},
-              .completion_root_reference = {},
-              .completion_root_checksum = 0};
-            return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-              _serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply)));
+        if (header.message_name == spot_actor_admission_route_request_t::packet_name
+            || header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
+            /* One implementation (dispatch_request_async); a caller without a
+             * deferred record terminal waits for it here. */
+            ::zlink::framework::detail::task_completion_source_t<zlink::message_t> completion;
+            auto result = completion.task ();
+            if (!dispatch_request_async (received, header, services,
+                                         [completion] (result_t<zlink::message_t> value) mutable {
+                                             completion.complete (std::move (value));
+                                         }))
+                return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
+                                                            "SPOT route request decode failed");
+            return result.result ();
         }
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
@@ -872,21 +922,6 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             return result_t<zlink::message_t>::failure (
               framework_error_kind_t::unavailable,
               "actor packet route requires asynchronous terminal dispatch");
-        }
-        if (header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
-            auto request = _serializers->get<spot_actor_disconnect_route_request_t> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ()));
-            auto disconnected =
-              _runtime.notify_actor_disconnected_erased (actor_ref_from_spot_route (request));
-            if (!disconnected) {
-                return result_t<zlink::message_t>::failure (
-                  disconnected.error_kind (), disconnected.error ()
-                                                ? disconnected.error ()->what ()
-                                                : "remote actor disconnect notify failed");
-            }
-            return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-              _serializers->get<spot_actor_disconnect_route_reply_t> ().serialize (
-                spot_actor_disconnect_route_reply_t{})));
         }
         return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
                                                     "unsupported internal SPOT route packet");

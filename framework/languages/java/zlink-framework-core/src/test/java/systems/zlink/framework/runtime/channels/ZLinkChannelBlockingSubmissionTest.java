@@ -11,6 +11,8 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.configuration.ZLinkMessageFlowControl;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
@@ -20,6 +22,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
@@ -42,6 +45,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Timeout(10)
@@ -57,6 +61,131 @@ final class ZLinkChannelBlockingSubmissionTest {
         // framework/doc/.../languages/java/interfaces/channel-messaging.ko.md:239,275
         assertTrue(send.isDefault());
         assertTrue(request.isDefault());
+    }
+
+    @Test
+    void completionContinuationRejectsBlockingRequestAndDispatcherDeliversNextCompletion()
+            throws Exception {
+        try (Fixture first = new Fixture();
+                Fixture nested = new Fixture();
+                Fixture next = new Fixture()) {
+            var continuation =
+                    first.request
+                            .submit(Reply.class)
+                            .thenRun(
+                                    () ->
+                                            assertInvalid(
+                                                    assertThrows(
+                                                            ZLinkFrameworkException.class,
+                                                            () ->
+                                                                    nested.request.submit_sync(
+                                                                            Reply.class))))
+                            .toCompletableFuture();
+            var following = next.request.submit(Reply.class).toCompletableFuture();
+            first.complete();
+            continuation.get(3, TimeUnit.SECONDS);
+            assertEquals(0, nested.submissions.get());
+            next.complete();
+            assertEquals(new Reply("accepted"), following.get(3, TimeUnit.SECONDS));
+            nested.complete();
+            assertEquals(new Reply("accepted"), nested.request.submit_sync(Reply.class));
+        }
+    }
+
+    @Test
+    void completionContinuationRejectsFlowControlBeforeChangingMode() throws Exception {
+        try (Fixture first = new Fixture();
+                Fixture next = new Fixture()) {
+            AtomicInteger changes = new AtomicInteger();
+            ZLinkMessageFlowControl control =
+                    new ZLinkMessageFlowControl() {
+                        @Override
+                        public CompletableFuture<Void> setMessageFlowModeAsync(
+                                ZLinkMessageFlowLogMode mode) {
+                            changes.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
+                        public ZLinkMessageFlowLogMode messageFlowMode() {
+                            return ZLinkMessageFlowLogMode.OFF;
+                        }
+                    };
+            var continuation =
+                    first.request
+                            .submit(Reply.class)
+                            .thenRun(
+                                    () -> {
+                                        assertInvalid(
+                                                assertThrows(
+                                                        ZLinkFrameworkException.class,
+                                                        () ->
+                                                                control.setMessageFlowMode(
+                                                                        ZLinkMessageFlowLogMode
+                                                                                .NORMAL)));
+                                        assertEquals(0, changes.get());
+                                    })
+                            .toCompletableFuture();
+            first.complete();
+            continuation.get(3, TimeUnit.SECONDS);
+            var following = next.request.submit(Reply.class).toCompletableFuture();
+            next.complete();
+            assertEquals(new Reply("accepted"), following.get(3, TimeUnit.SECONDS));
+            control.setMessageFlowMode(ZLinkMessageFlowLogMode.NORMAL);
+            assertEquals(1, changes.get());
+        }
+    }
+
+    @Test
+    void receiveThreadRejectsBlockingSubmitAndCompletionDispatcherKeepsServing() throws Exception {
+        try (Fixture rejected = new Fixture();
+                Fixture following = new Fixture();
+                var jobs =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(1),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                        1, null, null, null))) {
+            AtomicBoolean running = new AtomicBoolean(true);
+            CompletableFuture<Void> checked = new CompletableFuture<>();
+            var router =
+                    (ZLinkBackendRouterSocket)
+                            Proxy.newProxyInstance(
+                                    getClass().getClassLoader(),
+                                    new Class<?>[] {ZLinkBackendRouterSocket.class},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("waitForReadable")) {
+                                            try {
+                                                assertInvalid(
+                                                        assertThrows(
+                                                                ZLinkFrameworkException.class,
+                                                                rejected.send::submit_sync));
+                                                assertEquals(0, rejected.submissions.get());
+                                                checked.complete(null);
+                                            } catch (Throwable failure) {
+                                                checked.completeExceptionally(failure);
+                                            } finally {
+                                                running.set(false);
+                                            }
+                                            return false;
+                                        }
+                                        throw new AssertionError(
+                                                "unexpected router call: " + method);
+                                    });
+            try (var loops = new ZLinkChannelReceiveLoops(running::get, jobs)) {
+                loops.startRequest(
+                        router, received -> received.close(), checked::completeExceptionally);
+                try {
+                    checked.get(3, TimeUnit.SECONDS);
+                    var completion = following.request.submit(Reply.class).toCompletableFuture();
+                    following.complete();
+                    assertEquals(new Reply("accepted"), completion.get(3, TimeUnit.SECONDS));
+                } finally {
+                    running.set(false);
+                    rejected.complete();
+                }
+            }
+        }
     }
 
     @Test
@@ -136,7 +265,8 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                         "handle",
                                                         new Object[0],
                                                         List.of())
-                                                .thenApply(ignoredReply -> null));
+                                                .thenApply(ignoredReply -> null),
+                                null);
             } finally {
                 permit.abandonReservation();
             }

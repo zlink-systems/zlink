@@ -11,7 +11,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StandaloneActorRelocationPrecommitTests
 {
     [Fact]
-    public async Task Precommit_retries_owner_lease_heartbeat_conflict_and_completes()
+    public async Task Precommit_commits_through_owner_lease_heartbeat()
     {
         var provider = new OwnerLeaseHeartbeatLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
@@ -65,7 +65,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.Equal(1, Projection(preparing).Phase);
         Assert.Equal(sourceOwner.OwnerId, preparing.OwnerId);
         Assert.Equal(1, provider.HeartbeatWriteCount);
-        Assert.Equal(2, provider.AuthorityWriteCount);
+        Assert.Equal(1, provider.AuthorityWriteCount);
     }
 
     [Fact]

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include <zlink/framework/contracts/errors/result.hpp>
 
 #include <service_wire_constants.hpp>
 #include <opentelemetry/metrics/meter.h>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -109,6 +111,10 @@ class service_topology_registry_t
 
     void publish_local (service_node_descriptor_t descriptor);
     service_node_descriptor_t local_descriptor () const;
+    task_t<std::tuple<service_node_descriptor_t,
+                      std::vector<admitted_peer_t>,
+                      std::vector<service_node_descriptor_t>>>
+    monitoring_snapshot_async () const;
     void set_change_handler (std::function<void ()> handler);
 
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
@@ -122,11 +128,13 @@ class service_topology_registry_t
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
-    std::optional<std::vector<std::uint8_t>> select (const std::string &channel_name);
+    result_t<std::vector<std::uint8_t>> select (const std::string &channel_name);
     std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
   private:
+    std::vector<admitted_peer_t> peers_on_lane () const;
+    std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
     struct byte_vector_less_t
     {
         bool operator() (const std::vector<std::uint8_t> &left,

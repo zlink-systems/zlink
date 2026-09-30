@@ -306,6 +306,11 @@ void test_dealer_router_hwm_request_uses_writable_retry ()
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (router);
     set_zero_linger (dealer);
     set_small_hwm (router);
@@ -329,6 +334,11 @@ void test_router_router_hwm_request_preserves_rid ()
     void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (server);
     set_zero_linger (client);
     set_small_hwm (server);
@@ -359,6 +369,11 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (dealer);
     TEST_ASSERT_NOT_NULL (router);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     set_zero_linger (dealer);
     set_zero_linger (router);
     const int immediate = 1;
@@ -377,8 +392,8 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
                         sizeof (one)));
 
     char endpoint[MAX_SOCKET_STRING];
-    fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
-    close (reserved);
+    fd_t reserved = bind_socket_resolve_port (
+      "127.0.0.1", "0", endpoint, AF_INET, IPPROTO_TCP, false);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
 
     int request_context = 21;
@@ -429,6 +444,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
       zlink_set_option (dealer, ZLINK_OPT_RCVTIMEO, &normal_receive_timeout,
                         sizeof (normal_receive_timeout)));
 
+    close (reserved);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, endpoint));
     assert_writable_poll (dealer);
     bool saw_request = false;

@@ -1,6 +1,57 @@
 use super::*;
 
 const INITIAL_NATIVE_PART_CAPACITY: usize = 8;
+const INLINE_TOPIC_BUFFER_CAPACITY: usize = 256;
+
+pub(crate) struct TopicBuffer {
+    inline: [i8; INLINE_TOPIC_BUFFER_CAPACITY],
+    grown: Vec<i8>,
+}
+
+impl TopicBuffer {
+    pub(crate) fn new() -> Self {
+        Self {
+            inline: [0; INLINE_TOPIC_BUFFER_CAPACITY],
+            grown: Vec::new(),
+        }
+    }
+
+    fn current_mut(&mut self) -> &mut [i8] {
+        if self.grown.is_empty() {
+            &mut self.inline
+        } else {
+            &mut self.grown
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[i8] {
+        if self.grown.is_empty() {
+            &self.inline
+        } else {
+            &self.grown
+        }
+    }
+
+    fn grow(&mut self, required: usize) {
+        self.grown.resize(required, 0);
+    }
+}
+
+pub(crate) fn recv_topic_with_growth(
+    buffer: &mut TopicBuffer,
+    mut receive: impl FnMut(*mut i8, usize, *mut usize) -> i32,
+) -> (i32, usize) {
+    loop {
+        let topic_buf = buffer.current_mut();
+        let capacity = topic_buf.len();
+        let mut topic_len = capacity;
+        let rc = receive(topic_buf.as_mut_ptr(), capacity, &mut topic_len);
+        if rc != ffi::ZLINK_RECV_BUFFER_TOO_SMALL || topic_len <= capacity {
+            return (rc, topic_len);
+        }
+        buffer.grow(topic_len);
+    }
+}
 
 // Short subscribe topics bypass heap allocation entirely (<=22 bytes live
 // inline).
@@ -80,14 +131,8 @@ fn adopt_native_parts(
     parts.reserve(count);
 
     for index in 0..count {
-        let mut part = Message::new().map_err(|error| {
-            unsafe {
-                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), count);
-            }
-            parts.clear();
-            RecvError::new(RecvResult::InternalError, error.native_errno())
-        })?;
-        let rc = unsafe { ffi::zlink_msg_adopt(part.raw_mut(), &mut native_parts[index]) };
+        let mut part = ffi::zlink_msg_t::recv_slot();
+        let rc = unsafe { ffi::zlink_msg_adopt(&mut part, &mut native_parts[index]) };
         if rc != 0 {
             let errno = unsafe { ffi::zlink_errno() };
             unsafe {
@@ -99,7 +144,7 @@ fn adopt_native_parts(
                 if errno == 0 { libc::EIO } else { errno },
             ));
         }
-        parts.push(part);
+        parts.push(unsafe { Message::from_raw(part) });
     }
 
     unsafe {
@@ -142,36 +187,41 @@ pub(crate) fn recv_basic_parts(
 
 pub(crate) fn recv_subscribed_parts(
     handle: *mut c_void,
-    topic_buf: &mut [i8; 256],
     flags: ffi::zlink_recv_flags_t,
     parts: &mut Vec<Message>,
     native_parts: &mut Vec<ffi::zlink_msg_t>,
 ) -> RecvSubscribedParts {
     let mut routing_id = None;
     let mut topic = smol_str::SmolStr::default();
+    let mut topic_buf = TopicBuffer::new();
     let received = recv_whole_message(
         parts,
         native_parts,
         flags,
         |buffer, capacity, count, recv_flags| {
-            let mut source_rid_ptr = ptr::null();
-            let mut topic_len = topic_buf.len();
-            let rc = unsafe {
-                ffi::zlink_subscribe(
-                    handle,
-                    &mut source_rid_ptr,
-                    topic_buf.as_mut_ptr(),
-                    topic_buf.len(),
-                    &mut topic_len,
-                    buffer,
-                    capacity,
-                    count,
-                    recv_flags,
-                )
-            };
+            let (rc, topic_len) =
+                recv_topic_with_growth(&mut topic_buf, |topic_ptr, topic_capacity, topic_len| {
+                    let mut source_rid_ptr = ptr::null();
+                    let rc = unsafe {
+                        ffi::zlink_subscribe(
+                            handle,
+                            &mut source_rid_ptr,
+                            topic_ptr,
+                            topic_capacity,
+                            topic_len,
+                            buffer,
+                            capacity,
+                            count,
+                            recv_flags,
+                        )
+                    };
+                    if rc == 0 {
+                        routing_id = routing_id_from_ptr(source_rid_ptr);
+                    }
+                    rc
+                });
             if rc == 0 {
-                routing_id = routing_id_from_ptr(source_rid_ptr);
-                topic = cstr_buf_to_smolstr(topic_buf, topic_len);
+                topic = cstr_buf_to_smolstr(topic_buf.as_slice(), topic_len);
             }
             rc
         },

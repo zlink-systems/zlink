@@ -145,9 +145,14 @@ void receive_reply_completion (void *dealer_, zlink_completion_id_t id_,
 
 void run_case (size_t size_, bool tcp_)
 {
+    const int no_token_deadline = -1;
     for (int run = 0; run != repetitions; ++run) {
         void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
         void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                            sizeof (no_token_deadline)));
         const int receive_timeout_ms = 3000;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_CONFIG_OK,
@@ -286,6 +291,11 @@ void test_correlation_release_terminal_events (int event_)
     const bool routed = event_ == 2;
     void *client = test_context_socket (routed ? ZLINK_SOCKET_ROUTER
                                               : ZLINK_SOCKET_DEALER);
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
+                        sizeof (no_token_deadline)));
     const zlink_routing_id_t target = {1, {'s'}};
     if (routed) {
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,

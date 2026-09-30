@@ -211,6 +211,8 @@ authority를 유지한다. Caller가 명시적 leave 또는 destroy를 끝낸 �
 `JoinSpot`은 이동할 User Spot의 global Spot ID를 받는다. `JoinEntrySpot`은 target node
 RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. Actor와 target
 Spot의 owner node가 다르면 같은 Join operation 안에서 Actor relocation도 수행한다.
+Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh Join record를
+제출하지 않는다.
 
 Application은 relocation 단계, target node, state adapter 또는 owner token을 직접 지정하지
 않는다. 이 값은 Framework가 현재 설정과 authority를 기준으로 결정한다.
@@ -423,6 +425,14 @@ Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체
 [Actor 모델 §6.1](04-actor-model.ko.md#61-factory와-relocation-policy-등록)과 이 문서의 다른 절은
 이 절만 가리킨다.
 
+다른 node로의 Actor Join에서 target이 보내는 승인 wire 응답은 target의 수락과 temporary queue·factory
+준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS의 실행 조건과 확정된 authority에
+따른 후속 처리는 [Actor와 Spot relocation 전체 흐름 §4.4–§4.6](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)을
+따르고, CAS 응답 불확정의 판정과 재제출은 그 흐름이 참조하는
+[Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. 승인 응답이
+수락된 뒤 난 실패는 같은 wire 요청에 다시 응답하지 않고, 확정된 authority에 따라 Actor Join
+completion으로 전달한다.
+
 Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 반환된 call 객체에서
 `Defer()`를 호출하면 Framework는 handler가 정상적으로 끝난 뒤 다음 순서로 Join을 실행한다.
 
@@ -443,8 +453,9 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    `Accepted`이면 계속하고, `Rejected`이면 target이 같은 처리 안에서 등록한 temporary
    queue와 준비한 factory 자원을 제거하며 source membership을 유지한 채 끝낸다. Target이
    Entry Spot이면 `OnActorJoin`을 호출하지 않는다. Join 요청을 받은 node는 자기 node의 활성 target Spot
-   항목으로만 Join을 수락한다. 항목이 없거나 비활성 상태이면 Spot을 생성하지 않고
-   `Unavailable`로 거절한다.
+   항목으로만 Join을 수락한다. `Closing` 상태인 target은
+   [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 `Closing` 행을 따른다. 그 밖에
+   항목이 없거나 활성화되지 않았으면 Spot을 생성하지 않고 `Unavailable`로 거절한다.
 3. Framework가 relocation policy와 target capacity를 확인한다. 이동을 진행할 수 있으면
    source Actor의 새 message 처리를 잠시 막고, application state와 현재 Actor queue를
    capture해 source memory에 유지한다. Relocation payload는 저장소를 거치지 않고

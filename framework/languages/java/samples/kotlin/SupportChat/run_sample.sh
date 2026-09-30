@@ -145,7 +145,7 @@ EOF
 chmod 0600 "${api_config}" "${session_config}" "${support_config}"
 
 cd "${SCRIPT_DIR}"
-zlink_sample_gradle_standalone standalone.settings.gradle.kts ../../gradlew --no-daemon --no-parallel --max-workers=1 \
+gradle_run \
   :Server:Api:installDist \
   :Server:Session:installDist \
   :Server:Support:installDist \

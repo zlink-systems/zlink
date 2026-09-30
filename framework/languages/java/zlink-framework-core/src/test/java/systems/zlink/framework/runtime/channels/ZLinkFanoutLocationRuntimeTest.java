@@ -188,53 +188,59 @@ final class ZLinkFanoutLocationRuntimeTest {
     void blockingProviderAndSaturatedTicksDoNotDelayRequestTimeout() throws Exception {
         SaturatingStore store = new SaturatingStore();
         try (Fixture fixture = new Fixture(store)) {
-            fixture.start();
-            assertTrue(store.entered.await(1, TimeUnit.SECONDS));
-
-            ZLinkChannelCallRuntime calls =
-                    new ZLinkChannelCallRuntime(
-                            null,
-                            fixture.scheduler,
-                            new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
-                            (channel,
-                                    node,
-                                    spot,
-                                    generation,
-                                    authorityOwnerGeneration,
-                                    ownerLeaseGeneration,
-                                    parts) -> CompletableFuture.completedFuture(null),
-                            (channel,
-                                    node,
-                                    spot,
-                                    generation,
-                                    authorityOwnerGeneration,
-                                    ownerLeaseGeneration,
-                                    parts,
-                                    timeout,
-                                    operations,
-                                    operationId) -> CompletableFuture.completedFuture(List.of()));
             try {
-                long startedNanos = System.nanoTime();
-                CompletableFuture<Void> request =
-                        calls.submit(
-                                Duration.ofMillis(40), CompletableFuture<Void>::new, ignored -> {});
+                fixture.start();
+                assertTrue(store.entered.await(1, TimeUnit.SECONDS));
 
-                ExecutionException failure =
-                        assertThrows(
-                                ExecutionException.class,
-                                () -> request.get(500, TimeUnit.MILLISECONDS));
-                ZLinkFrameworkException timeout =
-                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
-                assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
-                assertInstanceOf(TimeoutException.class, timeout.getCause());
-                assertTrue(
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos) < 250,
-                        "the request deadline must not wait for provider progress");
+                ZLinkChannelCallRuntime calls =
+                        new ZLinkChannelCallRuntime(
+                                null,
+                                fixture.scheduler,
+                                new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
+                                (channel,
+                                        node,
+                                        spot,
+                                        generation,
+                                        authorityOwnerGeneration,
+                                        ownerLeaseGeneration,
+                                        parts) -> CompletableFuture.completedFuture(null),
+                                (channel,
+                                        node,
+                                        spot,
+                                        generation,
+                                        authorityOwnerGeneration,
+                                        ownerLeaseGeneration,
+                                        parts,
+                                        timeout,
+                                        operations,
+                                        operationId) ->
+                                        CompletableFuture.completedFuture(List.of()));
+                try {
+                    long startedNanos = System.nanoTime();
+                    CompletableFuture<Void> request =
+                            calls.submit(
+                                    Duration.ofMillis(40),
+                                    CompletableFuture<Void>::new,
+                                    ignored -> {});
 
-                Thread.sleep(60);
-                assertEquals(1, store.listCalls.get());
+                    ExecutionException failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> request.get(500, TimeUnit.MILLISECONDS));
+                    ZLinkFrameworkException timeout =
+                            assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+                    assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
+                    assertInstanceOf(TimeoutException.class, timeout.getCause());
+                    assertTrue(
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos) < 250,
+                            "the request deadline must not wait for provider progress");
+
+                    Thread.sleep(60);
+                    assertEquals(1, store.listCalls.get());
+                } finally {
+                    calls.beginClose();
+                }
             } finally {
-                calls.beginClose();
                 store.release.countDown();
             }
         }
@@ -320,11 +326,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {
-            ControlledSubscriber value = created.poll(1, TimeUnit.SECONDS);
-            if (value == null) {
-                throw new AssertionError("fanout subscriber was not created");
-            }
-            value.monitor.handlerReady.get(1, TimeUnit.SECONDS);
+            ControlledSubscriber value = created.take();
+            value.monitor.handlerReady.join();
             return value;
         }
 
@@ -365,9 +368,7 @@ final class ZLinkFanoutLocationRuntimeTest {
             listCalls.incrementAndGet();
             entered.countDown();
             try {
-                if (!release.await(1, TimeUnit.SECONDS)) {
-                    throw new AssertionError("provider test release was not signalled");
-                }
+                release.await();
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(interrupted);
@@ -444,7 +445,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -454,7 +456,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
     }

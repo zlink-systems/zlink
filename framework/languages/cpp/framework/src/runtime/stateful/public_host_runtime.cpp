@@ -1039,16 +1039,7 @@ void public_host_runtime_t::close () noexcept
       })
       .get ();
     _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
-    auto retained_outbound = _sessions.take_all_retained_outbound ();
-    for (auto &settle : retained_outbound) {
-        if (!settle)
-            continue;
-        try {
-            settle (false);
-        }
-        catch (...) {
-        }
-    }
+    _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
     _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
@@ -3641,43 +3632,45 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
     }
 }
 
-bool public_host_runtime_t::restore_relocation_assembly (
-  const pending_relocation_assembly_t &pending, const relocation_assembly_staging_t &staging)
+task_t<bool> public_host_runtime_t::restore_relocation_assembly (
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  std::shared_ptr<const relocation_assembly_staging_t> staging)
 {
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
+    bool threw = false;
     try {
         std::optional<stateful::object_ref_t> actor_join_target_spot;
-        if (staging.targets.size () == 1
-            && staging.targets.front ().kind == stateful::object_kind_t::actor
+        if (staging->targets.size () == 1
+            && staging->targets.front ().kind == stateful::object_kind_t::actor
             && _actor_join_authority_spot_resolver) {
-            const auto spot = _actor_join_authority_spot_resolver (staging.targets.front ());
+            const auto spot = _actor_join_authority_spot_resolver (staging->targets.front ());
             if (spot) {
                 actor_join_target_spot = stateful::object_ref_t{stateful::object_kind_t::user_spot,
                                                                 std::get<1> (*spot),
                                                                 std::get<2> (*spot),
                                                                 0,
-                                                                staging.targets.front ().mesh_name,
-                                                                staging.targets.front ().node_id};
+                                                                staging->targets.front ().mesh_name,
+                                                                staging->targets.front ().node_id};
             }
         }
-        restored = staging.targets.size () == 1
-                     ? _objects.restore_relocation (
-                         staging.frozen.front (), staging.targets.front (),
-                         staging.restore_identity, {}, std::move (actor_join_target_spot))
-                     : _objects.restore_relocation_aggregate (staging.frozen, staging.targets,
-                                                              staging.restore_identity, {});
+        restored =
+          co_await (staging->targets.size () == 1
+                      ? _objects.restore_relocation (
+                          staging->frozen.front (), staging->targets.front (),
+                          staging->restore_identity, {}, std::move (actor_join_target_spot))
+                      : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
+                                                               staging->restore_identity, {}));
     }
     catch (...) {
-        discard_relocation_assembly_staging (pending, staging);
-        reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
-        return false;
+        threw = true;
     }
-    if (restored == stateful::stateful_error_t::none
-        || restored == stateful::stateful_error_t::already_exists)
-        return true;
-    discard_relocation_assembly_staging (pending, staging);
-    reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
-    return false;
+    if (!threw
+        && (restored == stateful::stateful_error_t::none
+            || restored == stateful::stateful_error_t::already_exists))
+        co_return true;
+    discard_relocation_assembly_staging (*pending, *staging);
+    reply_relocation_assembly_failure (*pending, protocol::framework_error_code::requestFailed);
+    co_return false;
 }
 
 void public_host_runtime_t::activate_relocation_assembly (
@@ -4043,13 +4036,22 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
         }
     }
     // Factory/restore failures are staging failures, not payload-integrity
-    // failures; the helper tears down every queue it registered first.
-    if (!restore_relocation_assembly (pending, staging)) {
-        rollback_actor_join_recoveries (consumed);
-        return;
-    }
-
-    activate_relocation_assembly (key, pending, std::move (staging));
+    // failures; the helper tears down every queue it registered first. The
+    // restore completes when its application materialization does; this
+    // pump continues meanwhile and the attempt activates from that completion.
+    auto held_pending = std::make_shared<pending_relocation_assembly_t> (std::move (pending));
+    auto held_staging = std::make_shared<relocation_assembly_staging_t> (std::move (staging));
+    auto restoring =
+      std::make_shared<task_t<bool>> (restore_relocation_assembly (held_pending, held_staging));
+    detail::observe_task_completion (
+      *restoring, [self = shared_from_this (), restoring, key, held_pending, held_staging,
+                   consumed = std::move (consumed)] (const result_t<bool> &restored) mutable {
+          if (!restored || !restored.value ()) {
+              self->rollback_actor_join_recoveries (consumed);
+              return;
+          }
+          self->activate_relocation_assembly (key, *held_pending, std::move (*held_staging));
+      });
 }
 
 bool public_host_runtime_t::register_relocation_target_queue (
@@ -4690,18 +4692,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               sealed->second.consumed = true;
                       })
                       .get ();
-                    /* Commit and abort both open the held pushes: commit to the
-                     * target route, abort to the source route (Session-Actor
-                     * binding §8.1). */
-                    for (auto &settle : admission.retained_outbound) {
-                        if (!settle)
-                            continue;
-                        try {
-                            settle (true);
-                        }
-                        catch (...) {
-                        }
-                    }
                     continue;
                 }
 
@@ -5587,9 +5577,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 }
 
 bool public_host_runtime_t::dispatch_bound_session_send (
-  const mesh::service_mailbox_record_t &mailbox_record,
-  std::function<void ()> retain_mailbox_reservation,
-  std::function<void ()> release_mailbox_reservation)
+  const mesh::service_mailbox_record_t &mailbox_record)
 {
     if (mailbox_record.parts.size () != 2)
         return false;
@@ -5605,45 +5593,24 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     const auto application =
       protocol::decode_application_payload (mailbox_record.parts.back (), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
-    const auto execute_delivery = [operations,
-                                   record] (std::vector<zlink::message_t> admitted_parts) {
-        if (operations.capture_send) {
-            auto capability = operations.capture_send (record);
-            return capability ? (*capability) (std::move (admitted_parts))
-                              : stateful::stateful_error_t::conflict;
-        }
-        return operations.send (record, std::move (admitted_parts));
-    };
-    auto retained_delivery =
-      [execute_delivery, parts,
-       release = std::move (release_mailbox_reservation)] (bool should_deliver) mutable {
-          if (should_deliver) {
-              try {
-                  (void) execute_delivery (std::move (parts));
-              }
-              catch (...) {
-              }
-          }
-          if (release) {
-              try {
-                  release ();
-              }
-              catch (...) {
-              }
-          }
-      };
-    const auto admitted = _sessions.admit_outbound (
+    std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
+    const auto admitted = _sessions.capture_outbound (
       record.actor.actor_id, record.actor.object_generation, record.expected_binding_generation,
-      retain_mailbox_reservation
-        ? stateful::stream_retained_outbound_t (std::move (retained_delivery))
-        : stateful::stream_retained_outbound_t{});
-    if (admitted.error != stateful::stateful_error_t::none)
-        return false;
-    if (admitted.kind == stateful::stream_outbound_admission_kind_t::retained) {
-        retain_mailbox_reservation ();
-        return true;
-    }
-    return execute_delivery (std::move (parts)) == stateful::stateful_error_t::none;
+      [&] {
+          if (operations.capture_send) {
+              auto capability = operations.capture_send (record);
+              if (!capability)
+                  return false;
+              delivery = std::move (*capability);
+          } else {
+              delivery = [operations, record] (std::vector<zlink::message_t> payload) {
+                  return operations.send (record, std::move (payload));
+              };
+          }
+          return true;
+      });
+    return admitted == stateful::stateful_error_t::none
+           && delivery (std::move (parts)) == stateful::stateful_error_t::none;
 }
 
 task_t<std::size_t> public_host_runtime_t::dispatch_ready (
@@ -5911,8 +5878,7 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
-                (void) dispatch_bound_session_send (mailbox_record, retain_mailbox_reservation,
-                                                    release_mailbox_reservation);
+                (void) dispatch_bound_session_send (mailbox_record);
                 ++count;
                 if (!release_state->retained (index))
                     release_mailbox_reservation ();
@@ -6057,41 +6023,18 @@ bool public_host_runtime_t::dispatch_application_owner (
     return true;
 }
 
-bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::milliseconds timeout,
-                                                        bool accept_application_receive) noexcept
+bool public_host_runtime_t::wait_for_dispatch_activity (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
 {
     try {
-        if (accept_application_receive) {
-            if (_local_dispatch_completion_lane
-                  .run ([&] { return !_local_application_dispatches.empty (); })
-                  .get ())
-                return true;
-        }
-        auto next = _relocation_wire->next_activity ();
-        _relocation_session_terminal_lane
-          .run ([&] {
-              const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
-                  if (!next || deadline < *next)
-                      next = deadline;
-              };
-              for (const auto &[key, assembly] : _relocation_assemblies)
-                  include (assembly.expires_at);
-              for (const auto &[key, attempt] : _relocation_target_attempts) {
-                  if (!attempt.target_finalized
-                      && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
-                      include (attempt.next_finalize_at);
-              }
-              for (const auto &[key, seal] : _session_seal_terminals) {
-                  if (!seal.consumed)
-                      include (seal.expires_at);
-              }
-          })
-          .get ();
-        if (next) {
+        if (next_activity) {
             const auto now = std::chrono::steady_clock::now ();
-            const auto remaining = *next <= now
-                                     ? std::chrono::milliseconds::zero ()
-                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+            const auto remaining =
+              *next_activity <= now
+                ? std::chrono::milliseconds::zero ()
+                : std::chrono::ceil<std::chrono::milliseconds> (*next_activity - now);
             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
@@ -6100,6 +6043,33 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
     catch (...) {
         return false;
     }
+}
+
+task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
+public_host_runtime_t::next_dispatch_activity_async ()
+{
+    const auto local_pending = co_await _local_dispatch_completion_lane.run_task (
+      [this] { return !_local_application_dispatches.empty (); });
+    auto next = _relocation_wire->next_activity ();
+    co_return std::make_pair (
+      local_pending, co_await _relocation_session_terminal_lane.run_task ([this, next] () mutable {
+          const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
+              if (!next || deadline < *next)
+                  next = deadline;
+          };
+          for (const auto &[key, assembly] : _relocation_assemblies)
+              include (assembly.expires_at);
+          for (const auto &[key, attempt] : _relocation_target_attempts) {
+              if (!attempt.target_finalized
+                  && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+                  include (attempt.next_finalize_at);
+          }
+          for (const auto &[key, seal] : _session_seal_terminals) {
+              if (!seal.consumed)
+                  include (seal.expires_at);
+          }
+          return next;
+      }));
 }
 
 void public_host_runtime_t::signal_dispatch_activity () noexcept

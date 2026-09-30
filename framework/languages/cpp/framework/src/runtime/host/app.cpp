@@ -65,6 +65,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <typeindex>
 #include <typeinfo>
 #include <utility>
@@ -2182,121 +2183,252 @@ void app_t::_apply_zlink_framework ()
                                                      error.what ());
               }
           });
+        auto deliver_relay =
+          [application_mesh, actor_gateway_runtime] (
+            actor_ref_t actor, detail::stream_header_t header, zlink::message_t payload,
+            std::optional<detail::bound_session_relay_source_t> bound_session_source,
+            std::optional<runtime::stateful::stream_dispatch_t> dispatch,
+            std::chrono::milliseconds request_timeout,
+            std::shared_ptr<runtime::host::public_host_runtime_t> session_owner_runtime) mutable
+          -> task_t<std::optional<zlink::message_t>> {
+            detail::session_ingress_completion_t ingress;
+            auto routed_actor = actor;
+            runtime::protocol::actor_route_fence_t stale_route;
+            std::optional<zlink::routing_id_t> session_owner;
+            if (bound_session_source) {
+                auto &sessions = session_owner_runtime->sessions ();
+                ingress.arm (sessions, *dispatch);
+                session_owner = application_mesh->routing_id ();
+                const auto completion_admitted =
+                  session_owner
+                    ? actor_gateway_runtime.begin_session_relay_completion (
+                        actor, *session_owner, bound_session_source->session_rid,
+                        bound_session_source->binding_generation, dispatch->inbound_sequence)
+                    : result_t<void>::failure (framework_error_kind_t::not_found,
+                                               "bound Session owner identity is unavailable");
+                if (!completion_admitted) {
+                    co_return result_t<std::optional<zlink::message_t>>::failure (
+                      completion_admitted.error_kind (),
+                      completion_admitted.error () != nullptr
+                        ? completion_admitted.error ()->what ()
+                        : "bound Session relay completion was not admitted");
+                }
+                routed_actor = detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (dispatch->binding.actor.node_id),
+                  std::string (detail::actor_ref_access_t::actor_type (actor)),
+                  dispatch->binding.actor.key, dispatch->binding.actor.object_generation);
+                stale_route = runtime::protocol::actor_route_fence_t{
+                  dispatch->binding.actor.key,
+                  dispatch->binding.actor.object_generation,
+                  zlink::routing_id_t::from (dispatch->binding.actor.node_id).to_bytes (),
+                  dispatch->binding.target_node_generation,
+                  dispatch->binding.actor.authority_owner_generation,
+                  dispatch->binding.owner_lease_generation};
+                bound_session_source->session_sequence = dispatch->inbound_sequence;
+            }
+            const auto admitted_source = bound_session_source;
+            //  Spec 20-session-actor-dispatch §3/§7 — the admitted ingress
+            //  and relay-sequence fences must complete exactly once even
+            //  when the application handler throws. Skipping the tail
+            //  leaves the owner's recorded sequence behind, so every later
+            //  request on this binding is rejected with "bound Session
+            //  relay completion is not current or next".
+            std::exception_ptr relay_failure;
+            std::optional<zlink::message_t> relayed;
+            try {
+                if (header.kind () == detail::stream_message_kind_t::request
+                    && request_timeout <= std::chrono::milliseconds::zero ())
+                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                 "bound Session request original deadline elapsed");
+                relayed = co_await application_mesh->relay_application_actor (
+                  routed_actor, header, payload, request_timeout, true,
+                  std::move (bound_session_source), std::move (stale_route));
+            }
+            catch (...) {
+                relay_failure = std::current_exception ();
+            }
+            const auto completed = ingress.complete ();
+            result_t<void> observed = result_t<void>::success ();
+            if (admitted_source) {
+                observed =
+                  session_owner
+                    ? actor_gateway_runtime.complete_session_relay (
+                        actor, *session_owner, admitted_source->session_rid,
+                        admitted_source->binding_generation, admitted_source->session_sequence)
+                    : result_t<void>::failure (framework_error_kind_t::not_found,
+                                               "bound Session owner identity is unavailable");
+            }
+            //  The original application error stays the single terminal;
+            //  fence completion above ran regardless, and its own failure
+            //  is reported only when the relay itself succeeded.
+            if (relay_failure)
+                std::rethrow_exception (relay_failure);
+            if (completed != runtime::stateful::stateful_error_t::none) {
+                co_return result_t<std::optional<zlink::message_t>>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "bound Session ingress completion lost its exact fence");
+            }
+            if (!observed) {
+                co_return result_t<std::optional<zlink::message_t>>::failure (
+                  observed.error_kind (), observed.error () != nullptr
+                                            ? observed.error ()->what ()
+                                            : "bound Session ingress high-water was not published");
+            }
+            co_return relayed;
+        };
         actor_gateway_runtime.on_relay (
-          [application_mesh, actor_gateway_runtime, request_timeout] (
+          [application_mesh, actor_gateway_runtime, deliver_relay,
+           dispatch_options = options.configure_dispatch (), request_timeout] (
             const actor_ref_t &actor, actor_context_t, const detail::stream_header_t &header,
             const zlink::message_t &payload,
-            std::optional<detail::bound_session_relay_source_t> bound_session_source) mutable
-          -> task_t<std::optional<zlink::message_t>> {
-              detail::session_ingress_completion_t ingress;
-              auto routed_actor = actor;
-              runtime::protocol::actor_route_fence_t stale_route;
-              std::optional<zlink::routing_id_t> session_owner;
-              if (bound_session_source) {
-                  auto &sessions = application_mesh->native_node ().sessions ();
-                  auto [admission, dispatch] = sessions.admit_inbound (
-                    bound_session_source->session_rid.to_hex (),
-                    bound_session_source->binding_generation,
-                    std::string (actor.actor_id ().value ()),
-                    bound_session_source->session_sequence, request_timeout);
-                  if (admission != runtime::stateful::stateful_error_t::none || !dispatch) {
-                      co_return result_t<std::optional<zlink::message_t>>::failure (
-                        admission == runtime::stateful::stateful_error_t::moving
-                          ? framework_error_kind_t::unavailable
-                          : framework_error_kind_t::invalid_operation,
-                        "bound Session ingress was not admitted by the relocation barrier");
-                  }
-                  ingress.arm (sessions, *dispatch);
-                  session_owner = application_mesh->routing_id ();
-                  const auto completion_admitted =
-                    session_owner
-                      ? actor_gateway_runtime.begin_session_relay_completion (
-                          actor, *session_owner, bound_session_source->session_rid,
-                          bound_session_source->binding_generation, dispatch->inbound_sequence)
-                      : result_t<void>::failure (framework_error_kind_t::not_found,
-                                                 "bound Session owner identity is unavailable");
-                  if (!completion_admitted) {
-                      co_return result_t<std::optional<zlink::message_t>>::failure (
-                        completion_admitted.error_kind (),
-                        completion_admitted.error () != nullptr
-                          ? completion_admitted.error ()->what ()
-                          : "bound Session relay completion was not admitted");
-                  }
-                  routed_actor = detail::actor_ref_access_t::make (
-                    node_rid_t::from_string (dispatch->binding.actor.node_id),
-                    std::string (detail::actor_ref_access_t::actor_type (actor)),
-                    dispatch->binding.actor.key, dispatch->binding.actor.object_generation);
-                  stale_route = runtime::protocol::actor_route_fence_t{
-                    dispatch->binding.actor.key,
-                    dispatch->binding.actor.object_generation,
-                    zlink::routing_id_t::from (dispatch->binding.actor.node_id).to_bytes (),
-                    dispatch->binding.target_node_generation,
-                    dispatch->binding.actor.authority_owner_generation,
-                    dispatch->binding.owner_lease_generation};
-                  bound_session_source->session_sequence = dispatch->inbound_sequence;
+            std::optional<detail::bound_session_relay_source_t> source,
+            std::chrono::milliseconds timeout) mutable -> task_t<std::optional<zlink::message_t>> {
+              using reply_t = std::optional<zlink::message_t>;
+              const auto budget =
+                timeout.count () > 0
+                  ? timeout
+                  : std::chrono::duration_cast<std::chrono::milliseconds> (request_timeout);
+              const auto deadline = std::chrono::steady_clock::now () + budget;
+              if (!source)
+                  co_return co_await deliver_relay (actor, header, payload, source, {}, budget, {});
+              std::shared_ptr<detail::task_completion_source_t<reply_t>> completion;
+              std::optional<runtime::foundation::call_id_t> operation;
+              auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
+              auto &native = *session_owner_runtime;
+              const bool request = header.kind () == detail::stream_message_kind_t::request;
+              auto retain = [&] () -> runtime::stateful::stream_relay_delivery_t {
+                  completion = std::make_shared<detail::task_completion_source_t<reply_t>> ();
+                  operation =
+                    request
+                      ? native.transport ().register_local_operation (
+                          deadline,
+                          [completion] (runtime::foundation::operation_terminal_t terminal,
+                                        const std::vector<std::uint8_t> &) {
+                              completion->complete (result_t<reply_t>::failure (
+                                terminal == runtime::foundation::operation_terminal_t::timed_out
+                                  ? framework_error_kind_t::deadline_exceeded
+                                  : framework_error_kind_t::unavailable,
+                                "bound Session relay request did not complete within its original "
+                                "operation"));
+                          })
+                      : std::optional<runtime::foundation::call_id_t>{};
+
+                  if (request && !operation)
+                      completion->complete (result_t<reply_t>::failure (
+                        framework_error_kind_t::unavailable,
+                        "bound Session request operation is unavailable"));
+                  auto drop = [header, source, actor,
+                               dispatch_options] (message_flow_reason_t reason) {
+                      detail::message_flow_tracer_t (dispatch_options)
+                        .trace (
+                          message_flow_outcome_t::dropped, message_flow_result_t::dropped, [&] {
+                              message_flow_event_t event{};
+                              event.outcome = message_flow_outcome_t::dropped;
+                              event.surface = dispatch_error_surface_t::stream_session;
+                              event.message_kind = dispatch_message_kind_t::send;
+                              event.packet_name = std::string (header.packet_name ());
+                              event.actor_id = std::string (actor.actor_id ().value ());
+                              event.stream_session_id = source->session_rid.to_hex ();
+                              event.reason = reason;
+                              if (header.correlation_id ())
+                                  event.correlation_id = std::string (*header.correlation_id ());
+                              if (header.flow_id ())
+                                  event.flow_id = std::string (*header.flow_id ());
+                              event.flow_origin = header.flow_origin ();
+                              return event;
+                          });
+                  };
+                  return [application_mesh, session_owner_runtime, deliver_relay, actor, header,
+                          payload, source, deadline, budget, request, operation, completion, drop,
+                          dispatch_options] (
+                           std::optional<runtime::stateful::stream_dispatch_t> dispatch,
+                           message_flow_reason_t reason,
+                           std::optional<result_t<void>> failure) mutable -> task_t<void> {
+                      if (failure) {
+                          detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
+                              message_dispatch_error_event_t event{};
+                              event.surface = dispatch_error_surface_t::stream_session;
+                              event.message_kind = request ? dispatch_message_kind_t::request
+                                                           : dispatch_message_kind_t::send;
+                              event.reason = detail::dispatch_reason_from_error (failure->error ());
+                              event.action = dispatch_error_action_t::drop;
+                              event.packet_name = std::string (header.packet_name ());
+                              event.actor_id = std::string (actor.actor_id ().value ());
+                              event.source_rid = source->session_rid.to_hex ();
+                              if (header.correlation_id ())
+                                  event.correlation_id = std::string (*header.correlation_id ());
+                              if (header.flow_id ())
+                                  event.flow_id = std::string (*header.flow_id ());
+                              event.flow_origin = header.flow_origin ();
+                              if (failure->error ())
+                                  event.exception = std::make_exception_ptr (*failure->error ());
+                              return event;
+                          });
+                          co_return;
+                      }
+                      auto &owner = *session_owner_runtime;
+                      if (!dispatch) {
+                          if (request && operation)
+                              (void) owner.transport ().fail_local_operation (
+                                *operation,
+                                runtime::foundation::operation_terminal_t::route_unavailable);
+                          else if (!request)
+                              drop (reason);
+                          else
+                              completion->complete (result_t<reply_t>::failure (
+                                framework_error_kind_t::unavailable,
+                                "bound Session request operation is unavailable"));
+                          co_return;
+                      }
+                      const auto remaining =
+                        request
+                            && (!operation
+                                || !owner.transport ().unregister_local_operation (*operation))
+                          ? std::chrono::milliseconds::zero ()
+                          : std::chrono::duration_cast<std::chrono::milliseconds> (
+                              deadline - std::chrono::steady_clock::now ());
+                      auto execute =
+                        std::make_shared<std::remove_cvref_t<decltype (deliver_relay)>> (
+                          deliver_relay);
+                      auto delivery = std::make_shared<task_t<reply_t>> (
+                        (*execute) (actor, header, payload, source, dispatch,
+                                    request ? remaining : budget, session_owner_runtime));
+                      detail::observe_task_completion (
+                        *delivery, [execute, delivery, completion, request,
+                                    drop] (const result_t<reply_t> &result) {
+                            if (request)
+                                completion->complete (result);
+                            else {
+                                if (!result)
+                                    drop (detail::message_flow_reason_from_error (result.error ()));
+                                completion->complete (result_t<reply_t>::success (std::nullopt));
+                            }
+                        });
+                      if (!request)
+                          (void) co_await completion->task ();
+                      co_return;
+                  };
+              };
+              auto [admission, dispatch] = native.sessions ().admit_inbound (
+                source->session_rid.to_hex (), source->binding_generation,
+                std::string (actor.actor_id ().value ()), source->session_sequence,
+                std::chrono::milliseconds{0}, std::move (retain));
+              if (admission != runtime::stateful::stateful_error_t::none) {
+                  if (operation)
+                      (void) native.transport ().unregister_local_operation (*operation);
+                  co_return result_t<reply_t>::failure (framework_error_kind_t::invalid_operation,
+                                                        "bound Session ingress was not admitted");
               }
-              const auto admitted_source = bound_session_source;
-              //  Spec 20-session-actor-dispatch §3/§7 — the admitted ingress
-              //  and relay-sequence fences must complete exactly once even
-              //  when the application handler throws. Skipping the tail
-              //  leaves the owner's recorded sequence behind, so every later
-              //  request on this binding is rejected with "bound Session
-              //  relay completion is not current or next".
-              std::exception_ptr relay_failure;
-              std::optional<zlink::message_t> relayed;
-              try {
-                  relayed = co_await (
-                    stale_route.owner_lease_generation == 0
-                      ? application_mesh->relay_application_actor (routed_actor, header, payload,
-                                                                   request_timeout, true,
-                                                                   std::move (bound_session_source))
-                      : application_mesh->relay_application_actor (
-                          routed_actor,
-                          runtime::messaging::envelope_header_t{
-                            .kind = header.kind () == detail::stream_message_kind_t::send
-                                      ? runtime::messaging::message_kind_t::command
-                                      : runtime::messaging::message_kind_t::request,
-                            .channel_name = "actor",
-                            .message_name = std::string (header.packet_name ()),
-                            .content_type =
-                              std::string (detail::stream_content_type (header.codec ())),
-                            .metadata = header.metadata ().values ()},
-                          payload, request_timeout, zlink::routing_id_t::from (std::uint32_t{0}),
-                          stale_route, 0, runtime::protocol::wire_operation_id_t{}, 0, true,
-                          std::move (bound_session_source)));
+              if (!dispatch) {
+                  if (request)
+                      co_return co_await completion->task ();
+                  co_return std::nullopt;
               }
-              catch (...) {
-                  relay_failure = std::current_exception ();
-              }
-              const auto completed = ingress.complete ();
-              result_t<void> observed = result_t<void>::success ();
-              if (admitted_source) {
-                  observed =
-                    session_owner
-                      ? actor_gateway_runtime.complete_session_relay (
-                          actor, *session_owner, admitted_source->session_rid,
-                          admitted_source->binding_generation, admitted_source->session_sequence)
-                      : result_t<void>::failure (framework_error_kind_t::not_found,
-                                                 "bound Session owner identity is unavailable");
-              }
-              //  The original application error stays the single terminal;
-              //  fence completion above ran regardless, and its own failure
-              //  is reported only when the relay itself succeeded.
-              if (relay_failure)
-                  std::rethrow_exception (relay_failure);
-              if (completed != runtime::stateful::stateful_error_t::none) {
-                  co_return result_t<std::optional<zlink::message_t>>::failure (
-                    framework_error_kind_t::internal_failure,
-                    "bound Session ingress completion lost its exact fence");
-              }
-              if (!observed) {
-                  co_return result_t<std::optional<zlink::message_t>>::failure (
-                    observed.error_kind (),
-                    observed.error () != nullptr
-                      ? observed.error ()->what ()
-                      : "bound Session ingress high-water was not published");
-              }
-              co_return relayed;
+              co_return co_await deliver_relay (
+                actor, header, payload, source, dispatch,
+                std::chrono::duration_cast<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ()),
+                session_owner_runtime);
           });
         actor_gateway_runtime.offload_session_relay ();
         actor_gateway_runtime.on_disconnect (
@@ -3876,11 +4008,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             waiters = std::move (state.termination_operation.waiters);
             state.termination_operation.waiters.clear ();
         }
+        state.runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
     }
     for (auto &waiter : waiters) {
         waiter->complete (terminal);
     }
-    state.runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
 }
 
 void app_t::stop () noexcept

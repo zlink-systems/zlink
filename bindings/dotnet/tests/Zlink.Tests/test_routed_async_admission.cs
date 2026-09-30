@@ -37,6 +37,43 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
+    public void disconnect_rid_projects_not_found_as_connect_exception()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        using var dealer = context.CreateDealerSocket();
+        RoutingId expectedRid = CoreTestSupport.RoutingIdUtf8(
+            "dotnet-disconnect-result-peer");
+        dealer.SetRoutingId(expectedRid);
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-disconnect-result");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+
+        using Message probe = Message.From("route-prime");
+        dealer.Send().Message(probe).Submit();
+        using Received received = RecvWithRetry(router);
+        RoutingId peerRid = received.RoutingId!.Value;
+        Assert.Equal(expectedRid, peerRid);
+
+        using ISocketMonitor monitor = router.MonitorOpen(
+            SocketEvent.Disconnected);
+        router.DisconnectRid(peerRid);
+        Assert.Equal(1, ZlinkPoll.Poll(new[] { monitor }, 5000));
+        SocketMonitorEvent disconnected = monitor.Recv(RecvFlags.DontWait)
+            ?? throw new TimeoutException("Poll reported no disconnect event.");
+        Assert.Equal(MonitorEventType.Disconnected, disconnected.Event);
+
+        ZlinkConnectException error = Assert.Throws<ZlinkConnectException>(
+            () => router.DisconnectRid(peerRid));
+        Assert.Equal(605, (int)error.Result);
+        Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, error.Result);
+    }
+
+    [Fact]
     public void ownerless_async_send_fails_fast_when_writable_is_required()
     {
         if (!CoreTestSupport.IsNativeAvailable())

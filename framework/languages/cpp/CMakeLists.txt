@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(zlink_framework_cpp VERSION 0.26.0 LANGUAGES C CXX)
+add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
 
@@ -58,9 +59,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.11.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.12.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.11.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.12.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -1522,6 +1523,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
       -D ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
   endif()
+  if(CMAKE_PREFIX_PATH)
+    # Preserve the prefix list across CTest command argument expansion.
+    string(REPLACE ";" "\;" tooling_cmake_prefix_path
+      "${CMAKE_PREFIX_PATH}")
+    list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
+      -D
+      "ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_PREFIX_PATH=${tooling_cmake_prefix_path}")
+  endif()
   foreach(tooling_dependency IN ITEMS
       protobuf_DIR
       absl_DIR
@@ -1597,6 +1606,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_relocation_seal_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
+    "framework-unit;framework-contract;framework-actor;stream;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_relocation_seal_contract)
+  target_include_directories(test_cpp_framework_relocation_seal_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_session_seal_relay
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_session_seal_relay.cpp
+    "framework-unit;framework-contract;framework-actor;stream;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_session_seal_relay)
+  target_include_directories(test_cpp_framework_session_seal_relay PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(reconcile_case source no-commit target indeterminate)
     zlink_framework_cpp_add_test(
@@ -1895,6 +1920,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
   add_zlink_framework_test(
+    test_cpp_framework_route_client_channel_routing
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
+    "framework-contract;framework-regression;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_route_client_channel_routing)
+  add_zlink_framework_test(
     test_cpp_framework_channel_no_eligible_member
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_no_eligible_member.cpp
     "framework-unit;framework-regression;channel;messaging")
@@ -2060,6 +2090,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_executable(test_cpp_framework_locations_redis
       tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis
       GTest::gtest_main)

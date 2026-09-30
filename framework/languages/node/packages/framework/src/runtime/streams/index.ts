@@ -79,7 +79,11 @@ import {
   type ZLinkStreamSessionNodeRuntimeOptions as ZLinkStreamSessionNodeRuntimeCoreOptions,
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
-import type { ZLinkActorRouteCommitOptions } from './stream-binding-runtime-ports';
+import type {
+  ZLinkActorRouteCommitOptions,
+  ZLinkSessionBindingConfirmationOptions,
+  ZLinkSessionBindingIdentity
+} from './stream-binding-runtime-ports';
 export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
@@ -99,6 +103,7 @@ export type {
 } from './bound-session-service';
 
 export interface ZLinkStreamBindingRuntimeOptions {
+  readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly transport?: ZLinkBoundSessionTransport;
   readonly messageFactory?: ZLinkStreamMessageFactory;
   readonly streamPayloadCodec?: ZLinkStreamPayloadCodec;
@@ -121,7 +126,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
     signal?: AbortSignal,
-    options?: { readonly waitForAcknowledgement?: boolean }
+    options?: ZLinkSessionBindingConfirmationOptions
   ) => Promise<void>;
   readonly errorSink?: () =>
     | {
@@ -274,10 +279,7 @@ export class ZLinkStreamRuntimeManager {
           node.nativeSessionServices.push(service);
           const bindingOwner = actorSessionBindingRuntimeOwner(this.options.bindingRuntime);
           registerServiceSessionBindingIngressPort(service, {
-            actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid),
-            retainOutbound: (actorId, delivery) =>
-              bindingOwner.retainRelocationOutbound(actorId, delivery),
-            clearOutbound: (actorId, error) => bindingOwner.clearRelocation(actorId, error)
+            actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid)
           });
           nativeSessionRoutes.set(meshName, {
             service,
@@ -373,6 +375,7 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
     const bindingRuntime =
       options.bindingRuntime ??
       new ZLinkStreamBindingRuntime({
+        dispatchErrors: options.dispatchErrors,
         flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
       });
     super(
@@ -396,6 +399,7 @@ export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntime
     const bindingRuntime =
       options.bindingRuntime ??
       new ZLinkStreamBindingRuntime({
+        dispatchErrors: options.dispatchErrors,
         flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
       });
     super({
@@ -424,7 +428,7 @@ export class ZLinkStreamBindingRuntime {
     this.routes = new ZLinkActorSessionBindingRegistry<
       DefaultZLinkSessionContext,
       DefaultZLinkSessionActor
-    >(4096, 4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000, runtimeOptions.errorSink);
+    >(4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000, runtimeOptions.errorSink);
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
     this.boundSessions = new ZLinkBoundSessionService(
@@ -446,19 +450,11 @@ export class ZLinkStreamBindingRuntime {
       actorSessionLifecycle
     );
     registerActorSessionBindingRuntimeOwner(this, {
-      actorSlot: async (actorId, sessionRid) => {
-        const route = await this.routes.route(actorId);
-        return route !== undefined && route.sessionIdentity === sessionRid
-          ? route.actorSlot
-          : undefined;
-      },
+      actorSlot: async (actorId, sessionRid) =>
+        (await this.routes.routeForSessionBinding(actorId, sessionRid))?.actorSlot,
       sealRelocation: (claim, expected, signal) =>
         this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
-      retainRelocationOutbound: (actorId, operation, sealId) =>
-        this.routes.retainRelocationOutbound(actorId, operation, sealId),
-      discardRelocationOutbound: (actorId, sealId, error) =>
-        this.routes.discardRelocationOutbound(actorId, sealId, error),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
       clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
@@ -741,6 +737,14 @@ export class ZLinkStreamBindingRuntime {
 
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {
     await this.boundSessions.disconnectBoundSession(actorId, signal);
+  }
+
+  async closeSessionBinding(
+    actorId: string,
+    expected: ZLinkSessionBindingIdentity,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.boundSessions.closeSessionBinding(actorId, expected, signal);
   }
 
   async relay(

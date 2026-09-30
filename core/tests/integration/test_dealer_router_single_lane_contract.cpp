@@ -2208,6 +2208,11 @@ void test_sl_flow_rr_completion_control_progresses_under_pause ()
 void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
 {
     dr_fixture_t fixture ("inproc://sl-flow-normal-kinds");
+    const int no_token_deadline = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (fixture.dealer, ZLINK_OPT_SNDTIMEO,
+                        &no_token_deadline, sizeof (no_token_deadline)));
     const uint64_t hwm = 256;
     const uint64_t one_pending_request = 1;
     TEST_ASSERT_EQUAL_INT (

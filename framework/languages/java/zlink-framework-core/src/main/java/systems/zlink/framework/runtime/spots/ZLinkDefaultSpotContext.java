@@ -159,11 +159,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         return timerContext.addTimer(name, period, handlerType, options);
     }
 
-    void closeTimers() {
-        timerContexts.forEach(DefaultSpotContext::closeTimers);
-        actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
+    CompletionStage<Void> closeTimersAsync() {
+        List<CompletableFuture<?>> closing = new ArrayList<>();
+        timerContexts.forEach(
+                context -> closing.add(context.closeTimersAsync().toCompletableFuture()));
+        actorTimers
+                .values()
+                .forEach(timer -> closing.add(timer.closeAsync().toCompletableFuture()));
         actorTimers.clear();
-        serials.close();
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, serials.closeAsync()))
+                .thenCompose(stage -> stage);
     }
 
     @Override
@@ -173,6 +181,18 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     void closeHandlerInstances() {
         handlerInstances.close();
+    }
+
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                backendSpot.close();
+                            }
+                        });
     }
 
     void sealTimerAdmission() {
@@ -198,8 +218,15 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     @Override
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(payloadBytes, operation, null);
+    }
+
+    CompletionStage<Void> enqueueDispatch(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         host.ensureOwnerAdmissionOpen();
-        return enqueueAccepted(payloadBytes, operation);
+        return enqueueAccepted(payloadBytes, operation, admission);
     }
 
     /**
@@ -212,11 +239,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     private CompletionStage<Void> enqueueAccepted(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueAccepted(payloadBytes, operation, null);
+    }
+
+    private CompletionStage<Void> enqueueAccepted(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
                 () ->
                         runApplicationExecution(
-                                null, false, () -> host.runEntryDispatch(this, operation)));
+                                null, false, () -> host.runEntryDispatch(this, operation)),
+                admission);
     }
 
     @Override
@@ -224,7 +259,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
         return infrastructureQueue.enqueueWithPayloadBytes(
-                0, () -> host.runEntryDispatch(this, operation));
+                0, () -> host.runEntryDispatch(this, operation), null);
     }
 
     @Override
@@ -602,11 +637,18 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return timers.add(name, period, handlerType, options);
     }
 
-    void closeTimers() {
-        timers.close();
-        actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
+    CompletionStage<Void> closeTimersAsync() {
+        List<CompletableFuture<?>> closing = new ArrayList<>();
+        closing.add(timers.closeAsync().toCompletableFuture());
+        actorTimers
+                .values()
+                .forEach(registry -> closing.add(registry.closeAsync().toCompletableFuture()));
         actorTimers.clear();
-        serials.close();
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, serials.closeAsync()))
+                .thenCompose(stage -> stage);
     }
 
     @Override
@@ -616,6 +658,18 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     void closeHandlerInstances() {
         handlerInstances.close();
+    }
+
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                backendSpot.close();
+                            }
+                        });
     }
 
     void sealTimerAdmission() {
@@ -773,15 +827,34 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueAcceptedDispatch(
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                null);
+    }
+
+    CompletionStage<Void> enqueueAcceptedDispatch(
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return serials.executeAcceptedSpotLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
                 yieldAllowed -> runApplicationExecution(null, yieldAllowed, operation),
-                relocationRelease);
+                relocationRelease,
+                admission);
     }
 
     CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.executeLifecycle(() -> runLifecycleExecution(operation));
+    }
+
+    CompletionStage<Void> enqueueJoinLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return serials.enqueueSpotLifecycleAdmission(() -> runLifecycleExecution(operation));
     }
 
     @Override
@@ -793,12 +866,29 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.awaitAllLanes(spotScope);
     }
 
+    void sealClosingAdmission() {
+        serials.sealClosingAdmission();
+    }
+
+    CompletionStage<Void> admitIngress(Supplier<CompletionStage<Void>> admission) {
+        return serials.admitIngress(admission);
+    }
+
+    boolean tryEnqueueSpot(Supplier<CompletionStage<Void>> operation) {
+        return serials.tryEnqueueSpot(operation);
+    }
+
     boolean isCurrentSpotTurn() {
         return serials.isCurrentSpotTurn();
     }
 
-    Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
-        return serials.relocationLanes();
+    CompletionStage<Map<String, ZLinkSerialExecutionQueue>> relocationLanesAsync(
+            List<String> participantActorIds) {
+        return serials.relocationLanesAsync(participantActorIds);
+    }
+
+    Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> captureSpotActiveTurnSealHandle() {
+        return serials.captureSpotActiveTurnSealHandle();
     }
 
     ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
@@ -875,7 +965,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> awaitRelocationReadySignal(
-            Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+            Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
             BooleanSupplier cancelled) {
         Objects.requireNonNull(claim, "claim");
         Objects.requireNonNull(cancelled, "cancelled");
@@ -1056,19 +1146,27 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
             return continued;
         }
-        Optional<ZLinkUserSpotRelocationBarrier.Seal> claimed;
+        CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claimed;
         try {
             claimed = Objects.requireNonNull(waiter.claim.get(), "relocation readiness claim");
         } catch (RuntimeException failure) {
             waiter.result.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
-        waiter.result.complete(claimed);
-        CompletionStage<Void> completed =
-                claimed.isPresent()
-                        ? CompletableFuture.completedFuture(null)
-                        : runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
-        return completed;
+        return claimed.thenCompose(
+                        result -> {
+                            waiter.result.complete(result);
+                            return result.isPresent()
+                                    ? CompletableFuture.completedFuture(null)
+                                    : runRelocationReadyCompletion(
+                                            ZLinkSpotRelocationReadyOutcome.CONTINUED);
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                waiter.result.completeExceptionally(failure);
+                            }
+                        });
     }
 
     private void pollRelocationReadyCancellation(RelocationReadyWaiter waiter) {
@@ -1118,13 +1216,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     private static final class RelocationReadyWaiter {
-        private final Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim;
+        private final Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>>
+                claim;
         private final BooleanSupplier cancelled;
         private final CompletableFuture<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
                 new CompletableFuture<>();
 
         RelocationReadyWaiter(
-                Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+                Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
                 BooleanSupplier cancelled) {
             this.claim = claim;
             this.cancelled = cancelled;

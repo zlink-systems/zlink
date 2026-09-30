@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -15,6 +16,8 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -43,6 +46,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -53,12 +57,14 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -91,6 +97,37 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<Void>> PUSH_TERMINAL =
             new AtomicReference<>();
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void canonicalJoinRejectsMissingLocalTargetAsUnavailable(boolean entry) {
+        var options =
+                options(
+                        TARGET_RID,
+                        "inproc://canonical-missing-target-" + UUID.randomUUID(),
+                        new ZLinkInMemoryLocationStore(),
+                        new InMemoryRelocationStore(),
+                        Duration.ofSeconds(1));
+        try (var host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            var spots = (ZLinkSpotRuntime) host.spotManager();
+            byte[] rid = TARGET_RID.toString().getBytes(StandardCharsets.UTF_8);
+            var fence = new ServiceWirePilotCodec.Fence("actor", 1L, rid, 1L, 1L, 1L);
+            var target = new ServiceWirePilotCodec.Fence("absent-spot", 1L, rid, 1L, 1L, 1L);
+            var join = new ServiceWirePilotCodec.ActorJoin28(1L, fence, entry, target, null);
+
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    spots.admitCanonicalActorJoin(join, SOURCE_RID)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertNull(spots.spotFor("absent-spot"));
+        }
+    }
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Scenario.class)
@@ -395,7 +432,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     sourceQueue.enqueueRelocatable(
                             actorRecord("B1"),
                             () -> fail("B1 must transfer instead of executing at source"),
-                            released::incrementAndGet);
+                            released::incrementAndGet,
+                            null);
 
             UUID relocationId = UUID.randomUUID();
             ZLinkActorJoinOperationId operationId = new ZLinkActorJoinOperationId(0x1111L, 0x2222L);
@@ -522,7 +560,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 fail(
                                                         "B2 must transfer instead of executing at"
                                                                 + " source"),
-                                        released::incrementAndGet);
+                                        released::incrementAndGet,
+                                        null);
                         link.b2Accepted.set(b2);
                         injectD1(endpoint, sourceDescriptor, targetDescriptor, sourceAuthority);
                     });
@@ -848,8 +887,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public void publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(Object spot) {
                         fail();
+
+                        return CompletableFuture.completedFuture(null);
                     }
 
                     @Override
@@ -873,8 +914,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public void discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(Object spot) {
                         fail();
+
+                        return CompletableFuture.completedFuture(null);
                     }
                 });
     }

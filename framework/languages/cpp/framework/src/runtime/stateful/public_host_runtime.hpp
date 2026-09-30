@@ -806,8 +806,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
       const std::function<void ()> &started,
       const std::function<void ()> &rejected);
-    bool wait_for_dispatch_activity (std::chrono::milliseconds timeout,
-                                     bool accept_application_receive = true) noexcept;
+    bool wait_for_dispatch_activity (
+      std::chrono::milliseconds timeout,
+      bool accept_application_receive,
+      std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
+    task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
+    next_dispatch_activity_async ();
     void signal_dispatch_activity () noexcept;
     bool prepare_actor_transfer (const actor_transfer_prepare_t &prepare,
                                  actor_transfer_token_t &token,
@@ -899,9 +903,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<void (const ready_record_t &,
                                 const receive_record_t &,
                                 std::vector<zlink::message_t>)> &dispatch);
-    bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record,
-                                      std::function<void ()> retain_mailbox_reservation = {},
-                                      std::function<void ()> release_mailbox_reservation = {});
+    bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
     std::function<bool ()> _flow_capture;
@@ -1091,8 +1093,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
       const std::vector<protocol::relocation_object_t> &wire_objects) noexcept;
-    bool restore_relocation_assembly (const pending_relocation_assembly_t &pending,
-                                      const relocation_assembly_staging_t &staging);
+    task_t<bool>
+    restore_relocation_assembly (std::shared_ptr<const pending_relocation_assembly_t> pending,
+                                 std::shared_ptr<const relocation_assembly_staging_t> staging);
     void activate_relocation_assembly (const relocation_attempt_key_t &key,
                                        const pending_relocation_assembly_t &pending,
                                        relocation_assembly_staging_t staging);

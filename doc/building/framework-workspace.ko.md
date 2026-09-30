@@ -39,7 +39,7 @@ framework의 기본 빌드, CI, 배포는 **runtime library, unit test, `cross-l
 
 | 언어 | 판정 기준 | 사용자 모드 강제 | 저장소 밖으로 복사 |
 |---|---|---|---|
-| .NET | `samples/Directory.Build.props`가 `../src/Zlink.Framework/Zlink.Framework.csproj` 존재 여부로 판정 | `-p:ZLinkSampleUseLocalSource=false` | `scripts/local-package/dotnet/prepare-sample.sh <Sample> <dest>` (`.ps1` 동일) |
+| .NET | `props/ZLink.FrameworkReference.props`(samples와 perf가 함께 import)가 `../src/Zlink.Framework/Zlink.Framework.csproj` 존재 여부로 판정 | `-p:ZLinkSampleUseLocalSource=false` | `scripts/local-package/dotnet/prepare-sample.sh <Sample> <dest>` (`.ps1` 동일) |
 | Node.js | `samples/scripts/prepare-sample-dependencies.mjs`가 상위 workspace(`@zlink-systems/node-framework-workspace`)를 찾으면 개발자 모드 | `ZLINK_NODE_SAMPLES_PACKAGE_MODE=1` | 샘플 디렉터리(`samples/<Name>.Ts`)를 그대로 복사한 뒤 `npm install` |
 | Java/Kotlin | `samples/gradle/zlink-sample-dependencies.settings.gradle.kts`가 상위에서 framework `settings.gradle.kts`를 찾으면 개발자 모드 | `-Pzlink.samples.packageMode=true` (`-Pzlink.frameworkVersion`, `-Pzlink.bindingsVersion`으로 버전 지정) | `samples/` 디렉터리를 통째로 복사 |
 | C++ | 샘플 `CMakeLists.txt`가 `../../CMakeLists.txt`와 `framework/include/zlink/framework.hpp`를 찾으면 개발자 모드 | `-DZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE=ON` | `samples/<Name>/` 디렉터리를 복사. `vcpkg.json`과 `conanfile.txt`가 `zlink`·`zlink-framework`를 요구 |

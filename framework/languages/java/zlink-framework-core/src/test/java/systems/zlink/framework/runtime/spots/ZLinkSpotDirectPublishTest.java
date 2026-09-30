@@ -71,7 +71,8 @@ final class ZLinkSpotDirectPublishTest {
                                             .thenRun(
                                                     () ->
                                                             continuationIsCurrent.set(
-                                                                    queue.isCurrent())));
+                                                                    queue.isCurrent())),
+                            null);
 
             assertTrue(submitted.await(1, TimeUnit.SECONDS));
             admission.complete(null);

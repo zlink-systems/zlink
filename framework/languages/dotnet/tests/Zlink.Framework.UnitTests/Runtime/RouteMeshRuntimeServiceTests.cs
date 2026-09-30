@@ -369,7 +369,7 @@ public sealed class RouteMeshRuntimeServiceTests
                     : ZLinkFrameworkRuntimeState.Serving
             );
 
-        await Task.Run(fixture.StopMonitoring).WaitAsync(TimeSpan.FromSeconds(2));
+        await fixture.StopMonitoringAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(await observer.MoveNextAsync());
         Assert.Equal(ZLinkTopologyState.Stopped, observer.Current.Status.State);
@@ -394,7 +394,7 @@ public sealed class RouteMeshRuntimeServiceTests
 
         fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocating);
         var pending = observer.MoveNextAsync().AsTask();
-        await Task.Run(fixture.StopMonitoring).WaitAsync(TimeSpan.FromSeconds(2));
+        await fixture.StopMonitoringAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(await pending);
         while (observer.Current.Status.State != ZLinkTopologyState.Stopped)
@@ -966,7 +966,7 @@ public sealed class RouteMeshRuntimeServiceTests
         internal void SetHostState(ZLinkFrameworkRuntimeState state) =>
             _hostLifecycle.TransitionTo(state);
 
-        internal void StopMonitoring() => _monitoring.Stop();
+        internal Task StopMonitoringAsync() => _monitoring.StopAsync();
 
         internal async Task StopAsync()
         {

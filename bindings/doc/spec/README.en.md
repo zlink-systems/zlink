@@ -1554,7 +1554,7 @@ owns the public Actor service contract. Raw bindings follow the
 - Example common functionality a public base may allow external access
   to:
   - `bind`, `unbind`
-  - `connect`, `disconnect`, `disconnectRid` on connectable base only
+  - `connect`, `disconnect` on connectable base only; `disconnectRid` on every raw socket
   - `close` / `dispose`
   - common typed options
   - `monitorOpen`, or an equivalent monitor entry point
@@ -1685,9 +1685,13 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
    - A transport-style name such as `sendNoWait`, `recvNoWait`, or
      `publishNoWait` does not belong on the public surface.
 4. **Looking up `INTERNAL_ERROR` detail.**
-   - When the result code is in the `INTERNAL_ERROR` family (12, 105,
-     206, 306, 404, 505, 604, 704, and so on), the internal raw errno can
-     be looked up with `zlink_errno()`.
+   - When the result code is in the `INTERNAL_ERROR` family (12, 206,
+     306, 404, 505, 604, 704, and so on), the internal raw errno can be
+     looked up with `zlink_errno()`.
+   - The errno representation of a failed REQUEST completion result
+     (1xx, including 105) follows the Core
+     [Request completion result](../../../core/doc/spec/core/03-errors.en.md#3-request-completion-result)
+     contract. Its original internal errno is not retrieved with `zlink_errno()`.
    - The binding's error type (an exception object for exception
      languages, an error value for return-based languages) exposes this
      through an `internalErrno`/`internal_errno` field (for debugging
@@ -2308,11 +2312,11 @@ Public Spot/Actor snapshot shapes are owned by [Framework API](../../../framewor
 | `unbind` | Y | Y | Y | Y | Y | Y | Y | Y |
 | `connect` | Y | Y | Y | Y | Y | Y | Y | — |
 | `disconnect` | Y | Y | Y | Y | Y | Y | Y | — |
-| `disconnectRid` | Y | Y | Y | Y | Y | Y | Y | — |
+| `disconnectRid` | Y | Y | Y | Y | Y | Y | Y | Y |
 
-`disconnectRid` is the peer-rid disconnect surface of a connectable raw
-socket. `STREAM` is a bind-only socket and does not expose `connect`,
-`disconnect`, or `disconnectRid` as public API. Public Spot/Actor peer management is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
+`disconnectRid` is the peer-rid disconnect surface of a raw socket. `STREAM`
+is a bind-only socket and does not expose `connect` or `disconnect`, but it
+must provide `disconnectRid` to close an accepted connection. Public Spot/Actor peer management is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Send Capabilities
 
@@ -2363,8 +2367,6 @@ public `detachStream`/`streamDetach`-family release API is not provided.
 | Sub options (topicsCount) | Sub, XSub |
 | RoutingId (set/get) | Dealer, Router, Stream |
 
-  `disconnectRid`, `unbind`, and `close` are blocked.
-
 ## Per-Language Spec File Compliance Rule
 
 Each per-language spec file (`doc/spec/bindings/{lang}/README.md`) must
@@ -2383,9 +2385,9 @@ spec file.
 - Watch especially for these frequent violations:
   - No plain `send` (a send without routingId) on `RouterSocket`/
     `StreamSocket` — it must be `send(routingId, ...)`.
-  - No `connect`, `disconnect`, or `disconnectRid` on `StreamSocket` —
-    `STREAM` is a bind-only socket. Allowed only on Dealer, Router, Pub,
-    Sub.
+  - No `connect` or `disconnect` on `StreamSocket` —
+    `STREAM` is a bind-only socket. `connect` and `disconnect` are provided on every raw socket
+    except STREAM (capability table above). `disconnectRid` is also provided on `StreamSocket`.
   - No `onSubscribe` callback on `XPubSocket` — only
     `receiveSubscriptionEvent` is allowed on XPub.
   - No `STREAM` raw direct callback `onReceive`, and no
@@ -2950,7 +2952,9 @@ Codes split into two layers.
 2. **Internal errno** — the internal raw errno looked up with
    `zlink_errno()`. Used to look up the detailed cause behind a coarse
    bucket such as `INTERNAL_ERROR`. A binding exposes this value through
-   an `internalErrno`/`internal_errno` field (for debugging only).
+   an `internalErrno`/`internal_errno` field (for debugging only). A
+   REQUEST completion result follows the `INTERNAL_ERROR` detail item
+   above.
 
 #### Public Result Enum Catalog
 
@@ -3494,7 +3498,7 @@ This table and the Required surface test apply to the Core raw socket ABI. [Fram
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
-| StreamSocket `disconnectRid` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
+| StreamSocket `disconnectRid` provided | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` not exposed | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Poller result type name | N/A | `poll_event_t` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` |
 | Monitor typed event surface | Raw struct | Required | Required | Required | Required | Required | Required | Required |
@@ -3986,7 +3990,6 @@ The perf policy is managed across every language in a shared way, in
 - Verification: the surface test must match the matrix.
 - Representative violation examples:
   - `connect()` exposed on StreamSocket → remove
-  - `disconnectRid()` exposed on StreamSocket → remove
   - `detachStream()` exposed on StreamSocket → remove
   - async send uses a binding retry queue instead of Core completion → wire it to Core completion
   - publish/subscribe exposed on the wrong socket → remove

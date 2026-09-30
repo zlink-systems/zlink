@@ -69,6 +69,8 @@ internal sealed class ZLinkActorRuntimeState(
 
     public string ActorId => _actorId.Value;
 
+    internal int PendingLifecycleCount => _dispatchMailbox.PendingLifecycleCount;
+
     internal ZLinkActorId RuntimeActorId => _actorId;
 
     public ZLinkActorHandoffState Handoff { get; } =

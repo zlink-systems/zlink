@@ -1,12 +1,8 @@
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { RoutingId, ZLinkRouteMessageContext } from '../../contracts';
+import type { RoutingId } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef } from '../backend';
 import type { DefaultZLinkActorManager } from '../actors';
-import {
-  mergeRemoteBoundSessionTarget,
-  preferredRemoteBoundSessionTarget
-} from '../actors/actor-runtime-state';
 import { decodeRemoteActorJoinPayload } from '../actors/actor-remote-wire';
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
@@ -15,7 +11,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import { normalizeRoutingId, routingIdWireHex, routingIdsEqual } from '../routing-id';
+import { routingIdWireHex, routingIdsEqual } from '../routing-id';
 
 export interface ZLinkCanonicalActorJoinAuthorityFence {
   readonly actorId: string;
@@ -35,10 +31,7 @@ export interface ZLinkRemoteActorJoinReceiverOptions {
 export class ZLinkRemoteActorJoinReceiver {
   constructor(private readonly options: ZLinkRemoteActorJoinReceiverOptions) {}
 
-  async receive(
-    payload: unknown,
-    routeContext: ZLinkRouteMessageContext
-  ): Promise<{
+  async receive(payload: unknown): Promise<{
     readonly accepted: boolean;
     readonly actorNodeRid: string;
     readonly actorNodeRidHex?: string;
@@ -77,26 +70,6 @@ export class ZLinkRemoteActorJoinReceiver {
       generation: BigInt(join.actorGeneration)
     };
     state.setNativeActorRef(actorRef as unknown as ZLinkBackendActorRef);
-    const refreshedTarget = mergeRemoteBoundSessionTarget(
-      {
-        routerChannelId:
-          join.boundSessionRouterChannelId ??
-          join.routerChannelId ??
-          routeContext.channelName ??
-          '',
-        targetNodeRid:
-          join.boundSessionTargetNodeRid ?? normalizeRoutingId(routeContext.sourceNodeRid),
-        spotId:
-          join.boundSessionSpotId ??
-          join.sourceSpotId ??
-          normalizeRoutingId(routeContext.sourceNodeRid)
-      },
-      preferredRemoteBoundSessionTarget(
-        state.remoteBoundSessionTarget,
-        state.boundSessionTransferTarget
-      )
-    );
-    state.setRemoteBoundSessionTarget(refreshedTarget);
     const request = RuntimeMessage.from(Buffer.from(join.request, 'base64'));
     try {
       const response = await this.requireSpotManager().admitActorJoin(
@@ -105,7 +78,6 @@ export class ZLinkRemoteActorJoinReceiver {
         request,
         (spot) => {
           state.setJoinedSpot(join.spotId as RoutingId, spot);
-          return () => state.clearJoinedSpot();
         },
         undefined,
         undefined,

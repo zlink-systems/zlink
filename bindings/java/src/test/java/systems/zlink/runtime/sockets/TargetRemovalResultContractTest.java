@@ -5,9 +5,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
+import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.*;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.MonitorEvent;
+import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.Poller;
+import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.errors.*;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.sockets.*;
@@ -17,6 +25,49 @@ class TargetRemovalResultContractTest {
     @Test
     void writableProjectionAndLaterSubmitKeepTheirCoreResults() throws Exception {
         CompletionNativeFixture.runProbe(getClass());
+    }
+
+    @Test
+    void disconnectRidProjectsNotFoundAsConnectException() {
+        TestSupport.assumeNative();
+        try (Context context = Zlink.createContext();
+             RouterSocket router = context.createRouterSocket();
+             DealerSocket dealer = context.createDealerSocket();
+             Poller poller = Zlink.createPoller()) {
+            RoutingId expectedRid = RoutingId.from("java-disconnect-result-peer");
+            dealer.setRoutingId(expectedRid);
+            String endpoint = TestSupport.inprocEndpoint("disconnect-rid-result");
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+
+            try (Message probe = Message.from("route-prime")) {
+                dealer.send().message(probe).submit_sync();
+            }
+            RoutingId peerRid;
+            try (Received received = new Received()) {
+                assertTrue(router.recv(received, RecvFlags.NONE));
+                peerRid = received.getRoutingId().orElseThrow();
+            }
+            assertEquals(expectedRid, peerRid);
+            try (SocketMonitor monitor = router.monitorOpen(
+                     MonitorEventType.DISCONNECTED)) {
+                poller.add(monitor, 1, PollEventFlags.POLLIN);
+                router.disconnectRid(peerRid);
+
+                PollEvents events = new PollEvents(1);
+                assertEquals(1, poller.wait(events,
+                    Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS)));
+                MonitorEvent disconnected = monitor.recv(RecvFlags.DONT_WAIT);
+                assertNotNull(disconnected);
+                assertEquals(MonitorEventType.DISCONNECTED,
+                    disconnected.event());
+                assertEquals(peerRid, disconnected.routingId().orElseThrow());
+            }
+            ZlinkConnectException error = assertThrows(ZlinkConnectException.class,
+                () -> router.disconnectRid(peerRid));
+            assertEquals(605, error.getResult().value());
+            assertEquals(ConnectResult.NOT_FOUND, error.getResult());
+        }
     }
 
     public static void main(String[] args) throws Throwable {

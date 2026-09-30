@@ -125,6 +125,17 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                     object_creation_key_t reserve_key,
                                     object_reservation_fence_t fence,
                                     creation_operation_identity_t operation);
+    task_t<actor_create_result_t>
+    complete_local_actor_creation (task_t<zlink::framework::detail::actor_join_reply_t> joining,
+                                   std::shared_ptr<void> activation_admission,
+                                   mesh_node_descriptor_t target,
+                                   actor_ref_t created,
+                                   actor_id_t actor_id,
+                                   std::string stable_type,
+                                   object_creation_key_t reserve_key,
+                                   object_reservation_fence_t fence,
+                                   creation_operation_identity_t operation,
+                                   std::chrono::system_clock::time_point operation_deadline);
     task_t<std::optional<actor_ref_t>> find_actor (actor_id_t actor_id);
     task_t<std::optional<spot_ref_t>> find_actor_spot (actor_id_t actor_id);
     result_t<void> finalize_local_actor_destroy (const actor_ref_t &actor);

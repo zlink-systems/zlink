@@ -209,21 +209,11 @@ internal sealed class ZoneNodeBootstrap(
         if (result is not ZLinkActorCreateResult.Created created)
             throw new InvalidOperationException("Bot Actor creation was rejected.");
 
-        var entered = await actors
+        await actors
             .RequestToActor(
                 created.Actor.ActorId,
                 new EnterWorldReq(route.X, route.Y, IsBot: true, route.DirX, route.DirY)
             )
             .Async<EnterWorldRes>(cancellationToken);
-
-        logger.LogInformation(
-            "bot spawned. bot={PlayerId}, zone={ZoneId}, start=({X},{Y}), dir=({DirX},{DirY})",
-            route.PlayerId,
-            entered.ZoneId,
-            route.X,
-            route.Y,
-            route.DirX,
-            route.DirY
-        );
     }
 }

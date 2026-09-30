@@ -6,6 +6,18 @@
 namespace zlink::framework::detail
 {
 
+inline std::chrono::milliseconds
+channel_send_timeout (std::optional<std::chrono::milliseconds> timeout)
+{
+    return timeout.value_or (std::chrono::milliseconds (1000));
+}
+
+template <typename SocketT>
+void apply_channel_send_timeout (SocketT &socket, std::optional<std::chrono::milliseconds> timeout)
+{
+    socket.options ().send_timeout (channel_send_timeout (timeout));
+}
+
 template <typename SocketT>
 void apply_common_channel_socket_options (SocketT &socket,
                                           const channel_capability_snapshot_t &capability)

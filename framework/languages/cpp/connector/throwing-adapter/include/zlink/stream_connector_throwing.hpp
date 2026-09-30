@@ -2,49 +2,12 @@
 #pragma once
 
 #include <zlink/stream_connector.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 
-#include <stdexcept>
-#include <string>
 #include <utility>
 
 namespace zlink::stream_connector_throwing
 {
-
-class stream_connector_error : public std::runtime_error
-{
-  public:
-    stream_connector_error (zlink::stream_connector::error_code_t code, std::string message) :
-        std::runtime_error (message), _code (code)
-    {
-    }
-
-    zlink::stream_connector::error_code_t code () const noexcept { return _code; }
-
-  private:
-    zlink::stream_connector::error_code_t _code;
-};
-
-template <typename T> T value_or_throw (zlink::stream_connector::result_t<T> result)
-{
-    if (result) {
-        return std::move (result.value ());
-    }
-    const auto &error = result.error ();
-    throw stream_connector_error (error ? error->code
-                                        : zlink::stream_connector::error_code_t::disconnected,
-                                  error ? error->message : "stream connector operation failed");
-}
-
-inline void value_or_throw (zlink::stream_connector::result_t<void> result)
-{
-    if (result) {
-        return;
-    }
-    const auto &error = result.error ();
-    throw stream_connector_error (error ? error->code
-                                        : zlink::stream_connector::error_code_t::disconnected,
-                                  error ? error->message : "stream connector operation failed");
-}
 
 class connector_t
 {

@@ -1,4 +1,5 @@
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -56,6 +57,7 @@ import { requireZLinkInfrastructureExecutionArea } from '../execution';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import type { ZLinkDispatchErrorReporter } from '../channels';
+import { requireUniqueRouteMeshChannel, resolveChannelRoute } from '../channels/channel-clients';
 import {
   decodeChannelEnvelope,
   decodeChannelPayload,
@@ -328,7 +330,8 @@ export class ZLinkSpotNodeRuntimeManager {
             spotNode.actorLimit ?? 0,
             spotNode.spotLimit ?? 0
           ),
-          pendingCapacityLimit: spotNode.activationConcurrencyLimit ?? 128,
+          pendingCapacityLimit:
+            spotNode.activationConcurrencyLimit ?? DEFAULT_ACTIVATION_CONCURRENCY_LIMIT,
           objectCapabilities: [
             ...stableTypes.map((type) => `object-type:${type}`),
             ...instanceSpotTypes.map((type) => `instance-spot-type:${type}`)
@@ -491,7 +494,7 @@ export class ZLinkSpotNodeRuntimeManager {
         },
         activationConcurrency: this.options.activationConcurrency?.(meshName) ?? {
           active: 0,
-          limit: registration.activationConcurrencyLimit ?? 128
+          limit: registration.activationConcurrencyLimit ?? DEFAULT_ACTIVATION_CONCURRENCY_LIMIT
         },
         channelWeights: Object.fromEntries(
           this.serverChannels(meshName).map(([channelName, channel]) => [
@@ -686,21 +689,20 @@ export class ZLinkSpotNodeRuntimeManager {
     readonly meshName: string;
     readonly configuredWeight: number;
   } {
-    const matches = [...this.options.registration.spotNodes].flatMap(([meshName, registration]) => {
-      const channel = registration.meshChannels?.[channelName];
-      return channel === undefined ? [] : [{ meshName, configuredWeight: channel.weight ?? 100 }];
-    });
-    if (matches.length === 0) {
+    const route = resolveChannelRoute(this.options.registration, channelName);
+    if (route?.kind !== 'route-mesh') {
       throw new ZLinkConfigurationException(
         `RouteMesh channel '${channelName}' is not registered.`
       );
     }
-    if (matches.length > 1) {
-      throw new ZLinkConfigurationException(
-        `RouteMesh channel '${channelName}' is registered in more than one Mesh.`
-      );
-    }
-    return matches[0]!;
+    const match = requireUniqueRouteMeshChannel(
+      route.matches,
+      `RouteMesh channel '${channelName}' is registered in more than one Mesh.`
+    );
+    return {
+      meshName: match.meshName,
+      configuredWeight: match.mesh.meshChannels?.[channelName]?.weight ?? 100
+    };
   }
 
   private scheduleRuntimeWeightPublication(
@@ -979,8 +981,6 @@ export class ZLinkSpotNodeRuntimeManager {
       spotPublisherClient: this.options.spotPublisherClient,
       routedTransport: this.options.routedTransport,
       spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
-      channelMeshNameForChannel: (channelName) =>
-        resolveChannelMeshName(this.options.registration, channelName),
       timerHandlers: spotNode.entrySpotTimerHandlers,
       packetHandlers: spotNode.entrySpotPacketHandlers,
       subscriptionHandlers: spotNode.entrySpotSubscriptionHandlers,
@@ -1081,6 +1081,16 @@ export class ZLinkSpotNodeRuntimeManager {
       );
     }
     await activation.commitServiceActorJoin(actor, handoffBacklog);
+  }
+
+  executeEntryActor<T>(meshName: string, actorId: string, operation: () => Promise<T>): Promise<T> {
+    const activation = this.entryActivations.get(meshName);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(
+        `Entry Spot Actor '${actorId}' has no activation for MeshNode '${meshName}'.`
+      );
+    }
+    return activation.executeActor(actorId, operation);
   }
 
   publish(
@@ -1206,18 +1216,6 @@ export function createFrameworkEntrySpotId(prefix: string): string {
     );
   }
   return `${prefix}-entry-${randomUUID()}`;
-}
-
-function resolveChannelMeshName(
-  registration: ZLinkFrameworkRegistration,
-  channelName: string
-): string | undefined {
-  const matches = [...registration.spotNodes.entries()]
-    .filter(([, node]) =>
-      Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, channelName)
-    )
-    .map(([meshName]) => meshName);
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {

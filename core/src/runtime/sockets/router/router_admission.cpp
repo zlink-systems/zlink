@@ -201,8 +201,11 @@ bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
     {
         std::lock_guard<std::mutex> route_lifecycle_lock (
           _out_pipes_sync);
+        const uint64_t connection_id =
+          pipe_ ? pipe_->get_transport_connection_id () : 0;
         if (!pipe_ || pipe_->get_transport_pair_id () == 0
             || pipe_->get_transport_lane () != transport_lane_application
+            || connection_id == 0
             // Every caller, including the session-side endpoint refresh,
             // shares this data-plane gate. Pair-table admission alone is not
             // readiness: route adoption and write release must both be done.
@@ -230,8 +233,7 @@ bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
         public_routing_id =
           blob_t (routing_id->data (), routing_id->size ());
         endpoint_pair = pipe_->get_endpoint_pair ();
-        endpoint_pair.connection_id =
-          pipe_->get_transport_connection_id ();
+        endpoint_pair.connection_id = connection_id;
         pair_id = pipe_->get_transport_pair_id ();
         pair_generation = pipe_->get_transport_pair_generation ();
     }

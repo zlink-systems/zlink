@@ -432,6 +432,64 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
+    public async Task Connect_Result_Can_Observe_Reconciler_Owner_While_Tick_Waits()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        Task<int>? observation = null;
+        fixture.Executor.BeforeConnect = () =>
+        {
+            observation = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                Task.Run(() => fixture.Reconciler.ActiveTargets.Count)
+            );
+            Assert.True(observation.Wait(TimeSpan.FromSeconds(1)));
+        };
+
+        try
+        {
+            await fixture.Reconciler.TickAsync();
+        }
+        finally
+        {
+            if (observation is not null)
+                await observation;
+        }
+
+        Assert.Equal(0, await observation!);
+        Assert.Single(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Disconnect_Result_Can_Observe_Active_Claim_Before_Release()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+        await fixture.RemovePeerAsync("r1");
+        Task<int>? observation = null;
+        fixture.Executor.BeforeDisconnect = () =>
+        {
+            observation = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                Task.Run(() => fixture.Reconciler.ActiveTargets.Count)
+            );
+            Assert.True(observation.Wait(TimeSpan.FromSeconds(1)));
+        };
+
+        try
+        {
+            await fixture.Reconciler.TickAsync();
+        }
+        finally
+        {
+            if (observation is not null)
+                await observation;
+        }
+
+        Assert.Equal(1, await observation!);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
     public async Task Failed_Connect_Is_Not_Marked_Active_And_Retries_On_The_Next_Tick()
     {
         var fixture = await FixtureAsync();
@@ -701,11 +759,7 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(ZLinkLocationWriteStatus.Stored, claim.Status);
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var reconciler = new ZLinkAutoConnectReconciler(
             Local(
                 ZLinkLocationAutoConnectType.SpotMesh,
@@ -753,11 +807,7 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(ZLinkLocationWriteStatus.Stored, claim.Status);
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var reconciler = new ZLinkAutoConnectReconciler(
             Local(
                 ZLinkLocationAutoConnectType.SpotMesh,
@@ -783,7 +833,7 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
-    public async Task Store_Outage_Is_Fail_Static_And_Recovery_Defers_Disconnects()
+    public async Task Store_Outage_Defers_Missing_Target_Removal_Until_Lease_Ttl_After_Recovery()
     {
         var fixture = await FixtureAsync();
         await fixture.PublishPeerAsync("r1", "tcp://r:1");
@@ -796,21 +846,43 @@ public sealed class AutoConnectReconcilerTests
         Assert.Empty(fixture.Executor.Disconnected);
         Assert.Single(fixture.Reconciler.ActiveTargets);
 
-        // Recovery with an empty store: r1 has not re-registered yet. The
-        // first tick must not cut it — disconnect diffs wait one heartbeat
-        // interval so the mesh does not sweep live peers.
+        // The recovered snapshot cannot remove a missing target until the owner lease TTL.
         await fixture.RemovePeerAsync("r1");
         fixture.PeerResolver.Fail = false;
         await fixture.Reconciler.TickAsync();
         Assert.False(fixture.Reconciler.StoreFailed);
         Assert.Empty(fixture.Executor.Disconnected);
+        Assert.Single(fixture.Reconciler.ActiveTargets);
 
-        // After the grace the fresh list wins and the vanished peer drops.
+        fixture.Time.Advance(TimeSpan.FromSeconds(14));
         Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
-        fixture.Time.Advance(TimeSpan.FromSeconds(6));
         await fixture.Reconciler.TickAsync();
-        Assert.False(fixture.Reconciler.StoreFailed);
+        Assert.Empty(fixture.Executor.Disconnected);
+
+        fixture.Time.Advance(TimeSpan.FromSeconds(1));
+        await fixture.Reconciler.TickAsync();
         Assert.Single(fixture.Executor.Disconnected);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Recovery_Preserves_Unconnected_Target_Intent_Until_Lease_Ttl()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        fixture.Executor.ConnectSucceeds = false;
+        await fixture.Reconciler.TickAsync();
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+
+        fixture.PeerResolver.Fail = true;
+        await fixture.Reconciler.TickAsync();
+        await fixture.RemovePeerAsync("r1");
+        fixture.Executor.ConnectSucceeds = true;
+        fixture.PeerResolver.Fail = false;
+        await fixture.Reconciler.TickAsync();
+
+        Assert.Equal("tcp://r:1", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);
+        Assert.Empty(fixture.Executor.Disconnected);
     }
 
     [Fact]
@@ -898,9 +970,7 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(["tcp://r:1"], fixture.Executor.Connected.Select(target => target.Endpoint));
         Assert.Equal("tcp://r:1", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);
 
-        // Recovery re-publishes the local row before reading the list, then
-        // connects newly visible peers immediately but still defers disconnect
-        // diffs for one heartbeat interval.
+        // The newly visible target connects on the first recovered snapshot.
         fixture.PeerResolver.Fail = false;
         await fixture.Reconciler.TickAsync();
 
@@ -910,13 +980,12 @@ public sealed class AutoConnectReconcilerTests
             ["tcp://r:1", "tcp://r:2"],
             fixture.Executor.Connected.Select(target => target.Endpoint)
         );
-        Assert.Equal(
-            ["tcp://r:1", "tcp://r:2"],
-            fixture.Reconciler.ActiveTargets.Select(target => target.Endpoint).Order()
-        );
+        Assert.Equal(2, fixture.Reconciler.ActiveTargets.Count);
 
         Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
-        fixture.Time.Advance(TimeSpan.FromSeconds(6));
+        fixture.Time.Advance(TimeSpan.FromSeconds(14));
+        Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
+        fixture.Time.Advance(TimeSpan.FromSeconds(1));
         await fixture.Reconciler.TickAsync();
 
         Assert.False(fixture.Reconciler.StoreFailed);
@@ -962,11 +1031,7 @@ public sealed class AutoConnectReconcilerTests
         );
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var executor = new RecordingAutoConnectExecutor();
 
         // An EnableClient() dealer has neither a routing id nor an endpoint:
@@ -1045,11 +1110,7 @@ public sealed class AutoConnectReconcilerTests
         await store.ClaimLiveOwnerAsync("peer-owner", TimeSpan.FromMinutes(10));
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         var failable = new FailablePeerResolver(resolvers);
         var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(

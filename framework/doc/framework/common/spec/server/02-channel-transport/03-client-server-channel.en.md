@@ -67,8 +67,8 @@ A ClientServer send or request can start only when the local process
 registered the Client role for that `ChannelName`. Even if the ChannelName and
 a Server role exist, absence of the Client role ends the call with a
 `NotConfigured` framework error and never directly invokes a local handler.
-`NotFound` is used when the ChannelName itself, or the target to select, does
-not exist.
+Target selection and waiting results follow
+[the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).
 
 ```csharp
 public interface IZLinkFrameworkOptions
@@ -431,6 +431,20 @@ request-reply correlation information from the original ClientServer request.
 The original request only completes once, via the reply the ClientServer
 handler returned. The downstream reply's correlation information doesn't
 replace the original ClientServer request's value.
+
+### 5.3 Application Record Contract
+
+The internal wire contract for a ClientServer application record carries
+[application metadata](02-channel-messaging.en.md#9-metadata-and-observation) in the JSON header's
+`metadata` field as a string-to-string object. A missing field is interpreted as empty metadata.
+Character, size-limit, error, and reply rules follow channel messaging §9. The total size in that
+section is the UTF-8 JSON encoding length of the entire metadata object, including keys, values, and
+structural overhead. The header's `metadata` field name and other fields are excluded from this size.
+This length is measured on the minimal-escape form — in key and value strings only `"`, `\`, and
+U+0001–U+001F are escaped (control characters use `\b` `\f` `\n` `\r` `\t` where one exists, otherwise
+lowercase `\u00xx`), every other character is written as raw UTF-8, and no whitespace appears between
+structural characters. A sender writes this form, and a receiver judges by the length of the received
+value re-measured in this form. The business payload frame carries no metadata.
 
 ## 6. Drain
 

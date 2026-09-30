@@ -268,11 +268,14 @@ class stateful_object_runtime_t
       std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
     // Application materialization is a second, internal boundary from the
     // persisted state machine.  Aggregate restore supplies the target Spot to
-    // member Actors and invokes this callback in Spot-before-Actor order.
-    using relocation_state_materialize_t = std::function<bool (const frozen_object_state_t &,
-                                                               const object_ref_t &,
-                                                               const std::optional<object_ref_t> &,
-                                                               std::stop_token)>;
+    // member Actors and invokes this callback in Spot-before-Actor order. The
+    // restore continues when the returned task completes, so an application
+    // lifecycle step it waits for does not hold the caller.
+    using relocation_state_materialize_t =
+      std::function<task_t<bool> (const frozen_object_state_t &,
+                                  const object_ref_t &,
+                                  const std::optional<object_ref_t> &,
+                                  std::stop_token)>;
     using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
     using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
 
@@ -365,15 +368,17 @@ class stateful_object_runtime_t
     stateful_error_t abort_relocation (std::uint64_t token);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
-    stateful_error_t restore_relocation (frozen_object_state_t frozen,
-                                         object_ref_t target,
-                                         relocation_restore_identity_t identity,
-                                         std::stop_token cancellation = {},
-                                         std::optional<object_ref_t> target_spot = std::nullopt);
-    stateful_error_t restore_relocation_aggregate (std::vector<frozen_object_state_t> frozen,
-                                                   std::vector<object_ref_t> targets,
-                                                   relocation_restore_identity_t identity,
-                                                   std::stop_token cancellation = {});
+    task_t<stateful_error_t>
+    restore_relocation (frozen_object_state_t frozen,
+                        object_ref_t target,
+                        relocation_restore_identity_t identity,
+                        std::stop_token cancellation = {},
+                        std::optional<object_ref_t> target_spot = std::nullopt);
+    task_t<stateful_error_t>
+    restore_relocation_aggregate (std::vector<frozen_object_state_t> frozen,
+                                  std::vector<object_ref_t> targets,
+                                  relocation_restore_identity_t identity,
+                                  std::stop_token cancellation = {});
     stateful_error_t commit_relocation_restore (const object_ref_t &target,
                                                 const relocation_restore_identity_t &identity);
     stateful_error_t

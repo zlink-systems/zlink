@@ -260,7 +260,8 @@ doesn't secretly move or destroy an Actor.
 `JoinEntrySpot` doesn't take a target node RID. The framework finds the
 target Spot and owner node to use. If the Actor's and target Spot's owner
 node differ, Actor relocation is also performed within the same Join
-operation.
+operation. The framework handles same-node Actor Join directly through a
+single local Join path and does not submit Mesh Join records.
 
 The application doesn't directly specify relocation stage, target node,
 state adapter, or owner token. The framework decides these values based on
@@ -505,6 +506,15 @@ described, and
 [Actor Model §6.1](04-actor-model.en.md#61-registering-factory-and-relocation-policy)
 and every other section of this document only point here.
 
+In an Actor Join to another node, the target's admission wire reply reports the target's
+acceptance and its temporary queue and factory preparation; it doesn't confirm the owner or
+membership commit. The conditions for the target-only CAS and the handling under settled authority follow
+[Complete Actor And Spot Relocation Flow §4.4–§4.6](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover);
+settlement and resubmission after an indeterminate CAS response follow
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received), as referenced there. A failure
+after the admission reply is accepted doesn't produce a second reply to the same wire request;
+Actor Join completion reports it according to the settled authority.
+
 Once an Actor handler calls `JoinSpot(...)` or `JoinEntrySpot(...)` and
 calls `Defer()` on the returned call object, the framework runs the Join in
 the following order after the handler ends normally.
@@ -533,9 +543,11 @@ the following order after the handler ends normally.
    removes the temporary queue it registered and the prepared factory
    resources within the same processing, and it ends while keeping source
    membership. If the target is an Entry Spot, `OnActorJoin` isn't called. The node
-   receiving the Join request accepts it only through an active local target Spot. If
-   that Spot is absent or inactive, it doesn't create one and rejects the request with
-   `Unavailable`.
+   receiving the Join request accepts it only through an active local target Spot. A
+   target in the `Closing` state follows the `Closing` row of
+   [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability).
+   Otherwise, if the Spot is absent or not yet active, it doesn't create one and rejects the
+   request with `Unavailable`.
 3. The framework checks the relocation policy and target capacity. If the
    move can proceed, it briefly blocks new message processing on the
    source Actor, captures application state and the current Actor queue,

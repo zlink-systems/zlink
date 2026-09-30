@@ -1066,51 +1066,6 @@ bool raw_relocation_replay_coordinator_t::register_target (
     }
 }
 
-bool raw_relocation_replay_coordinator_t::seal_target (const protocol::relocation_id_t &relocation,
-                                                       std::uint64_t target_attempt_generation,
-                                                       const protocol::relocation_object_t &object)
-{
-    return _lane
-      .run ([this, &relocation, target_attempt_generation, &object] {
-          const auto found = _targets.find (key (relocation, target_attempt_generation, object));
-          if (found == _targets.end () || found->second.closing || found->second.removing)
-              return false;
-          found->second.closing = true;
-          return true;
-      })
-      .get ();
-}
-
-bool raw_relocation_replay_coordinator_t::drain_target (const protocol::relocation_id_t &relocation,
-                                                        std::uint64_t target_attempt_generation,
-                                                        const protocol::relocation_object_t &object)
-{
-    const auto target_key = key (relocation, target_attempt_generation, object);
-    if (!_lane
-           .run ([this, &target_key] {
-               const auto found = _targets.find (target_key);
-               return found != _targets.end () && found->second.closing;
-           })
-           .get ())
-        return false;
-    std::unique_lock wait_lock (_activity_wait_mutex);
-    _activity_changed.wait (wait_lock, [this, &target_key] {
-        return _lane
-          .run ([this, &target_key] {
-              const auto current = _targets.find (target_key);
-              return current == _targets.end () || current->second.active_stages == 0;
-          })
-          .get ();
-    });
-    return _lane
-      .run ([this, &target_key] {
-          const auto current = _targets.find (target_key);
-          return current != _targets.end () && !current->second.removing
-                 && current->second.active_stages == 0;
-      })
-      .get ();
-}
-
 bool raw_relocation_replay_coordinator_t::unregister_target (
   const protocol::relocation_id_t &relocation,
   std::uint64_t target_attempt_generation,

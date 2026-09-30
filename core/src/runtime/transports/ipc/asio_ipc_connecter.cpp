@@ -5,7 +5,6 @@
 
 #include "transports/ipc/asio_ipc_connecter.hpp"
 #include "engine/asio/asio_poller.hpp"
-#include "engine/asio/asio_raw_engine.hpp"
 #include "engine/asio/asio_zmp_engine.hpp"
 #include "transports/ipc/ipc_transport.hpp"
 #include "transports/asio/asio_reconnect_interval.hpp"
@@ -257,23 +256,17 @@ void zlink::asio_ipc_connecter_t::create_engine (fd_t fd_, const std::string &lo
     std::unique_ptr<i_asio_transport> transport (new (std::nothrow) ipc_transport_t ());
     alloc_assert (transport.get ());
 
-    i_engine *engine = NULL;
-    if (options.type == ZLINK_CORE_SOCKET_STREAM) {
-        engine =
-          new (std::nothrow) asio_raw_engine_t (fd_, options, endpoint_pair, std::move (transport));
-    } else {
-        engine =
-          new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair, std::move (transport));
-    }
+    i_engine *engine =
+      new (std::nothrow) asio_zmp_engine_t (fd_, options, endpoint_pair, std::move (transport));
     alloc_assert (engine);
-
-    send_attach (_session, engine);
-
-    terminate ();
 
     _socket_ptr->event_connected (
       endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
       options.transport_pair_generation);
+
+    send_attach (_session, engine);
+
+    terminate ();
 }
 
 void zlink::asio_ipc_connecter_t::close ()

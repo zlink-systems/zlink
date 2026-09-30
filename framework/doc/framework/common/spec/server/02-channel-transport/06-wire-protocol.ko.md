@@ -328,6 +328,7 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 - ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
 - ClientServer connection에서 service wire record는 infrastructure command에만 사용한다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
 - ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
+- ClientServer application metadata의 내부 wire 표현은 [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 정한다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness
@@ -568,7 +569,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 - Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
   relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
   않는다.
-- Seal 뒤 들어온 Session request와 push는 route 변경 또는 abort까지 Session owner가 보관한다.
+- Session owner의 seal 처리와 보관하는 message의 범위는 [Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)을 따른다.
   Relocation 전용 record 수 또는 byte 상한은 두지 않는다.
 - Source object route로 들어온 일반 server message는 target temporary queue로 계속 relay한다.
   같은 TCP connection의 순서와 재전송을 사용하며 message별 ACK나 durable journal을 추가하지
@@ -633,7 +634,10 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
   `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
   leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.
-  capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다(과도기 폴백).
+  다른 node의 target에서 capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다
+  (과도기 폴백). 같은 node의 Actor Join 경로와 commit 순서는
+  [Spot과 Actor membership §4](../03-spot-actor/05-spot-actor-membership.ko.md#4-actor-join과-commit-순서)가
+  정한다.
   수신측은 stable type을 wire가 아니라 §9대로 Store Actor Authority row에서 해석한다.
   (이전 개정에서 C++·.NET은 originate하지 않는다고 명시했으나, 네 runtime의 Store-backed
   canonical 수신자가 완성되어 네 runtime 모두 originate로 통일한다.)

@@ -6,7 +6,7 @@ namespace ZLink.Framework.Perf;
 // Request.Async<PerfEchoReply> through full identity/byte validation is one operation.
 // 1024/4096 JSON, request/ordinary, Immediate public dispatch mode; no Store or Actor.
 // Server logical stream, Actor, Spot, worker and fanout metrics are not applicable.
-public sealed class SessionEchoOnlyScenario(EndpointManifest manifest, Measurement measurement, int index) : IAsyncDisposable
+public class SessionEchoOnlyScenario(EndpointManifest manifest, Measurement measurement, int index) : IAsyncDisposable
 {
     private readonly List<(int id, IZlinkStreamConnector connector)> connectors = [];
     private readonly List<IZlinkStreamConnector> owned = [];
@@ -40,7 +40,8 @@ public sealed class SessionEchoOnlyScenario(EndpointManifest manifest, Measureme
                 using var timeout = new CancellationTokenSource(workload.setupTimeoutMs);
                 await connector.Connect.Async(timeout.Token);
                 var request = measurement.Request(id, (ulong)Interlocked.Increment(ref sequences[local]), probe: true);
-                var reply = await connector.Request(request).Timeout(TimeSpan.FromMilliseconds(workload.requestTimeoutMs))
+                // Setup probe: bounded by the setup deadline; an Actor cell's probe also carries the session's create and bind.
+                var reply = await connector.Request(request).Timeout(TimeSpan.FromMilliseconds(workload.setupTimeoutMs))
                     .Async<PerfEchoReply>(timeout.Token);
                 PayloadPattern.ValidateIdentity(request, reply);
                 measurement.Pattern.Validate(reply.payload);

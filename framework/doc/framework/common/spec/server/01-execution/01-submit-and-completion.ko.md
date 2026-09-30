@@ -63,6 +63,12 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
 
 격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 pending stage의 기존 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
+**Application이 직접 완료시키는 비동기 결과와 제한 시간 관찰.** Application은 외부 사건으로 완료되는 비동기 결과를 만들고, application thread에서 그 결과를 제한 시간 동안 관찰할 수 있다.
+
+- 완료 소스는 첫 완료 하나만 확정하며, 이후 완료 시도는 결과를 바꾸지 않는다. 결과는 성공 값 또는 typed Framework 오류다. 같은 완료 소스에서 얻은 결과 handle은 모두 같은 원 결과를 관찰한다. 완료 소스나 결과 handle을 파괴해도 원 결과를 완료하거나 취소하지 않는다.
+- 제한 시간 관찰은 동기 blocking 종결자와 같은 문맥 규칙을 따른다 — runtime 실행 문맥에서는 `InvalidOperation`이다. 시간이 지나면 미완료를 알릴 뿐 원 결과를 완료·취소하지 않으며, 늦은 완료는 원 결과에 남는다. 관찰 시간 초과는 operation terminal이 아니다.
+- .NET·Java·Node.js는 언어 표준 타입(`TaskCompletionSource`, `CompletableFuture`, `Promise`)으로 이 능력을 제공하므로 Framework API를 따로 두지 않는다. C++은 Framework task 타입에 완료 소스와 제한 시간 관찰을 둔다. 이 완료 소스의 결과를 기다린 continuation은 완료한 thread가 아니라 await를 등록한 실행 문맥에서 재개하며, handler 안의 await는 일반 비동기 terminal처럼 그 handler turn을 유지한다. 이름과 형태는 [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.ko.md)이 정하고, host 종료와의 경계는 [Cancellation과 shutdown §5.1](03-cancellation-and-shutdown.ko.md#51-application-완료-소스를-기다리는-대기의-종료)이 정한다.
+
 `Yield`를 제공하는 실행 문맥과 call 목록은
 [Handler turn과 execution gate §16](02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 소유한다.
 
@@ -130,6 +136,7 @@ Session callback이 사용하는 transport-facing stream write(동기 `bool` 반
 |---|---|
 | Remote target | local transport queue |
 | Local target | 해당 mailbox 또는 relay queue |
+| Relocation seal 중인 binding으로 가는 one-way session Actor relay | Session owner의 seal 보관소([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)) |
 | [Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout) — 연결·구독이 끝난 대상에게만 event를 보내는 별도 PUB/SUB 경로 — ·STREAM | 해당 socket queue |
 
 Global Spot·Actor send는 current [Ready](../00-foundation/02-glossary.ko.md#ready) authority
@@ -176,7 +183,8 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 |---|---|
 | Actor authority 없음 | `NotFound` |
 | Spot authority 없음 | `NotFound` |
-| Mesh나 선택 가능한 Server 없음 | `NotFound` |
+| Mesh 없음 | `NotFound` |
+| ChannelName target 선택 실패 | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다 |
 | 사용할 route가 없음 | `Unavailable` |
 | admission deadline 만료 | `DeadlineExceeded` |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
@@ -214,7 +222,7 @@ result로 만들지 않는다.
 
 ## 7. Admission deadline — owner와 값 규칙
 
-One-way admission deadline은 operation이 실제로 사용하는 outbound socket 또는, RouteMesh에
+One-way admission deadline과 global object request의 outbound admission deadline은 operation이 실제로 사용하는 outbound socket 또는, RouteMesh에
 참여해 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 소유한다.
 
@@ -238,13 +246,17 @@ Framework public send timeout의 값 규칙은 다음과 같다.
   option을 새로 추가해야 한다는 뜻은 아니다.
 - Runtime setter가 있는 경우 잘못된 값은 setter 호출에서 즉시 거부한다.
 
+호출 쪽 deadline이 있는 admission은 socket send timeout과 그 deadline 중 먼저 도달하는 deadline을
+사용하며, 호출 쪽 값으로 socket send timeout을 연장하지 않는다. 호출 쪽 deadline은 아래 STREAM
+one-way send의 admission timeout modifier와 global object request의 남은 request timeout
+([§9](#9-request-completion--완료-경쟁과-timeout-budget))이다.
+
 STREAM one-way send call은 선택적인 호출별 admission timeout modifier를 제공한다. 이
 값은 reply를 기다리는 시간이 아니라 해당 send가 STREAM transport queue의 수락을
 기다릴 수 있는 최대 시간이다.
 
 - Modifier를 생략하면 해당 STREAM socket의 send timeout을 사용한다.
-- Modifier를 지정하면 socket timeout과 호출별 timeout 중 먼저 도달하는 deadline을
-  사용한다. 호출별 값으로 socket timeout을 연장하지 않는다.
+- Modifier를 지정하면 위의 호출 쪽 deadline 규칙을 따른다.
 - 값 검증과 millisecond 올림은 위 `1..INT_MAX` 규칙을 그대로 사용한다.
 - Deadline이 먼저 끝나면 `DeadlineExceeded`로 한 번 완료하고, 이후 capacity가
   생겨도 해당 send를 admission하거나 다시 시도하지 않는다.
@@ -299,7 +311,8 @@ flowchart LR
 
 Global object request timeout은 current Ready authority resolve, outbound
 admission, handler와 reply 전체를 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
-잔여 시간만 다음 단계에 전달한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+잔여 시간만 다음 단계에 전달한다. Outbound admission 단계의 deadline은
+[§7](#7-admission-deadline--owner와-값-규칙)이 정한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이

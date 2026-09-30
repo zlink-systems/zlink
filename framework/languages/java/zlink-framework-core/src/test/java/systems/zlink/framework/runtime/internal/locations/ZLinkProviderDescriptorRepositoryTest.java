@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -22,8 +23,73 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 class ZLinkProviderDescriptorRepositoryTest {
+    @Test
+    void leaseRenewalDuringDescriptorCommitDoesNotRejectPublication() throws Exception {
+        var backing = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(backing);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("renew-during-publish", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var leaseKey = ZLinkOwnerLeaseRecordCodec.key(owner.ownerId());
+        var interleaving =
+                new ZLinkLocationStore() {
+                    @Override
+                    public CompletionStage<ZLinkStoreReadResult> read(
+                            ZLinkStoreKey key,
+                            systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                    cancellation) {
+                        return backing.read(key, cancellation);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkStoreWriteResult> write(
+                            ZLinkStoreWriteRequest request,
+                            systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                    cancellation) {
+                        if (request.conditions().stream()
+                                .anyMatch(
+                                        condition ->
+                                                condition
+                                                                        instanceof
+                                                                        ZLinkStoreVersionCondition
+                                                                                version
+                                                                && version.key().equals(leaseKey)
+                                                        || condition
+                                                                        instanceof
+                                                                        ZLinkStoreValueCondition
+                                                                                value
+                                                                && value.key().equals(leaseKey))) {
+                            return owners.renew(owner, Duration.ofMinutes(1))
+                                    .thenCompose(ignored -> backing.write(request, cancellation));
+                        }
+                        return backing.write(request, cancellation);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkStoreScanResult> scan(
+                            ZLinkStoreScanRequest request,
+                            systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                    cancellation) {
+                        return backing.scan(request, cancellation);
+                    }
+                };
+        var descriptors = new ZLinkProviderDescriptorRepository(interleaving);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor(owner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
     @Test
     void newClaimTakesOverDescriptorWhoseOwnerLeaseExpired() throws Exception {
         var clock = new MutableClock(Instant.parse("2026-09-20T00:00:00Z"));
@@ -110,7 +176,7 @@ class ZLinkProviderDescriptorRepositoryTest {
     }
 
     @Test
-    void meshDescriptorUsesOwnerVersionFenceAndOpaqueSnapshot() throws Exception {
+    void meshDescriptorUsesOwnerValueFenceAndOpaqueSnapshot() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);

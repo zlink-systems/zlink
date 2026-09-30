@@ -4,7 +4,6 @@
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_WS
 
 #include "transports/ws/asio_ws_connecter.hpp"
-#include "engine/asio/asio_raw_engine.hpp"
 #include "engine/asio/asio_zmp_engine.hpp"
 #include "engine/asio/asio_poller.hpp"
 #include "transports/ws/ws_batch_policy.hpp"
@@ -390,43 +389,31 @@ void zlink::asio_ws_connecter_t::create_engine (fd_t fd_, const std::string &loc
         transport.reset (ws_transport.release ());
     }
 
-    const bool is_stream = options.type == ZLINK_CORE_SOCKET_STREAM;
     options_t engine_options = options;
-    if (!is_stream)
-        engine_options.out_batch_size =
-          zlink::ws_batch_policy::zmp_send_batch_size ();
+    engine_options.out_batch_size =
+      zlink::ws_batch_policy::zmp_send_batch_size ();
     i_engine *engine = NULL;
 #if defined ZLINK_HAVE_WSS
     if (_secure) {
-        if (is_stream) {
-            engine = new (std::nothrow) asio_raw_engine_t (
-              fd_, engine_options, endpoint_pair, std::move (transport), std::move (ssl_context));
-        } else {
-            engine = new (std::nothrow) asio_zmp_engine_t (
-              fd_, engine_options, endpoint_pair, std::move (transport), std::move (ssl_context));
-        }
+        engine = new (std::nothrow) asio_zmp_engine_t (
+          fd_, engine_options, endpoint_pair, std::move (transport), std::move (ssl_context));
     } else
 #endif
     {
-        if (is_stream) {
-            engine = new (std::nothrow)
-              asio_raw_engine_t (fd_, engine_options, endpoint_pair, std::move (transport));
-        } else {
-            engine = new (std::nothrow)
-              asio_zmp_engine_t (fd_, engine_options, endpoint_pair, std::move (transport));
-        }
+        engine = new (std::nothrow)
+          asio_zmp_engine_t (fd_, engine_options, endpoint_pair, std::move (transport));
     }
     alloc_assert (engine);
+
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
 
     //  Attach the engine to the session
     send_attach (_session, engine);
 
     //  Shut down the connecter
     terminate ();
-
-    _socket_ptr->event_connected (
-      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
-      options.transport_pair_generation);
 }
 
 bool zlink::asio_ws_connecter_t::tune_socket (fd_t fd_)

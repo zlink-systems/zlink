@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 
 import java.util.List;
 import java.util.Objects;
@@ -48,6 +49,7 @@ final class ZLinkSpotCloseCoordinator {
     // -1 until the Closing transition is committed; then the index of the next step to run.
     private int next = -1;
     private CompletableFuture<Boolean> attempt;
+    private AsyncDrainProbe debugProbe;
 
     ZLinkSpotCloseCoordinator(
             Supplier<CompletionStage<Boolean>> commit,
@@ -80,9 +82,21 @@ final class ZLinkSpotCloseCoordinator {
                 return attempt;
             }
             attempt = started = new CompletableFuture<>();
+            assert (debugProbe = new AsyncDrainProbe()) != null;
+            assert registerDebugObligations();
         }
         advance(started);
         return started;
+    }
+
+    private boolean registerDebugObligations() {
+        if (next < 0) {
+            debugProbe.expect("spot-close-commit", "Spot Close");
+        }
+        for (int index = Math.max(next, 0); index < steps.size(); index++) {
+            debugProbe.expect("spot-close-step:" + index, "Spot Close");
+        }
+        return true;
     }
 
     private void advance(CompletableFuture<Boolean> result) {
@@ -101,6 +115,7 @@ final class ZLinkSpotCloseCoordinator {
             ZLinkSerialExecutionQueue.yieldCurrent(committed)
                     .whenComplete(
                             (value, failure) -> {
+                                assert debugProbe.complete("spot-close-commit");
                                 if (failure != null) {
                                     end(result, null, failure);
                                 } else if (!Boolean.TRUE.equals(value)) {
@@ -126,6 +141,7 @@ final class ZLinkSpotCloseCoordinator {
         ZLinkSerialExecutionQueue.yieldCurrent(operation)
                 .whenComplete(
                         (ignored, failure) -> {
+                            assert debugProbe.complete("spot-close-step:" + position);
                             if (failure != null && !step.onClosing()) {
                                 end(result, null, failure);
                                 return;
@@ -146,6 +162,7 @@ final class ZLinkSpotCloseCoordinator {
     }
 
     private void end(CompletableFuture<Boolean> result, Boolean value, Throwable failure) {
+        assert failure != null || !Boolean.TRUE.equals(value) || debugProbe.assertDrainedResult();
         if (failure != null) {
             synchronized (this) {
                 if (attempt == result) {

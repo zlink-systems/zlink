@@ -12,12 +12,10 @@ import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
-import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -94,6 +92,15 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
     }
 
     @Override
+    CompletionStage<Void> appendSpotHandler(
+            CompletionStage<Void> tail,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return context.enqueueDispatch(payloadBytes, operation, admission);
+    }
+
+    @Override
     CompletionStage<Void> appendActorLifecycle(
             CompletionStage<Void> tail,
             ZLinkBackendActorLifecycleEvent event,
@@ -123,9 +130,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.SUBSCRIBE_READABLE) {
             drainSubscriptions();
-        }
-        if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE) {
-            drainUnhandledActorJoins();
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
             return dispatchActorMessages(info.actorMessages())
@@ -173,13 +177,55 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         }
     }
 
+    CompletionStage<Void> admitRoute(ZLinkBackendReceived received) {
+        return admitRoute(received, null);
+    }
+
+    CompletionStage<Void> admitRoute(
+            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            Thread.currentThread().interrupt();
+            received.close();
+            var failure = new IllegalStateException("application job reservation was interrupted");
+            if (admission != null) admission.completeExceptionally(failure);
+            return CompletableFuture.failedFuture(failure);
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
+            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+            if (hostRejection != null) {
+                received.close();
+                if (admission != null) admission.completeExceptionally(hostRejection);
+                return CompletableFuture.failedFuture(hostRejection);
+            }
+            if (host.dispatchSpotRouteBridgePacket(received)) {
+                received.close();
+                if (admission != null) admission.complete(null);
+                return CompletableFuture.completedFuture(null);
+            }
+            dispatchRoute(received, admission);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException | Error failure) {
+            if (admission != null) admission.completeExceptionally(failure);
+            received.close();
+            throw failure;
+        } finally {
+            permit.abandonReservation();
+        }
+    }
+
     void drainPolledDispatchQueues() {
         drainRoutes();
-        drainUnhandledActorJoins();
         drainActorLifecycleEvents();
     }
 
     private void dispatchRoute(ZLinkBackendReceived received) {
+        dispatchRoute(received, null);
+    }
+
+    private void dispatchRoute(ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         trackRouteReceived(received);
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
@@ -197,6 +243,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                 : ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
             } catch (ZLinkFrameworkException invalidFlow) {
                 failRouteInvalidFlow(received, invalidFlow);
+                if (admission != null) admission.complete(null);
                 return;
             }
         }
@@ -207,6 +254,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         try {
             if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
                 closeRouteReceived(received);
+                if (admission != null) admission.complete(null);
                 return;
             }
             ParsedPacket packet;
@@ -219,6 +267,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                 //  A JSON-object first frame that is not a valid shared envelope
                 //  is a protocol error (C++ decode parity).
                 failRouteInvalidFlow(received, invalidEnvelope);
+                if (admission != null) admission.complete(null);
                 return;
             }
             host.traceSpotRouteFlow(
@@ -239,19 +288,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                     handleRoutedBoundSessionSendParts(received.parts());
                     closeRouteReceived(received);
                 }
-                return;
-            }
-            if (host.isDraining()
-                    && ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            host.spotAdmissionFailure(backendSpot.spotId()));
-                }
-                closeRouteReceived(received);
+                if (admission != null) admission.complete(null);
                 return;
             }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
@@ -273,21 +310,17 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                     }
                                 })
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
+                if (admission != null) admission.complete(null);
                 return;
             }
-            if (host.isDraining()) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            host.spotAdmissionFailure(backendSpot.spotId()));
-                }
-                closeRouteReceived(received);
-                return;
-            }
-            dispatchSpotRouteHandler(received, packet);
+            dispatchSpotRouteHandler(received, packet, admission)
+                    .whenComplete(
+                            (ignored, error) -> {
+                                if (admission != null && !admission.isDone()) {
+                                    if (error == null) admission.complete(null);
+                                    else admission.completeExceptionally(error);
+                                }
+                            });
         } finally {
             flowScope.close();
         }
@@ -453,129 +486,38 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         }
     }
 
-    private void drainUnhandledActorJoins() {
-        ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-        while (batch.canReceiveNext()) {
-            ZLinkBackendActorJoinRequest request =
-                    backendSpot.recvActorJoin(ZLinkBackendRecvMode.DONT_WAIT);
-            if (request == null) {
-                return;
-            }
-            batch.record(ZLinkReceiveBatchBudget.bytesOf(request.parts()));
-            Message payloadCopy =
-                    request.parts().isEmpty()
-                            ? Message.from(new byte[0])
-                            : Message.from(request.parts().get(0).dataBuffer());
-            try {
-                acceptEntryActorJoin(request, payloadCopy)
-                        .whenComplete(
-                                (response, error) -> {
-                                    try {
-                                        if (error != null) {
-                                            try (Message emptyReply = Message.from(new byte[0])) {
-                                                backendSpot.replyActorJoin(
-                                                        request, 1, List.of(emptyReply));
-                                            }
-                                            return;
-                                        }
-                                        ZLinkSpotActorJoinResult effective =
-                                                response == null
-                                                        ? ZLinkSpotActorJoinResult.reject()
-                                                        : response;
-                                        Message reply =
-                                                effective.reply() == null
-                                                        ? Message.from(new byte[0])
-                                                        : ZLinkMessagePayloads.message(
-                                                                effective.reply(),
-                                                                host.serializerForSpot());
-                                        backendSpot.replyActorJoin(
-                                                request,
-                                                effective.accepted() ? 0 : 1,
-                                                List.of(reply));
-                                        reply.close();
-                                        if (effective.accepted()) {
-                                            completeAcceptedEntryJoin(request);
-                                        }
-                                    } finally {
-                                        payloadCopy.close();
-                                    }
-                                });
-            } finally {
-                request.parts().forEach(Message::close);
-            }
-        }
+    CompletionStage<Void> closeAsync(Instant deadline) {
+        return closingStage(deadline)
+                .handle(
+                        (ignored, failure) -> {
+                            closePendingActorMessage();
+                            closeActiveRouteReceives();
+                            return finishCleanup(failure, context.closeResourcesAsync());
+                        })
+                .thenCompose(stage -> stage);
     }
 
-    private CompletionStage<ZLinkSpotActorJoinResult> acceptEntryActorJoin(
-            ZLinkBackendActorJoinRequest request, Message payload) {
-        return host.actorAdmissions()
-                .admitEntryActor(
-                        request,
-                        backendSpot.spotId(),
-                        actorId ->
-                                CompletableFuture.completedFuture(
-                                        ZLinkSpotActorJoinResult.accept()));
-    }
-
-    private void completeAcceptedEntryJoin(ZLinkBackendActorJoinRequest request) {
-        host.actorAdmissions()
-                .completeEntryActorJoin(
-                        request,
-                        host.primaryNode().routingId(),
-                        actor ->
-                                context.enqueueDispatch(
-                                        () ->
-                                                host
-                                                        .notifySpotActorLifecycleAndSuppressBackendEvent(
-                                                                entrySpot,
-                                                                actor,
-                                                                backendSpot.spotId(),
-                                                                true)))
-                .exceptionally(error -> null);
-    }
-
-    @Override
-    public void close() {
-        close(Instant.now());
-    }
-
-    void close(Instant deadline) {
-        try {
-            notifyClosing(deadline);
-        } finally {
-            closePendingActorMessage();
-            closeActiveRouteReceives();
-            context.closeTimers();
-            context.closeHandlerInstances();
-            backendSpot.close();
-        }
-    }
-
-    void notifyClosing(Instant deadline) {
-        host.awaitClosing(
-                closingCallback(
-                        () ->
-                                context.enqueueLifecycle(
-                                        () ->
-                                                host.runWithOutbound(
-                                                        context.dispatchOutbound(),
-                                                        () ->
-                                                                ZLinkHandlerStages
-                                                                        .fromStageSupplier(
-                                                                                () ->
-                                                                                        entrySpot
-                                                                                                .onClosing(
-                                                                                                        new systems
-                                                                                                                .zlink
-                                                                                                                .framework
-                                                                                                                .spots
-                                                                                                                .ZLinkSpotClosingContext(
-                                                                                                                systems
-                                                                                                                        .zlink
-                                                                                                                        .framework
-                                                                                                                        .spots
-                                                                                                                        .ZLinkSpotCloseReason
-                                                                                                                        .HOST_SHUTDOWN,
-                                                                                                                deadline)))))));
+    CompletionStage<Void> closingStage(Instant deadline) {
+        return closingCallback(
+                () ->
+                        context.enqueueLifecycle(
+                                () ->
+                                        host.runWithOutbound(
+                                                context.dispatchOutbound(),
+                                                () ->
+                                                        ZLinkHandlerStages.fromStageSupplier(
+                                                                () ->
+                                                                        entrySpot.onClosing(
+                                                                                new systems.zlink
+                                                                                        .framework
+                                                                                        .spots
+                                                                                        .ZLinkSpotClosingContext(
+                                                                                        systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .spots
+                                                                                                .ZLinkSpotCloseReason
+                                                                                                .HOST_SHUTDOWN,
+                                                                                        deadline))))));
     }
 }

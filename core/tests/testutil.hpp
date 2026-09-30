@@ -301,11 +301,14 @@ fd_t connect_socket (const char *endpoint_,
 //  prefix, so ensure it is writable and of appropriate size.
 //  Works with ipv4/ipv6/unix. With unix sockets address_/port_ can be empty and
 //  my_endpoint_ will contain a random path.
+//  listen_은 기본값이 true이며 bind 뒤 listen을 수행한다. false이면 반환된
+//  소켓은 호출자가 닫을 때까지 bind 상태로 유지되고 listen을 수행하지 않는다.
 fd_t bind_socket_resolve_port (const char *address_,
                                const char *port_,
                                char *my_endpoint_,
                                const int af_ = AF_INET,
-                               const int protocol_ = IPPROTO_TCP);
+                               const int protocol_ = IPPROTO_TCP,
+                               const bool listen_ = true);
 
 int fuzzer_corpus_encode (const char *filename, uint8_t ***data, size_t **len, size_t *num_cases);
 

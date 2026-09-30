@@ -1329,7 +1329,7 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
   올리면 안 된다.
 - public base에서 외부 접근을 허용해도 되는 공통 기능 예:
   - `bind`, `unbind`
-  - `connect`, `disconnect`, `disconnectRid` on connectable base only
+  - `connect`, `disconnect` on connectable base only; `disconnectRid` on every raw socket
   - `close` / `dispose`
   - common typed options
   - `monitorOpen` 또는 동등한 monitor 진입점
@@ -1442,8 +1442,11 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
      공개 surface 에 두지 않는다.
 4. **`INTERNAL_ERROR` 상세 조회.**
    - result code 가 `INTERNAL_ERROR` 계열
-     (12, 105, 206, 306, 404, 505, 604, 704 등) 이면
+     (12, 206, 306, 404, 505, 604, 704 등) 이면
      `zlink_errno()` 로 내부 raw errno 를 조회할 수 있다.
+   - REQUEST completion 실패 결과(1xx, 105 포함)의 errno 표시는 Core
+     [Request completion result](../../../core/doc/spec/core/03-errors.ko.md#3-request-completion-result)
+     계약을 따른다. 이 결과의 원래 내부 errno 는 `zlink_errno()` 로 조회하지 않는다.
    - 바인딩의 에러 타입(exception 언어는 예외 객체, return-based 언어는
      에러 값)은 `internalErrno` / `internal_errno` 필드로 이를 노출한다
      (디버깅 전용).
@@ -2005,11 +2008,11 @@ message-count option이나 count↔byte alias는 제공하지 않는다.
 | `unbind` | Y | Y | Y | Y | Y | Y | Y | Y |
 | `connect` | Y | Y | Y | Y | Y | Y | Y | — |
 | `disconnect` | Y | Y | Y | Y | Y | Y | Y | — |
-| `disconnectRid` | Y | Y | Y | Y | Y | Y | Y | — |
+| `disconnectRid` | Y | Y | Y | Y | Y | Y | Y | Y |
 
-`disconnectRid` 는 connectable raw socket 의 peer-rid disconnect 표면이다.
-`STREAM` 은 bind-only socket 이며 `connect`, `disconnect`, `disconnectRid`
-를 public API 로 노출하지 않는다. 공개 Spot/Actor peer 관리 표면은 [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 소유한다.
+`disconnectRid` 는 raw socket 의 peer-rid disconnect 표면이다. `STREAM` 은 bind-only
+socket 이라 `connect`, `disconnect` 를 노출하지 않지만, 받아들인 연결을 끊는
+`disconnectRid` 는 필수로 제공한다. 공개 Spot/Actor peer 관리 표면은 [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 소유한다.
 
 #### Send Capabilities
 
@@ -2060,8 +2063,6 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
 | Sub options (topicsCount) | Sub, XSub |
 | RoutingId (set/get) | Dealer, Router, Stream |
 
-  `disconnectRid`, `unbind`, `close`는 차단된다.
-
 ## 언어별 스펙 파일 준수 규칙
 
 각 언어별 스펙 파일(`doc/spec/bindings/{lang}/README.md`)은 아래 규칙을
@@ -2078,9 +2079,9 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
 - 특히 다음 위반이 자주 발생하므로 주의한다:
   - `RouterSocket` / `StreamSocket`에 plain `send` (routingId 없는 send) 금지 —
     반드시 `send(routingId, ...)` 형태여야 한다.
-  - `StreamSocket`에 `connect`, `disconnect`, `disconnectRid` 노출 금지 —
-    `STREAM`은 bind-only socket이다.
-    Dealer, Router, Pub, Sub에만 허용된다.
+  - `StreamSocket`에 `connect`, `disconnect` 노출 금지 —
+    `STREAM`은 bind-only socket이다. `connect`·`disconnect`는 STREAM을 제외한 raw
+    socket에 제공한다(위 기능 표). `disconnectRid`는 `StreamSocket`에도 제공한다.
   - `XPubSocket`에 `onSubscribe` 콜백 금지 —
     XPub는 `receiveSubscriptionEvent`만 허용된다.
   - `STREAM` raw direct callback `onReceive` 및 `detachStream` 류 해제 API 금지 —
@@ -2583,7 +2584,8 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
    전체 정의는 [Core errors](../../../core/doc/spec/core/03-errors.ko.md) 참조.
 2. **Internal errno** — `zlink_errno()` 로 조회되는 내부 raw errno.
    `INTERNAL_ERROR` 같은 coarse bucket 의 상세 원인 조회용. 바인딩은 이 값을
-   `internalErrno` / `internal_errno` 필드로 노출한다 (디버깅 전용).
+   `internalErrno` / `internal_errno` 필드로 노출한다 (디버깅 전용). REQUEST
+   completion 결과는 위 `INTERNAL_ERROR` 상세 조회 항목을 따른다.
 
 #### Public Result Enum 카탈로그
 
@@ -3074,7 +3076,7 @@ guide, spec signature에 노출하지 않는다.
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
-| StreamSocket `disconnectRid` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
+| StreamSocket `disconnectRid` 제공 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` 비노출 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Poller result type name | N/A | `poll_event_t` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` | `PollEvent` |
 | Monitor typed event surface | Raw struct | Required | Required | Required | Required | Required | Required | Required |
@@ -3476,7 +3478,6 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 - 검증: surface test가 matrix와 일치해야 한다.
 - 대표 위반 예:
   - StreamSocket에 `connect()` 노출 → 제거
-  - StreamSocket에 `disconnectRid()` 노출 → 제거
   - StreamSocket에 `detachStream()` 노출 → 제거
   - async send가 Core completion 대신 binding retry queue를 사용함 → Core completion으로 연결
   - 잘못된 소켓에 publish/subscribe 노출 → 제거

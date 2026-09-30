@@ -9,11 +9,11 @@ void admitted_writable_retries ()
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
     const auto target = zlink::routing_id_t::from ("submit-target");
-    auto send = fixture.socket.send (target)
-                  .message (zlink::message_t::from ("send")).async ();
+    auto send = fixture.socket.send (target).message (zlink::message_t::from ("send")).async ();
     auto request = fixture.socket.request (target)
                      .message (zlink::message_t::from ("request"))
-                     .timeout (std::chrono::seconds (5)).async ();
+                     .timeout (std::chrono::seconds (5))
+                     .async ();
     auto send_wait = std::move (send.admitted).operator co_await ();
     auto request_wait = std::move (request.reply).operator co_await ();
     assert (!send_wait.await_ready () && !request_wait.await_ready ());
@@ -48,11 +48,11 @@ void terminal_writable_uses_core_result (zlink_send_complete_result_t result_,
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
     const auto target = zlink::routing_id_t::from ("submit-target");
-    auto send = fixture.socket.send (target)
-                  .message (zlink::message_t::from ("send")).async ();
+    auto send = fixture.socket.send (target).message (zlink::message_t::from ("send")).async ();
     auto request = fixture.socket.request (target)
                      .message (zlink::message_t::from ("request"))
-                     .timeout (std::chrono::seconds (5)).async ();
+                     .timeout (std::chrono::seconds (5))
+                     .async ();
     auto send_wait = std::move (send.admitted).operator co_await ();
     auto request_wait = std::move (request.reply).operator co_await ();
     assert (!send_wait.await_ready () && !request_wait.await_ready ());
@@ -85,18 +85,16 @@ void unknown_writable_uses_protocol_error ()
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
     const auto target = zlink::routing_id_t::from ("submit-target");
-    auto send = fixture.socket.send (target)
-                  .message (zlink::message_t::from ("send")).async ();
+    auto send = fixture.socket.send (target).message (zlink::message_t::from ("send")).async ();
     auto request = fixture.socket.request (target)
                      .message (zlink::message_t::from ("request"))
-                     .timeout (std::chrono::seconds (5)).async ();
+                     .timeout (std::chrono::seconds (5))
+                     .async ();
     auto send_wait = std::move (send.admitted).operator co_await ();
     auto request_wait = std::move (request.reply).operator co_await ();
     assert (!send_wait.await_ready () && !request_wait.await_ready ());
-    fixture.writable (0, "submit-target",
-                      static_cast<zlink_send_complete_result_t> (999), ENOENT);
-    fixture.writable (1, "submit-target",
-                      static_cast<zlink_send_complete_result_t> (999), ENOENT);
+    fixture.writable (0, "submit-target", static_cast<zlink_send_complete_result_t> (999), ENOENT);
+    fixture.writable (1, "submit-target", static_cast<zlink_send_complete_result_t> (999), ENOENT);
     assert (fixture.owner->drain () == 2);
     const auto assert_protocol = [] (auto &wait) {
         assert (wait.await_ready ());
@@ -113,14 +111,44 @@ void unknown_writable_uses_protocol_error ()
     assert_protocol (request_wait);
 }
 
+void request_completion_projects_core_first_errno (zlink_request_result_t result_,
+                                                   zlink::request_result_t expected_result_,
+                                                   int expected_errno_)
+{
+    completion_test::fixture_t fixture;
+    completion_test::active = &fixture;
+    const auto target = zlink::routing_id_t::from ("submit-target");
+    auto request = fixture.socket.request (target)
+                     .message (zlink::message_t::from ("request"))
+                     .timeout (std::chrono::seconds (5))
+                     .async ();
+    auto request_wait = std::move (request.reply).operator co_await ();
+    assert (!request_wait.await_ready ());
+
+    fixture.writable (0, "submit-target");
+    assert (fixture.owner->drain () == 1);
+    assert (!fixture.completions.empty ());
+    fixture.completions.back ().request_result = result_;
+    assert (fixture.owner->drain () == 1);
+    assert (request_wait.await_ready ());
+    try {
+        request_wait.await_resume ();
+        assert (false);
+    }
+    catch (const zlink::request_error_t &error) {
+        assert (error.result () == expected_result_);
+        assert (error.internal_errno () == expected_errno_);
+    }
+}
+
 void abandoned_send_does_not_resubmit ()
 {
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
     const auto target = zlink::routing_id_t::from ("submit-target");
     {
-        auto send = fixture.socket.send (target)
-                      .message (zlink::message_t::from ("abandoned")).async ();
+        auto send =
+          fixture.socket.send (target).message (zlink::message_t::from ("abandoned")).async ();
         assert (send.result == ZLINK_SUBMIT_BACKPRESSURED);
     }
     fixture.writable (0, "submit-target");
@@ -133,8 +161,7 @@ void abandonment_during_resubmit_completes ()
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
     const auto target = zlink::routing_id_t::from ("submit-target");
-    auto send = fixture.socket.send (target)
-                  .message (zlink::message_t::from ("racing")).async ();
+    auto send = fixture.socket.send (target).message (zlink::message_t::from ("racing")).async ();
     std::promise<void> retry_entered;
     std::promise<void> release_retry;
     auto release = release_retry.get_future ();
@@ -147,8 +174,7 @@ void abandonment_during_resubmit_completes ()
     std::thread drain ([&] { assert (fixture.owner->drain () == 1); });
     retry_entered.get_future ().wait ();
     std::promise<void> detach_done;
-    std::thread detach ([admitted = std::move (send.admitted),
-                         &detach_done] () mutable {
+    std::thread detach ([admitted = std::move (send.admitted), &detach_done] () mutable {
         {
             auto dropped = std::move (admitted);
             (void) dropped;
@@ -175,6 +201,32 @@ int main ()
     terminal_writable_uses_core_result (ZLINK_SEND_TIMED_OUT, EAGAIN,
                                         zlink::submit_result_t::backpressured);
     unknown_writable_uses_protocol_error ();
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_TIMED_OUT,
+                                                  zlink::request_result_t::timed_out, ETIMEDOUT);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_NOT_FOUND,
+                                                  zlink::request_result_t::not_found, ENOENT);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_TERMINATED,
+                                                  zlink::request_result_t::terminated, ETERM);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_PROTOCOL_ERROR,
+                                                  zlink::request_result_t::protocol_error, EPROTO);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_INTERNAL_ERROR,
+                                                  zlink::request_result_t::internal_error, EIO);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_REJECTED,
+                                                  zlink::request_result_t::rejected, EACCES);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_CONFLICT,
+                                                  zlink::request_result_t::conflict, EEXIST);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_BUSY, zlink::request_result_t::busy,
+                                                  EBUSY);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_NOT_CONNECTED,
+                                                  zlink::request_result_t::not_connected, ENOTCONN);
+    request_completion_projects_core_first_errno (
+      ZLINK_REQUEST_INVALID_ARGUMENT, zlink::request_result_t::invalid_argument, EINVAL);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_INVALID_STATE,
+                                                  zlink::request_result_t::invalid_state, EFSM);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_NOT_SUPPORTED,
+                                                  zlink::request_result_t::not_supported, ENOTSUP);
+    request_completion_projects_core_first_errno (ZLINK_REQUEST_BACKPRESSURED,
+                                                  zlink::request_result_t::backpressured, EAGAIN);
     abandoned_send_does_not_resubmit ();
     abandonment_during_resubmit_completes ();
 }

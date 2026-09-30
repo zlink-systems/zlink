@@ -20,10 +20,6 @@ import {
   type ZLinkRemoteActorPacketTarget,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import {
-  mergeRemoteBoundSessionTarget,
-  preferredRemoteBoundSessionTarget
-} from '../actors/actor-runtime-state';
 import type { DefaultZLinkActorManager } from '../actors';
 import {
   decodeRemoteActorSessionBinding,
@@ -44,13 +40,14 @@ import { streamMetadataMap } from '../actors/bound-session-wire';
 import { decodeRoutingId, normalizeRoutingId, routingIdsEqual } from '../routing-id';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
-import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
 import type { ZLinkBoundSessionResponseTarget } from '../streams';
 import type {
   ZLinkBoundSessionResponsePort,
+  ZLinkSessionBindingConfirmationOptions,
   ZLinkStreamActorLookupPort
 } from '../streams/stream-binding-runtime-ports';
+import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-contracts';
 import { actorSessionBindingRuntimeOwnerIfRegistered } from '../streams/actor-session-binding-runtime-owner';
 import {
   decodeStreamHeader,
@@ -64,10 +61,6 @@ import {
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import { ZLinkRemoteActorPacketTargetStore } from './remote-actor-packet-target-store';
 import type { ZLinkStoreLocationResolvers } from '../locations';
-
-const REMOTE_SESSION_BIND_RETRY_DEADLINE_MS = 30_000;
-const REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS = 25;
-const REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS = 1_000;
 
 export interface ZLinkActorPacketRelayOptions {
   readonly requestTimeoutMs?: number;
@@ -120,12 +113,7 @@ export class ZLinkActorPacketRelay {
   ): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.actorId);
     const currentRemoteBoundSessionTarget =
-      state?.spotId === undefined
-        ? undefined
-        : preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          );
+      state?.spotId === undefined ? undefined : state.remoteBoundSessionTarget;
     const currentRemoteActorPacketTarget =
       state?.spotId === undefined ? undefined : state.remoteActorPacketTarget;
     const remoteTarget =
@@ -174,10 +162,7 @@ export class ZLinkActorPacketRelay {
     const remoteTarget =
       state === undefined
         ? undefined
-        : (preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          ) ?? state.remoteActorPacketTarget);
+        : (state.remoteBoundSessionTarget ?? state.remoteActorPacketTarget);
     if (remoteTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actorId, remoteTarget, signal);
       return;
@@ -288,61 +273,23 @@ export class ZLinkActorPacketRelay {
         if (frameHeader.kind !== ZLinkStreamMessageKind.Send) {
           throw new Error('Remote actor session binding requires a send frame.');
         }
-        const { sessionNodeRid, sessionRid } = decodeRemoteActorSessionBinding(
-          messageToBytes(body)
-        );
+        const { sessionNodeRid } = decodeRemoteActorSessionBinding(messageToBytes(body));
         if (!routingIdsEqual(sessionNodeRid, _routeContext.sourceNodeRid)) {
           throw new Error(
             'Remote actor session binding source did not match the declared session node.'
           );
         }
+        // The Actor owner installs the binding from the Session owner's
+        // command 38 (Session–Actor binding §5); this relay confirmation only
+        // acknowledges that the Actor is still owned here.
         const state = this.options.actorManager()?.getState(relay.actorId);
-        const actorRef = state?.nativeActorRef;
-        if (state === undefined || actorRef === undefined) {
+        if (state?.nativeActorRef === undefined) {
           throw new Error(`Actor '${relay.actorId}' does not have a concrete actor ref.`);
         }
-        if (this.requireSpotNodeRuntime().primaryMeshNode === undefined) {
-          throw new Error('MeshNode actor runtime is not started.');
-        }
-        const target =
-          relay.routerChannelId === undefined
-            ? this.options.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid)
-            : {
-                routerChannelId: relay.routerChannelId,
-                targetNodeRid: sessionNodeRid,
-                spotId: sessionNodeRid
-              };
-        if (target === undefined) {
-          throw new Error('Remote actor session binding did not declare a return router.');
-        }
-        const bindingGeneration = (
-          fallbackActorRef as
-            | (ActorRef & {
-                readonly bindingGeneration?: bigint;
-              })
-            | undefined
-        )?.bindingGeneration;
-        const refreshedTarget = mergeRemoteBoundSessionTarget(
-          {
-            ...target,
-            sessionNodeRid,
-            sessionRid,
-            ...(bindingGeneration === undefined ? {} : { bindingGeneration })
-          },
-          preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          )
-        );
-        state.setRemoteBoundSessionTarget(refreshedTarget);
         return { ok: true, response: { acknowledged: true } };
       }
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
-        this.options
-          .actorManager()
-          ?.getState(relay.actorId)
-          ?.setRemoteBoundSessionTarget(undefined);
         await this.notifyLocalActorDisconnectedById(relay.actorId);
         return {
           ok: true,
@@ -523,34 +470,10 @@ export class ZLinkActorPacketRelay {
     payload: Message,
     signal?: AbortSignal
   ): Promise<boolean> {
-    //  Spec 32:87 — a route/owner that is not currently usable is
-    //  Unavailable and retryable within the request deadline. Right after a
-    //  relocation the cached packet target can carry a transiently
-    //  incomplete Ready authority fence (route publication still
-    //  converging); failing the request on the fence check would surface a
-    //  NotFound for a Spot that exists and is Ready on its owner. Clear the
-    //  stale hint and re-resolve with a short bound instead.
-    const fenceRetryDeadlineMs = performance.now() + 1_000;
-    for (;;) {
-      try {
-        if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
-          return true;
-        }
-        return await this.relayLocalActorPacket(actor, frameHeader, payload, signal);
-      } catch (error) {
-        if (
-          !(
-            error instanceof Error && error.message.includes('no complete Ready authority fence')
-          ) ||
-          performance.now() >= fenceRetryDeadlineMs
-        ) {
-          throw error;
-        }
-        this.targets.clear(actor.actorId);
-        this.options.actorManager()?.getState(actor.actorId)?.setRemoteActorPacketTarget(undefined);
-        await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      }
+    if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
+      return true;
     }
+    return this.relayLocalActorPacket(actor, frameHeader, payload, signal);
   }
 
   async confirmRemoteSessionBinding(
@@ -558,10 +481,13 @@ export class ZLinkActorPacketRelay {
     sessionNodeRid: RoutingId,
     sessionRid: RoutingId,
     signal?: AbortSignal,
-    options?: { readonly waitForAcknowledgement?: boolean }
+    options?: ZLinkSessionBindingConfirmationOptions
   ): Promise<void> {
     const target = this.targets.targetForActorRef(actor);
-    if (target === undefined) return;
+    if (target === undefined) {
+      this.installSameNodeSessionBinding(actor.actorId, options?.binding);
+      return;
+    }
     const header = encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Json,
@@ -579,12 +505,9 @@ export class ZLinkActorPacketRelay {
       payload: encodeRemoteActorSessionBinding({ sessionNodeRid, sessionRid })
     });
     if (options?.waitForAcknowledgement === false) {
-      await this.retryRemoteSessionBindingSend(
-        withDefaultSpotKind(target),
-        request,
-        performance.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
-        REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS
-      );
+      await this.options.routeTransport.sendToSpot(withDefaultSpotKind(target), request, {
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+      });
       return;
     }
     const reply = await this.requestRemoteTarget<{
@@ -624,42 +547,38 @@ export class ZLinkActorPacketRelay {
     }
   }
 
-  private async retryRemoteSessionBindingSend(
-    target: ZLinkSpotRouteTarget,
-    request: unknown,
-    deadline: number,
-    delayMs: number
-  ): Promise<void> {
-    try {
-      await this.options.routeTransport.sendToSpot(target, request, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-      });
-    } catch (error) {
-      if (performance.now() >= deadline) {
-        //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
-        //  exhaustion on the one-way bind send remains diagnostics-only but
-        //  the caller waits for its bounded submission terminal so later
-        //  application relay cannot overtake it.
-        this.options
-          .errorSink()
-          .reportRuntimeTaskException(
-            'remote session binding send',
-            createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-              'Remote actor session binding send retries exceeded their deadline.',
-              error
-            )
-          );
-        return;
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-      await this.retryRemoteSessionBindingSend(
-        target,
-        request,
-        deadline,
-        Math.min(delayMs * 2, REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS)
+  /**
+   * Session–Actor binding §5·§6 (.NET ZLinkSessionActorCoordinator rule): a
+   * same-node bind installs the Session owner's registry identity through the
+   * same install a remote command 38 uses, so relocation seals and carries it.
+   */
+  private installSameNodeSessionBinding(
+    actorId: string,
+    binding: ServiceStreamSessionBinding | undefined
+  ): void {
+    // The Actor is gone (destroyed or relocated away): nothing to record.
+    const state = this.options.actorManager()?.getState(actorId);
+    // No registry binding exists only for a native-fallback bind, which has no
+    // Session owner registry (managed-stream.ts `bindActor` fallback).
+    if (state === undefined || binding === undefined) return;
+    const route = this.options.meshRouters.remoteBoundSessionTargetForSource(
+      binding.sessionOwnerNodeRid
+    );
+    if (route === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+        `Actor '${actorId}' Session route is unavailable.`
       );
     }
+    state.installBoundSessionBinding({
+      ...route,
+      sessionNodeRid: binding.sessionOwnerNodeRid,
+      sessionRid: binding.sessionRid,
+      sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+      sessionOwnerId: binding.sessionOwnerId,
+      sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+      bindingGeneration: binding.bindingGeneration
+    });
   }
 
   async relayRemoteActorPacket(
@@ -894,13 +813,7 @@ export class ZLinkActorPacketRelay {
     routeContext: ZLinkRouteMessageContext
   ): void {
     const state = this.options.actorManager()?.getState(relay.actorId);
-    const current =
-      state === undefined
-        ? undefined
-        : preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          );
+    const current = state?.boundSession;
     if (
       current === undefined ||
       current.sessionNodeRid === undefined ||

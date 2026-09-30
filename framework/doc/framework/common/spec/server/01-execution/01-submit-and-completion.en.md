@@ -68,6 +68,12 @@ Verification uses the completion representations and outcomes actually exposed b
 
 The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove an existing cancellation connection for a pending stage or introduce binding operation state, registries, or resubmission logic into the Framework.
 
+**Asynchronous results completed by the application, and bounded observation.** The application can create an asynchronous result that an external event completes, and can observe that result for a bounded time on an application thread.
+
+- A completion source settles only the first completion, and later completion attempts don't change the result. The result is a success value or a typed Framework error. Every result handle obtained from the same completion source observes the same original result. Destroying the completion source or a result handle neither completes nor cancels the original result.
+- Bounded observation follows the same context rule as a synchronous blocking terminator — in a runtime execution context it is `InvalidOperation`. When the time passes it only reports "not completed"; it neither completes nor cancels the original result, and a late completion stays on the original result. An observation timeout isn't an operation terminal.
+- .NET, Java, and Node.js provide this capability through their standard types (`TaskCompletionSource`, `CompletableFuture`, `Promise`), so the Framework adds no separate API there. C++ puts a completion source and bounded observation on the Framework task type. A continuation awaiting this completion source's result resumes in the execution context that registered the await, not on the completing thread, and an await inside a handler keeps that handler turn like a general asynchronous terminal. [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.en.md) fixes the names and shapes, and [Cancellation and shutdown §5.1](03-cancellation-and-shutdown.en.md#51-ending-waits-on-an-application-completion-source) owns the boundary with host shutdown.
+
 [Handler turn and execution gate §16](02-handler-turn-and-execution-gate.en.md#yield-call-eligibility)
 owns the execution contexts and calls that offer `Yield`.
 
@@ -144,6 +150,7 @@ call of this section; it follows the transport execution-context contract of
 |---|---|
 | Remote target | Local transport queue |
 | Local target | The matching mailbox or relay queue |
+| One-way session Actor relay to a binding under a relocation seal | The Session owner's seal holding store ([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)) |
 | [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) — a separate PUB/SUB path that sends events only to targets that finished connecting and subscribing — /STREAM | The matching socket queue |
 
 Global Spot/Actor send waits from the current [Ready](../00-foundation/02-glossary.en.md#ready) authority
@@ -191,7 +198,8 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 |---|---|
 | No Actor authority | `NotFound` |
 | No Spot authority | `NotFound` |
-| No Mesh or eligible Server | `NotFound` |
+| No Mesh | `NotFound` |
+| ChannelName target selection fails | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result) |
 | No route available | `Unavailable` |
 | Admission deadline expired | `DeadlineExceeded` |
 | Runtime not accepting new admission | `ShuttingDown` |
@@ -233,7 +241,7 @@ not exposed as a public result.
 
 ## 7. Admission Deadline — Owner and Value Rules
 
-The one-way admission deadline is owned by the outbound socket or a
+The one-way admission deadline and the outbound admission deadline of a global object request are owned by the outbound socket or a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that participates in a
 RouteMesh to send or receive messages — that the operation actually uses.
 
@@ -258,13 +266,18 @@ The Framework's public send timeout follows these value rules.
   not mean every language must add the same root option.
 - If a runtime setter exists, an invalid value is rejected immediately at the setter call.
 
+An admission that carries a caller-side deadline uses whichever comes first, the socket send
+timeout or that deadline; the caller-side value never extends the socket send timeout. The
+caller-side deadlines are the STREAM one-way send admission-timeout modifier below and the
+remaining request timeout of a global object request
+([§9](#9-request-completion--the-completion-race-and-timeout-budget)).
+
 A STREAM one-way send call provides an optional per-call admission-timeout modifier. This
 value is not reply wait time; it is the maximum time that send can wait for acceptance by
 the STREAM transport queue.
 
 - If omitted, the matching STREAM socket's send timeout is used.
-- If specified, the earlier of the socket timeout and the per-call timeout is used. A
-  per-call value never extends the socket timeout.
+- If specified, the caller-side deadline rule above applies.
 - Validation and millisecond rounding use the same `1..INT_MAX` rules above.
 - If the deadline wins, the call completes once with `DeadlineExceeded`; later capacity does
   not admit or replay that send.
@@ -320,7 +333,8 @@ flowchart LR
 
 The global object request timeout covers the current Ready authority resolve, outbound
 admission, handler, and reply as a whole. A source only passes the remaining time, after
-subtracting what earlier stages used, to the next stage. The resubmission boundary for a request after timeout or connection failure is defined by
+subtracting what earlier stages used, to the next stage. The deadline of the outbound
+admission stage is set by [§7](#7-admission-deadline--owner-and-value-rules). The resubmission boundary for a request after timeout or connection failure is defined by
 [§5](#5-backpressure-and-error-classification).
 
 How a request sent within the same handler turn releases and reacquires the gate while

@@ -11,9 +11,7 @@ zlink::dist_t::dist_t () :
     _matching (0),
     _active (0),
     _eligible (0),
-    _more (false),
-    _matching_hwm_cache_valid (false),
-    _matching_hwm_admission (pipe_message_admission_ready)
+    _more (false)
 {
 }
 
@@ -37,7 +35,6 @@ void zlink::dist_t::attach (pipe_t *pipe_)
         _active++;
         _eligible++;
     }
-    _matching_hwm_cache_valid = false;
 }
 
 bool zlink::dist_t::has_pipe (pipe_t *pipe_)
@@ -60,7 +57,6 @@ void zlink::dist_t::match (pipe_t *pipe_)
     //  Mark the pipe as matching.
     _pipes.swap (index, _matching);
     _matching++;
-    _matching_hwm_cache_valid = false;
 }
 
 void zlink::dist_t::reverse_match ()
@@ -77,13 +73,11 @@ void zlink::dist_t::reverse_match ()
     for (pipes_t::size_type i = prev_matching; i < _eligible; ++i) {
         _pipes.swap (i, _matching++);
     }
-    _matching_hwm_cache_valid = false;
 }
 
 void zlink::dist_t::unmatch ()
 {
     _matching = 0;
-    _matching_hwm_cache_valid = false;
 }
 
 void zlink::dist_t::pipe_terminated (pipe_t *pipe_)
@@ -114,7 +108,6 @@ void zlink::dist_t::pipe_terminated (pipe_t *pipe_)
     }
 
     _pipes.erase (pipe_);
-    _matching_hwm_cache_valid = false;
 }
 
 void zlink::dist_t::activated (pipe_t *pipe_)
@@ -131,23 +124,42 @@ void zlink::dist_t::activated (pipe_t *pipe_)
         _pipes.swap (_eligible - 1, _active);
         _active++;
     }
-    _matching_hwm_cache_valid = false;
 }
 
 int zlink::dist_t::send_to_all (msg_t *msg_)
 {
-    _matching = _active;
-    _matching_hwm_cache_valid = false;
+    match_all ();
     return send_to_matching (msg_);
 }
 
-int zlink::dist_t::send_to_matching (msg_t *msg_)
+void zlink::dist_t::match_all ()
+{
+    _matching = _active;
+}
+
+int zlink::dist_t::send_to_matching (msg_t *msg_,
+                                    bool publish_record_admitted_)
 {
     //  Is this end of a multipart message?
     const bool msg_more = (msg_->flags () & msg_t::more) != 0;
 
+    if (publish_record_admitted_) {
+        //  All destinations must accept this frame before any destination
+        //  can flush the completed record.
+        for (pipes_t::size_type i = 0; i < _matching; ++i) {
+            const pipe_message_admission_t admission =
+              _pipes[i]->check_admitted_publish_frame_size (msg_);
+            if (admission != pipe_message_admission_ready) {
+                errno = EMSGSIZE;
+                if (_more)
+                    rollback ();
+                return -1;
+            }
+        }
+    }
+
     //  Push the message to matching pipes.
-    distribute (msg_);
+    distribute (msg_, publish_record_admitted_);
 
     //  If multipart message is fully sent, activate all the eligible pipes.
     if (!msg_more)
@@ -158,7 +170,8 @@ int zlink::dist_t::send_to_matching (msg_t *msg_)
     return 0;
 }
 
-void zlink::dist_t::distribute (msg_t *msg_)
+void zlink::dist_t::distribute (msg_t *msg_,
+                              bool publish_record_admitted_)
 {
     //  If there are no matching pipes available, simply drop the message.
     if (_matching == 0) {
@@ -173,7 +186,7 @@ void zlink::dist_t::distribute (msg_t *msg_)
     // matching pipe. Avoid the generic distributor loop, refcount churn, and
     // repeated pipe index lookups in that narrow case.
     if (_matching == 1 && _active == 1 && _eligible == 1) {
-        if (!write_at (0, msg_)) {
+        if (!write_at (0, msg_, publish_record_admitted_)) {
             const int close_rc = msg_->close ();
             errno_assert (close_rc == 0);
         }
@@ -187,7 +200,7 @@ void zlink::dist_t::distribute (msg_t *msg_)
     //  follow the same add_refs/rm_refs fan-out path as a long payload.
     if (msg_->is_vsm () && !msg_->has_long_group ()) {
         for (pipes_t::size_type i = 0; i < _matching;) {
-            if (!write_at (i, msg_)) {
+            if (!write_at (i, msg_, publish_record_admitted_)) {
                 //  Use same index again because entry will have been removed.
             } else {
                 ++i;
@@ -205,7 +218,7 @@ void zlink::dist_t::distribute (msg_t *msg_)
     //  Push copy of the message to each matching pipe.
     int failed = 0;
     for (pipes_t::size_type i = 0; i < _matching;) {
-        if (!write_at (i, msg_)) {
+        if (!write_at (i, msg_, publish_record_admitted_)) {
             ++failed;
             //  Use same index again because entry will have been removed.
         } else {
@@ -235,16 +248,18 @@ void zlink::dist_t::deactivate_matching_pipe (pipes_t::size_type index_)
     _active--;
     _pipes.swap (_active, _eligible - 1);
     _eligible--;
-    _matching_hwm_cache_valid = false;
 }
 
-bool zlink::dist_t::write_at (pipes_t::size_type index_, msg_t *msg_)
+bool zlink::dist_t::write_at (pipes_t::size_type index_, msg_t *msg_,
+                             bool publish_record_admitted_)
 {
     pipe_t *pipe = _pipes[index_];
     const bool more = (msg_->flags () & msg_t::more) != 0;
-    const bool ok = more ? pipe->write_no_recursive_hwm_check (msg_)
-                         : pipe->write_single_message_and_flush_no_recursive_hwm_check (
-                             msg_);
+    const bool ok = publish_record_admitted_
+                      ? pipe->write_admitted_publish_frame (msg_)
+                      : (more ? pipe->write_no_recursive_hwm_check (msg_)
+                              : pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                                  msg_));
     if (!ok) {
         if (_more)
             pipe->rollback ();
@@ -254,23 +269,21 @@ bool zlink::dist_t::write_at (pipes_t::size_type index_, msg_t *msg_)
     return true;
 }
 
-zlink::pipe_message_admission_t zlink::dist_t::check_hwm (const msg_t *msg_)
+zlink::pipe_message_admission_t zlink::dist_t::check_publish_record_hwm (
+  bool drop_full_publish_pipes_)
 {
-    if (!msg_ && _matching_hwm_cache_valid)
-        return _matching_hwm_admission;
-
     pipe_message_admission_t result = pipe_message_admission_ready;
-    for (pipes_t::size_type i = 0; i < _matching; ++i) {
+    for (pipes_t::size_type i = 0; i < _matching;) {
         const pipe_message_admission_t current =
-          msg_ ? _pipes[i]->check_hwm_for_message (msg_)
-               : (_pipes[i]->check_hwm () ? pipe_message_admission_ready
-                                          : pipe_message_admission_hwm_full);
-        if (current == pipe_message_admission_too_large
-            || current == pipe_message_admission_invalid)
-            result = current;
-        else if (current == pipe_message_admission_hwm_full
-                 && result != pipe_message_admission_too_large
-                 && result != pipe_message_admission_invalid)
+          _pipes[i]->check_publish_record_hwm ();
+        if (drop_full_publish_pipes_
+            && (current == pipe_message_admission_hwm_full
+                || current == pipe_message_admission_transport_wait
+                || current == pipe_message_admission_inactive)) {
+            deactivate_matching_pipe (i);
+            continue;
+        }
+        if (current == pipe_message_admission_hwm_full)
             result = current;
         else if ((result == pipe_message_admission_ready
                   || result == pipe_message_admission_inactive)
@@ -279,12 +292,9 @@ zlink::pipe_message_admission_t zlink::dist_t::check_hwm (const msg_t *msg_)
         else if (result == pipe_message_admission_ready
                  && current == pipe_message_admission_inactive)
             result = current;
+        ++i;
     }
 
-    if (!msg_) {
-        _matching_hwm_cache_valid = true;
-        _matching_hwm_admission = result;
-    }
     return result;
 }
 
@@ -296,5 +306,4 @@ void zlink::dist_t::rollback ()
     _matching = 0;
     _active = _eligible;
     _more = false;
-    _matching_hwm_cache_valid = false;
 }
