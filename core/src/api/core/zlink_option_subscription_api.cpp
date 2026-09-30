@@ -95,7 +95,9 @@ int raw_socket_subscription_at (zlink::socket_base_t *socket_,
     }
 
     std::vector<zlink::xsub_t::subscription_descriptor_t> entries;
-    static_cast<zlink::xsub_t *> (socket_)->snapshot_subscriptions (&entries);
+    if (static_cast<zlink::xsub_t *> (socket_)->snapshot_subscriptions_for_public_api (&entries)
+        != 0)
+        return -1;
     std::sort (entries.begin (), entries.end (), raw_subscription_less_t ());
 
     if (index_ >= entries.size ()) {
