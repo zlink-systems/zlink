@@ -1,0 +1,4 @@
+# bootstrap.cmake output (installed framework, build tree) and run results.
+.zlink/
+build/
+perf-results/

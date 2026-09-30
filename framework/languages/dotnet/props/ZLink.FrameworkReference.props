@@ -1,0 +1,49 @@
+<Project>
+  <!--
+    Shared package-or-source reference device for samples and perf.
+    Import it at the END of a Directory.Build.props, after that props declared its
+    <ZLinkFrameworkReference Include="<package id>" /> items, so those items become either
+    ProjectReference (local source) or PackageReference (published package).
+
+    Mode: ZLinkSampleUseLocalSource=true|false wins; otherwise the importer's preset default,
+    otherwise local source when this repository's ../src exists and published packages when it does not.
+    The published versions come from framework/languages/dotnet/VERSION (Framework packages)
+    and bindings/dotnet/VERSION (Zlink, through the central Directory.Packages.props); outside a checkout
+    the Framework version is the ZLinkSampleFrameworkVersion default below.
+  -->
+  <PropertyGroup>
+    <ZLinkSampleDotnetRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</ZLinkSampleDotnetRoot>
+    <ZLinkSampleRepositoryDetected Condition="Exists('$(ZLinkSampleDotnetRoot)/src/Zlink.Framework/Zlink.Framework.csproj')">true</ZLinkSampleRepositoryDetected>
+    <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
+    <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$(ZLinkSampleDotnetRoot)/VERSION</ZLinkSampleFrameworkVersionFile>
+    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
+    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.26.0</ZLinkSampleFrameworkVersion>
+    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true'">true</ZLinkSampleUseLocalSource>
+    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Zlink.Framework" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.Contracts" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.Locations.Redis" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.Codecs.Protobuf" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Stream.Connector" Version="$(ZLinkSampleFrameworkVersion)" />
+  </ItemGroup>
+
+  <!-- package id -> project path; only Stream.Connector's folder differs from its id. -->
+  <ItemGroup>
+    <ZLinkFrameworkReference Update="@(ZLinkFrameworkReference)"
+                             ProjectPath="$(ZLinkSampleDotnetRoot)/src/%(Identity)/%(Identity).csproj" />
+    <ZLinkFrameworkReference Update="Zlink.Stream.Connector"
+                             ProjectPath="$(ZLinkSampleDotnetRoot)/src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' == 'true'">
+    <ProjectReference Include="@(ZLinkFrameworkReference->'%(ProjectPath)')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' != 'true'">
+    <PackageReference Include="@(ZLinkFrameworkReference)" />
+  </ItemGroup>
+</Project>

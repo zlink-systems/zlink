@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="../ZLink.Framework.Perf.ServerSupport/ZLink.Framework.Perf.ServerSupport.csproj" />
+    <!-- The sequence original format has one definition (perf §15.4); the Publisher project owns it. -->
+    <Compile Include="../ZLink.Framework.Perf.PublisherServer/FanoutSequences.cs" Link="FanoutSequences.cs" />
+  </ItemGroup>
+</Project>

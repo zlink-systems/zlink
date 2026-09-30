@@ -41,7 +41,7 @@ repository.
 
 | Language | Detection | Force user mode | Copy out of the repository |
 |---|---|---|---|
-| .NET | `samples/Directory.Build.props` checks whether `../src/Zlink.Framework/Zlink.Framework.csproj` exists | `-p:ZLinkSampleUseLocalSource=false` | `scripts/local-package/dotnet/prepare-sample.sh <Sample> <dest>` (`.ps1` likewise) |
+| .NET | `props/ZLink.FrameworkReference.props` (imported by samples and perf) checks whether `../src/Zlink.Framework/Zlink.Framework.csproj` exists | `-p:ZLinkSampleUseLocalSource=false` | `scripts/local-package/dotnet/prepare-sample.sh <Sample> <dest>` (`.ps1` likewise) |
 | Node.js | `samples/scripts/prepare-sample-dependencies.mjs` finds the parent workspace (`@zlink-systems/node-framework-workspace`) | `ZLINK_NODE_SAMPLES_PACKAGE_MODE=1` | Copy the sample directory (`samples/<Name>.Ts`) as is, then `npm install` |
 | Java/Kotlin | `samples/gradle/zlink-sample-dependencies.settings.gradle.kts` finds the framework `settings.gradle.kts` above it | `-Pzlink.samples.packageMode=true` (`-Pzlink.frameworkVersion`, `-Pzlink.bindingsVersion` pin versions) | Copy the whole `samples/` directory |
 | C++ | The sample `CMakeLists.txt` finds `../../CMakeLists.txt` and `framework/include/zlink/framework.hpp` | `-DZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE=ON` | Copy `samples/<Name>/`. Its `vcpkg.json` and `conanfile.txt` require `zlink` and `zlink-framework` |
