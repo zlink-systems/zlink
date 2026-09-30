@@ -53,16 +53,16 @@ class provider_location_repository_t final : public location_repository_t
             throw std::invalid_argument ("owner lease claim is incomplete");
         const auto owner_key = key_owner (owner_id);
         for (;;) {
-            auto owner = read (owner_key);
+            auto owner = co_await _store->read (owner_key);
             if (std::holds_alternative<store_found_t> (owner))
-                return completed (owner_lease_claim_result_t{owner_lease_conflict_t{}});
+                co_return owner_lease_claim_result_t{owner_lease_conflict_t{}};
 
-            auto counter = read (counter_key);
+            auto counter = co_await _store->read (counter_key);
             std::int64_t generation = 1;
             if (const auto *found = std::get_if<store_found_t> (&counter))
                 generation = parse_i64 (found->value.bytes);
             if (generation == std::numeric_limits<std::int64_t>::max ())
-                return completed (owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}});
+                co_return owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}};
 
             const auto payload = owner_lease_bytes ({owner_id, generation});
             store_write_request_t request;
@@ -71,14 +71,14 @@ class provider_location_repository_t final : public location_repository_t
             request.mutations.push_back (store_put_t{owner_key, payload, lease_ttl});
             request.mutations.push_back (
               store_put_t{counter_key, to_bytes (std::to_string (generation + 1)), std::nullopt});
-            auto written = write (std::move (request));
+            auto written = co_await write_async (std::move (request));
             if (std::holds_alternative<store_write_conflict_t> (written))
                 continue;
             const auto &applied = std::get<store_write_applied_t> (written);
-            return completed (
-              owner_lease_claim_result_t{owner_lease_claimed_t{{std::move (owner_id), generation},
-                                                               applied.store_now + lease_ttl,
-                                                               applied.store_now}});
+            co_return owner_lease_claim_result_t{
+              owner_lease_claimed_t{{std::move (owner_id), generation},
+                                    applied.store_now + lease_ttl,
+                                    applied.store_now}};
         }
     }
 

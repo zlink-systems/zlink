@@ -639,14 +639,13 @@ class post_commit_failure_location_store_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        auto committed = inner.write (std::move (request));
+        auto committed = co_await inner.write (std::move (request));
         if (_fail_next_write) {
             _fail_next_write = false;
-            committed.result ().value ();
-            return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
-              framework_error_kind_t::unavailable, "reply was lost after commit"));
+            co_return result_t<store_write_result_t>::failure (framework_error_kind_t::unavailable,
+                                                               "reply was lost after commit");
         }
-        return committed;
+        co_return committed;
     }
 
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
@@ -757,14 +756,13 @@ class post_commit_failure_relocation_store_t final : public relocation_store_t
                                    std::span<const std::byte> payload,
                                    std::chrono::milliseconds retention) override
     {
-        auto committed = inner.put (reference, payload, retention);
+        auto committed = co_await inner.put (reference, payload, retention);
         if (_fail_next_put) {
             _fail_next_put = false;
-            committed.result ().value ();
-            return task_t<blob_put_result_t> (result_t<blob_put_result_t>::failure (
-              framework_error_kind_t::unavailable, "reply was lost after commit"));
+            co_return result_t<blob_put_result_t>::failure (framework_error_kind_t::unavailable,
+                                                            "reply was lost after commit");
         }
-        return committed;
+        co_return committed;
     }
 
     task_t<blob_read_result_t> read (blob_reference_t reference) override
