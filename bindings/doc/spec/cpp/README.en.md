@@ -426,8 +426,7 @@ Planning, manual overrides, and admission follow the [Core HWM contract](../READ
 forwarded unchanged as the exact monitor queue byte HWM. There is no
 message-count overload or alias.
 
-The outputs of `recv(received_t&)`, `subscribe(topic_message_t&)`, `recv(message_t&)`, and
-`subscribe_part(...)` manage part and routing/topic/request metadata lifetime through C++ copy,
+The outputs of `recv(received_t&)` and `subscribe(topic_message_t&)` manage part and routing/topic/request metadata lifetime through C++ copy,
 `close()`, and destruction. The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
 The public contract has no `auto_hwm_msg_unit_bytes` or slot, size-cap, or connection-bucket planner

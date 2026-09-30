@@ -505,6 +505,15 @@ described, and
 [Actor Model §6.1](04-actor-model.en.md#61-registering-factory-and-relocation-policy)
 and every other section of this document only point here.
 
+In an Actor Join to another node, the target's admission wire reply reports the target's
+acceptance and its temporary queue and factory preparation; it doesn't confirm the owner or
+membership commit. The conditions for the target-only CAS and the handling under settled authority follow
+[Complete Actor And Spot Relocation Flow §4.4–§4.6](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover);
+settlement and resubmission after an indeterminate CAS response follow
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received), as referenced there. A failure
+after the admission reply is accepted doesn't produce a second reply to the same wire request;
+Actor Join completion reports it according to the settled authority.
+
 Once an Actor handler calls `JoinSpot(...)` or `JoinEntrySpot(...)` and
 calls `Defer()` on the returned call object, the framework runs the Join in
 the following order after the handler ends normally.
