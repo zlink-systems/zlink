@@ -122,29 +122,6 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
         }
 
-        if (joinRequest.Canonical is not null)
-        {
-            if (result.Reply is null)
-            {
-                nativeSpot.ReplyActorJoin(
-                    joinRequest,
-                    result.Accepted ? 0 : 1,
-                    Array.Empty<Message>()
-                );
-                return;
-            }
-
-            var encoded = result.Reply.Encode(runtime.Registration.Codecs);
-            var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
-                ZLinkMessageNameResolver.ResolveFromMessage(result.Reply),
-                encoded.ContentType,
-                encoded.Payload.Bytes.Span
-            );
-            using var reply = Message.From(application);
-            nativeSpot.ReplyActorJoin(joinRequest, result.Accepted ? 0 : 1, reply);
-            return;
-        }
-
         if (!payload.UsesEnvelope)
         {
             if (result.Reply is { } reply)
