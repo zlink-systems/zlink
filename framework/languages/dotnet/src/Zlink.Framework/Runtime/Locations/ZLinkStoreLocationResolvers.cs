@@ -13,9 +13,7 @@ namespace Zlink.Framework.Runtime.Locations;
 /// </summary>
 internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolver
 {
-    private const int MaximumStaleSnapshotRetries = 3;
     private readonly IZLinkLocationRepository _store;
-    private readonly ZLinkObservedLocationGenerations _observed;
     private readonly ZLinkLiveLocationRows _liveRows;
     private readonly ZLinkLocationStoreHealth? _health;
     private readonly ZLinkOwnerLeaseTracker _leaseTracker;
@@ -34,14 +32,12 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     internal ZLinkStoreLocationResolvers(
         IZLinkLocationRepository store,
         ZLinkOwnerLeaseTracker leaseTracker,
-        ZLinkObservedLocationGenerations observed,
         ZLinkLocationStoreHealth? health = null,
         ZLinkLocationOptions? options = null,
         TimeProvider? timeProvider = null
     )
     {
         _store = store;
-        _observed = observed;
         _health = health;
         _leaseTracker = leaseTracker;
         _options = options ?? new ZLinkLocationOptions();
@@ -54,57 +50,32 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         CancellationToken cancellationToken = default
     )
     {
-        for (var attempt = 0; ; attempt++)
-        {
-            var rows = await ZLinkLocationStoreRead
-                .ExecuteAsync(
-                    _health,
-                    "mesh-node-resolver-read",
-                    cancellationToken,
-                    storeToken => _store.ListAllMeshNodesAsync(meshName, storeToken)
-                )
-                .ConfigureAwait(false);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"autoconnect_store_snapshot mesh={meshName} raw_rows={rows.Count} "
-                    + $"raw_rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
-            );
-            _observed.ReconcileDescriptors(meshName, rows);
+        var rows = await ZLinkLocationStoreRead
+            .ExecuteAsync(
+                _health,
+                "mesh-node-resolver-read",
+                cancellationToken,
+                storeToken => _store.ListAllMeshNodesAsync(meshName, storeToken)
+            )
+            .ConfigureAwait(false);
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"autoconnect_store_snapshot mesh={meshName} raw_rows={rows.Count} "
+                + $"raw_rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
+        );
 
-            // The shared acceptance policy rejects lagging lifecycle generation
-            // and descriptor revision views. A local descriptor update may
-            // finish after this snapshot begins but before its rows are
-            // filtered. Retry that bounded race without accepting the older
-            // row; a retired owner remains rejected on every attempt.
-            var rejectedByOlderRevision = false;
-            var live = await _liveRows
-                .FilterAsync(
-                    rows,
-                    static row => row.OwnerId,
-                    row =>
-                    {
-                        var accepted = _observed.AcceptDescriptor(row, out var olderRevision);
-                        rejectedByOlderRevision |= olderRevision;
-                        return accepted;
-                    },
-                    cancellationToken,
-                    static row => row.LeaseGeneration
-                )
-                .ConfigureAwait(false);
-            if (!rejectedByOlderRevision || attempt >= MaximumStaleSnapshotRetries)
-            {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} "
-                        + $"live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
-                );
-                return live;
-            }
-
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"autoconnect_snapshot_retry mesh={meshName} "
-                    + $"reason=older_revision attempt={attempt + 1}"
-            );
-            await Task.Yield();
-        }
+        var live = await _liveRows
+            .FilterAsync(
+                rows,
+                static row => row.OwnerId,
+                cancellationToken,
+                static row => row.LeaseGeneration
+            )
+            .ConfigureAwait(false);
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} "
+                + $"live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
+        );
+        return live;
     }
 
     internal async ValueTask<ZLinkResolvedSpotLocation?> ResolveSpotRowAsync(
@@ -197,20 +168,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             .ConfigureAwait(false);
         var raw = ProjectSpot(authority);
         var (row, liveRowPresent) = await _liveRows
-            .ResolveWithPresenceAsync(
-                raw,
-                static row => row.OwnerId,
-                row => _observed.AcceptSpot(row),
-                cancellationToken
-            )
+            .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
             .ConfigureAwait(false);
-        // A missing row and a row whose owner lease expired both end the
-        // incarnation. Storage can retain the expired row until a successor
-        // claims it, so raw presence alone must not preserve the old floor.
-        // A live but older replica row still reports LiveRowPresent=true and
-        // therefore cannot reset the floor.
-        if (!liveRowPresent)
-            _observed.ForgetSpot(key);
         if (row is null)
         {
             InvalidateSpotRoute(key);
@@ -228,7 +187,6 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false)
         )
         {
-            _observed.ForgetSpot(key);
             InvalidateSpotRoute(key);
             return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable);
         }
@@ -259,22 +217,13 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             .ConfigureAwait(false);
         var raw = ProjectActor(authority, key.ActorId);
         var (row, liveRowPresent) = await _liveRows
-            .ResolveWithPresenceAsync(
-                raw,
-                static row => row.OwnerId,
-                // Reference generation 0 marks a claimed-but-unpublished actor:
-                // the claim precedes activation, so such a row is never a
-                // resolvable reference (40-location-runtime §6).
-                row => row.ActorRef.ObjectGeneration > 0 && _observed.AcceptActor(row),
-                cancellationToken
-            )
+            .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
             .ConfigureAwait(false);
-        // An expired owner ends the incarnation even when its stale row remains
-        // in storage. Forget the old membership/generation floor so the next
-        // owner can publish its fresh per-instance axes. Do not forget for a
-        // live lagging replica row: LiveRowPresent remains true in that case.
-        if (!liveRowPresent)
-            _observed.ForgetActor(key);
+        // Reference generation 0 marks a claimed-but-unpublished actor:
+        // the claim precedes activation, so such a row is never a
+        // resolvable reference (40-location-runtime §6).
+        if (row is not null)
+            row = row.ActorRef.ObjectGeneration > 0 ? row : null;
         if (row is null)
         {
             InvalidateActorRoute(key);
@@ -298,7 +247,6 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false)
         )
         {
-            _observed.ForgetActor(key);
             InvalidateActorRoute(key);
             return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable);
         }

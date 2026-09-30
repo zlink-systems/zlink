@@ -54,7 +54,6 @@ internal sealed class ZLinkAutoConnectReconciler
     private bool _localPublished;
     private bool _storeFailed;
     private long? _storeFailureStartedAt;
-    private long _recoveryDeferUntil;
 
     // Set before waiting for the reconcile gate. The shutdown barrier must
     // prevent a queued or in-flight tick from starting another owner write
@@ -486,15 +485,8 @@ internal sealed class ZLinkAutoConnectReconciler
             {
                 if (_storeFailed)
                 {
-                    // First successful read after an outage: defer disconnects for
-                    // one heartbeat interval so other nodes get time to re-register.
                     _storeFailed = false;
                     _storeFailureStartedAt = null;
-                    _recoveryDeferUntil =
-                        _time.GetTimestamp()
-                        + (long)(
-                            _options.OwnerLeaseRenewInterval.TotalSeconds * _time.TimestampFrequency
-                        );
                 }
 
                 var desired = ZLinkAutoConnectPlanner.ComputeDesired(_local, rows);
@@ -622,9 +614,7 @@ internal sealed class ZLinkAutoConnectReconciler
 
         var toRemove = await _lane
             .RunAsync(() =>
-                _time.GetTimestamp() >= _recoveryDeferUntil
-                    ? _active.Where(entry => !connectableDesired.ContainsKey(entry.Key)).ToArray()
-                    : []
+                _active.Where(entry => !connectableDesired.ContainsKey(entry.Key)).ToArray()
             )
             .ConfigureAwait(false);
         foreach (var (key, target) in toRemove)

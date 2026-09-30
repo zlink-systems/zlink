@@ -27,7 +27,6 @@ final class ZLinkAutoConnectReconciler {
             new HashMap<>();
     private boolean storeFailed;
     private long storeFailureStartedNanos = -1;
-    private long recoveryDeferUntilNanos;
 
     ZLinkAutoConnectReconciler(
             ZLinkAutoConnectPlanner.Local local,
@@ -91,11 +90,6 @@ final class ZLinkAutoConnectReconciler {
         if (storeFailed) {
             storeFailed = false;
             storeFailureStartedNanos = -1;
-            recoveryDeferUntilNanos =
-                    nanoTime.getAsLong()
-                            + Math.max(
-                                    options.ownerLeaseRenewInterval().toNanos(),
-                                    options.ownerLeaseTtl().toNanos());
         }
         Map<String, ZLinkAutoConnectPlanner.Target> desired =
                 ZLinkAutoConnectPlanner.computeDesired(local, rows);
@@ -177,16 +171,12 @@ final class ZLinkAutoConnectReconciler {
                 executor.ensureConnected(target);
             }
         }
-        if (nanoTime.getAsLong() >= recoveryDeferUntilNanos) {
-            active.keySet().stream()
-                    .filter(key -> !desired.containsKey(key))
-                    .forEach(toRemove::add);
-            toRemove.forEach(
-                    key -> {
-                        ZLinkAutoConnectPlanner.Target target = active.get(key);
-                        if (executor.disconnect(target)) active.remove(key);
-                    });
-        }
+        active.keySet().stream().filter(key -> !desired.containsKey(key)).forEach(toRemove::add);
+        toRemove.forEach(
+                key -> {
+                    ZLinkAutoConnectPlanner.Target target = active.get(key);
+                    if (executor.disconnect(target)) active.remove(key);
+                });
     }
 
     private static boolean samePeerIdentity(

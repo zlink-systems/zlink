@@ -47,7 +47,7 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     @Test
-    void firstRecoveredSnapshotKeepsExistingConnectionUntilLeaseWindowEnds() {
+    void firstRecoveredSnapshotDisconnectsMissingTargetImmediately() {
         MutableResolver resolver = new MutableResolver();
         RecordingExecutor executor = new RecordingExecutor();
         AtomicLong now = new AtomicLong();
@@ -65,10 +65,6 @@ final class ZLinkAutoConnectReconcilerTest {
         resolver.failure = null;
         resolver.rows = List.of();
         now.set(Duration.ofMillis(100).toNanos());
-        reconciler.tick().toCompletableFuture().join();
-        assertEquals(0, executor.disconnects);
-
-        now.set(Duration.ofSeconds(4).toNanos());
         reconciler.tick().toCompletableFuture().join();
         assertEquals(1, executor.disconnects);
     }

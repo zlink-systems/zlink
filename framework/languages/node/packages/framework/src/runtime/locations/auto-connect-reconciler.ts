@@ -53,7 +53,6 @@ export class ZLinkAutoConnectReconciler {
   private localPublished = false;
   private storeFailedValue = false;
   private storeFailureStartedAtMs: number | undefined;
-  private recoveryDeferUntilMs = 0;
   private lastDesired = new Map<string, ZLinkAutoConnectTarget>();
   private meshMemberRidHexes?: ReadonlySet<string>;
 
@@ -155,14 +154,6 @@ export class ZLinkAutoConnectReconciler {
       await this.lane.run(() => {
         this.storeFailedValue = false;
         this.storeFailureStartedAtMs = undefined;
-        // After a store restart, owners may need one full lease interval to
-        // reclaim their token and republish a descriptor. Do not interpret the
-        // incomplete post-restart scan as a definitive removal.
-        // Keep the existing transport set through one lease interval while
-        // owners reclaim their tokens and republish descriptors. This deferral
-        // applies only after a Store operation failed; a successful empty scan
-        // is authoritative and must remove stale peers promptly.
-        this.recoveryDeferUntilMs = this.monotonicNowMs() + this.options.ownerLeaseTtlMs;
       });
     }
 
@@ -175,7 +166,6 @@ export class ZLinkAutoConnectReconciler {
       );
     });
     const candidates = ZLinkAutoConnectPlanner.computeCandidates(this.local, rows);
-    const nowMs = this.monotonicNowMs();
     this.executor.expectPeers?.([...candidates.values()]);
     this.executor.replaceNotRequired?.(
       ZLinkAutoConnectPlanner.computeNotRequired(this.local, rows)
@@ -263,15 +253,6 @@ export class ZLinkAutoConnectReconciler {
       }
     }
 
-    if (nowMs < (await this.lane.run(() => this.recoveryDeferUntilMs))) {
-      this.publishDesiredSetChange(connectedEndpoints, disconnectedEndpoints);
-      return;
-    }
-
-    // A store restart can expose an incomplete descriptor set while peers are
-    // reclaiming their owner leases. Preserve existing transport connections
-    // during that recovery window; stale-peer cleanup is safe after the
-    // deferred reconciliation has completed.
     this.executor.disconnectStalePeers?.([...candidates.values()]);
 
     const activeTargets = await this.lane.run(() => [...this.active]);

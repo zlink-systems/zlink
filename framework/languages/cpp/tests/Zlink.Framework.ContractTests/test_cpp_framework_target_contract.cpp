@@ -765,16 +765,26 @@ int main ()
     gate.require (messaging_test.find ("\"errorMessage\":\"missing handler\"") != std::string::npos,
                   "E2E-CP-33", "RL-D4 has no raw camelCase errorMessage assertion");
 
-    /* IMP-CP-06 — recovery re-registers local rows before applying disconnect diff. */
-    gate.require (location_auto_connect.find ("owner_lease_usable") != std::string::npos,
-                  "IMP-CP-06", "auto-connect recovery has no heartbeat defer boundary");
-    gate.require (location_auto_connect.find ("republish_after_store_recovery")
-                    != std::string::npos,
-                  "IMP-CP-06", "auto-connect recovery does not republish local rows");
-    gate.require (location_auto_connect.find (
-                    "invalidate_all_routes_after_store_recovery ();\n            return;")
-                    != std::string::npos,
-                  "IMP-CP-06", "recovery diff races the first provider heartbeat");
+    /* IMP-CP-06 — 복구 뒤 완전한 snapshot을 확인하면 같은 tick에서 적용합니다. */
+    const auto complete_recovery_snapshot =
+      location_auto_connect.find ("} while (page.continuation_token);");
+    const auto recovery_owner_check =
+      location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
+    const auto recovery_republish =
+      location_auto_connect.find ("republish_after_store_recovery ()", recovery_owner_check);
+    const auto recovery_invalidation = location_auto_connect.find (
+      "invalidate_all_routes_after_store_recovery ();", recovery_republish);
+    const auto recovery_diff =
+      location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
+    gate.require (
+      complete_recovery_snapshot != std::string::npos && recovery_owner_check != std::string::npos
+        && recovery_republish != std::string::npos && recovery_invalidation != std::string::npos
+        && recovery_diff != std::string::npos
+        && location_auto_connect.find (
+             "invalidate_all_routes_after_store_recovery ();\n            return;",
+             recovery_republish)
+             == std::string::npos,
+      "IMP-CP-06", "auto-connect applies the first complete recovery snapshot");
     gate.require (location_auto_connect.find ("_runtime->options ().polling_interval")
                       != std::string::npos
                     && location_auto_connect.find ("sleep_for (std::chrono::milliseconds (100))")

@@ -828,8 +828,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
         var resolvers = new ZLinkStoreLocationResolvers(
             store,
-            new ZLinkOwnerLeaseTracker(store, options, time),
-            new ZLinkObservedLocationGenerations()
+            new ZLinkOwnerLeaseTracker(store, options, time)
         );
         await using var lifecycle = new ZLinkLocationLifecycle(locationRuntime, resolvers);
         await CreateTrackedActorOwnershipAsync(
@@ -903,8 +902,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
         var resolvers = new ZLinkStoreLocationResolvers(
             store,
-            new ZLinkOwnerLeaseTracker(store, options, time),
-            new ZLinkObservedLocationGenerations()
+            new ZLinkOwnerLeaseTracker(store, options, time)
         );
         await using var lifecycle = new ZLinkLocationLifecycle(locationRuntime, resolvers);
         await CreateTrackedActorOwnershipAsync(
@@ -1009,8 +1007,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
         var resolvers = new ZLinkStoreLocationResolvers(
             store,
-            new ZLinkOwnerLeaseTracker(store, options, time),
-            new ZLinkObservedLocationGenerations()
+            new ZLinkOwnerLeaseTracker(store, options, time)
         );
         await using var lifecycle = new ZLinkLocationLifecycle(locationRuntime, resolvers);
         await CreateTrackedActorOwnershipAsync(
@@ -1113,8 +1110,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
         var resolvers = new ZLinkStoreLocationResolvers(
             store,
-            new ZLinkOwnerLeaseTracker(store, options, time),
-            new ZLinkObservedLocationGenerations()
+            new ZLinkOwnerLeaseTracker(store, options, time)
         );
         await using var lifecycle = new ZLinkLocationLifecycle(locationRuntime, resolvers);
         await CreateTrackedActorOwnershipAsync(
@@ -9277,7 +9273,6 @@ public sealed partial class EntrySpotActorDispatchTests
         var locationResolvers = new ZLinkStoreLocationResolvers(
             runtimeLocationStore,
             leaseTracker,
-            new ZLinkObservedLocationGenerations(),
             options: locationOptions
         );
         var locationRuntime = new ZLinkLocationRuntime(

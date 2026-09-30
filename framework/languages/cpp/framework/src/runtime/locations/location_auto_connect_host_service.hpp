@@ -389,7 +389,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             loop.failure_started_at.reset ();
             if (_route_cache)
                 _route_cache->invalidate_all_routes_after_store_recovery ();
-            return;
         }
 
         auto desired = select_endpoint_winners (compute_desired (loop, descriptors));
