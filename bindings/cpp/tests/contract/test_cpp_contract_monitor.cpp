@@ -386,8 +386,10 @@ void test_poller_wait_buffer_returns_slot ()
     assert (static_cast<short> (events[0].revents)
             & static_cast<short> (zlink::poll_event_flag_t::pollin));
 
-    zlink::message_t inbound;
+    zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "first");
     poller.remove (left);
 
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
@@ -397,6 +399,8 @@ void test_poller_wait_buffer_returns_slot ()
     assert (events[0].slot == 23);
 
     assert (left.recv (inbound) == 0);
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "second");
 }
 
 void test_socket_only_poller_modify_rebuilds_cached_items ()
@@ -429,16 +433,18 @@ void test_socket_only_poller_modify_rebuilds_cached_items ()
     assert (static_cast<short> (events[0].revents)
             & static_cast<short> (zlink::poll_event_flag_t::pollin));
 
-    zlink::message_t inbound;
+    zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
-    assert (inbound.to_string () == "first");
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "first");
 
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
     right.send ().message (second).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].slot == 11);
     assert (left.recv (inbound) == 0);
-    assert (inbound.to_string () == "second");
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "second");
 
     poller.modify (left, zlink::poll_event_flag_t::none);
     zlink::message_t third = zlink_cpp_contract::make_message ("third");
@@ -449,7 +455,8 @@ void test_socket_only_poller_modify_rebuilds_cached_items ()
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].slot == 11);
     assert (left.recv (inbound) == 0);
-    assert (inbound.to_string () == "third");
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "third");
 }
 
 void test_poller_capacity_leaves_remaining_ready_source ()
@@ -481,23 +488,27 @@ void test_poller_capacity_leaves_remaining_ready_source ()
     const std::uintptr_t first_slot = events[0].slot;
     assert (first_slot == 101 || first_slot == 102);
 
-    zlink::message_t inbound;
+    zlink::received_t inbound;
     if (first_slot == 101) {
         assert (receiver1.recv (inbound) == 0);
-        assert (inbound.to_string () == "a");
+        assert (inbound.is_single_part ());
+        assert (inbound.first_part ().to_string () == "a");
     } else {
         assert (receiver2.recv (inbound) == 0);
-        assert (inbound.to_string () == "b");
+        assert (inbound.is_single_part ());
+        assert (inbound.first_part ().to_string () == "b");
     }
 
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].slot != first_slot);
     if (events[0].slot == 101) {
         assert (receiver1.recv (inbound) == 0);
-        assert (inbound.to_string () == "a");
+        assert (inbound.is_single_part ());
+        assert (inbound.first_part ().to_string () == "a");
     } else {
         assert (receiver2.recv (inbound) == 0);
-        assert (inbound.to_string () == "b");
+        assert (inbound.is_single_part ());
+        assert (inbound.first_part ().to_string () == "b");
     }
 }
 
@@ -550,9 +561,10 @@ void test_poller_distinguishes_timer_and_socket_in_same_buffer ()
         for (std::size_t i = 0; i < count; ++i) {
             if (events[i].source_kind == zlink::poll_source_kind_t::socket) {
                 assert (events[i].slot == 41);
-                zlink::message_t inbound;
+                zlink::received_t inbound;
                 assert (receiver.recv (inbound) == 0);
-                assert (inbound.to_string () == "socket");
+                assert (inbound.is_single_part ());
+                assert (inbound.first_part ().to_string () == "socket");
                 saw_socket = true;
             } else if (events[i].source_kind == zlink::poll_source_kind_t::timer) {
                 assert (events[i].slot == 42);

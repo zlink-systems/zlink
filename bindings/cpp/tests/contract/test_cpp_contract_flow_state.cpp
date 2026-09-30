@@ -238,9 +238,10 @@ void test_unsupported_socket_send_recv_is_unchanged ()
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("still-works");
     right.send ().message (outbound).submit ();
-    zlink::message_t inbound;
+    zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
-    assert (inbound.to_string () == "still-works");
+    assert (inbound.is_single_part ());
+    assert (inbound.first_part ().to_string () == "still-works");
 }
 
 void test_invalid_handle_reports_invalid_handle ()
