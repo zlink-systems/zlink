@@ -93,22 +93,6 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     CompletionStage<Void> connect() {
-        synchronized (connectionAttemptLock) {
-            if (state == ZLinkStreamConnectionState.CLOSED) {
-                //  Spec 32 6: connecting a closed connector fails. There is
-                //  no connection and there will not be one, so the code the
-                //  caller reads is Disconnected.
-                throw ZLinkStreamException.disconnected("connector is closed");
-            }
-            if (isConnected()) {
-                return CompletableFuture.completedFuture(null);
-            }
-            if ((state == ZLinkStreamConnectionState.CONNECTING
-                            || state == ZLinkStreamConnectionState.RECONNECTING)
-                    && connectionAttempt != null) {
-                return connectionAttempt;
-            }
-        }
         return startConnectionAttempt(
                 ZLinkStreamConnectionState.CONNECTING, this::connectOnceStage);
     }
@@ -526,19 +510,22 @@ final class ZLinkStreamConnectionLifecycle {
 
     private CompletionStage<Void> startConnectionAttempt(
             ZLinkStreamConnectionState targetState, Supplier<CompletionStage<Void>> starter) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
+        CompletableFuture<Void> result;
         boolean notifyState;
         synchronized (connectionAttemptLock) {
             if (state == ZLinkStreamConnectionState.CLOSED) {
                 return CompletableFuture.failedFuture(
                         ZLinkStreamException.disconnected("connector is closed"));
             }
+            if (isConnected()) {
+                return CompletableFuture.completedFuture(null);
+            }
             if (connectionAttempt != null
                     && (state == ZLinkStreamConnectionState.CONNECTING
                             || state == ZLinkStreamConnectionState.RECONNECTING)) {
                 return connectionAttempt;
             }
-            connectionAttempt = result;
+            connectionAttempt = result = new CompletableFuture<>();
             notifyState = setStateLocked(targetState);
         }
         if (notifyState) {
@@ -743,7 +730,7 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private boolean setStateLocked(ZLinkStreamConnectionState next) {
-        if (state == next) {
+        if (state == ZLinkStreamConnectionState.CLOSED || state == next) {
             return false;
         }
         state = next;
