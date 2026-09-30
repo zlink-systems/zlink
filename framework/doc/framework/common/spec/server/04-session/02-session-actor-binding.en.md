@@ -567,8 +567,9 @@ the Session owner handles within that flow.
 - **A relocation seal and retired-binding rejection are different
   transitions.** §6's retired-binding rejection blocks ingress of a
   previous generation after replacing the current binding with a new
-  session. A relocation seal holds Session messages while moving the same
-  binding's Actor route. The two rules apply together and don't substitute
+  session. A relocation seal holds messages from the Session to the Actor while moving the same
+  binding's Actor route. A push from the Actor to the Session isn't held; it passes only
+  the binding check of [§5](#5-bind-and-relay) and is submitted immediately. The two rules apply together and don't substitute
   for each other.
 
 ### 8.1 Seal, Held Messages, and Route Switchover
@@ -597,9 +598,16 @@ using the expected source owner and generation.
 
 Session route change doesn't use a numeric high-water,
 per-message ACK journal, or relocation-specific capacity condition. A
-message arriving during the seal is held by the aggregate, but the per-
+message from the Session to the Actor arriving during the seal is held by the aggregate, but the per-
 message size, transport, deadline, and cancellation limits still apply
 unchanged.
+
+A relay (§5) to a sealed binding finishes admission when this holding store accepts it
+([Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
+The relay caller doesn't wait for the seal to be released. If a held message can't be submitted after route
+application or abort, or is cleaned up by the seal timeout, the caller's already completed result doesn't change;
+the failure is recorded once in that message's flow
+([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)). A request still ends by its existing correlation and deadline.
 
 The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 

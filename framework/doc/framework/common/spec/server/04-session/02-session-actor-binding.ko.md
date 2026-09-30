@@ -471,7 +471,8 @@ queue 병합의 전체 순서는
 
 - **relocation seal과 retired binding 거부는 서로 다른 전이다.** §6의 retired binding 거부는 current
   binding을 새 session으로 교체한 뒤 이전 generation의 ingress를 막는다. Relocation seal은 같은 binding의
-  Actor route를 옮기는 동안 Session message를 보관한다. 두 규칙은 함께 적용되며 서로를 대신하지 않는다.
+  Actor route를 옮기는 동안 Session에서 Actor로 가는 message를 보관한다. Actor에서 Session으로 가는 push는
+  보관하지 않고 [§5](#5-bind와-relay)의 binding 판정만 거쳐 곧바로 제출한다. 두 규칙은 함께 적용되며 서로를 대신하지 않는다.
 
 ### 8.1 Seal, held message와 route 전환
 
@@ -494,8 +495,13 @@ runtime은 준비를 끝낸 뒤 예상 source owner와 generation으로 Location
 
 Session route
 변경에는 numeric high-water, message별 ACK journal 또는 relocation 전용 capacity
-조건을 사용하지 않는다. Seal 중 도착한 message는 aggregate가 보관하지만 개별 message
+조건을 사용하지 않는다. Seal 중 Session에서 Actor로 도착한 message는 aggregate가 보관하지만 개별 message
 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
+
+Seal 중인 binding으로 가는 relay(§5)는 이 보관소가 수락하면 admission을 마친다([Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)).
+Relay 호출자는 seal 해제를 기다리지 않는다. 보관한 message를 route 적용이나 abort 뒤 제출하지 못하거나
+seal timeout으로 정리하면, 이미 끝난 호출자 결과는 바꾸지 않고 그 message의 flow에 한 번 기록한다
+([Message-flow tracing §6](../06-observability/03-message-flow-tracing.ko.md#6-완료-실패와-수명)). Request는 기존 correlation과 deadline으로 끝난다.
 
 Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 

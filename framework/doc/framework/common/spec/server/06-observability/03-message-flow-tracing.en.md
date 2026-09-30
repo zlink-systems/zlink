@@ -349,6 +349,11 @@ An Instance Spot's one-way creation failure is recorded exactly once as
 `surface=instance_spot`, `phase=dropped`, without building a hidden
 request or replay.
 
+If a session Actor relay accepted by the relocation seal holding store can't be delivered
+([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)),
+it is recorded exactly once as `surface=stream`, `phase=dropped`, `outcome=dropped`. The `reason` is
+`target_closed` if the seal timeout closed the Session, or the cause of the failed submit otherwise.
+
 ## 7. Verification Requirements
 
 The following is verified using only the public surface —
@@ -382,6 +387,7 @@ interface. Each item corresponds to one contract test.
 - An Instance Spot's one-way creation failure is recorded exactly once as
   `surface=instance_spot`, `phase=dropped`, without building a hidden
   request or replay.
+- A delivery failure of a session Actor relay accepted by the seal holding store is recorded exactly once as `surface=stream`, `phase=dropped`.
 - RouteMesh and ClientServer paths using the same ChannelName are
   distinguished by `channel_route_kind`, without requiring an application
   handler to provide this value.

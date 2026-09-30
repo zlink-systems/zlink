@@ -310,6 +310,11 @@ buffer나 runtime object를 참조하지 않는다. `correlation_id`, `flow_id`�
 Instance Spot의 one-way 생성 실패는 `surface=instance_spot`, `phase=dropped`로
 정확히 한 번 기록하며, 숨은 request나 replay를 만들지 않는다.
 
+Relocation seal 보관소가 수락한 session Actor relay를 전달하지 못하면
+([Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환))
+`surface=stream`, `phase=dropped`, `outcome=dropped`로 정확히 한 번 기록한다. `reason`은 seal timeout으로
+Session을 닫았으면 `target_closed`, 제출이 실패했으면 그 제출 결과의 원인이다.
+
 ## 7. 검증 요구
 
 공개 표면(`event_id`, `phase`, `surface`·`message_kind`·`outcome`·`reason`·`action`,
@@ -337,6 +342,7 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.
+- Seal 보관소가 수락한 session Actor relay의 전달 실패를 `surface=stream`, `phase=dropped`로 정확히 한 번 기록한다.
 - 같은 ChannelName을 사용하는 RouteMesh와 ClientServer 경로를 `channel_route_kind`로
   구분하되 application handler가 이 값을 요구하지 않는다.
 
