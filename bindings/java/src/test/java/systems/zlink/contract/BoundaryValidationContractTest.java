@@ -89,23 +89,20 @@ public class BoundaryValidationContractTest {
     }
 
     @Test
-    public void topicAndFilterRejectOverflowingUtf8Length() {
+    public void topicAndFilterAcceptBytesBeyondLegacyCapacity() {
         TestSupport.assumeNative();
 
-        String max = "a".repeat(255);
-        String overflow = "b".repeat(256);
+        String beyond = "b".repeat(256);
 
         try (Context ctx = Zlink.createContext();
              PubSocket pub = ctx.createPubSocket();
-             SubSocket sub = ctx.createSubSocket();
-             Message payload = Message.from("payload")) {
-            assertDoesNotThrow(() -> sub.setSubscription(max));
-            assertThrows(IllegalArgumentException.class,
-                () -> sub.setSubscription(overflow));
+             SubSocket sub = ctx.createSubSocket()) {
+            assertDoesNotThrow(() -> sub.setSubscription(beyond));
 
-            assertDoesNotThrow(() -> pub.publish(max).message(payload).submit());
-            assertThrows(IllegalArgumentException.class,
-                () -> pub.publish(overflow).message(payload).submit());
+            try (Message payload = Message.from("payload")) {
+                assertDoesNotThrow(() -> pub.publish(beyond)
+                    .message(payload).submit());
+            }
         }
     }
 
