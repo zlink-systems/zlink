@@ -123,6 +123,10 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         timers.close();
     }
 
+    CompletionStage<Void> closeTimersAsync() {
+        return timers.closeAsync();
+    }
+
     void closeHandlerInstances() {
         handlerInstances.close();
     }
@@ -232,7 +236,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     public CompletionStage<Void> enqueueInfrastructureDispatch(
             Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
-        return infrastructureQueue.enqueue(operation);
+        return infrastructureQueue.enqueue(operation, null);
     }
 
     @Override

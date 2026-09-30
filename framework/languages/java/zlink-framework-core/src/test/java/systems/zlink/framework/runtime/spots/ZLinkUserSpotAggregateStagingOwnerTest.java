@@ -9,6 +9,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -23,6 +24,68 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotAggregateStagingOwnerTest {
+    @Test
+    void successfulDiscardCompletesHeldIngressObligations() {
+        var owner = new ZLinkUserSpotAggregateStagingOwner(new FakeBackend());
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.spot(
+                                "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1}),
+                        null,
+                        ignored -> {}));
+        owner.stageRelayedRecord(staged, "room-a", false, new byte[] {2})
+                .toCompletableFuture()
+                .join();
+        assertEquals(2, pending(staged).size());
+
+        owner.discard(staged).toCompletableFuture().join();
+        assertTrue(pending(staged).isEmpty());
+    }
+
+    @Test
+    void failedDiscardPreservesFailureAndNamedIngress() {
+        FakeBackend backend = new FakeBackend();
+        var failure = new IllegalStateException("discard failed");
+        backend.discardActorResult = CompletableFuture.failedFuture(failure);
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.spot(
+                                "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1}),
+                        null,
+                        ignored -> {}));
+        owner.stageRelayedRecord(staged, "room-a", false, new byte[] {2})
+                .toCompletableFuture()
+                .join();
+        assertEquals(
+                List.of(
+                        new AsyncDrainProbe.Pending("temporary:spot:0", "aggregate staging owner"),
+                        new AsyncDrainProbe.Pending("relayed:spot:0", "aggregate staging owner")),
+                pending(staged));
+
+        assertSame(
+                failure,
+                assertThrows(
+                                CompletionException.class,
+                                () -> owner.discard(staged).toCompletableFuture().join())
+                        .getCause());
+        assertEquals(2, pending(staged).size());
+    }
+
+    private static List<AsyncDrainProbe.Pending> pending(Object owner) {
+        try {
+            var field = owner.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return ((AsyncDrainProbe) field.get(owner)).pending();
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     @Test
     void failedBacklogReplayDoesNotWithholdLaterAcceptedRecord() {
         FakeBackend backend = new FakeBackend();
@@ -364,6 +427,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         private int admissionCount;
         private int rejectAdmissionAt;
         private boolean allowSpotReplay;
+        private CompletionStage<Void> discardActorResult = CompletableFuture.completedFuture(null);
 
         @Override
         public <T> CompletionStage<T> admitApplicationJob(
@@ -463,7 +527,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         @Override
         public CompletionStage<Void> discardActor(Object value) {
             operations.add("discard:" + value);
-            return CompletableFuture.completedFuture(null);
+            return discardActorResult;
         }
 
         @Override

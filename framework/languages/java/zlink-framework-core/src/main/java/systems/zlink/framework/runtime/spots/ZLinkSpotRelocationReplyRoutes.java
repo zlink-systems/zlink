@@ -259,15 +259,34 @@ final class ZLinkSpotRelocationReplyRoutes {
             long targetNodeGeneration,
             CommittedFence fence) {
         inStateLane(
-                () -> {
-                    bindCommittedOnLane(
-                            acceptedRecords,
-                            targetNodeRid,
-                            targetNodeGeneration,
-                            fence.targetAttemptGeneration());
-                    attachCanonicalFence(acceptedRecords, false, fence);
-                    return null;
-                });
+                () ->
+                        bindCommittedWithFenceOnLane(
+                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
+    }
+
+    CompletionStage<Void> bindCommittedAsync(
+            List<byte[]> acceptedRecords,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            CommittedFence fence) {
+        return stateLane.runNowOrQueue(
+                () ->
+                        bindCommittedWithFenceOnLane(
+                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
+    }
+
+    private Void bindCommittedWithFenceOnLane(
+            List<byte[]> acceptedRecords,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            CommittedFence fence) {
+        bindCommittedOnLane(
+                acceptedRecords,
+                targetNodeRid,
+                targetNodeGeneration,
+                fence.targetAttemptGeneration());
+        attachCanonicalFence(acceptedRecords, false, fence);
+        return null;
     }
 
     void bindCommitted(
@@ -398,15 +417,34 @@ final class ZLinkSpotRelocationReplyRoutes {
             long targetNodeGeneration,
             CommittedFence fence) {
         inStateLane(
-                () -> {
-                    bindActorCommittedOnLane(
-                            acceptedRecords,
-                            targetNodeRid,
-                            targetNodeGeneration,
-                            fence.targetAttemptGeneration());
-                    attachCanonicalFence(acceptedRecords, true, fence);
-                    return null;
-                });
+                () ->
+                        bindActorCommittedWithFenceOnLane(
+                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
+    }
+
+    CompletionStage<Void> bindActorCommittedAsync(
+            List<byte[]> acceptedRecords,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            CommittedFence fence) {
+        return stateLane.runNowOrQueue(
+                () ->
+                        bindActorCommittedWithFenceOnLane(
+                                acceptedRecords, targetNodeRid, targetNodeGeneration, fence));
+    }
+
+    private Void bindActorCommittedWithFenceOnLane(
+            List<byte[]> acceptedRecords,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            CommittedFence fence) {
+        bindActorCommittedOnLane(
+                acceptedRecords,
+                targetNodeRid,
+                targetNodeGeneration,
+                fence.targetAttemptGeneration());
+        attachCanonicalFence(acceptedRecords, true, fence);
+        return null;
     }
 
     private void attachCanonicalFence(

@@ -1245,55 +1245,74 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 return claim.completion()
                         .thenCompose(ignored -> relayCapturedIngress(client, timeout));
             }
-            ZLinkUserSpotRelocationBarrier.RelocationCommit retained = claim.retained();
             if (claim.owner()) {
-                try {
-                    retained =
-                            barrier.retainCommit(seal)
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "source relocation barrier was lost"));
-                    installExpectedRelocationForwards();
-                    ZLinkUserSpotRelocationBarrier.RelocationCommit established = retained;
-                    retained =
-                            inStateLane(
-                                    () -> {
-                                        relocationCommit = established;
-                                        relocationCommitClaim = null;
-                                        return relocationCommit;
-                                    });
-                    ZLinkUserSpotRelocationBarrier.RelocationCommit published = retained;
-                    claim.completion().completeAsync(() -> published);
-                } catch (RuntimeException failure) {
-                    inStateLane(
-                            () -> {
-                                if (relocationCommitClaim == claim.completion()) {
-                                    relocationCommitClaim = null;
-                                }
-                                return null;
-                            });
-                    claim.completion()
-                            .completeAsync(
-                                    () -> {
-                                        throw failure;
-                                    });
-                    throw failure;
-                }
+                return barrier.retainCommit(seal)
+                        .thenCompose(
+                                retained -> {
+                                    var established =
+                                            retained.orElseThrow(
+                                                    () ->
+                                                            new IllegalStateException(
+                                                                    "source relocation barrier was lost"));
+                                    installExpectedRelocationForwards();
+                                    return stateLane
+                                            .runAsync(
+                                                    () -> {
+                                                        relocationCommit = established;
+                                                        relocationCommitClaim = null;
+                                                        return relocationCommit;
+                                                    })
+                                            .thenCompose(
+                                                    published -> {
+                                                        claim.completion()
+                                                                .completeAsync(() -> published);
+                                                        return relayRetained(
+                                                                client, timeout, published);
+                                                    });
+                                })
+                        .handle(
+                                (ignored, failure) ->
+                                        failure == null
+                                                ? CompletableFuture.<Void>completedFuture(null)
+                                                : stateLane
+                                                        .runAsync(
+                                                                () -> {
+                                                                    if (relocationCommitClaim
+                                                                            == claim.completion()) {
+                                                                        relocationCommitClaim =
+                                                                                null;
+                                                                    }
+                                                                })
+                                                        .thenCompose(
+                                                                cleaned -> {
+                                                                    claim.completion()
+                                                                            .completeExceptionally(
+                                                                                    failure);
+                                                                    return CompletableFuture
+                                                                            .<Void>failedFuture(
+                                                                                    failure);
+                                                                }))
+                        .thenCompose(result -> result);
             }
+            return relayRetained(client, timeout, claim.retained());
+        }
+
+        private CompletionStage<Void> relayRetained(
+                ZLinkRelocationTransitionClient client,
+                Duration timeout,
+                ZLinkUserSpotRelocationBarrier.RelocationCommit retained) {
             ZLinkUserSpotRelocationBarrier.RelocationCommit.Cut cut;
             do {
                 cut = retained.cut();
             } while (!retained.tryEstablishAndFinishCapture(cut));
             Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> relayed =
                     cut.committed().heldIngress();
-            inStateLane(
-                    () -> {
-                        finalJournal = relayed;
-                        captureFinished = true;
-                        return null;
-                    });
-            CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+            CompletionStage<Void> chain =
+                    stateLane.runAsync(
+                            () -> {
+                                finalJournal = relayed;
+                                captureFinished = true;
+                            });
             for (List<ZLinkSerialExecutionQueue.QueuedRecord> lane : relayed.values()) {
                 for (ZLinkSerialExecutionQueue.QueuedRecord record : lane) {
                     chain =

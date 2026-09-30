@@ -65,7 +65,8 @@ final class ZLinkSpotPublisherRuntimeTest {
                                 secondSubmitted.countDown();
                                 return publish.thenRun(
                                         () -> continuationIsCurrent.set(queue.isCurrent()));
-                            });
+                            },
+                            null);
 
             assertTrue(secondSubmitted.await(1, TimeUnit.SECONDS));
             assertTrue(secondWasPending.get());
