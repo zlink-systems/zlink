@@ -433,6 +433,27 @@ fn poller_wait_with_no_event_capacity_reports_core_config_error() {
 }
 
 #[test]
+fn ownerless_async_send_rejects_before_core_submission() {
+    let ctx = Context::new().unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://rust-ownerless-send").unwrap();
+    sender.connect("inproc://rust-ownerless-send").unwrap();
+
+    let error = match sender
+        .send()
+        .message(Message::try_from(b"must-not-submit").unwrap())
+        .submit()
+    {
+        Err(error) => error,
+        Ok(_) => panic!("ownerless async SEND was accepted"),
+    };
+    assert_eq!(error.code(), SubmitResult::InvalidState);
+    let mut received = Received::empty();
+    assert!(!receiver.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
+}
+
+#[test]
 fn ownerless_async_request_fails_fast_and_reacquires_through_public_poller() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();

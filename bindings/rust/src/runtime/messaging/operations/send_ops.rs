@@ -119,21 +119,15 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
     let entry = owner.register_send(context)?;
     match submit_send_attempt(&mut op, context) {
         Ok(SendAttempt::Admitted) => {
-            if entry.is_some() {
-                owner.unregister(context);
-            }
+            owner.unregister(context);
             Ok(SendSubmission {
                 result: SubmitResult::Ok,
                 admitted: Box::pin(std::future::ready(Ok(()))),
             })
         }
         Ok(SendAttempt::Waiting(completion_id)) => {
-            let published = match &entry {
-                Some(entry) => owner.publish_send_token(entry, completion_id),
-                None => Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY)),
-            };
-            if let Err(error) = published {
-                if entry.is_some_and(|entry| entry.detach()) {
+            if let Err(error) = owner.publish_send_token(&entry, completion_id) {
+                if entry.detach() {
                     owner.unregister(context);
                 }
                 return Err(error);
@@ -143,24 +137,22 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
                 admitted: Box::pin(SendFuture {
                     operation: Some(op),
                     context,
-                    entry,
+                    entry: Some(entry),
                     waiting_for_writable: true,
                     finished: false,
                 }),
             })
         }
         Err(failure) => {
-            if let Some(entry) = entry {
-                let removable = match failure.live_token {
-                    Some(completion_id) => {
-                        let _ = owner.publish_send_token(&entry, completion_id);
-                        entry.detach()
-                    }
-                    None => true,
-                };
-                if removable {
-                    owner.unregister(context);
+            let removable = match failure.live_token {
+                Some(completion_id) => {
+                    let _ = owner.publish_send_token(&entry, completion_id);
+                    entry.detach()
                 }
+                None => true,
+            };
+            if removable {
+                owner.unregister(context);
             }
             Err(failure.error)
         }
