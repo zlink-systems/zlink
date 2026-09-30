@@ -53,6 +53,23 @@ public final class ZLinkStateLane {
         return CURRENT.get();
     }
 
+    /** Assertion-only check for a synchronous wait on infrastructure or serial execution. */
+    public static boolean assertMayBlock() {
+        if (CURRENT.get() != null) {
+            throw new AssertionError("synchronous wait from a state lane");
+        }
+        if (systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentSerialExecutionTurn()
+                != null) {
+            throw new AssertionError("synchronous wait from a serial turn");
+        }
+        String thread = Thread.currentThread().getName();
+        if (thread.equals("zlink-stream-recv") || thread.equals("zlink-java-channel-runtime")) {
+            throw new AssertionError("synchronous wait from a receive thread");
+        }
+        return true;
+    }
+
     public boolean isOnLane() {
         return CURRENT.get() == this;
     }

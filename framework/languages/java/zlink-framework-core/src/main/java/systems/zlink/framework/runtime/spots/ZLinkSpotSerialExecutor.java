@@ -352,7 +352,9 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 });
         spotQueue.close();
         infrastructureQueue.close();
-        stateLane.closeAsync().toCompletableFuture().join();
+        CompletableFuture<Void> laneClosed = stateLane.closeAsync().toCompletableFuture();
+        assert laneClosed.isDone() || ZLinkStateLane.assertMayBlock();
+        laneClosed.join();
     }
 
     Map<String, ZLinkSerialExecutionQueue> relocationLanes() {
@@ -404,7 +406,9 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
 
     private <T> T inStateLane(Supplier<T> operation) {
         try {
-            return stateLane.runAsync(operation).toCompletableFuture().join();
+            CompletableFuture<T> turn = stateLane.runAsync(operation).toCompletableFuture();
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) throw runtimeFailure;

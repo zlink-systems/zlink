@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +22,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
+    @Test
+    void synchronousWaitGuardUsesExistingExecutionContext() {
+        assumeTrue(ZLinkStateLane.class.desiredAssertionStatus());
+        assertTrue(ZLinkStateLane.assertMayBlock());
+        ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);
+        lane.runAsync(
+                        () -> {
+                            assertThrows(AssertionError.class, ZLinkStateLane::assertMayBlock);
+                            return null;
+                        })
+                .toCompletableFuture()
+                .join();
+        String originalName = Thread.currentThread().getName();
+        try {
+            Thread.currentThread().setName("zlink-stream-recv");
+            assertThrows(AssertionError.class, ZLinkStateLane::assertMayBlock);
+        } finally {
+            Thread.currentThread().setName(originalName);
+        }
+    }
+
     @Test
     void directExecutorReturnsCompletedTurnsWithoutAnotherCompletionTask() {
         ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);
