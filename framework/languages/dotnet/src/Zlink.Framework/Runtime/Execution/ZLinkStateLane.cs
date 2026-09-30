@@ -65,12 +65,39 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     /// <exception cref="ObjectDisposedException">The lane is closed.</exception>
     internal ValueTask<T> RunAsync<T>(Func<T> work)
     {
+        ArgumentNullException.ThrowIfNull(work);
+        ThrowIfReentrant();
+        if (Volatile.Read(ref _closed) != 0)
+            throw new ObjectDisposedException(nameof(ZLinkStateLane));
+
         // Claim the same drain ownership used by queued work before inspecting
         // the queue. An earlier enqueue must run first, even if its producer has
         // not reached ScheduleDrain yet. With no predecessor, the caller owns
         // this turn and can return its value without a completion allocation.
-        if (TryRunInline(work, out var result))
-            return result;
+        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0)
+        {
+            if (_mailbox.IsEmpty)
+            {
+                var previous = CurrentLane.Value;
+                try
+                {
+                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
+                    CurrentLane.Value = this;
+                    return ValueTask.FromResult(work());
+                }
+                catch (Exception error)
+                {
+                    return ValueTask.FromException<T>(error);
+                }
+                finally
+                {
+                    CurrentLane.Value = previous;
+                    ReleaseDrain();
+                }
+            }
+
+            ReleaseDrain();
+        }
 
         var completion = new TaskCompletionSource<T>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -90,47 +117,6 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         });
         ScheduleDrain(inline: true);
         return new ValueTask<T>(completion.Task);
-    }
-
-    internal bool TryRunInline<T>(Func<T> work, out ValueTask<T> result)
-    {
-        ArgumentNullException.ThrowIfNull(work);
-        ThrowIfReentrant();
-        if (Volatile.Read(ref _closed) != 0)
-            throw new ObjectDisposedException(nameof(ZLinkStateLane));
-
-        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) != 0)
-        {
-            result = default!;
-            return false;
-        }
-
-        var previous = CurrentLane.Value;
-        try
-        {
-            if (!_mailbox.IsEmpty)
-            {
-                result = default!;
-                return false;
-            }
-
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
-            CurrentLane.Value = this;
-            try
-            {
-                result = ValueTask.FromResult(work());
-            }
-            catch (Exception error)
-            {
-                result = ValueTask.FromException<T>(error);
-            }
-            return true;
-        }
-        finally
-        {
-            CurrentLane.Value = previous;
-            ReleaseDrain();
-        }
     }
 
     /// <summary>Runs <paramref name="work"/> on the lane.</summary>

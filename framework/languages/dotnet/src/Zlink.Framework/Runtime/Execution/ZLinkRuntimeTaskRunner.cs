@@ -232,7 +232,7 @@ internal sealed class ZLinkRuntimeExecutionScope
 internal sealed class ZLinkRuntimeTaskSupervisor
 {
     private readonly HashSet<Task> _active = [];
-    private readonly ZLinkStateLane _lane = new();
+    private readonly object _gate = new();
     private bool _accepting = true;
 
     public bool TryStart(
@@ -242,22 +242,7 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         bool acceptsOwnerExecution
     )
     {
-#if DEBUG
-        if (ZLinkInfrastructureWaitGuard.IsInfrastructureContext)
-        {
-            if (!_lane.TryRunInline(Admit, out var accepted))
-            {
-                ZLinkInfrastructureWaitGuard.ThrowIfBlocking(false, "task supervisor admission");
-                throw new InvalidOperationException(
-                    "Task supervisor admission requires a lane turn."
-                );
-            }
-            return accepted.GetAwaiter().GetResult();
-        }
-#endif
-        return AwaitStateLane(_lane.RunAsync(Admit));
-
-        bool Admit()
+        lock (_gate)
         {
             if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
                 return false;
@@ -273,42 +258,32 @@ internal sealed class ZLinkRuntimeTaskSupervisor
 
     public void Remove(ZLinkRuntimeTaskRunner runner, Task completed)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                runner.ActiveOnSupervisorLane.Remove(completed);
-                _active.Remove(completed);
-                return true;
-            })
-        );
+        lock (_gate)
+        {
+            runner.ActiveOnSupervisorLane.Remove(completed);
+            _active.Remove(completed);
+        }
     }
 
     public async ValueTask StopRunnerAsync(ZLinkRuntimeTaskRunner runner, bool ownsSupervisor)
     {
         while (true)
         {
-            var active = await _lane
-                .RunAsync(() =>
-                {
-                    runner.AcceptingOnSupervisorLane = false;
-                    if (ownsSupervisor)
-                        _accepting = false;
+            Task[] active;
+            lock (_gate)
+            {
+                runner.AcceptingOnSupervisorLane = false;
+                if (ownsSupervisor)
+                    _accepting = false;
 
-                    var activeSet = ownsSupervisor ? _active : runner.ActiveOnSupervisorLane;
-                    activeSet.RemoveWhere(static candidate => candidate.IsCompleted);
-                    return activeSet.ToArray();
-                })
-                .ConfigureAwait(false);
+                var activeSet = ownsSupervisor ? _active : runner.ActiveOnSupervisorLane;
+                activeSet.RemoveWhere(static candidate => candidate.IsCompleted);
+                active = activeSet.ToArray();
+            }
             if (active.Length == 0)
                 return;
 
             await Task.WhenAll(active).ConfigureAwait(false);
         }
-    }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation)
-    {
-        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "task supervisor lane");
-        return operation.GetAwaiter().GetResult();
     }
 }
