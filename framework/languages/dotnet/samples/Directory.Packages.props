@@ -7,7 +7,7 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
-  <!-- Zlink.Framework* / Zlink.Stream.Connector versions: ../build/ZLink.FrameworkReference.props -->
+  <!-- Zlink.Framework* / Zlink.Stream.Connector versions: ZLink.FrameworkReference.props, imported by Directory.Build.props -->
 
   <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">
     <PackageVersion Include="Zlink.HttpClient" Version="$(ZLinkSampleFrameworkVersion)" />

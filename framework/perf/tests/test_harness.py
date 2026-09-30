@@ -352,9 +352,6 @@ class HarnessTests(unittest.TestCase):
                     self.assertTrue(all("lowerBoundMs" in reason for reason in saved["nullReasons"].values()))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CoreVersionAgreementTest(unittest.TestCase):
     def test_all_roles_report_the_same_version(self):
@@ -381,3 +378,7 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
         for observed, declared in (("0.25.0", "0.26.0"), (None, "0.26.0"), ("0.26.0", None)):
             with self.subTest(observed=observed, declared=declared), self.assertRaises(RuntimeError):
                 agreed_framework_version(observed, declared)
+
+
+if __name__ == "__main__":
+    unittest.main()

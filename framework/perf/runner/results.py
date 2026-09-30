@@ -77,7 +77,7 @@ def export_latency(histogram: dict, prefix: str, histogram_key: str, metrics: di
         if value is None:
             reasons[pointer] = null_reason("NO_SAMPLES" if not count else "HISTOGRAM_OVERFLOW",
                                            "No successful samples." if not count else "Nearest rank is above the final bucket.",
-                                           "perf/README.ko.md §15.3", 1024 if count else None)
+                                           "perf/README.ko.md §15.3", BOUNDS[-1] if count else None)
     pointer = "/histograms/" + histogram_key + "/maxNs"
     reasons.pop(pointer, None)
     if not count:
