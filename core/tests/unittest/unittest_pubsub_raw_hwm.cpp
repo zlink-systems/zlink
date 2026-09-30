@@ -9,7 +9,11 @@
 #include "core/recv_internal.hpp"
 #include "core/send_internal.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstring>
+#include <cstdio>
+#include <thread>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -176,10 +180,8 @@ void test_a12_xsub_subscription_reports_success_but_is_lost_at_hwm ()
     void *sub = test_context_socket (ZLINK_SOCKET_XSUB);
     // One subscription contains its command byte and a one-byte filter.
     const uint64_t hwm = sizeof (zlink_msg_t) + 2;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (sub, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (pub, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (sub, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (pub, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
     contract_socket_pair_t pair (pub, sub, 0, 0, true, hwm);
 
     // Do not pump the publisher owner until both calls finish. This fills
@@ -220,6 +222,115 @@ void test_a12_xsub_subscription_reports_success_but_is_lost_at_hwm ()
     test_context_socket_close (pub);
 }
 
+void test_subscription_snapshot_runs_with_sub_receive_turn ()
+{
+    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
+    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
+    TEST_ASSERT_NOT_NULL (pub);
+    TEST_ASSERT_NOT_NULL (sub);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://xsub-subscription-turn"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://xsub-subscription-turn"));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_subscription (sub, "topic-"));
+
+    std::atomic<bool> start (false);
+    std::atomic<bool> stop (false);
+    std::atomic<bool> subscriptions_done (false);
+    std::atomic<unsigned int> snapshots (0);
+    std::atomic<unsigned int> receive_attempts (0);
+    std::atomic<unsigned int> received (0);
+    std::atomic<int> errors (0);
+
+    std::thread subscription_thread ([&] {
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        for (unsigned int i = 0; i < 128; ++i) {
+            char filter[32];
+            snprintf (filter, sizeof (filter), "topic-%04u", i);
+            if (zlink_set_subscription (sub, filter) != ZLINK_CONFIG_OK) {
+                errors.fetch_add (1, std::memory_order_relaxed);
+                break;
+            }
+            std::this_thread::yield ();
+        }
+        subscriptions_done.store (true, std::memory_order_release);
+    });
+
+    std::thread snapshot_thread ([&] {
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        while (!stop.load (std::memory_order_acquire)) {
+            char filter[64];
+            size_t filter_len = sizeof (filter);
+            int is_pattern = -1;
+            if (zlink_subscription_at (sub, 0, filter, &filter_len, &is_pattern) != ZLINK_CONFIG_OK)
+                errors.fetch_add (1, std::memory_order_relaxed);
+            snapshots.fetch_add (1, std::memory_order_relaxed);
+        }
+    });
+
+    std::thread receive_thread ([&] {
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        while (!stop.load (std::memory_order_acquire)) {
+            char topic[32];
+            size_t topic_len = sizeof (topic);
+            zlink_msg_t part;
+            size_t part_count = 0;
+            const zlink_recv_result_t rc =
+              zlink_subscribe (sub, NULL, topic, sizeof (topic), &topic_len, &part, 1, &part_count,
+                               ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc == ZLINK_RECV_OK) {
+                received.fetch_add (1, std::memory_order_relaxed);
+                zlink_multipart_close (&part, part_count);
+            } else if (rc != ZLINK_RECV_NO_DATA) {
+                errors.fetch_add (1, std::memory_order_relaxed);
+            }
+            receive_attempts.fetch_add (1, std::memory_order_relaxed);
+        }
+    });
+
+    std::thread publish_thread ([&] {
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        while (!stop.load (std::memory_order_acquire)) {
+            zlink_msg_t part;
+            if (zlink_msg_init_size (&part, 1) != ZLINK_CONFIG_OK) {
+                errors.fetch_add (1, std::memory_order_relaxed);
+                break;
+            }
+            *static_cast<char *> (zlink_msg_data (&part)) = 'x';
+            (void) zlink_publish (pub, "topic-turn", &part, 1, ZLINK_SEND_FLAGS_DONTWAIT);
+            if (zlink_msg_close (&part) != ZLINK_CONFIG_OK)
+                errors.fetch_add (1, std::memory_order_relaxed);
+            std::this_thread::sleep_for (std::chrono::microseconds (100));
+        }
+    });
+
+    start.store (true, std::memory_order_release);
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (std::chrono::steady_clock::now () < deadline
+           && (!subscriptions_done.load (std::memory_order_acquire)
+               || snapshots.load (std::memory_order_relaxed) < 128
+               || receive_attempts.load (std::memory_order_relaxed) < 128
+               || received.load (std::memory_order_relaxed) == 0))
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    stop.store (true, std::memory_order_release);
+
+    subscription_thread.join ();
+    snapshot_thread.join ();
+    receive_thread.join ();
+    publish_thread.join ();
+
+    TEST_ASSERT_TRUE (subscriptions_done.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (snapshots.load (std::memory_order_relaxed) >= 128);
+    TEST_ASSERT_TRUE (receive_attempts.load (std::memory_order_relaxed) >= 128);
+    TEST_ASSERT_TRUE (received.load (std::memory_order_relaxed) > 0);
+    TEST_ASSERT_EQUAL_INT (0, errors.load (std::memory_order_relaxed));
+
+    test_context_socket_close_zero_linger (sub);
+    test_context_socket_close_zero_linger (pub);
+}
+
 }
 
 int main ()
@@ -229,5 +340,6 @@ int main ()
     RUN_TEST (test_nodrop_raw_empty_frame_hwm);
     RUN_TEST (test_default_publish_drops_instead_of_backpressuring);
     RUN_TEST (test_a12_xsub_subscription_reports_success_but_is_lost_at_hwm);
+    RUN_TEST (test_subscription_snapshot_runs_with_sub_receive_turn);
     return UNITY_END ();
 }
