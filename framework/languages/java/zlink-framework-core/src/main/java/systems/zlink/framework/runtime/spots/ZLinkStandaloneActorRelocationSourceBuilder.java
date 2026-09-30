@@ -11,6 +11,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -957,6 +958,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final String targetSpotId;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private AsyncDrainProbe debugProbe;
         private List<ZLinkSerialExecutionQueue.QueuedRecord> finalJournal = List.of();
         private CompletionStage<
                         systems.zlink.framework.runtime.internal.relocation
@@ -994,6 +996,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             this.timerEnvelope = timerEnvelope.clone();
             this.stageRequest = stageRequest;
             this.targetSpotId = targetSpotId;
+            assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
         ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest() {
@@ -1192,16 +1195,28 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 timeout));
             }
             for (ZLinkSerialExecutionQueue.QueuedRecord record : relayed) {
+                CompletableFuture<Void> obligation = null;
+                assert (obligation =
+                                debugProbe.expect(
+                                        "relay:actor:" + record.sequence(), owned.actorId()))
+                        != null;
+                final CompletableFuture<Void> relayObligation = obligation;
                 chain =
                         chain.thenCompose(
-                                ignored ->
-                                        client.relay(
-                                                stageRequest.targetNodeRid(),
-                                                stageRequest.fence(),
-                                                record.payload(),
-                                                timeout));
+                                ignored -> {
+                                    CompletionStage<Void> sent =
+                                            client.relay(
+                                                    stageRequest.targetNodeRid(),
+                                                    stageRequest.fence(),
+                                                    record.payload(),
+                                                    timeout);
+                                    assert debugProbe.completeOn(sent, relayObligation);
+                                    return sent;
+                                });
             }
-            return chain;
+            CompletionStage<Void> result = chain;
+            assert (result = debugProbe.assertDrainedOnSuccess(chain)) != null;
+            return result;
         }
 
         private CompletionStage<Void> installExpectedRelocationForward() {

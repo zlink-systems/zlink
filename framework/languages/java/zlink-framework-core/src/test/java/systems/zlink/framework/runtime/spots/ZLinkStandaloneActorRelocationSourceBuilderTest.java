@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -468,6 +469,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals(0, released.get());
             assertFalse(lateReleased.get());
             prepared.relayCapturedIngress(sourceMachine.get(), timeout).toCompletableFuture().get();
+            assertTrue(relayProbe(prepared).pending().isEmpty());
 
             byte[] stagedTargetRecord =
                     ZLinkAcceptedJournalTestRecords.actor(
@@ -547,6 +549,16 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                     .get());
             assertEquals(objectGeneration, authority.objectGeneration());
             assertEquals(sourceOwnerGeneration + 1, authority.authorityOwnerGeneration());
+        }
+    }
+
+    private static AsyncDrainProbe relayProbe(Object prepared) {
+        try {
+            var field = prepared.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return (AsyncDrainProbe) field.get(prepared);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
         }
     }
 
