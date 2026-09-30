@@ -24,6 +24,7 @@ import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.InstanceSpotFactoryConfiguration;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableInstanceSpotFactory;
@@ -1038,7 +1039,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
         @Override
         public void setSendTimeout(Duration value) {
-            sendTimeout = value == null ? null : requireSendTimeout(value);
+            sendTimeout = value == null ? null : ZLinkChannelAdmissionTimeout.requireValid(value);
         }
     }
 
@@ -1064,7 +1065,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
         @Override
         public void setSendTimeout(Duration value) {
-            sendTimeout = value == null ? null : requireSendTimeout(value);
+            sendTimeout = value == null ? null : ZLinkChannelAdmissionTimeout.requireValid(value);
         }
 
         @Override
@@ -1076,22 +1077,5 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         public void setLinger(Duration value) {
             linger = value;
         }
-    }
-
-    private static Duration requireSendTimeout(Duration value) {
-        if (value.isZero() || value.isNegative()) {
-            throw new ZLinkConfigurationException("send timeout must be positive");
-        }
-        long seconds = value.getSeconds();
-        if (seconds > Integer.MAX_VALUE / 1000L) {
-            throw new ZLinkConfigurationException(
-                    "send timeout must normalize to at most Integer.MAX_VALUE ms");
-        }
-        long millis = seconds * 1000L + (value.getNano() + 999_999L) / 1_000_000L;
-        if (millis > Integer.MAX_VALUE) {
-            throw new ZLinkConfigurationException(
-                    "send timeout must normalize to at most Integer.MAX_VALUE ms");
-        }
-        return value;
     }
 }

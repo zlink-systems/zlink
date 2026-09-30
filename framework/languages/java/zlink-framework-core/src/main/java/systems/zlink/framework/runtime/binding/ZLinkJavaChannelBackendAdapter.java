@@ -10,6 +10,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSo
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 
+import java.time.Duration;
+
 final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter {
     @Override
     public ZLinkBackendContext createContext() {
@@ -18,10 +20,16 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
 
     @Override
     public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        return createDealerSocket(context, ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
+    }
+
+    @Override
+    public ZLinkBackendDealerSocket createDealerSocket(
+            ZLinkBackendContext context, Duration sendTimeout) {
         var socket =
                 ZLinkJavaSocketOptions.configureFrameworkSocket(
                         nativeContext(context).createDealerSocket());
-        socket.options().sendTimeout(ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
+        socket.options().sendTimeout(sendTimeout);
         return new ZLinkJavaDealerSocket(socket);
     }
 
@@ -34,10 +42,16 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
 
     @Override
     public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        return createPublisherSocket(context, ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
+    }
+
+    @Override
+    public ZLinkBackendPublisherSocket createPublisherSocket(
+            ZLinkBackendContext context, Duration sendTimeout) {
         var socket =
                 ZLinkJavaSocketOptions.configureFrameworkSocket(
                         nativeContext(context).createPubSocket());
-        socket.options().sendTimeout(ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
+        socket.options().sendTimeout(sendTimeout);
         return new ZLinkJavaPublisherSocket(socket);
     }
 

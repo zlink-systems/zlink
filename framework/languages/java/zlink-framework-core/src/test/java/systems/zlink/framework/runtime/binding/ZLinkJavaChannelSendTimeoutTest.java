@@ -23,4 +23,21 @@ final class ZLinkJavaChannelSendTimeoutTest {
                     ((ZLinkJavaSocketBacked) publisher).nativeSocket().options().sendTimeout());
         }
     }
+
+    @Test
+    void configuredClientDealerAndFanoutPublisherUseTheRequestedSendTimeout() {
+        Duration clientTimeout = Duration.ofMillis(375);
+        Duration publisherTimeout = Duration.ofMillis(625);
+        ZLinkJavaChannelBackendAdapter backend = new ZLinkJavaChannelBackendAdapter();
+        try (ZLinkBackendContext context = backend.createContext();
+                var dealer = backend.createDealerSocket(context, clientTimeout);
+                var publisher = backend.createPublisherSocket(context, publisherTimeout)) {
+            assertEquals(
+                    clientTimeout,
+                    ((ZLinkJavaSocketBacked) dealer).nativeSocket().options().sendTimeout());
+            assertEquals(
+                    publisherTimeout,
+                    ((ZLinkJavaSocketBacked) publisher).nativeSocket().options().sendTimeout());
+        }
+    }
 }

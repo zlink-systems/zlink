@@ -288,6 +288,12 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit) {
         long started = nanoTime.getAsLong();
+        // Registrations are finalized before this registry accepts submissions.
+        ChannelRegistration registration = registrations.get(channelName);
+        long readyBound =
+                registration == null
+                        ? ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT.toNanos()
+                        : registration.sendTimeout().toNanos();
         // The request timeout starts after Core admission. Before a ClientServer
         // target is ready, the family send timeout bounds the admission wait.
         Duration[] timeout = {null};
@@ -295,7 +301,6 @@ final class ZLinkChannelSocketRegistry {
             boolean interrupted = Thread.currentThread().isInterrupted();
             Supplier<CompletionStage<T>> attempt =
                     () -> {
-                        ChannelRegistration registration = registrations.get(channelName);
                         if (timeout[0] == null) {
                             timeout[0] =
                                     requestTimeoutCore(
@@ -314,8 +319,6 @@ final class ZLinkChannelSocketRegistry {
                             if (target != null) {
                                 return clientSubmit.apply(target, timeout[0]);
                             }
-                            long readyBound =
-                                    ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT.toNanos();
                             long elapsed = nanoTime.getAsLong() - started;
                             if (elapsed >= readyBound) {
                                 ZLinkFrameworkErrorKind kind =
@@ -368,9 +371,7 @@ final class ZLinkChannelSocketRegistry {
             }
             // An existing turn cannot block admission callbacks queued behind it.
             stateLane.throwIfReentrant();
-            long remaining =
-                    ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT.toNanos()
-                            - (nanoTime.getAsLong() - started);
+            long remaining = readyBound - (nanoTime.getAsLong() - started);
             parkNanos.accept(
                     Math.min(
                             TimeUnit.MILLISECONDS.toNanos(READY_POLL_INTERVAL_MILLIS),
