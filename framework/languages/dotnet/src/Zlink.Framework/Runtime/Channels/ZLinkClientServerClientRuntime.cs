@@ -13,7 +13,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
-    private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan _sendTimeout;
     private readonly TimeProvider _time;
     private readonly CancellationToken _stopToken;
     private readonly ZLinkStateLane _lane = new();
@@ -37,7 +37,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkMonitoringBackendAdapter monitoring,
         IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
-        TimeSpan requestTimeout,
+        TimeSpan sendTimeout,
         CancellationToken stopToken,
         ZLinkApplicationJobQueue applicationJobQueue,
         ZLinkMessageFlowTracer? flow = null,
@@ -48,7 +48,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _monitoring = monitoring;
         _context = context;
         _socketConfig = socketConfig;
-        _requestTimeout = requestTimeout;
+        _sendTimeout = sendTimeout;
         _stopToken = stopToken;
         _applicationJobQueue = applicationJobQueue;
         _flow = flow;
@@ -146,11 +146,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        var target = await WaitForReadyAsync(cancellationToken).ConfigureAwait(false);
+        var readiness = await WaitForReadyAsync(_sendTimeout, cancellationToken)
+            .ConfigureAwait(false);
+        var target = readiness.Target;
         if (target is null)
         {
             ZLinkMessageParts.DisposeAll(parts);
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TargetNotFound);
+            return new ZLinkOneWaySubmitResult(
+                readiness.Failure == ReadyWaitFailure.NoSelectableTarget
+                    ? ZLinkOneWaySubmitStatus.TargetNotFound
+                    : ZLinkOneWaySubmitStatus.TimedOut
+            );
         }
         if (!ZLinkClientServerMessageBound.Fits(parts, target.AdmittedMaximumMessageBytes))
         {
@@ -229,12 +235,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         );
         try
         {
-            var started = _time.GetTimestamp();
-            var target = await WaitForReadyAsync(timeout, readyWaitCancellation.Token)
+            var readiness = await WaitForReadyAsync(_sendTimeout, readyWaitCancellation.Token)
                 .ConfigureAwait(false);
+            var target = readiness.Target;
             if (target is null)
             {
                 ZLinkMessageParts.DisposeAll(parts);
+                if (readiness.Failure == ReadyWaitFailure.NoSelectableTarget)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NotFound,
+                        $"ClientServer channel '{_channelName}' has no selectable server."
+                    );
                 throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
                     $"ClientServer channel '{_channelName}' had no ready server before the request deadline."
                 );
@@ -244,14 +255,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ZLinkMessageParts.DisposeAll(parts);
                 throw ZLinkClientServerMessageBound.CreateExceededException(
                     target.AdmittedMaximumMessageBytes
-                );
-            }
-            var remaining = timeout - _time.GetElapsedTime(started);
-            if (remaining <= TimeSpan.Zero)
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-                throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
-                    $"ClientServer channel '{_channelName}' had no request time remaining after route admission."
                 );
             }
             if (
@@ -279,7 +282,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             .Timeout(nativeTimeout)
                             .Async(token)
                             .Reply,
-                    remaining,
+                    timeout,
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken
                 )
@@ -492,7 +495,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             try
             {
                 await created
-                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
+                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig, _sendTimeout)
                     .ConfigureAwait(false);
                 var committed = false;
                 try
@@ -692,25 +695,51 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
-    private async ValueTask<ReadyTarget?> WaitForReadyAsync(CancellationToken cancellationToken) =>
-        await WaitForReadyAsync(_requestTimeout, cancellationToken).ConfigureAwait(false);
-
-    private async ValueTask<ReadyTarget?> WaitForReadyAsync(
+    private async ValueTask<ReadyWaitResult> WaitForReadyAsync(
         TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
-        timeout = timeout < TimeSpan.FromSeconds(5) ? timeout : TimeSpan.FromSeconds(5);
         var started = _time.GetTimestamp();
         while (true)
         {
             if (SelectReady() is { } ready)
-                return ready;
+                return new ReadyWaitResult(ready, ReadyWaitFailure.None);
             if (_time.GetElapsedTime(started) >= timeout)
-                return null;
+            {
+                var hasNoSelectableTarget =
+                    await HasCompletedAdmissionWithoutSelectableTargetAsync().ConfigureAwait(false);
+                return new ReadyWaitResult(
+                    null,
+                    hasNoSelectableTarget
+                        ? ReadyWaitFailure.NoSelectableTarget
+                        : ReadyWaitFailure.DeadlineExceeded
+                );
+            }
             await Task.Delay(TimeSpan.FromMilliseconds(5), cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private async ValueTask<bool> HasCompletedAdmissionWithoutSelectableTargetAsync() =>
+        await _lane
+            .RunAsync(() =>
+            {
+                var connections = DistinctConnections().ToArray();
+                return connections.Length > 0
+                    && connections.All(static connection =>
+                        connection.AdmittedWithoutSelectableTarget
+                    );
+            })
+            .ConfigureAwait(false);
+
+    private enum ReadyWaitFailure
+    {
+        None,
+        DeadlineExceeded,
+        NoSelectableTarget,
+    }
+
+    private readonly record struct ReadyWaitResult(ReadyTarget? Target, ReadyWaitFailure Failure);
 
     private sealed class Connection : IAsyncDisposable
     {
@@ -776,6 +805,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         internal IDealerSocket Socket { get; }
         internal ReadyTarget? ReadyTarget => Volatile.Read(ref _readyTarget);
+        internal bool AdmittedWithoutSelectableTarget =>
+            RunState(() =>
+                _currentAdmission is { } admission
+                && (admission.State != ZLinkFrameworkRuntimeState.Serving || admission.Weight <= 0)
+                && _readyTarget is null
+            );
         internal bool Ready => RunState(() => _ready && !_disposed);
         internal bool AdmissionCompleted
         {
@@ -905,7 +940,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         internal async ValueTask PrepareAsync(
             ZLinkApplicationJobQueue applicationJobQueue,
             IZLinkMonitoringBackendAdapter monitoring,
-            IZLinkSocketConfig socketConfig
+            IZLinkSocketConfig socketConfig,
+            TimeSpan sendTimeout
         )
         {
             _admissionTimeout = socketConfig.ConnectTimeout ?? TimeSpan.FromSeconds(1);
@@ -915,7 +951,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     socketConfig.MaxMessageSize
                 );
             Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
-            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
+            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig, sendTimeout);
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
             _receivePoller = ZLinkBackendSocketPoller.Create(Socket);

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelRuntimeManager(
@@ -199,8 +201,12 @@ internal sealed class ZLinkChannelRuntimeManager(
                     backendAdapterFactory.CreateMonitoringAdapter(),
                     state.Context,
                     channel.Client!.SocketConfig,
-                    channel.Client.SocketConfig.SendTimeout
-                        ?? registration.DefaultSocketSendTimeout,
+                    ZLinkBackendSocketOptionsMapper
+                        .ResolveSendTimeout(
+                            channel.Client.SocketConfig,
+                            registration.DefaultSocketSendTimeout
+                        )!
+                        .Value,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
                     outboundFlow?.Invoke(),
