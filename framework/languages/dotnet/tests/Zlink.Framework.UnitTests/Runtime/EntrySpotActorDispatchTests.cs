@@ -2963,6 +2963,29 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 );
             }
+            using var invalidOperationPayload = Message.From(sendBody);
+            string invalidOperationFlowId;
+            using (
+                var invalidOperationFlow = ZLinkFlowContext.Enter(
+                    null,
+                    null,
+                    captureEnabled: true,
+                    ZLinkFlowOrigin.Inbound
+                )
+            )
+            {
+                invalidOperationFlowId = ZLinkFlowContext.Current!.Value.FlowId;
+                await context.ActorCoordinator.RelayToActorAsync(
+                    bound,
+                    sendHeader with
+                    {
+                        Name = "held-invalid-operation",
+                    },
+                    invalidOperationPayload,
+                    static (_, _, _) => ValueTask.CompletedTask,
+                    CancellationToken.None
+                );
+            }
             using var continuedPayload = Message.From(sendBody);
             await context.ActorCoordinator.RelayToActorAsync(
                 bound,
@@ -2980,6 +3003,12 @@ public sealed partial class EntrySpotActorDispatchTests
             runtime.ErrorSink.UnhandledCallbackException += exception =>
                 reportedError.TrySetResult(exception);
             node.NodeSendAsyncFailures.Enqueue(new InvalidOperationException("held relay failed"));
+            node.NodeSendAsyncFailures.Enqueue(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    "terminal invoked twice"
+                )
+            );
             var continuedSend = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
@@ -3009,6 +3038,20 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Empty(
                 observer.Events.Where(flow =>
                     flow.Outcome == "dropped" && flow.FlowId == errorFlowId
+                )
+            );
+            var invalidOperation = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "failed" && flow.FlowId == invalidOperationFlowId
+                )
+            );
+            Assert.Equal("stream", invalidOperation.Surface);
+            Assert.Equal("handler_exception", invalidOperation.Reason);
+            Assert.Equal("ZLinkFrameworkException", invalidOperation.ErrorType);
+            Assert.Equal("terminal invoked twice", invalidOperation.ErrorMessage);
+            Assert.Empty(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "dropped" && flow.FlowId == invalidOperationFlowId
                 )
             );
             Assert.Single(node.NodeSendAttempts);

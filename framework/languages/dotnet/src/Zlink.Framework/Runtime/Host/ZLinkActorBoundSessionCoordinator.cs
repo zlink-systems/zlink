@@ -109,16 +109,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         };
     }
 
-    internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameOneWayAsync(
-        ZLinkRemoteSessionPushRelay identity,
-        byte[] frame,
-        CancellationToken cancellationToken
-    )
-    {
-        return await AdmitRemoteSessionFrameAsync(identity, frame, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
     // 04-session/02-session-actor-binding §8.1: transport already authenticated
     // the peer; the Session owner admits the push by binding identity only.
     private ValueTask<ZLinkSessionOutboundAdmission> AdmitRemoteSessionFrameCoreAsync(

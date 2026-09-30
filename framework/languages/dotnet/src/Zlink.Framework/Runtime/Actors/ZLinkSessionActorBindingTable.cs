@@ -863,7 +863,6 @@ internal sealed class ZLinkSessionActorBindingTable
                     {
                         Kind: ZLinkFrameworkErrorKind.Unavailable
                             or ZLinkFrameworkErrorKind.NotFound
-                            or ZLinkFrameworkErrorKind.InvalidOperation
                     } => ZLinkMessageFlowReason.StaleTarget,
                     ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
                         ZLinkMessageFlowReason.Backpressure,

@@ -4688,7 +4688,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var delivery = await _actorBoundSessionCoordinator
-            .AdmitRemoteSessionFrameOneWayAsync(identity, identity.Frame, cancellationToken)
+            .AdmitRemoteSessionFrameAsync(identity, identity.Frame, cancellationToken)
             .ConfigureAwait(false);
         TraceRejectedSessionPush(identity, delivery);
         ZLinkFrameworkDebugLog.SpotDiscovery(
