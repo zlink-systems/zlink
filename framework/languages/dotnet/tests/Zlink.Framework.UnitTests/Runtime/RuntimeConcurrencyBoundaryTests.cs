@@ -2,6 +2,60 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RuntimeConcurrencyBoundaryTests
 {
+#if DEBUG
+    [Fact]
+    public async Task InfrastructureWaitGuard_RejectsIncompleteWaitOnStateLane()
+    {
+        await using var lane = new ZLinkStateLane();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var error = await lane.RunAsync(() =>
+            Record.Exception(() =>
+                ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                    pending.Task.IsCompleted,
+                    "pending request"
+                )
+            )
+        );
+
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.Contains("pending request", error.Message);
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(true, "completed request");
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(false, "outside lane");
+    }
+
+    [Fact]
+    public async Task InfrastructureWaitGuard_RejectsIncompleteWaitOnLifecycleTurn()
+    {
+        var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? observed = null;
+
+        await queue.RunLifecycleAsync(
+            _ =>
+            {
+                observed = Record.Exception(() =>
+                    ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                        pending.Task.IsCompleted,
+                        "lifecycle completion"
+                    )
+                );
+                ZLinkInfrastructureWaitGuard.ThrowIfBlocking(true, "completed lifecycle operation");
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
+
+        Assert.IsType<InvalidOperationException>(observed);
+    }
+#endif
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

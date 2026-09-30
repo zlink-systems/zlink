@@ -149,7 +149,13 @@ internal static class ZLinkFrameworkServiceRegistrar
                 provider.GetRequiredService<IZLinkDrainExecutor>(),
                 flowCaptureEnabled: () =>
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().Flow.CaptureEnabled,
-                logger: provider.GetService<ILogger<ZLinkDrainCoordinator>>()
+                logger: provider.GetService<ILogger<ZLinkDrainCoordinator>>(),
+                snapshotUnfinished: provider
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
+                    .SnapshotUnfinishedOperationsAsync,
+                traceUnfinished: provider
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
+                    .TraceUnfinishedDrain
             )
         );
         services.TryAddSingleton<ZLinkFrameworkMaintenanceRuntime>(

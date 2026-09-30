@@ -1044,13 +1044,27 @@ public sealed partial class StatefulServiceRuntimeTests
         var manual = lower.ConnectPeer(higherEndpoint, higher.RoutingId);
 
         Assert.NotEqual(inbound.ConnectionIntentId, manual);
+        MeshNodePeer[]? convergedPeers = null;
+        MeshNodeStatus? convergedStatus = null;
         await WaitUntilAsync(() =>
-            lower.Status().AdmittedPeerCount == 1
-            && lower.Peers().Count() == 1
-            && lower.Peers().Single().ConnectionIntentId == manual
-        );
-        Assert.Equal(manual, Assert.Single(lower.Peers()).ConnectionIntentId);
-        Assert.Equal(1u, lower.Status().AdmittedPeerCount);
+        {
+            var peers = lower.Peers();
+            var status = lower.Status();
+            if (
+                peers.Length != 1
+                || peers[0].ConnectionIntentId != manual
+                || peers[0].State != MeshPeerState.Admitted
+                || status.AdmittedPeerCount != 1
+            )
+                return false;
+            convergedPeers = peers;
+            convergedStatus = status;
+            return true;
+        });
+        var convergedPeer = Assert.Single(convergedPeers!);
+        Assert.Equal(manual, convergedPeer.ConnectionIntentId);
+        Assert.Equal(MeshPeerState.Admitted, convergedPeer.State);
+        Assert.Equal(1u, convergedStatus!.AdmittedPeerCount);
     }
 
     [Fact]
