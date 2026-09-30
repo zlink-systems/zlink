@@ -68,6 +68,12 @@ Verification uses the completion representations and outcomes actually exposed b
 
 The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove an existing cancellation connection for a pending stage or introduce binding operation state, registries, or resubmission logic into the Framework.
 
+**Asynchronous results completed by the application, and bounded observation.** The application can create an asynchronous result that an external event completes, and can observe that result for a bounded time on an application thread.
+
+- A completion source settles only the first completion, and later completion attempts don't change the result. The result is a success value or a typed Framework error. Every result handle obtained from the same completion source observes the same original result. Destroying the completion source or a result handle neither completes nor cancels the original result.
+- Bounded observation follows the same context rule as a synchronous blocking terminator — in a runtime execution context it is `InvalidOperation`. When the time passes it only reports "not completed"; it neither completes nor cancels the original result, and a late completion stays on the original result. An observation timeout isn't an operation terminal.
+- .NET, Java, and Node.js provide this capability through their standard types (`TaskCompletionSource`, `CompletableFuture`, `Promise`), so the Framework adds no separate API there. C++ puts a completion source and bounded observation on the Framework task type. A continuation awaiting this completion source's result resumes in the execution context that registered the await, not on the completing thread, and an await inside a handler keeps that handler turn like a general asynchronous terminal. [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.en.md) fixes the names and shapes.
+
 [Handler turn and execution gate §16](02-handler-turn-and-execution-gate.en.md#yield-call-eligibility)
 owns the execution contexts and calls that offer `Yield`.
 

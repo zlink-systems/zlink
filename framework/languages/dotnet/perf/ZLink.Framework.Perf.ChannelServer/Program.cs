@@ -1,33 +1,12 @@
 using ZLink.Framework.Perf;
 
 var config = ServerApplication.ReadConfig(args);
-if (config.scenario != "channel-echo-only" || config.role != "channel")
-    throw new ArgumentException("ChannelServer supports the channel-echo-only source and target.");
-var builder = ServerApplication.Builder(config, options =>
+switch (config.scenario)
 {
-    if (config.topology == "routemesh")
-    {
-        var mesh = options.AddRouteMesh(config.meshName!).Listen(config.listenerEndpoint!);
-        if (config.source)
-        {
-            mesh.Channel(config.channelName!).Client();
-            mesh.PeerConnections.Connect(config.peerEndpoint!);
-        }
-        else mesh.Channel(config.channelName!).Server().AddRequestHandler<ChannelEchoHandler, PerfEchoRequest, PerfEchoReply>();
-    }
-    else if (config.topology == "clientserver")
-    {
-        var channel = options.AddClientServerChannel(config.channelName!);
-        if (config.source) channel.Client().Connect(config.peerEndpoint!);
-        else channel.Server().Listen(new Uri(config.listenerEndpoint!).Port)
-            .AddRequestHandler<ChannelEchoHandler, PerfEchoRequest, PerfEchoReply>();
-    }
-    else throw new ArgumentException("Unsupported channel topology.");
-});
-builder.Services.AddSingleton<ChannelEchoOnlyScenario>();
-var app = builder.Build();
-var scenario = app.Services.GetRequiredService<ChannelEchoOnlyScenario>();
-ServerApplication.Map(app, config.source ? scenario.RunAsync : null);
-await app.StartAsync();
-if (config.source) await scenario.PrepareAsync(app.Lifetime.ApplicationStopping);
-await app.WaitForShutdownAsync();
+    case "channel-echo-only": await ChannelEchoOnlyHost.RunAsync(config); break;
+    case "s2s-channel-to-spot-request-echo": await S2sChannelToSpotRequestEchoScenario.RunAsync(config); break;
+    case "s2s-channel-to-spot-send-send-echo": await S2sChannelToSpotSendSendEchoScenario.RunAsync(config); break;
+    case "s2s-spot-to-channel-request-echo": await S2sSpotToChannelRequestEchoTarget.RunAsync(config); break;
+    case "s2s-spot-to-channel-send-send-echo": await S2sSpotToChannelSendSendEchoTarget.RunAsync(config); break;
+    default: throw new ArgumentException($"ChannelServer does not run scenario {config.scenario}.");
+}

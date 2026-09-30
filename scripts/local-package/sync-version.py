@@ -224,7 +224,7 @@ FRAMEWORK_SCALAR_FIELDS = (
         rf'(public static final String VERSION = ")(?P<version>{SEMVER})(";)',
     ),
     FrameworkField(
-        "framework/languages/dotnet/samples/Directory.Build.props",
+        "framework/languages/dotnet/props/ZLink.FrameworkReference.props",
         "dotnet",
         "PropertyGroup/ZLinkSampleFrameworkVersion default",
         rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == '' and '\$\(ZLinkSampleRepositoryDetected\)' != 'true'\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",

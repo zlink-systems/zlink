@@ -6,7 +6,7 @@ namespace ZLink.Framework.Perf.Tests;
 public sealed class HarnessContractTests
 {
     private static RoleConfig Config(double seconds = .05) => new("test", "session-echo-only/1024/test", new string('a', 64),
-        "client", 0, "session-echo-only", null, null, null, null, null, "", "", false, "None", null, [], [],
+        "client", 0, "session-echo-only", null, null, null, [], null, "", "", false, "None", null, [], [],
         "Immediate", new(1024, seconds, seconds, 1, 1, null, 1, 1, 1000, 1000, 5000, 30000, 5000, 1000), []);
     private static PerfTriggerRequest Trigger(Measurement measurement, string phase, string seq) => new()
     { runId = measurement.Config.runId, cellId = measurement.Config.cellId, phase = phase, resetSeq = seq };

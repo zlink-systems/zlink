@@ -191,6 +191,30 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle.notifyActorMovedToEntrySpot(actorType, actor.context().actorId(), nodeRid);
     }
 
+    CompletionStage<Void> actorMovedToEntrySpot(
+            ZLinkActor actor, RoutingId nodeRid, String entrySpotId, long entrySpotGeneration) {
+        if (lifecycle == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        String actorType = actorTypeFor(actor);
+        if (actorType == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return lifecycle
+                .notifyActorMovedToEntrySpot(
+                        actorType,
+                        actor.context().actorId(),
+                        nodeRid,
+                        entrySpotId,
+                        entrySpotGeneration)
+                .thenRun(
+                        () -> {
+                            if (resolvers != null) {
+                                resolvers.invalidateActorRoute(actor.context().actorId());
+                            }
+                        });
+    }
+
     CompletionStage<Void> releaseActor(String actorType, String actorId) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
