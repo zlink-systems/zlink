@@ -59,6 +59,13 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
       const current = this.liveValue(condition.key.value, storeNow);
       if (condition.kind === 'missing') {
         if (current !== undefined) return { kind: 'conflict', storeNow };
+      } else if (condition.kind === 'value') {
+        if (
+          current === undefined ||
+          !Buffer.from(current.bytes).equals(Buffer.from(condition.expected))
+        ) {
+          return { kind: 'conflict', storeNow };
+        }
       } else if (current?.version.value !== condition.expected.value) {
         return { kind: 'conflict', storeNow };
       }
@@ -175,10 +182,16 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
     throw new RangeError('Location Store write keys must be unique and bounded to 2,048.');
   }
   for (const key of keys) requireKey(key);
-  const encodedSize = request.mutations.reduce(
-    (sum, mutation) => sum + (mutation.kind === 'put' ? mutation.bytes.byteLength : 0),
-    0
-  );
+  const encodedSize =
+    request.conditions.reduce((sum, condition) => {
+      if (condition.kind !== 'value') return sum;
+      requireValue(condition.expected, undefined);
+      return sum + condition.expected.byteLength;
+    }, 0) +
+    request.mutations.reduce(
+      (sum, mutation) => sum + (mutation.kind === 'put' ? mutation.bytes.byteLength : 0),
+      0
+    );
   if (encodedSize > 4 * 1024 * 1024) {
     throw new RangeError('Location Store write exceeds 4 MiB.');
   }

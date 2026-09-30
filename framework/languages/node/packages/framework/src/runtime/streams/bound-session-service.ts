@@ -23,6 +23,7 @@ import type { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './ses
 import { boundSessionErrorPayload } from './bound-session-response-target';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 import { ZLinkManagedStream } from './managed-stream';
+import type { ZLinkSessionBindingIdentity } from './stream-binding-runtime-ports';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -299,6 +300,24 @@ export class ZLinkBoundSessionService {
     } finally {
       await this.routes.unbind(actorId, route.context, route.bindingToken);
     }
+  }
+
+  /**
+   * Closes the physical Session of one exact binding after its relocation
+   * failed (Session–Actor binding §8.1). A newer binding of the same Actor is
+   * not selected.
+   */
+  async closeSessionBinding(
+    actorId: string,
+    expected: ZLinkSessionBindingIdentity,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const route = await this.routes.routeForSessionBinding(
+      actorId,
+      expected.sessionRid,
+      expected.bindingGeneration
+    );
+    await route?.context.close(signal);
   }
 
   async relayRemoteBoundSessionBind(stream: ZLinkManagedStream, actorRef: ActorRef): Promise<void> {

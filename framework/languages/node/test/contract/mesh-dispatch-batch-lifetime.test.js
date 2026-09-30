@@ -20,6 +20,181 @@ function applicationQueue(limit = 1n) {
   }));
 }
 
+test('a suspended infrastructure owner does not block another ready owner', async () => {
+  let ready;
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  const secondFinished = deferred();
+  const firstSecondFinished = deferred();
+  const released = [];
+  const dispatched = [];
+  const errors = [];
+  let receiveBatches = 0;
+  let receiveBatchesClosed = 0;
+  let drained = false;
+  const node = {
+    setReadyHandler(handler) {
+      ready = handler;
+    },
+    createReadyBatch() {
+      return {
+        reset() {},
+        close() {},
+        takeClaim(index) {
+          let received = false;
+          return {
+            recvBatch() {
+              if (received) return { ok: false, records: [] };
+              received = true;
+              return {
+                ok: true,
+                records:
+                  index === 0
+                    ? [
+                        { parts: [], owner: index, sequence: 0 },
+                        { parts: [], owner: index, sequence: 1 }
+                      ]
+                    : [{ parts: [], owner: index, sequence: 0 }]
+              };
+            },
+            release() {
+              released.push(index);
+            }
+          };
+        }
+      };
+    },
+    createReceiveBatch() {
+      receiveBatches++;
+      return {
+        reset() {},
+        close() {
+          receiveBatchesClosed++;
+        }
+      };
+    },
+    drainReady() {
+      if (drained) return { ok: false, hasResidue: false, records: [] };
+      drained = true;
+      return { ok: true, hasResidue: false, records: [{}, {}] };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationQueue(),
+    async dispatch(_owner, record) {
+      dispatched.push([record.owner, record.sequence]);
+      if (record.owner === 0 && record.sequence === 0) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      } else if (record.owner === 1) {
+        secondFinished.resolve();
+      } else {
+        firstSecondFinished.resolve();
+      }
+    },
+    reportError(error) {
+      errors.push(error);
+    }
+  });
+  try {
+    pump.start();
+    ready(ReadyDomain.Infrastructure);
+    await firstStarted.promise;
+    await Promise.race([
+      secondFinished.promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('second owner was blocked')), 250)
+      )
+    ]);
+    assert.deepEqual(dispatched, [
+      [0, 0],
+      [1, 0]
+    ]);
+    releaseFirst.resolve();
+    await firstSecondFinished.promise;
+  } finally {
+    releaseFirst.resolve();
+    await pump.dispose();
+  }
+  assert.deepEqual(released.sort(), [0, 1]);
+  assert.deepEqual(dispatched, [
+    [0, 0],
+    [1, 0],
+    [0, 1]
+  ]);
+  assert.equal(receiveBatchesClosed, receiveBatches);
+  assert.deepEqual(errors, []);
+});
+
+test('disposing the pump waits for a detached infrastructure claim to release', async () => {
+  let ready;
+  const started = deferred();
+  const release = deferred();
+  let released = false;
+  let opened = 0;
+  let closed = 0;
+  let drained = false;
+  const node = {
+    setReadyHandler(handler) {
+      ready = handler;
+    },
+    createReadyBatch() {
+      return {
+        reset() {},
+        close() {},
+        takeClaim() {
+          let received = false;
+          return {
+            recvBatch() {
+              if (received) return { ok: false, records: [] };
+              received = true;
+              return { ok: true, records: [{ parts: [] }] };
+            },
+            release() {
+              released = true;
+            }
+          };
+        }
+      };
+    },
+    createReceiveBatch() {
+      opened += 1;
+      return {
+        reset() {},
+        close() {
+          closed += 1;
+        }
+      };
+    },
+    drainReady() {
+      if (drained) return { ok: false, hasResidue: false, records: [] };
+      drained = true;
+      return { ok: true, hasResidue: false, records: [{}] };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationQueue(),
+    async dispatch() {
+      started.resolve();
+      await release.promise;
+    }
+  });
+  pump.start();
+  ready(ReadyDomain.Infrastructure);
+  await started.promise;
+  let disposed = false;
+  const stopping = pump.dispose().then(() => {
+    disposed = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, false);
+  assert.equal(released, false);
+  release.resolve();
+  await stopping;
+  assert.equal(released, true);
+  assert.equal(closed, opened);
+});
+
 test('application worker reuses its ready and receive batches across sparse readiness', async () => {
   let ready;
   let pending;

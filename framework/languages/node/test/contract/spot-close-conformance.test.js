@@ -26,6 +26,9 @@ const {
 const {
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
+const { ZLinkExecutionBarrier } = require('../../packages/framework/dist/runtime/execution');
+const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+const { ZLinkRuntimeAdmissionGate } = require('../../packages/framework/dist/runtime/admission');
 
 const fixture = JSON.parse(
   fs.readFileSync(
@@ -52,14 +55,14 @@ function errorKindName(error) {
   );
 }
 
-function joiningActor(actorId) {
+function joiningActor(actorId, nodeRid = NODE_RID) {
   return {
     actorId,
     context: {
       actorId,
       [framework.ZLINK_ACTOR_LIFECYCLE_SNAPSHOT]() {
         return {
-          actorRef: { nodeRid: zlink.RoutingId.from(NODE_RID), actorId, generation: 1n },
+          actorRef: { nodeRid: zlink.RoutingId.from(nodeRid), actorId, generation: 1n },
           actorType: 'player',
           membershipEpoch: 1n
         };
@@ -171,10 +174,10 @@ async function createOwner(given) {
     const reply = await manager.executeOnSpot(RoomSpot, spotId, () => 'admitted');
     return reply === 'admitted' ? 'open' : 'sealed';
   };
-  const join = async (actorId) => {
+  const join = async (actorId, nodeRid = NODE_RID) => {
     const request = zlink.Message.from(JSON.stringify('join'));
     try {
-      return await manager.admitActorJoin(spotId, joiningActor(actorId), request, () => undefined);
+      return await manager.admitActorJoin(spotId, joiningActor(actorId, nodeRid), request, () => undefined);
     } finally {
       request.close();
     }
@@ -331,4 +334,179 @@ test('context Close resolves after the target authority is released', async () =
   owner.finishClosing.resolve();
   assert.equal(await close, true);
   assert.equal(await owner.authority(), 'Missing');
+});
+
+test('Close processes a turn and message admitted before its local seal', async () => {
+  const barrier = new ZLinkExecutionBarrier();
+  const serial = new ZLinkSpotSerialTurnExecutor();
+  serial.setExecutionBarrier(barrier);
+  const firstEntered = deferred();
+  const releaseFirst = deferred();
+  const events = [];
+  const first = serial.execute(async () => {
+    firstEntered.resolve();
+    await releaseFirst.promise;
+    events.push('first');
+  });
+  await firstEntered.promise;
+  const second = serial.execute(() => {
+    events.push('second');
+  });
+  const messageHandled = deferred();
+  await serial.postOneWay(
+    () => { events.push('message'); messageHandled.resolve(); },
+    (error) => assert.fail(`accepted message failed: ${error}`)
+  );
+  const seal = barrier.seal('close');
+  assert.equal(barrier.commit(seal), true);
+  releaseFirst.resolve();
+  await Promise.all([first, second]);
+  await messageHandled.promise;
+  assert.deepEqual(events, ['first', 'second', 'message']);
+});
+
+test('Closing commit rejects new Spot admission', async () => {
+  const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
+  const close = owner.spots.close(owner.ref);
+  try {
+    await owner.closingEntered.promise;
+    assert.equal(await owner.authority(), 'Closing');
+    assert.equal(await outcome(() => owner.manager.executeOnSpot(owner.RoomSpot, owner.spotId, () => 'late')), 'Rejected');
+    assert.equal(await outcome(() => owner.manager.getOrCreate(MESH, owner.RoomSpot, owner.spotId)), 'Rejected');
+  } finally {
+    owner.finishClosing.resolve();
+  }
+  assert.equal(await close, true);
+});
+
+test('Closing commit rejects local and remote ActorRef joins', async () => {
+  const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
+  const close = owner.spots.close(owner.ref);
+  try {
+    await owner.closingEntered.promise;
+    assert.equal(await owner.authority(), 'Closing');
+    const outcomes = await Promise.all([
+      outcome(() => owner.join('local-member')),
+      outcome(() => owner.join('remote-member', 'node-b'))
+    ]);
+    assert.deepEqual(outcomes, ['Rejected', 'Rejected']);
+  } finally {
+    owner.finishClosing.resolve();
+  }
+  assert.equal(await close, true);
+});
+
+test('completed Close rejects lifecycle submission without retaining work', async () => {
+  const owner = await createOwner({ authority: 'Ready' });
+  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  assert.notEqual(activation, undefined);
+  assert.equal(await owner.spots.close(owner.ref), true);
+  let ran = false;
+  await assert.rejects(
+    () => activation.serial.executeLifecycleOperation(() => { ran = true; }),
+    (error) => errorKindName(error) === 'Rejected'
+  );
+  assert.equal(ran, false);
+  assert.equal(activation.serial.hasPendingWork, false);
+});
+
+test('membership makes Close false without rejecting admission', async () => {
+  const joinGate = deferred();
+  const owner = await createOwner({ authority: 'Ready', joinGate });
+  const joining = owner.join('member');
+  await new Promise((resolve) => setImmediate(resolve));
+  const close = owner.spots.close(owner.ref);
+  let closeSettled = false;
+  void close.finally(() => { closeSettled = true; });
+  const arrived = owner.manager.executeOnSpot(owner.RoomSpot, owner.spotId, () => 'arrived');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closeSettled, false);
+  joinGate.resolve();
+  assert.equal((await joining).accepted, true);
+  assert.equal(await close, false);
+  assert.equal(await owner.authority(), 'Ready');
+  assert.equal(await arrived, 'arrived');
+});
+
+test('Close in the same JS turn observes an earlier submitted Join', async () => {
+  const joinGate = deferred();
+  const owner = await createOwner({ authority: 'Ready', joinGate });
+  const joining = outcome(() => owner.join('same-turn-member'));
+  const closing = outcome(() => owner.spots.close(owner.ref));
+  joinGate.resolve();
+  const [joinResult, closeResult] = await Promise.all([joining, closing]);
+  assert.equal(closeResult, false);
+  assert.equal(joinResult.accepted, true);
+  assert.equal(await owner.authority(), 'Ready');
+});
+
+test('Join lifecycle submission precedes same-turn Close control submission', async () => {
+  const owner = await createOwner({ authority: 'Ready' });
+  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  assert.notEqual(activation, undefined);
+  const events = [];
+  const joining = activation.serial.executeLifecycleOperation(() => { events.push('join'); });
+  const closing = activation.serial.executeControlLifecycleOperation(() => { events.push('close'); });
+  await Promise.all([joining, closing]);
+  assert.deepEqual(events, ['join', 'close']);
+});
+
+test('Join held by relocation seal precedes Close after seal release', async () => {
+  const owner = await createOwner({ authority: 'Ready' });
+  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  assert.notEqual(activation, undefined);
+  const seal = activation.sealExecution();
+  const events = [];
+  let joined = false;
+  const joinStarted = deferred();
+  const finishJoin = deferred();
+  const joining = activation.serial.executeLifecycleOperation(async () => {
+    events.push('join');
+    joinStarted.resolve();
+    await finishJoin.promise;
+    joined = true;
+    return { accepted: true };
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, []);
+  activation.abortExecutionSeal(seal);
+  await joinStarted.promise;
+  const closing = activation.serial.executeControlLifecycleOperation(() => {
+    events.push('close');
+    return !joined;
+  });
+  finishJoin.resolve();
+  const [joinResult, closeResult] = await Promise.all([joining, closing]);
+  assert.deepEqual(events, ['join', 'close']);
+  assert.deepEqual(joinResult, { accepted: true });
+  assert.equal(closeResult, false);
+});
+
+test('host Draining gate rejects new admission as ShuttingDown', () => {
+  const gate = new ZLinkRuntimeAdmissionGate();
+  gate.register(MESH);
+  gate.close();
+  assert.throws(() => gate.claim(MESH, 'Spot message'), (error) => {
+    assert.equal(errorKindName(error), 'ShuttingDown');
+    return true;
+  });
+});
+
+test('relocation seal holds ingress until its result is known', async () => {
+  const barrier = new ZLinkExecutionBarrier();
+  const serial = new ZLinkSpotSerialTurnExecutor();
+  serial.setExecutionBarrier(barrier);
+  const seal = barrier.seal();
+  const events = [];
+  const handled = deferred();
+  const ingress = serial.postOneWay(
+    () => { events.push('handled'); handled.resolve(); },
+    (error) => assert.fail(`held ingress failed: ${error}`)
+  );
+  await Promise.resolve();
+  assert.deepEqual(events, []);
+  barrier.abort(seal);
+  await ingress;
+  await handled.promise;
+  assert.deepEqual(events, ['handled']);
 });

@@ -6,8 +6,14 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
+import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
+import {
+  ServiceWireExactTerminalByFailureCode,
+  ServiceWireFrameworkErrorCode
+} from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { wireReplyFailureException } from '../../packages/framework/src/runtime/framework-errors-internal';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
   type ZLinkParkedActorArrival
@@ -47,24 +53,31 @@ const MESH_NAME = 'mesh-a';
 const NODE_RID = 'target' as unknown as RoutingId;
 const SPOT_ID = 'spot-1' as unknown as RoutingId;
 
-test('canonical Join rejects missing and closing local targets as Unavailable', async () => {
+test('canonical Join rejects missing targets as Unavailable and closing targets as Rejected', async () => {
+  const closingBarrier = new ZLinkExecutionBarrier();
+  closingBarrier.seal('close');
+  const closingSerial = new ZLinkSpotSerialTurnExecutor(true);
+  closingSerial.setExecutionBarrier(closingBarrier);
+
   for (const state of ['missing-user', 'missing-null', 'closing-user', 'missing-entry']) {
     const replies: Array<{ terminal: number; code: number }> = [];
     let dispatched = false;
     const activation = {
       domain: { kind: 'user' },
       spotId: SPOT_ID,
-      serial: { executeLifecycleOperation: async (callback: () => Promise<void>) => callback() }
+      serial:
+        state === 'closing-user'
+          ? closingSerial
+          : { executeLifecycleOperation: async (callback: () => Promise<void>) => callback() }
     };
     const manager = {
       activations: { resolve: () => (state === 'closing-user' ? activation : undefined) },
       async dispatchMeshActorJoinCore() {
         dispatched = true;
       },
-      options: { entryNodeRid: state === 'missing-entry' ? SPOT_ID : NODE_RID },
-      isSpotClosing: () => state === 'closing-user'
+      options: { entryNodeRid: state === 'missing-entry' ? SPOT_ID : NODE_RID }
     };
-    await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+    const dispatch = DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
       manager as never,
       MESH_NAME,
       { spotId: state === 'missing-null' ? null : SPOT_ID } as never,
@@ -81,9 +94,26 @@ test('canonical Join rejects missing and closing local targets as Unavailable', 
         }
       } as never
     );
-    assert.deepEqual(replies, [{ terminal: 105, code: 13 }], state);
-    const failure = wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join');
-    assert.equal(failure.kind, ZLinkFrameworkErrorKind.Unavailable, state);
+
+    // The Join requester must receive exactly one terminal reply: Rejected for a
+    // Closing target (barrier seal), Unavailable for an absent target.
+    await dispatch;
+    const expected =
+      state === 'closing-user'
+        ? {
+            terminal:
+              ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestRejected],
+            code: ServiceWireFrameworkErrorCode.requestRejected,
+            kind: ZLinkFrameworkErrorKind.Rejected
+          }
+        : { terminal: 105, code: 13, kind: ZLinkFrameworkErrorKind.Unavailable };
+    assert.deepEqual(replies, [{ terminal: expected.terminal, code: expected.code }], state);
+    if (state === 'closing-user') assert.deepEqual(replies[0], { terminal: 106, code: 15 });
+    assert.equal(
+      wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join').kind,
+      expected.kind,
+      state
+    );
     assert.equal(dispatched, false, state);
   }
 });

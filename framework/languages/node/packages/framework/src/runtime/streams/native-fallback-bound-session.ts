@@ -160,9 +160,8 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
   ): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    const sealedRemoteTarget = remoteTarget?.relocationSealId !== undefined;
     let nativeAttempted = false;
-    if (localActor && !sealedRemoteTarget) {
+    if (localActor) {
       const result = await this.options.runtime.submitLocalBoundSession(
         this.options.actorId,
         this.message,
@@ -213,7 +212,6 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
         actorNodeRidHex: (actorRef?.nodeRid as { toHex?: () => string } | undefined)?.toHex?.(),
         actorGeneration: actorRef?.objectGeneration.toString(),
         actorOwnershipGeneration: ownershipGeneration?.toString(),
-        relocationSealId: remoteTarget.relocationSealId,
         message: this.message,
         boundPacketName: packetName,
         metadata: this.selectedMetadata,

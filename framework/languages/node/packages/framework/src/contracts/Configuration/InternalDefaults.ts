@@ -3,6 +3,9 @@ import * as os from 'node:os';
 /** Default complete header plus payload size accepted by a StreamNode. */
 export const DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE = 64 * 1024;
 
+/** Default MeshNode pending activation limit (spec 03-mesh-node §5.1). */
+export const DEFAULT_ACTIVATION_CONCURRENCY_LIMIT = 128;
+
 /** Defaults shared by registration normalization and the runtime worker pool. */
 export const DEFAULT_WORKER_MIN_THREADS = 0;
 export const DEFAULT_WORKER_IDLE_TIMEOUT_MS = 30_000;

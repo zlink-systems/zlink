@@ -600,13 +600,13 @@ export class RawServiceMeshRuntime {
     return this.receiveOne(nowMs, observe);
   }
 
-  setReadableHandler(handler: () => void): void {
+  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void {
     this.requireStarted().setReadableHandler(handler);
   }
 
   /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
-  async pumpBatch(receiveReady = true): Promise<boolean> {
-    await this.observeSelectedRoutes();
+  async pumpBatch(receiveReady = true, routeReady = false): Promise<boolean> {
+    if (routeReady) await this.observeSelectedRoutes();
     const startedAtMs = performance.now();
     let messages = 0;
     let bytes = 0;

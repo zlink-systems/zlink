@@ -49,6 +49,108 @@ test('redis provider exports only the two opaque Store implementations', () => {
   }
 });
 
+async function verifyValueCondition(store, advanceClock) {
+  const subject = key('value-condition/subject');
+  const marker = key('value-condition/marker');
+  const bytes = Buffer.from([0, 255, 17]);
+  const condition = { kind: 'value', key: subject, expected: bytes };
+  const batch = () => store.write({
+    conditions: [condition, { kind: 'missing', key: marker }],
+    mutations: [{ kind: 'put', key: marker, bytes: Buffer.from('applied') }]
+  });
+  const put = (value, retentionMs) => store.write({
+    conditions: [], mutations: [{ kind: 'put', key: subject, bytes: value, retentionMs }]
+  });
+  const absentMarker = async () => assert.equal((await store.read(marker)).kind, 'missing');
+
+  const first = await put(bytes, 60_000);
+  const renewed = await put(bytes, 120_000);
+  assert.equal(first.kind, 'applied');
+  assert.equal(renewed.kind, 'applied');
+  assert.notEqual(first.putVersions[0].version.value, renewed.putVersions[0].version.value);
+  assert.equal((await batch()).kind, 'applied');
+  await store.write({ conditions: [], mutations: [{ kind: 'delete', key: marker }] });
+
+  await put(Buffer.from([0, 255, 18]));
+  assert.equal((await batch()).kind, 'conflict');
+  await absentMarker();
+  await store.write({ conditions: [], mutations: [{ kind: 'delete', key: subject }] });
+  assert.equal((await batch()).kind, 'conflict');
+  await absentMarker();
+
+  await put(bytes, advanceClock === undefined ? 1 : 10);
+  if (advanceClock === undefined) {
+    let expired = false;
+    for (let attempt = 0; attempt < 1_000; attempt += 1) {
+      if ((await store.read(subject)).kind === 'missing') {
+        expired = true;
+        break;
+      }
+    }
+    assert.equal(expired, true);
+  } else {
+    advanceClock(11);
+  }
+  assert.equal((await batch()).kind, 'conflict');
+  await absentMarker();
+}
+
+test('in-memory provider checks Value against live bytes at commit', async () => {
+  let now = 0;
+  const store = new frameworkInternal.ZLinkInMemoryProviderLocationStore(() => new Date(now));
+  await verifyValueCondition(store, milliseconds => { now += milliseconds; });
+});
+
+test('redis provider checks Value against live bytes in its write script', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('value-condition');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  try {
+    await verifyValueCondition(store);
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
+test('descriptor publication accepts a lease renewal between read and commit', async () => {
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let repository;
+  let owner;
+  let armed = false;
+  let attempts = 0;
+  const provider = {
+    read: (key, signal) => inner.read(key, signal),
+    scan: (request, signal) => inner.scan(request, signal),
+    async write(request, signal) {
+      const publishes = request.mutations.some(mutation =>
+        mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0')
+      );
+      if (publishes) attempts += 1;
+      if (publishes && armed) {
+        armed = false;
+        assert.equal((await repository.renewOwnerLease(owner.token, 60_000, signal)).kind, 'renewed');
+      }
+      return inner.write(request, signal);
+    }
+  };
+  repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  owner = await repository.claimOwnerLease('descriptor-renew-owner', 60_000);
+  assert.equal(owner.kind, 'claimed');
+  const target = {
+    meshName: 'descriptor-renew-mesh', nodeRid: 'descriptor-renew-node',
+    nodeLifecycleGeneration: 1n, owner: owner.token
+  };
+  armed = true;
+  const result = await repository.updateMeshNode(
+    aggregateDescriptor(target, 4), frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+  );
+  assert.equal(result.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
+  assert.equal(attempts, 1);
+});
+
 test('redis opaque Location Store applies conditional batches atomically', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
@@ -580,7 +682,7 @@ test('redis-backed aggregate prepare commit and abort converge across repository
   }
 });
 
-test('aggregate committer retries a target owner-lease heartbeat conflict with unchanged authority', async () => {
+test('aggregate committer accepts an unchanged target owner lease after renewal', async () => {
   const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
   let targetRepository;
   let targetOwner;
@@ -655,7 +757,7 @@ test('aggregate committer retries a target owner-lease heartbeat conflict with u
 
   assert.equal(prepared.fence.aggregateId.value, plan.envelope.aggregateId);
   assert.equal(heartbeatWrites, 1);
-  assert.equal(prepareCasAttempts, 2);
+  assert.equal(prepareCasAttempts, 1);
   const unchanged = await targetRepository.readAuthority(plan.participants[0].key);
   assert.equal(unchanged.kind, 'snapshot');
   assert.equal(unchanged.storeVersion.value, authority.storeVersion.value);
@@ -713,7 +815,7 @@ test('aggregate committer does not retry a conflict after authority StoreVersion
   assert.equal(attempts, 1);
 });
 
-test('aggregate commit retries a target owner-lease heartbeat conflict while its fence stays prepared', async () => {
+test('aggregate commit accepts an unchanged target owner lease after renewal', async () => {
   const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
   let targetRepository;
   let targetOwner;
@@ -790,7 +892,7 @@ test('aggregate commit retries a target owner-lease heartbeat conflict while its
 
   assert.equal(committed.kind, 'committed');
   assert.equal(heartbeatWrites, 1);
-  assert.equal(commitCasAttempts, 2);
+  assert.equal(commitCasAttempts, 1);
   const moved = await targetRepository.readAuthority(request.participants[0].authorityKey);
   assert.equal(moved.kind, 'snapshot');
   assert.equal(moved.ownerId, targetOwner.token.ownerId);

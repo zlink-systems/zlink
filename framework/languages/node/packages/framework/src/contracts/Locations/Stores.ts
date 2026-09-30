@@ -34,6 +34,11 @@ export type ZLinkStoreCondition =
       readonly kind: 'version';
       readonly key: ZLinkStoreKey;
       readonly expected: ZLinkStoreVersion;
+    }
+  | {
+      readonly kind: 'value';
+      readonly key: ZLinkStoreKey;
+      readonly expected: Uint8Array;
     };
 
 export type ZLinkStoreMutation =

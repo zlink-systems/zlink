@@ -1,3 +1,9 @@
+import {
+  diagnosticWorkName,
+  guardStateLaneCompletion,
+  trackDiagnosticCompletion
+} from './state-lane';
+
 export type ZLinkSerialWorkLane = 'application' | 'lifecycle';
 
 export interface ZLinkSerialWorkOptions {
@@ -440,6 +446,93 @@ export class ZLinkSerialExecutionQueue {
   private resolveIdleWaiters(): void {
     for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
+}
+
+if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+  const submit = ZLinkSerialExecutionQueue.prototype.submit;
+  ZLinkSerialExecutionQueue.prototype.submit = function <T>(
+    this: ZLinkSerialExecutionQueue,
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown
+  ): Promise<T> {
+    return guardStateLaneCompletion(
+      trackDiagnosticCompletion(
+        submit.call(this, operation, options, context) as Promise<T>,
+        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+      ),
+      'serial completion'
+    );
+  };
+
+  const submitPreAdmitted = ZLinkSerialExecutionQueue.prototype.submitPreAdmitted;
+  ZLinkSerialExecutionQueue.prototype.submitPreAdmitted = function <T>(
+    this: ZLinkSerialExecutionQueue,
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown
+  ): Promise<T> {
+    return guardStateLaneCompletion(
+      trackDiagnosticCompletion(
+        submitPreAdmitted.call(this, operation, options, context) as Promise<T>,
+        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+      ),
+      'serial completion'
+    );
+  };
+
+  const submitContinuation = ZLinkSerialExecutionQueue.prototype.submitContinuation;
+  ZLinkSerialExecutionQueue.prototype.submitContinuation = function <T>(
+    this: ZLinkSerialExecutionQueue,
+    operation: () => Promise<T> | T,
+    context?: unknown
+  ): Promise<T> {
+    return guardStateLaneCompletion(
+      trackDiagnosticCompletion(
+        submitContinuation.call(this, operation, context) as Promise<T>,
+        `serial continuation ${diagnosticWorkName(operation)}`
+      ),
+      'serial completion'
+    );
+  };
+
+  const admitDurablePrefix = ZLinkSerialExecutionQueue.prototype.admitDurablePrefix;
+  ZLinkSerialExecutionQueue.prototype.admitDurablePrefix = function <T>(
+    this: ZLinkSerialExecutionQueue,
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown,
+    preparation?: ZLinkSerialWorkPreparation
+  ): Promise<T> {
+    return guardStateLaneCompletion(
+      trackDiagnosticCompletion(
+        admitDurablePrefix.call(this, operation, options, context, preparation) as Promise<T>,
+        `serial durable ${diagnosticWorkName(operation)}`
+      ),
+      'serial completion'
+    );
+  };
+
+  const submitLifecycleOperation = ZLinkSerialExecutionQueue.prototype.submitLifecycleOperation;
+  ZLinkSerialExecutionQueue.prototype.submitLifecycleOperation = function <T>(
+    this: ZLinkSerialExecutionQueue,
+    operation: () => Promise<T> | T
+  ): Promise<T> {
+    return guardStateLaneCompletion(
+      trackDiagnosticCompletion(
+        submitLifecycleOperation.call(this, operation) as Promise<T>,
+        `serial lifecycle ${diagnosticWorkName(operation)}`
+      ),
+      'serial completion'
+    );
+  };
+
+  const whenIdle = ZLinkSerialExecutionQueue.prototype.whenIdle;
+  ZLinkSerialExecutionQueue.prototype.whenIdle = function (
+    this: ZLinkSerialExecutionQueue
+  ): Promise<void> {
+    return guardStateLaneCompletion(whenIdle.call(this), 'serial completion');
+  };
 }
 
 function createLane(): ZLinkSerialAdmissionLane {

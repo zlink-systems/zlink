@@ -13,7 +13,6 @@ import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkActorClient,
   ZLinkActorNativeJoinCoordinator,
-  preferredRemoteBoundSessionTarget,
   type ZLinkActorTransferRegistry,
   type ZLinkActorManagerOptions
 } from '../actors';
@@ -194,13 +193,8 @@ export class ZLinkActorRuntimeOptionsFactory {
           },
           localActorProvider: () =>
             this.options.actorManager()?.getState(actorId)?.actor !== undefined,
-          remoteBoundSessionTargetProvider: () => {
-            const state = this.options.actorManager()?.getState(actorId);
-            return preferredRemoteBoundSessionTarget(
-              state?.remoteBoundSessionTarget,
-              state?.boundSessionTransferTarget
-            );
-          },
+          remoteBoundSessionTargetProvider: () =>
+            this.options.actorManager()?.getState(actorId)?.remoteBoundSessionTarget,
           remoteActorPacketTargetProvider: () => this.options.actorPacketTargetForState(actorId),
           requestTimeoutMs: this.options.registration.requestTimeoutMs,
           actorId,

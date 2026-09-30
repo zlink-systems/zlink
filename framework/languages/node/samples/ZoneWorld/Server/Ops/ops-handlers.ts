@@ -75,7 +75,7 @@ class WatchNodesHandler {
   ) {}
 
   async handle(context: ZLinkSessionContext): Promise<void> {
-    context.client.reply(new WatchNodesRes(this.nodes.snapshot())).submit();
+    await context.client.reply(new WatchNodesRes(this.nodes.snapshot())).submit();
     this.consoles.replayAlerts(context);
   }
 }
@@ -86,7 +86,7 @@ class RelocationPairHandler {
 
   async handle(context: ZLinkSessionContext): Promise<void> {
     const pair = this.nodes.relocationPair();
-    context.client
+    await context.client
       .reply(
         pair === undefined
           ? new RelocationPairRes('', '', '', '', ZoneWorldErrors.nodeUnavailable)
@@ -116,7 +116,7 @@ class AnnounceWorldHandler {
     await this.fanout
       .publish(ZoneWorldNames.broadcastChannel, new WorldAnnounceEvent(id, request.text))
       .submit();
-    context.client.reply(new AnnounceWorldRes(id)).submit();
+    await context.client.reply(new AnnounceWorldRes(id)).submit();
   }
 }
 
@@ -152,7 +152,7 @@ class SetMaintenanceHandler {
         )
         .submit();
       // --8<-- [end:doc-zw-ops-publish]
-      context.client
+      await context.client
         .reply(new SetMaintenanceRes(applied.nodeId, applied.enabled, applied.zones))
         .submit();
     } catch (error) {
@@ -160,7 +160,7 @@ class SetMaintenanceHandler {
         `maintenance apply failed node=${request.nodeId} enabled=${request.enabled}`,
         error instanceof Error ? error.message : String(error)
       );
-      context.client
+      await context.client
         .reply(
           new SetMaintenanceRes(
             request.nodeId,
@@ -193,7 +193,7 @@ class NodeDiagnosticsHandler {
         )
         .timeout(10_000)
         .submit<GetNodeDiagnosticsRes>();
-      context.client
+      await context.client
         .reply(
           new NodeDiagnosticsRes(
             result.nodeId,
@@ -204,7 +204,7 @@ class NodeDiagnosticsHandler {
         )
         .submit();
     } catch {
-      context.client
+      await context.client
         .reply(
           new NodeDiagnosticsRes(request.nodeId, [], 0, false, ZoneWorldErrors.nodeUnavailable)
         )
