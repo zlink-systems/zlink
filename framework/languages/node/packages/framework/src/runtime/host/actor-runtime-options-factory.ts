@@ -55,6 +55,8 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
     createRequest: ZLinkMessage,
     signal?: AbortSignal
   ) => Promise<import('../../contracts').ZLinkActorCreateResponse | undefined>;
+  readonly notifyEntrySpotActorJoined: (actor: ZLinkActor, signal?: AbortSignal) => Promise<void>;
+  readonly notifyEntrySpotActorLeft: (actor: ZLinkActor, signal?: AbortSignal) => Promise<void>;
   readonly locationLifecycle: () => ZLinkLocationLifecycle | undefined;
   readonly primaryMeshName: () => string | undefined;
   readonly actorMeshName: (actorType: string) => string | undefined;
@@ -123,6 +125,29 @@ export class ZLinkActorRuntimeOptionsFactory {
         completionTableProvider: this.options.primaryMeshCompletions,
         spotRouteResolver: this.options.createLocationSpotRouteResolver(),
         locationLifecycle: this.options.locationLifecycle(),
+        localSpotJoin: (spotId, actor, request, commit, signal, leaveSource, contentType) => {
+          const manager = this.options.spotManager();
+          if (manager === undefined)
+            throw new Error('Actor Spot membership runtime is not started.');
+          return manager.admitActorJoin(
+            spotId,
+            actor,
+            request,
+            commit,
+            signal,
+            leaveSource,
+            contentType
+          );
+        },
+        localEntryJoin: this.options.notifyEntrySpotActorJoined,
+        reportSourceLeaveError: this.options.reportPostCommitError,
+        localSourceLeave: async (actor, spotId, signal) => {
+          if (spotId === undefined) return this.options.notifyEntrySpotActorLeft(actor, signal);
+          const manager = this.options.spotManager();
+          if (manager === undefined)
+            throw new Error('Actor Spot membership runtime is not started.');
+          return manager.notifyActorLeftAfterTransfer(spotId, actor, signal);
+        },
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,

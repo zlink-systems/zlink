@@ -394,7 +394,6 @@ export class ZLinkEntrySpotActivation {
                 kind: 'enabled',
                 runtime: this.options.actorTransferRuntime
               },
-        commitNativeActor: (actor) => this.commitEntryActorTransaction(actor),
         commitTransferredActor: async (actor, backlog) => {
           await this.commitEntryActorTransaction(actor);
           return await this.replayActorBacklog(actor, backlog);

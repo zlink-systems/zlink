@@ -325,6 +325,7 @@ export class ServiceStatefulRegistry {
     );
     this.actorTypes.set(actor.actorId, stableType);
     this.actors.set(actor.actorId, restored);
+    this.updateBindingMembership(restored);
     return restored;
   }
 
