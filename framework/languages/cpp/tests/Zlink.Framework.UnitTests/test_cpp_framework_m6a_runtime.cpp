@@ -476,7 +476,7 @@ void verify_topology_snapshot_and_connection_fence ()
     peer.state = mesh::service_node_state_t::serving;
     const auto first_connection = bytes ("connection-a");
     assert (topology.admit (peer, first_connection) == mesh::peer_admission_result_t::admitted);
-    assert (*topology.select ("alpha") == bytes ("peer"));
+    assert (topology.select ("alpha").value () == bytes ("peer"));
 
     auto older = peer;
     older.descriptor_revision = 0;
@@ -829,9 +829,9 @@ void verify_signed_weight_contract ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected = topology.select ("weighted");
         assert (selected);
-        if (*selected == bytes ("weight-100"))
+        if (selected.value () == bytes ("weight-100"))
             ++selected_100;
-        else if (*selected == bytes ("weight-300"))
+        else if (selected.value () == bytes ("weight-300"))
             ++selected_300;
         else
             assert (false);
@@ -1442,7 +1442,7 @@ void verify_client_server_independent_raw_path ()
     assert (next_probe.probes.front ().probe_id != first_probe.probes.front ().probe_id);
 
     assert (
-      client.send ({"ClientServerSend", "application/json", bytes ("send")}, 2s).result ().value ()
+      client.send ({"ClientServerSend", "application/json", bytes ("send")}).result ().value ()
       == zlink::submit_result_t::ok);
     client_server::client_server_pump_result_t send_pump =
       client_server::client_server_pump_result_t::no_data;
@@ -1660,17 +1660,17 @@ void verify_client_server_weighted_selection ()
       bytes ("route-a"), bytes ("route-b"), bytes ("route-a"), bytes ("route-b")};
     for (const auto &expected : expected_route_ids) {
         const auto selected_route = topology.select ("alpha");
-        assert (selected_route && *selected_route == expected);
+        assert (selected_route && selected_route.value () == expected);
     }
     assert (!topology.select ("unknown-before-change"));
     const auto before_change = topology.select ("alpha");
-    assert (before_change && *before_change == bytes ("route-a"));
+    assert (before_change && before_change.value () == bytes ("route-a"));
     auto route_c = descriptor ("route-c");
     route_c.state = mesh::service_node_state_t::serving;
     assert (topology.admit (route_c, bytes ("route-connection-c"))
             == mesh::peer_admission_result_t::admitted);
     const auto retained_after_change = topology.select ("alpha");
-    assert (retained_after_change && *retained_after_change == bytes ("route-b"));
+    assert (retained_after_change && retained_after_change.value () == bytes ("route-b"));
     assert (!topology.select ("unknown-after-change"));
 
     auto weighted_route_a = descriptor ("weighted-route-a");
@@ -1688,7 +1688,7 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
         assert (selected_route);
-        ++weighted_selected[*selected_route];
+        ++weighted_selected[selected_route.value ()];
     }
     assert (weighted_selected[bytes ("weighted-route-a")] == 300);
     assert (weighted_selected[bytes ("weighted-route-b")] == 100);
@@ -1699,7 +1699,7 @@ void verify_client_server_weighted_selection ()
             == mesh::peer_admission_result_t::admitted);
     for (std::size_t index = 0; index < 32; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
-        assert (selected_route && *selected_route == bytes ("weighted-route-a"));
+        assert (selected_route && selected_route.value () == bytes ("weighted-route-a"));
     }
 
     mesh::service_topology_registry_t cycle_topology (descriptor ("cycle-route-local"));
@@ -1719,7 +1719,7 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 257; ++index) {
         const auto expected = cycle_reference.select (cycle_candidates);
         const auto actual = cycle_topology.select ("alpha");
-        assert (expected && actual && *actual == bytes (*expected));
+        assert (expected && actual && actual.value () == bytes (*expected));
     }
 
     auto cycle_route_c = descriptor ("cycle-route-c");
@@ -1731,7 +1731,7 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 211; ++index) {
         const auto expected = cycle_reference.select (cycle_candidates);
         const auto actual = cycle_topology.select ("alpha");
-        assert (expected && actual && *actual == bytes (*expected));
+        assert (expected && actual && actual.value () == bytes (*expected));
     }
 }
 
