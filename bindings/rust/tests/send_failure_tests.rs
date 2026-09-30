@@ -7,7 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SubmitResult, ZlinkError,
+    Context, Message, POLLCOMPLETION, Poller, Received, RecvFlags, RoutingId, SendFlags,
+    SubmitResult, ZlinkError,
 };
 
 fn await_send(
@@ -58,6 +59,7 @@ fn async_terminal_still_completes_after_sync_terminal_is_added() {
             .connect("inproc://rust-async-send-regression")
             .unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&sender);
 
     await_send(
         sender
@@ -75,6 +77,8 @@ fn routed_send_to_missing_target_is_immediately_not_connected() {
     let router = ctx.router_socket().unwrap();
     router.bind("inproc://sf-router-mandatory").unwrap();
     router.router_options().set_mandatory(true).unwrap();
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&router, POLLCOMPLETION, 1).unwrap();
     let rid = RoutingId::from(b"nonexistent-peer");
     let msg = Message::try_from(b"will-fail").unwrap();
     let error = match router.send(&rid).message(msg).submit() {

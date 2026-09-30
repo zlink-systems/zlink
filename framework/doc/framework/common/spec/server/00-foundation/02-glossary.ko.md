@@ -2383,7 +2383,7 @@ client의 대응표와 handle은 [Stream Connector 공통 스펙 §5.6](../../st
 ### Session sequence
 
 한 STREAM session에서 수락한 ingress message의 순서를 나타내는 값이다. Actor handoff는 이
-값을 cutover high-water로 사용하지 않는다. Session owner가 seal 뒤 도착한 message를 보관하고,
+값을 cutover high-water로 사용하지 않는다. Session owner가 seal 뒤 Session에서 Actor로 들어온 ingress message를 보관하고,
 source와 target의 ordered TCP relay가 cutover 전 순서를 제공한다.
 
 | 항목 | 내용 |

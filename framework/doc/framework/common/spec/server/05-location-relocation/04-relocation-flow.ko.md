@@ -102,7 +102,8 @@ Target을 사용할 수 없으면 source application dispatch를 막지 않고 r
 않는다.
 
 Actor가 Session에 bind되어 있으면 source application dispatch를 중단하기 전에 Session owner가
-그 binding을 seal한다. Seal 뒤 Session에서 들어온 request와 push는 Session owner가 보관한다.
+그 binding을 seal한다. Seal 중 Session owner가 보관하는 message의 범위는
+[Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 정한다.
 같은 Session에 bind된 다른 Actor는 영향을 받지 않는다.
 
 ### 4.2 Source는 실행을 멈추지만 message 수신은 멈추지 않는다
@@ -305,7 +306,7 @@ sequenceDiagram
     participant L as Location Store
 
     opt Actor가 Session에 bind되어 있음
-        A->>S: [request] Session seal · binding route 고정과 이후 message 보관
+        A->>S: [request] Session seal · binding route 고정과 이후 Session→Actor message 보관
         S-->>A: [reply] 그 binding의 seal 설치 완료
     end
     A->>A: [local] 현재 turn 완료 뒤 application dispatch 중단
@@ -691,7 +692,7 @@ target·source의 request·reply·send 결과, 반환하는 Error·Warning log)�
 
 **Session과 abort**
 
-- Bound Session message가 seal 중 보관되고 target route 변경 뒤 제출된 다음 seal이 해제된다.
+- Session에서 Actor로 들어온 message가 seal 중 보관되고 target route 변경 뒤 제출된 다음 seal이 해제된다.
 - Late·duplicate cutover는 Warning만 기록하고 owner와 queue를 다시 변경하지 않는다.
 - Session route update가 기본 3,000ms 안에 없으면 physical Session을 종료하고 state를
   정리한다.
