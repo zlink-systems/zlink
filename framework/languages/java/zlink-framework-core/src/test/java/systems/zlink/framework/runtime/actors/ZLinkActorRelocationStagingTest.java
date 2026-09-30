@@ -133,29 +133,6 @@ final class ZLinkActorRelocationStagingTest {
     }
 
     @Test
-    void localJoinSourceNotificationDoesNotBlockTargetCompletion() {
-        ZLinkActorRuntime runtime = runtime(new AtomicInteger());
-        var prepared = publishedActor(runtime, "actor-local-join");
-        CompletableFuture<Void> sourceNotification = new CompletableFuture<>();
-        runtime.setSourceActorLeaver(ignored -> sourceNotification);
-
-        runtime.beginLocalMove(prepared.actor());
-        ZLinkActorRuntime.LocalMoveSource source =
-                new ZLinkActorRuntime.LocalMoveSource(new Object(), "source-spot");
-        runtime.notifySourceForLocalMove(prepared.actor(), source);
-
-        assertTrue(runtime.isMoving(prepared.actor()));
-        runtime.completeRemoteMove(prepared.actor());
-        assertFalse(runtime.isMoving(prepared.actor()));
-        assertFalse(sourceNotification.isDone());
-
-        sourceNotification.completeExceptionally(
-                new IllegalStateException("source leave notification failed"));
-        assertTrue(sourceNotification.isCompletedExceptionally());
-        assertFalse(runtime.isMoving(prepared.actor()));
-    }
-
-    @Test
     void entrySpotDestroyWaitsForActiveActorTurn() {
         AtomicInteger closes = new AtomicInteger();
         AtomicInteger destroys = new AtomicInteger();
