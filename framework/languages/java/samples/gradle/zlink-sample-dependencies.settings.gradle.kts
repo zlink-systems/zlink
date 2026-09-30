@@ -4,9 +4,12 @@ val frameworkRoot = generateSequence(settingsDir.parentFile) { it.parentFile }
             candidate.resolve("gradle/zlink-local-packages.settings.gradle.kts").isFile
     }
 
-val samplesRoot = generateSequence(settingsDir) { it.parentFile }
-    .first { it.resolve("gradle/zlink-sample-dependencies.settings.gradle.kts").isFile }
-apply(from = samplesRoot.resolve("gradle/zlink-jvm-baseline.settings.gradle.kts"))
+// The samples build and the perf build (framework/languages/java/perf, issue #1171) share this script; the perf
+// build sits beside samples/, so the walk also looks for a samples/gradle folder.
+val samplesGradleDir = generateSequence(settingsDir) { it.parentFile }
+    .flatMap { sequenceOf(it.resolve("gradle"), it.resolve("samples/gradle")) }
+    .first { it.resolve("zlink-sample-dependencies.settings.gradle.kts").isFile }
+apply(from = samplesGradleDir.resolve("zlink-jvm-baseline.settings.gradle.kts"))
 
 val packageMode = providers.gradleProperty("zlink.samples.packageMode")
     .map(String::toBoolean)

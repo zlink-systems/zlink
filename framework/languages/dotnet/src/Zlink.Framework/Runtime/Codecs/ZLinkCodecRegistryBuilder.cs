@@ -6,7 +6,8 @@ internal sealed class ZLinkCodecRegistryBuilder
         IZLinkMessageCodecRegistry
 {
     private readonly Dictionary<ZlinkStreamCodec, string> _contentTypesByStreamCodec = [];
-    private readonly ZLinkSerializerSelectionRegistry _serializerSelections = new();
+    private readonly ZLinkSerializerSelectionRegistry _serializerSelections =
+        CreateSerializerSelectionRegistry();
 
     private readonly Dictionary<string, ZlinkStreamCodec> _streamCodecsByContentType = new(
         StringComparer.Ordinal
@@ -28,7 +29,7 @@ internal sealed class ZLinkCodecRegistryBuilder
 
     public void AddSerializer(string contentType, IZLinkMessageSerializer serializer)
     {
-        AddSerializer(contentType, serializer, _ => true, true);
+        RegisterSerializer(contentType, serializer, _ => true);
     }
 
     public void AddSerializer(
@@ -37,7 +38,7 @@ internal sealed class ZLinkCodecRegistryBuilder
         Func<Type, bool> canSerialize
     )
     {
-        AddSerializer(contentType, serializer, canSerialize, false);
+        RegisterSerializer(contentType, serializer, canSerialize);
     }
 
     internal void RegisterStreamCodec(string contentType, ZlinkStreamCodec codec)
@@ -55,27 +56,17 @@ internal sealed class ZLinkCodecRegistryBuilder
         RefreshSnapshot();
     }
 
-    private void AddSerializer(
+    private void RegisterSerializer(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize,
-        bool isFallbackSerializer
+        Func<Type, bool> canSerialize
     )
     {
         ThrowIfFrozen();
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        _serializerSelections.Add(contentType, serializer, canSerialize, isFallbackSerializer);
+        _serializerSelections.Add(contentType, serializer, canSerialize);
         RefreshSnapshot();
-    }
-
-    /// <summary>
-    ///     The last registered fallback serializer with its content type, or <c>null</c>
-    ///     when none is registered.
-    /// </summary>
-    public (string ContentType, IZLinkMessageSerializer Serializer)? SingleCustomSerializer()
-    {
-        return _serializerSelections.Fallback;
     }
 
     public bool TryGetSerializer(string contentType, out IZLinkMessageSerializer serializer)
@@ -112,6 +103,12 @@ internal sealed class ZLinkCodecRegistryBuilder
 
     IZLinkMessageCodecResolver IZLinkMessageCodecRegistry.Snapshot() => Snapshot();
 
+    internal static ZLinkSerializerSelectionRegistry CreateSerializerSelectionRegistry() =>
+        new(
+            ZLinkEnvelopeCodec.DefaultContentType,
+            ZLinkFrameworkJsonPayloadCodec.ReceiveSerializer
+        );
+
     private void RefreshSnapshot()
     {
         var serializers = _serializerSelections.FrozenCopy();
@@ -135,7 +132,7 @@ internal sealed class ZLinkCodecRegistrySnapshot(
 {
     internal static ZLinkCodecRegistrySnapshot Empty { get; } =
         new(
-            new ZLinkSerializerSelectionRegistry().FrozenCopy(),
+            ZLinkCodecRegistryBuilder.CreateSerializerSelectionRegistry().FrozenCopy(),
             new Dictionary<ZlinkStreamCodec, string>()
         );
 

@@ -97,87 +97,99 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                     targetResolver
                             .resolve(timeout)
                             .thenCompose(
-                                    target ->
-                                            services.spotNode()
-                                                    .joinActorEntrySpot(
-                                                            context.actorRef(),
-                                                            target.nodeRid(),
-                                                            requestPart,
-                                                            timeout)
-                                                    .thenCompose(
-                                                            result -> {
-                                                                if (result.result()
-                                                                        != ZLinkBackendRequestResult
-                                                                                .OK) {
-                                                                    //  Spec 15-spot-actor:364-375 —
-                                                                    // a Join Failed.Kind is a
-                                                                    //  runtime terminal
-                                                                    // (NotFound/Unavailable/
-                                                                    //  ...), never NotConfigured.
-                                                                    throw new ZLinkFrameworkException(
-                                                                            result.result()
-                                                                                    .toFrameworkErrorKind(),
-                                                                            "actor entry spot join"
-                                                                                    + " failed: "
-                                                                                    + result
-                                                                                            .result());
-                                                                }
-                                                                CompletionStage<Void> route =
-                                                                        result.joinResultCode() != 0
-                                                                                        || result.actor()
-                                                                                                .equals(
-                                                                                                        context
-                                                                                                                .actorRef())
-                                                                                ? CompletableFuture
-                                                                                        .completedFuture(
-                                                                                                null)
-                                                                                : context
-                                                                                        .rebindNativeActor(
-                                                                                                result
-                                                                                                        .actor(),
-                                                                                                timeout);
-                                                                return route.thenCompose(
-                                                                        ignored -> {
-                                                                            if (result
-                                                                                            .joinResultCode()
-                                                                                    == 0) {
-                                                                                context
-                                                                                        .markMovedToEntrySpot(
-                                                                                                result
-                                                                                                        .actor(),
-                                                                                                target);
-                                                                            }
-                                                                            ZLinkActorJoinOutcome
-                                                                                    decoded =
-                                                                                            ZLinkActorJoinResults
-                                                                                                    .decode(
-                                                                                                            services
-                                                                                                                    .serializer(),
-                                                                                                            result
-                                                                                                                    .joinResultCode(),
-                                                                                                            result
-                                                                                                                    .actor(),
-                                                                                                            context
-                                                                                                                    .meshName(),
-                                                                                                            result
-                                                                                                                    .replyParts());
-                                                                            return result
-                                                                                                    .joinResultCode()
-                                                                                            == 0
-                                                                                    ? services.locationRenewal()
-                                                                                            .renew(
+                                    target -> {
+                                        if (target.nodeRid().equals(context.actorRef().nodeRid())) {
+                                            return services.actors()
+                                                    .joinLocalActor(
+                                                            context.actor(),
+                                                            target.spotId(),
+                                                            requestPart)
+                                                    .thenApply(
+                                                            result ->
+                                                                    ZLinkActorJoinResults.decode(
+                                                                            result,
+                                                                            context.actorRef(),
+                                                                            context.meshName()));
+                                        }
+                                        return services.spotNode()
+                                                .joinActorEntrySpot(
+                                                        context.actorRef(),
+                                                        target.nodeRid(),
+                                                        requestPart,
+                                                        timeout)
+                                                .thenCompose(
+                                                        result -> {
+                                                            if (result.result()
+                                                                    != ZLinkBackendRequestResult
+                                                                            .OK) {
+                                                                //  Spec 15-spot-actor:364-375 —
+                                                                // a Join Failed.Kind is a
+                                                                //  runtime terminal
+                                                                // (NotFound/Unavailable/
+                                                                //  ...), never NotConfigured.
+                                                                throw new ZLinkFrameworkException(
+                                                                        result.result()
+                                                                                .toFrameworkErrorKind(),
+                                                                        "actor entry spot join"
+                                                                                + " failed: "
+                                                                                + result.result());
+                                                            }
+                                                            CompletionStage<Void> route =
+                                                                    result.joinResultCode() != 0
+                                                                                    || result.actor()
+                                                                                            .equals(
                                                                                                     context
-                                                                                                            .actor(),
-                                                                                                    result
-                                                                                                            .targetNodeRid())
-                                                                                            .thenApply(
-                                                                                                    ignoredRoute ->
-                                                                                                            decoded)
-                                                                                    : CompletableFuture
-                                                                                            .completedFuture(
-                                                                                                    decoded);
-                                                                        });
-                                                            }));
+                                                                                                            .actorRef())
+                                                                            ? CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            null)
+                                                                            : context
+                                                                                    .rebindNativeActor(
+                                                                                            result
+                                                                                                    .actor(),
+                                                                                            timeout);
+                                                            return route.thenCompose(
+                                                                    ignored -> {
+                                                                        if (result.joinResultCode()
+                                                                                == 0) {
+                                                                            context
+                                                                                    .markMovedToEntrySpot(
+                                                                                            result
+                                                                                                    .actor(),
+                                                                                            target);
+                                                                        }
+                                                                        ZLinkActorJoinOutcome
+                                                                                decoded =
+                                                                                        ZLinkActorJoinResults
+                                                                                                .decode(
+                                                                                                        services
+                                                                                                                .serializer(),
+                                                                                                        result
+                                                                                                                .joinResultCode(),
+                                                                                                        result
+                                                                                                                .actor(),
+                                                                                                        context
+                                                                                                                .meshName(),
+                                                                                                        result
+                                                                                                                .replyParts());
+                                                                        return result
+                                                                                                .joinResultCode()
+                                                                                        == 0
+                                                                                ? services.locationRenewal()
+                                                                                        .renew(
+                                                                                                context
+                                                                                                        .actor(),
+                                                                                                result
+                                                                                                        .targetNodeRid())
+                                                                                        .thenApply(
+                                                                                                ignoredRoute ->
+                                                                                                        decoded)
+                                                                                : CompletableFuture
+                                                                                        .completedFuture(
+                                                                                                decoded);
+                                                                    });
+                                                        });
+                                    });
             // The Join owns the request Message until its target submission stage ends.
             return manage(outcome.whenComplete((ignored, failure) -> requestPart.close()));
         } catch (RuntimeException error) {

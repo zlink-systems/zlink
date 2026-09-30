@@ -58,6 +58,7 @@ internal enum ErrorCode
     EBadf = 9,
     ENoent = 2,
     ENomem = 12,
+    EIo = 5,
     EAccess = 13,
     EExist = 17,
     EFault = 14,

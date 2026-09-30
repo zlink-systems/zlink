@@ -201,9 +201,9 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
     if (!channel.publisher.routing_id || channel.publisher.bind_endpoints.size () != 1)
         throw std::invalid_argument (
           "discovery fanout publisher requires one routing id and one bind endpoint");
-    auto raw = std::make_shared<raw_fanout_publisher_t> (channel.publisher.bind_endpoints.front (),
-                                                         _channel_runtime.core_context (),
-                                                         channel.publisher.no_drop);
+    auto raw = std::make_shared<raw_fanout_publisher_t> (
+      channel.publisher.bind_endpoints.front (), _channel_runtime.core_context (),
+      channel.publisher.no_drop, channel.publisher.send_timeout);
     raw->start ();
     std::optional<std::string> advertise_host;
     if (const auto found = _publisher_advertise_hosts.find (channel.name);
@@ -240,9 +240,9 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
     _channel_runtime.bind_fanout_transport (
       channel.name, [this, name = channel.name] (std::string topic, std::string packet_name,
                                                  std::string content_type, zlink::message_t message,
-                                                 std::chrono::milliseconds timeout) {
+                                                 std::chrono::milliseconds) {
           return publish (name, std::move (topic), std::move (packet_name),
-                          std::move (content_type), std::move (message), timeout);
+                          std::move (content_type), std::move (message));
       });
 }
 
@@ -679,8 +679,7 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
                                                  std::string topic,
                                                  std::string packet_name,
                                                  std::string content_type,
-                                                 zlink::message_t message,
-                                                 std::chrono::milliseconds timeout)
+                                                 zlink::message_t message)
 {
     if (_stop.load (std::memory_order_acquire))
         throw framework_exception_t (framework_error_kind_t::shutting_down,
@@ -700,7 +699,7 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
                                      "fanout runtime is shutting down");
     auto encoded = protocol::application_payload_t{std::move (packet_name),
                                                    std::move (content_type), message.to_bytes ()};
-    co_await publisher->publish (channel_name, topic, encoded, timeout);
+    co_await publisher->publish (channel_name, topic, encoded);
 }
 
 void fanout_location_runtime_t::stop () noexcept

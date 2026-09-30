@@ -2600,7 +2600,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, target.Status().PendingApplicationMessages);
 
-        occupied.ReleaseForHandlerStart();
+        await occupied.ReleaseForHandlerStartAsync();
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() =>
         {
@@ -2800,7 +2800,7 @@ public sealed class ServiceRuntimeFoundationTests
         //  Closing removes the receive-flow target and its outstanding
         //  pre-receive waiter before the external permit is returned.
         await requester.DisposeAsync();
-        occupied.ReleaseForHandlerStart();
+        await occupied.ReleaseForHandlerStartAsync();
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Running,
             applicationJobQueue.GetStatus().PressureState
@@ -2970,14 +2970,14 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(1UL, firstStatus.PermitsInUse);
 
         Assert.NotNull(first.ApplicationJobAdmission);
-        first.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        await first.ApplicationJobAdmission!.ReleaseForHandlerStartAsync();
 
         using var second = await secondDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var secondStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, secondStatus.QueuedApplicationJobs);
         Assert.Equal(1UL, secondStatus.PermitsInUse);
         Assert.NotNull(second.ApplicationJobAdmission);
-        second.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        await second.ApplicationJobAdmission!.ReleaseForHandlerStartAsync();
 
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         Assert.Equal(2, Volatile.Read(ref deliveries));
@@ -3073,7 +3073,8 @@ public sealed class ServiceRuntimeFoundationTests
         await target.DisposeAsync();
 
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
-        first.ApplicationJobAdmission?.ReleaseForHandlerStart();
+        if (first.ApplicationJobAdmission is { } admission)
+            await admission.ReleaseForHandlerStartAsync();
         first.Dispose();
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
     }

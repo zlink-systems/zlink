@@ -1218,6 +1218,12 @@ public sealed class RelocationBehaviorConformanceTests
             if (ReferenceEquals(delivery, sourceFailure.Task))
                 throw await sourceFailure.Task;
             Assert.Equal(1, stream.WriteCount);
+            await WaitUntilAsync(
+                () =>
+                    source.Runtime.TryGetSessionActorBinding(actorId, out var binding)
+                    && binding.AppliedCanonicalRelocationRoute is not null,
+                TimeSpan.FromSeconds(2)
+            );
             Assert.True(source.Runtime.TryGetSessionActorBinding(actorId, out var routedBinding));
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
             Assert.Equal(targetProtocolErrorsBeforeJoin, targetMonitor.Status().ProtocolErrors);
@@ -1623,8 +1629,8 @@ public sealed class RelocationBehaviorConformanceTests
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate) =>
-        await WaitUntilAsync(() => ValueTask.FromResult(predicate()));
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan? timeout = null) =>
+        await WaitUntilAsync(() => ValueTask.FromResult(predicate()), timeout);
 
     private static Task InvokeActorGenerationResetAsync(
         ZLinkFrameworkRuntime runtime,
@@ -1708,9 +1714,12 @@ public sealed class RelocationBehaviorConformanceTests
         }
     }
 
-    private static async Task WaitUntilAsync(Func<ValueTask<bool>> predicate)
+    private static async Task WaitUntilAsync(
+        Func<ValueTask<bool>> predicate,
+        TimeSpan? timeout = null
+    )
     {
-        var deadlineTimeout = TimeSpan.FromSeconds(15);
+        var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(15);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {

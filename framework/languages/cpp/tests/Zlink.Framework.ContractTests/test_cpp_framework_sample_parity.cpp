@@ -2034,23 +2034,6 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
     EXPECT_EQ (amount_wire.get<zlink::samples::shoppingmall::decimal_t> (), amount);
 }
 
-TEST (CppFrameworkSampleParity, ChannelSendBackpressureUsesIndependentDefault)
-{
-    const auto source = read_text_file (
-      cpp_language_root () / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
-    const auto submit_send = source.find ("channel_outbound_exchange_t::submit_send");
-    ASSERT_NE (submit_send, std::string::npos);
-    const auto submit_send_body = source.substr (submit_send);
-
-    EXPECT_NE (source.find ("default_send_wait_timeout = std::chrono::milliseconds (1000)"),
-               std::string::npos)
-      << "one-way send backpressure must use the contract's 1000ms default";
-    EXPECT_NE (submit_send_body.find ("resolve_send_wait_timeout"), std::string::npos)
-      << "one-way send must use its own backpressure policy";
-    EXPECT_EQ (submit_send_body.find ("resolve_channel_wait_timeout"), std::string::npos)
-      << "one-way send must not reuse request/reply timeout policy";
-}
-
 TEST (CppFrameworkSampleParity, ClientScenariosUseBlockingHttpSubmit)
 {
     const std::vector<std::filesystem::path> client_scenarios{

@@ -9,7 +9,6 @@ internal sealed class ZLinkActorRemoteJoiner(
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkRegistration registration,
     IServiceProvider services,
-    ZLinkSpotRuntimeManager spots,
     ZLinkActorSessionManager actorSessionManager
 )
 {
@@ -72,74 +71,25 @@ internal sealed class ZLinkActorRemoteJoiner(
         );
     }
 
-    public ValueTask<ZLinkActorJoinResult> JoinAsync(
-        ZLinkFrameworkComponentState state,
-        string spotId,
-        IZLinkActor actor,
-        ZLinkBackendActorRef actorRef,
-        IZLinkBackendSpotNode node,
-        ZLinkMessage request,
-        CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null
-    )
-    {
-        return JoinAsync(
-            state,
-            spotId,
-            actor,
-            actorRef,
-            node,
-            request,
-            operationId: null,
-            cancellationToken,
-            absoluteDeadline
-        );
-    }
-
     public async ValueTask<ZLinkActorJoinResult> JoinAsync(
-        ZLinkFrameworkComponentState state,
         string spotId,
         IZLinkActor actor,
+        ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef actorRef,
-        IZLinkBackendSpotNode node,
         ZLinkMessage request,
         ZLinkActorJoinOperationId? operationId,
         CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null
+        DateTimeOffset absoluteDeadline
     )
     {
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
         );
-        var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
         var deadline = (
-            Utc: effectiveDeadline,
-            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(effectiveDeadline)
+            Utc: absoluteDeadline,
+            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(absoluteDeadline)
         );
-        var activation = spots.GetActivationBySpotId(state, spotId);
-        if (activation is not null)
-        {
-            if (!activation.TryResolveActorJoinDescriptor(out var descriptor) || descriptor is null)
-                throw new InvalidOperationException(
-                    $"SPOT '{activation.SpotId}' does not declare an actor join callback."
-                );
-
-            return await SubmitNativeJoinActorAsync(
-                    actor,
-                    actorRef,
-                    node,
-                    activation.NodeRid,
-                    activation.SpotId,
-                    activation.ChannelName,
-                    request,
-                    RemainingTimeout(deadline.Monotonic),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-
         var remoteAddress = await ExecuteWithDeadlineAsync(
                 token => ResolveRemoteActorJoinTargetAsync(spotId, token),
                 RemainingTimeout(deadline.Monotonic),
@@ -149,7 +99,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         return await SubmitRoutedJoinActorAsync(
                 actor,
                 actorRef,
-                actorSessionManager.GetOrCreateState(actor.Context.ActorId),
+                actorState,
                 remoteAddress,
                 request,
                 operationId,
@@ -1769,169 +1719,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 );
         }
         return handle;
-    }
-
-    private async ValueTask<ZLinkActorJoinResult> SubmitNativeJoinActorAsync(
-        IZLinkActor actor,
-        ZLinkBackendActorRef actorRef,
-        IZLinkBackendSpotNode node,
-        RoutingId targetNodeRid,
-        string targetSpotId,
-        string channelName,
-        ZLinkMessage request,
-        TimeSpan timeout,
-        CancellationToken cancellationToken
-    )
-    {
-        var encodedRequest = request.Encode(registration.Codecs);
-        var joinHeader = new ZLinkEnvelopeHeader(
-            ZLinkMessageKind.Command,
-            channelName,
-            typeof(ZLinkMessage).Name,
-            encodedRequest.ContentType,
-            null,
-            null,
-            null,
-            null,
-            null
-        );
-        IReadOnlyList<Message> joinParts;
-        joinParts = ZLinkMessageParts.Create(
-            ZLinkEnvelopeCodec.EncodeHeader(joinHeader),
-            Message.From(encodedRequest.Payload.Bytes.Span)
-        );
-
-        using var completion = new ZLinkNativeReplyCompletion<ZLinkBackendActorJoinResult>(
-            cancellationToken
-        );
-
-        if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
-            runtime.Flow.Trace(
-                new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Sent,
-                    ZLinkDispatchErrorSurface.SpotActor,
-                    ZLinkDispatchMessageKind.ActorRequest,
-                    "JoinSpot",
-                    channelName,
-                    SourceRid: targetNodeRid.ToString(),
-                    SpotId: targetSpotId.ToString(),
-                    ActorId: actor.Context.ActorId
-                )
-            );
-
-        bool submitted;
-        try
-        {
-            submitted = node.JoinActor(
-                actorRef,
-                targetNodeRid,
-                targetSpotId,
-                joinParts,
-                completion.Complete,
-                timeout
-            );
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(joinParts);
-        }
-
-        if (!submitted)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor join submit failed for '{actor.Context.ActorId}' to SPOT '{targetSpotId}'."
-            );
-
-        var (joinResult, replyParts) = await completion.Task.ConfigureAwait(false);
-
-        if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.ReplyReceived))
-            runtime.Flow.Trace(
-                new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.ReplyReceived,
-                    ZLinkDispatchErrorSurface.SpotActor,
-                    ZLinkDispatchMessageKind.Response,
-                    "JoinSpot",
-                    channelName,
-                    SourceRid: targetNodeRid.ToString(),
-                    SpotId: targetSpotId.ToString(),
-                    ActorId: actor.Context.ActorId
-                )
-            );
-        var reply = DecodeNativeJoinReply(
-            joinResult.Result,
-            joinResult.FailureErrno,
-            replyParts,
-            actor.Context.ActorId,
-            targetSpotId
-        );
-        var accepted = joinResult.JoinResultCode == 0;
-        var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
-        if (accepted)
-        {
-            actorState.BindNativeActorRef(joinResult.Actor);
-            if (joinResult.Actor.NodeRid != actorRef.NodeRid)
-                actorState.InvalidateContext();
-        }
-
-        return accepted
-            ? new ZLinkActorJoinResult.Accepted(
-                joinResult.Actor.ToNative(node.MeshStatus().MeshName),
-                reply
-            )
-            : RejectedWithTrace(reply);
-    }
-
-    private ZLinkMessage DecodeNativeJoinReply(
-        RequestResult result,
-        int failureErrno,
-        IReadOnlyList<Message> replyParts,
-        string actorId,
-        string spotId
-    )
-    {
-        try
-        {
-            if (result != RequestResult.Ok)
-                //  Classify the join terminal via the shared ownership-aware mapper
-                //  (fine code refines the coarse terminal) instead of collapsing
-                //  every non-OK terminal to NotFound (spec 32-framework-error-model:
-                //  81-118), matching ZLinkNativeActorJoinOperation.
-                throw ZLinkRequestFailureMapper.CreateCompletionException(
-                    result,
-                    failureErrno,
-                    $"Actor join for '{actorId}' to SPOT '{spotId}'"
-                );
-
-            if (replyParts.Count == 0)
-                //  Spec 32-framework-error-model:91-92 — an empty successful
-                //  reply cannot be processed: ProtocolError, not a plain
-                //  InvalidOperationException.
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ProtocolError,
-                    "Actor join reply was empty."
-                );
-
-            var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts, runtime.Flow.CaptureEnabled);
-            var reply = (Message)ZLinkEnvelopeCodec.DecodeBody(replyParts, typeof(Message))!;
-            using var ownedReply = Message.From(reply);
-            return ZLinkMessage.FromEnvelopePayload(
-                header.ContentType,
-                ownedReply,
-                registration.Codecs
-            );
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(replyParts);
-        }
-    }
-
-    private static ZLinkActorJoinResult.Rejected RejectedWithTrace(ZLinkMessage reply)
-    {
-        Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            "actor_join_rejected site=remote_joiner_tail"
-        );
-        return new ZLinkActorJoinResult.Rejected(reply);
     }
 }
 

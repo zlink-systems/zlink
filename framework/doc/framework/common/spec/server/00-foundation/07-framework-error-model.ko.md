@@ -53,7 +53,7 @@ log와 trace에 기록한다.
 configuration exception으로 전달한다. 이런 오류를 remote error reply로 바꾸지 않는다.
 
 Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 확인한 Framework
-실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다. Binding의 `NOT_FOUND`는 지정한 target이 없을 때 `NotFound`, channel 선택에서 적격 member가 없을 때 `Unavailable`로 전달한다. 그 밖의 결과는 해당 호출 경로의 Core 결과 의미에 따라 분류한다.
+실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다. Binding의 `NOT_FOUND`는 지정한 target이 없을 때 `NotFound`로 전달한다. Channel 선택의 결과 분류는 [Framework API의 Channel 선택 결과](06-framework-api.ko.md#channel-selection-result)를 따른다. 그 밖의 결과는 해당 호출 경로의 Core 결과 의미에 따라 분류한다.
 
 ## 4. Send 완료와 실패
 

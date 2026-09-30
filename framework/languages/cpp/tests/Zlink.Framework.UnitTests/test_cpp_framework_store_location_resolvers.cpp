@@ -2599,7 +2599,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,
-      ClientServerWithoutSelectableSnapshotReturnsTargetNotFound)
+      ClientServerWithoutReadySnapshotExpiresAtAdmissionDeadline)
 {
     auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
@@ -2616,7 +2616,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_EQ (0, app.run (0, nullptr));
     ASSERT_NE (nullptr, client);
     ASSERT_TRUE (client->observed_error.has_value ());
-    EXPECT_EQ (zlink::framework::framework_error_kind_t::not_found, *client->observed_error);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded,
+               *client->observed_error);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,

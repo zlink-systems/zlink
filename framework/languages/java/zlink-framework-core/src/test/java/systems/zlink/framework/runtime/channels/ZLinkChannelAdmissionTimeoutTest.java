@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
@@ -30,6 +33,79 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkChannelAdmissionTimeoutTest {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
+
+    @Test
+    void configuredClientSendTimeoutBoundsAdmissionAndRoundsSubMillisecondValuesUp() {
+        assertConfiguredClientSendTimeout(Duration.ofMillis(250), Duration.ofMillis(250));
+        assertConfiguredClientSendTimeout(Duration.ofNanos(1), Duration.ofMillis(1));
+    }
+
+    @Test
+    void clientAndFanoutBuildersRejectInvalidSendTimeouts() {
+        for (Duration timeout :
+                new Duration[] {
+                    Duration.ZERO,
+                    Duration.ofNanos(-1),
+                    Duration.ofMillis(Integer.MAX_VALUE).plusNanos(1)
+                }) {
+            DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            assertThrows(
+                    ZLinkConfigurationException.class,
+                    () ->
+                            clientOptions
+                                    .addClientServerChannel("client")
+                                    .client()
+                                    .setSendTimeout(timeout));
+
+            DefaultZLinkFrameworkOptions fanoutOptions = new DefaultZLinkFrameworkOptions();
+            assertThrows(
+                    ZLinkConfigurationException.class,
+                    () -> fanoutOptions.addFanoutChannel("fanout").setSendTimeout(timeout));
+        }
+
+        Duration maximum = Duration.ofMillis(Integer.MAX_VALUE);
+        new DefaultZLinkFrameworkOptions()
+                .addClientServerChannel("maximum-client")
+                .client()
+                .setSendTimeout(maximum);
+        new DefaultZLinkFrameworkOptions()
+                .addFanoutChannel("maximum-fanout")
+                .setSendTimeout(maximum);
+    }
+
+    private static void assertConfiguredClientSendTimeout(
+            Duration configuredTimeout, Duration expectedTimeout) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addClientServerChannel("work").client().setSendTimeout(configuredTimeout);
+        ChannelRegistration registration = options.registration().channels().get(0);
+        AtomicLong now = new AtomicLong();
+        ZLinkChannelSocketRegistry sockets =
+                new ZLinkChannelSocketRegistry(
+                        null, now::get, ignored -> now.set(expectedTimeout.toNanos()));
+        sockets.registerChannel(registration);
+        sockets.addClientServerConnection("server", descriptor(), dealer());
+        try {
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    sockets.submitToChannel(
+                                            "work",
+                                            REQUEST_TIMEOUT,
+                                            DEFAULT_TIMEOUT,
+                                            false,
+                                            (client, timeout) ->
+                                                    CompletableFuture.completedFuture("accepted"),
+                                            (node, timeout) -> {
+                                                throw new AssertionError(
+                                                        "ClientServer must use its DEALER");
+                                            }));
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
+            assertEquals(expectedTimeout.toNanos(), now.get());
+        } finally {
+            sockets.closeAll();
+        }
+    }
 
     @RepeatedTest(5)
     void clientSendAndRequestAdmitWhenServerBecomesReadyWithinSendTimeout() throws Exception {

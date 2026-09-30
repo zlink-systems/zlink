@@ -233,7 +233,7 @@ type ZlinkError interface {
 ```
 
 - The current concrete error types are `SubmitError`, `RequestError`, `RecvError`, `HandlerError`, `CloseError`, `BindError`, `ConnectError`, and `ConfigError`.
-- `Code()` returns that function family's Core result code, and `InternalErrno()` returns the native failure cause.
+- `Code()` returns that function family's Core result code, and `InternalErrno()` returns the native failure cause. A REQUEST completion result of `RequestError` follows the `INTERNAL_ERROR` detail item in the [common spec](../README.en.md).
 - `errors.Is` via `Unwrap()` is also supported.
 - The `NativeErrno` field, and the `NativeErrno()` alias, are not part of the public contract.
 

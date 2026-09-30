@@ -207,6 +207,7 @@ public:
  void await_suspend(std::coroutine_handle<> continuation);
  T await_resume();
  const result_t<T> &result() const;
+ std::optional<result_t<T>> result_for(std::chrono::milliseconds timeout) const;
 };
 
 template <>
@@ -230,6 +231,21 @@ public:
  void await_suspend(std::coroutine_handle<> continuation);
  void await_resume();
  const result_t<void> &result() const;
+ std::optional<result_t<void>> result_for(std::chrono::milliseconds timeout) const;
+};
+
+// T must be void or copy-constructible.
+// complete() returns true when this call settled the result, false when it was already settled.
+template <typename T>
+class task_completion_source_t {
+public:
+ task_completion_source_t();
+ task_completion_source_t(task_completion_source_t &&) noexcept = default;
+ task_completion_source_t &operator=(task_completion_source_t &&) noexcept = default;
+ task_completion_source_t(const task_completion_source_t &) = delete;
+ task_completion_source_t &operator=(const task_completion_source_t &) = delete;
+ task_t<T> task() const;
+ bool complete(result_t<T> result);
 };
 
 class message_t {

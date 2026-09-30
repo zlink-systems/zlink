@@ -517,29 +517,25 @@ public sealed class ZlinkStreamTypedRequestBuilder
                 return;
             }
 
+            ZlinkStreamResult<TReply> typedResult;
             try
             {
-                callback(
-                    ZlinkStreamResult<TReply>.Success(
-                        ZlinkStreamTypedConnectorExtensions.DecodePayload<TReply>(
-                            _codec,
-                            result.Value!
-                        )
-                    )
+                typedResult = ZlinkStreamResult<TReply>.Success(
+                    ZlinkStreamTypedConnectorExtensions.DecodePayload<TReply>(_codec, result.Value!)
                 );
             }
             catch (Exception ex)
             {
-                callback(
-                    ZlinkStreamResult<TReply>.Failure(
-                        new ZlinkStreamError(
-                            ZlinkStreamErrorCode.UserCallbackFailed,
-                            "Stream reply decode failed.",
-                            ex
-                        )
+                typedResult = ZlinkStreamResult<TReply>.Failure(
+                    new ZlinkStreamError(
+                        ZlinkStreamErrorCode.UserCallbackFailed,
+                        "Stream reply decode failed.",
+                        ex
                     )
                 );
             }
+
+            callback(typedResult);
         });
     }
 }

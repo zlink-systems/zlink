@@ -135,9 +135,12 @@ final class ZLinkFanoutNoDropTest {
 
     @Test
     void e_builderValueIsAppliedToPublisherSocketOption() {
-        LowHwmBackendProvider backend = new LowHwmBackendProvider(SEND_TIMEOUT);
+        LowHwmBackendProvider backend = new LowHwmBackendProvider();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addFanoutChannel(CHANNEL).setNoDrop(true).enablePublisher("inproc://fanout-option");
+        options.addFanoutChannel(CHANNEL)
+                .setSendTimeout(SEND_TIMEOUT)
+                .setNoDrop(true)
+                .enablePublisher("inproc://fanout-option");
 
         try (ZLinkFrameworkRuntime ignored =
                 ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
@@ -235,9 +238,10 @@ final class ZLinkFanoutNoDropTest {
 
         private static Scenario start(boolean configureNoDrop, boolean noDrop, Duration sendTimeout)
                 throws Exception {
-            LowHwmBackendProvider backend = new LowHwmBackendProvider(sendTimeout);
+            LowHwmBackendProvider backend = new LowHwmBackendProvider();
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            FanoutChannelBuilder channel = options.addFanoutChannel(CHANNEL);
+            FanoutChannelBuilder channel =
+                    options.addFanoutChannel(CHANNEL).setSendTimeout(sendTimeout);
             if (configureNoDrop) {
                 channel.setNoDrop(noDrop);
             }
@@ -312,8 +316,8 @@ final class ZLinkFanoutNoDropTest {
                 new ZLinkJavaBackendAdapterFactory();
         private final LowHwmChannelAdapter channels;
 
-        private LowHwmBackendProvider(Duration sendTimeout) {
-            channels = new LowHwmChannelAdapter(sendTimeout);
+        private LowHwmBackendProvider() {
+            channels = new LowHwmChannelAdapter();
         }
 
         @Override
@@ -363,11 +367,6 @@ final class ZLinkFanoutNoDropTest {
     private static final class LowHwmChannelAdapter implements ZLinkChannelBackendAdapter {
         private Context context;
         private PubSocket publisher;
-        private final Duration sendTimeout;
-
-        private LowHwmChannelAdapter(Duration sendTimeout) {
-            this.sendTimeout = sendTimeout;
-        }
 
         @Override
         public ZLinkBackendContext createContext() {
@@ -376,7 +375,8 @@ final class ZLinkFanoutNoDropTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext ignored) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext ignored, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -386,7 +386,8 @@ final class ZLinkFanoutNoDropTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext ignored) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext ignored, Duration sendTimeout) {
             publisher = ZLinkJavaSocketOptions.configureFrameworkSocket(context.createPubSocket());
             publisher.options().sendHwm(HWM_BYTES);
             publisher.options().sendTimeout(sendTimeout);

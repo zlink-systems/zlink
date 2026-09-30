@@ -357,14 +357,21 @@ Public messaging은 typed payload를 받고 Framework가 packet name과 codec을
 Node direct와 channel operation은 target selection과 submit을 한 호출로 수행한다. 공개 `selectNode`,
 `selectOne`, `selectMany` 단계는 제공하지 않는다.
 
+<a id="channel-selection-result"></a>
 Channel client는 ChannelName을 process-local route index에서 찾아 RouteMesh MeshNode 또는 ClientServer
-client 하나를 선택한다. Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나
-ClientServer client를 검색하거나 relay하지 않는다. 등록된 송신 경로에 ready target pipe가 없으면
-`Unavailable`, [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면 `NotFound`를 사용한다.
+client 하나를 선택한다. 선택 결과는 이 절이 정한다.
+
+- Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나 ClientServer client를 검색하거나 relay하지 않는다.
+- RouteMesh 송신 경로는 기다리지 않는다. [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면
+  `NotFound`, ready target pipe가 없으면 `Unavailable`로 끝난다.
+- ClientServer 송신 경로는 ready target이 없으면 admission deadline
+  ([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)) 안에서
+  기다린다([Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#clientserver-ready-wait)). 그 안에
+  ready target이 생기지 않으면 `DeadlineExceeded`로 끝난다.
 
 <a id="no-eligible-select-one-member"></a>
-[Select-one](02-glossary.ko.md#select-one) ChannelName에서 eligibility와 drain 조건을 적용한 뒤 남은
-member가 하나도 없으면 `Unavailable`이다. Request와 one-way send가 같은 kind로 끝난다.
+[Select-one](02-glossary.ko.md#select-one) ChannelName에 ready target이 있지만 eligibility와 drain 조건을 적용한
+뒤 남은 member가 하나도 없으면 두 경로 모두 기다리지 않고 `Unavailable`로 끝난다. Request와 one-way send가 같은 kind로 끝난다.
 [Weight](02-glossary.ko.md#weight)가 `0`이거나 draining이어서 후보에서 빠진 경우가 여기에 해당하며,
 송신 경로와 connection은 그대로 있으므로 `NotFound`가 아니다. 후보 집합은 weight를 다시 높이거나
 drain이 끝나면 채워진다.

@@ -6,6 +6,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
@@ -34,6 +35,7 @@ public final class ChannelRegistration {
     private boolean routingIdPrefixConfigured;
     private RoutingId routeRoutingId;
     private Duration defaultRequestTimeout;
+    private Duration sendTimeout = ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT;
 
     public ChannelRegistration(String name, ChannelKind kind) {
         this.name = name;
@@ -172,6 +174,14 @@ public final class ChannelRegistration {
 
     public Duration defaultRequestTimeout() {
         return defaultRequestTimeout;
+    }
+
+    Duration sendTimeout() {
+        return sendTimeout;
+    }
+
+    void setSendTimeout(Duration timeout) {
+        sendTimeout = ZLinkChannelAdmissionTimeout.normalize(timeout);
     }
 
     void setDefaultRequestTimeout(Duration timeout) {

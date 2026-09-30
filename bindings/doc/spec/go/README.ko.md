@@ -218,7 +218,7 @@ type ZlinkError interface {
 ```
 
 - 현재 concrete error type은 `SubmitError`, `RequestError`, `RecvError`, `HandlerError`, `CloseError`, `BindError`, `ConnectError`와 `ConfigError`다.
-- `Code()`는 함수군의 Core result code를 반환하고 `InternalErrno()`는 native 실패 원인을 반환한다.
+- `Code()`는 함수군의 Core result code를 반환하고 `InternalErrno()`는 native 실패 원인을 반환한다. `RequestError`의 REQUEST completion 결과는 [공통 스펙](../README.ko.md)의 `INTERNAL_ERROR` 상세 조회 항목을 따른다.
 - `Unwrap()`을 통한 `errors.Is`도 지원한다.
 - `NativeErrno` field나 `NativeErrno()` alias는 공개 계약이 아니다.
 

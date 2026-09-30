@@ -16,7 +16,6 @@ import { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import type { ZLinkNativeActorJoinSnapshot } from './spot-runtime-ports';
 
 type AdmissionOptions = Pick<
   ZLinkSpotActivationLifecycleOptions,
@@ -110,7 +109,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
                 kind: 'enabled',
                 runtime: this.options.actorTransferRuntime
               },
-        commitNativeActor: (actor) => this.commitNativeActorTransaction(activation, actor),
         commitActorDeparture: (actorId) => activation.commitActorDeparture(actorId),
         commitTransferredActor: (actor, backlog, sealedSession) =>
           this.commitTransferredActorTransaction(activation, actor, backlog, sealedSession)
@@ -259,43 +257,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
       fallbackActorRef,
       requestTerminal
     );
-  }
-
-  private async commitNativeActorTransaction(
-    activation: ZLinkSpotActivation,
-    actor: ZLinkActor
-  ): Promise<void> {
-    const transfer = this.options.actorTransferRuntime;
-    let snapshot: ZLinkNativeActorJoinSnapshot | undefined;
-    let rollbackMembership: (() => void) | undefined;
-    let routeSwitchStarted = false;
-    try {
-      snapshot = await transfer?.claimNativeActorLocation(
-        actor,
-        activation.spotId,
-        activation.meshName
-      );
-      transfer?.commitRoutedActor(actor, activation.spotId, activation.spot);
-      rollbackMembership = activation.commitActorJoin(actor);
-      activation.beginActorTransfer(actor.context.actorId);
-      await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
-      routeSwitchStarted = true;
-      await transfer?.publishRoutedActorOwnership(actor, undefined);
-      await transfer?.openRoutedActorSession(actor);
-      activation.cancelActorTransfer(actor.context.actorId);
-    } catch (error) {
-      if (routeSwitchStarted) throw error;
-      rollbackMembership?.();
-      try {
-        if (snapshot !== undefined) await transfer?.rollbackNativeActorJoin(actor, snapshot);
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          'Native actor admission and rollback both failed.'
-        );
-      }
-      throw error;
-    }
   }
 
   private async commitTransferredActorTransaction(

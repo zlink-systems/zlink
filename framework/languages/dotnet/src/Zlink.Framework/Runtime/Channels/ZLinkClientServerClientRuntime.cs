@@ -152,11 +152,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         if (target is null)
         {
             ZLinkMessageParts.DisposeAll(parts);
-            return new ZLinkOneWaySubmitResult(
-                readiness.Failure == ReadyWaitFailure.NoSelectableTarget
-                    ? ZLinkOneWaySubmitStatus.TargetNotFound
-                    : ZLinkOneWaySubmitStatus.TimedOut
-            );
+            return new ZLinkOneWaySubmitResult(readiness.Status);
         }
         if (!ZLinkClientServerMessageBound.Fits(parts, target.AdmittedMaximumMessageBytes))
         {
@@ -241,14 +237,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             if (target is null)
             {
                 ZLinkMessageParts.DisposeAll(parts);
-                if (readiness.Failure == ReadyWaitFailure.NoSelectableTarget)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"ClientServer channel '{_channelName}' has no selectable server."
-                    );
-                throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
-                    $"ClientServer channel '{_channelName}' had no ready server before the request deadline."
+                ZLinkOneWaySubmitOutcome.EnsureAccepted(
+                    new ZLinkOneWaySubmitResult(readiness.Status),
+                    $"ClientServer channel '{_channelName}' request"
                 );
+                throw new InvalidOperationException("A failed ready wait was accepted.");
             }
             if (!ZLinkClientServerMessageBound.Fits(parts, target.AdmittedMaximumMessageBytes))
             {
@@ -603,10 +596,18 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _retired.Add(task);
     }
 
-    private ReadyTarget? SelectReady()
-    {
-        return RunState(() => _readySelectionPlan?.Select());
-    }
+    private ReadyWaitResult SelectReady() =>
+        RunState(() =>
+        {
+            if (_readySelectionPlan?.Select() is { } ready)
+                return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
+            return new ReadyWaitResult(
+                null,
+                DistinctConnections().Any(static connection => connection.AdmittedButIneligible)
+                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                    : ZLinkOneWaySubmitStatus.TimedOut
+            );
+        });
 
     private void ScheduleStateChanged(bool selectionChanged)
     {
@@ -703,43 +704,52 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         var started = _time.GetTimestamp();
         while (true)
         {
-            if (SelectReady() is { } ready)
-                return new ReadyWaitResult(ready, ReadyWaitFailure.None);
-            if (_time.GetElapsedTime(started) >= timeout)
+            cancellationToken.ThrowIfCancellationRequested();
+            var readiness = SelectReady();
+            if (
+                readiness.Target is not null
+                || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
+            )
+                return readiness;
+            var changed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            void OnStateChanged() => changed.TrySetResult();
+            StateChanged += OnStateChanged;
+            try
             {
-                var hasNoSelectableTarget =
-                    await HasCompletedAdmissionWithoutSelectableTargetAsync().ConfigureAwait(false);
-                return new ReadyWaitResult(
-                    null,
-                    hasNoSelectableTarget
-                        ? ReadyWaitFailure.NoSelectableTarget
-                        : ReadyWaitFailure.DeadlineExceeded
-                );
+                readiness = SelectReady();
+                if (
+                    readiness.Target is not null
+                    || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
+                )
+                    return readiness;
+                var remaining = timeout - _time.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero)
+                    return readiness;
+                try
+                {
+                    await changed
+                        .Task.WaitAsync(remaining, _time, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // Observe the current snapshot and monotonic deadline again after the timer wakes.
+                }
             }
-            await Task.Delay(TimeSpan.FromMilliseconds(5), cancellationToken).ConfigureAwait(false);
+            finally
+            {
+                StateChanged -= OnStateChanged;
+            }
         }
     }
 
-    private async ValueTask<bool> HasCompletedAdmissionWithoutSelectableTargetAsync() =>
-        await _lane
-            .RunAsync(() =>
-            {
-                var connections = DistinctConnections().ToArray();
-                return connections.Length > 0
-                    && connections.All(static connection =>
-                        connection.AdmittedWithoutSelectableTarget
-                    );
-            })
-            .ConfigureAwait(false);
-
-    private enum ReadyWaitFailure
-    {
-        None,
-        DeadlineExceeded,
-        NoSelectableTarget,
-    }
-
-    private readonly record struct ReadyWaitResult(ReadyTarget? Target, ReadyWaitFailure Failure);
+    private readonly record struct ReadyWaitResult(
+        ReadyTarget? Target,
+        ZLinkOneWaySubmitStatus Status
+    );
 
     private sealed class Connection : IAsyncDisposable
     {
@@ -805,10 +815,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         internal IDealerSocket Socket { get; }
         internal ReadyTarget? ReadyTarget => Volatile.Read(ref _readyTarget);
-        internal bool AdmittedWithoutSelectableTarget =>
+        internal bool AdmittedButIneligible =>
             RunState(() =>
-                _currentAdmission is { } admission
-                && (admission.State != ZLinkFrameworkRuntimeState.Serving || admission.Weight <= 0)
+                !_disposed
+                && _currentAdmission
+                    is {
+                        State: ZLinkFrameworkRuntimeState.Serving
+                            or ZLinkFrameworkRuntimeState.Draining
+                    } admission
+                && (
+                    _weight == 0
+                    || admission.State == ZLinkFrameworkRuntimeState.Draining
+                    || _expected?.State == ZLinkFrameworkRuntimeState.Draining
+                )
                 && _readyTarget is null
             );
         internal bool Ready => RunState(() => _ready && !_disposed);

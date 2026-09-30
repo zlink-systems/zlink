@@ -55,6 +55,8 @@ foreach ($file in @(
     "sample_runner.ps1")) {
     Copy-Item -Path (Join-Path $samplesRoot $file) -Destination $Destination
 }
+New-Item -ItemType Directory -Force -Path (Join-Path $Destination "props") | Out-Null
+Copy-Item -Path (Join-Path $samplesRoot "../props/ZLink.FrameworkReference.props") -Destination (Join-Path $Destination "props")
 Copy-SourceTree -Source (Join-Path $samplesRoot "Common") -Target (Join-Path $Destination "Common")
 Copy-SourceTree -Source (Join-Path $samplesRoot $SampleName) -Target (Join-Path $Destination $SampleName)
 

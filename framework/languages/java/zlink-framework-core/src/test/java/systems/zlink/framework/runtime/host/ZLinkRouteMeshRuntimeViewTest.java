@@ -185,14 +185,16 @@ final class ZLinkRouteMeshRuntimeViewTest {
     }
 
     @Test
-    void registeredChannelWithoutReadyTargetDegradesTopology() throws Exception {
+    void registeredChannelWithoutReadyTargetDoesNotDegradeTopology() throws Exception {
         RoutingId targetRid = rid("view-channel-target");
         var target = new DefaultZLinkFrameworkOptions();
+        target.addLocationStore(new ZLinkInMemoryLocationStore());
         var targetNode =
                 target.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(targetRid);
         targetNode.channelName("work").server().setWeight(0);
         try (var targetRuntime = start(target)) {
             var source = new DefaultZLinkFrameworkOptions();
+            source.addLocationStore(new ZLinkInMemoryLocationStore());
             var sourceNode =
                     source.addRouteMesh(MESH)
                             .listen("tcp://127.0.0.1:0")
@@ -205,9 +207,10 @@ final class ZLinkRouteMeshRuntimeViewTest {
                                 sourceRuntime,
                                 status -> peerState(status, targetRid) == ZLinkPeerState.READY);
 
-                assertEquals(ZLinkTopologyState.DEGRADED, snapshot.state());
-                assertFalse(snapshot.isReady());
+                assertEquals(ZLinkTopologyState.READY, snapshot.state());
+                assertTrue(snapshot.isReady());
                 assertEquals(0, snapshot.channels().getFirst().readyTargetCount());
+                assertTrue(sourceRuntime.routeMeshRuntime().isReady(MESH));
             }
         }
     }
