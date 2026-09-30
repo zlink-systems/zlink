@@ -131,7 +131,7 @@ internal sealed class ZLinkActorSessionRegistry(
 
     public ZLinkActorRuntimeState[] Snapshot()
     {
-        return AwaitStateLane(_lane.RunAsync(() => _states.Values.ToArray()));
+        return AwaitStateLane(SnapshotAsync());
     }
 
     internal ValueTask<ZLinkActorRuntimeState[]> SnapshotAsync() =>
