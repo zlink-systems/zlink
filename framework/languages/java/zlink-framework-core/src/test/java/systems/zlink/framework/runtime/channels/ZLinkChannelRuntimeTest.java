@@ -1880,9 +1880,9 @@ final class ZLinkChannelRuntimeTest {
                             .join());
             return true;
         } catch (CompletionException failure) {
-            // Channel messaging §8: no selectable target ends as NotFound.
+            // Framework API #channel-selection-result: ready but ineligible is Unavailable.
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             return false;
         }
@@ -2068,7 +2068,8 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             ManagedAdmissionDealer dealer = new ManagedAdmissionDealer(endpoint, router.peerWeight);
             dealers.add(dealer);
             return dealer;
@@ -2080,7 +2081,8 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -2233,11 +2235,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
-            return dealer;
-        }
-
-        @Override
         public ZLinkBackendDealerSocket createDealerSocket(
                 ZLinkBackendContext context, Duration sendTimeout) {
             dealerSendTimeouts.add(sendTimeout);
@@ -2250,15 +2247,10 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
-            return publisher;
-        }
-
-        @Override
         public ZLinkBackendPublisherSocket createPublisherSocket(
                 ZLinkBackendContext context, Duration sendTimeout) {
             publisherSendTimeouts.add(sendTimeout);
-            return createPublisherSocket(context);
+            return publisher;
         }
 
         @Override

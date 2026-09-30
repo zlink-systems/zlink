@@ -13,8 +13,8 @@ final class ZLinkJavaChannelSendTimeoutTest {
     void clientDealerAndFanoutPublisherReceiveSendTimeoutAtCreation() {
         ZLinkJavaChannelBackendAdapter backend = new ZLinkJavaChannelBackendAdapter();
         try (ZLinkBackendContext context = backend.createContext();
-                var dealer = backend.createDealerSocket(context);
-                var publisher = backend.createPublisherSocket(context)) {
+                var dealer = backend.createDealerSocket(context, Duration.ofSeconds(1));
+                var publisher = backend.createPublisherSocket(context, Duration.ofSeconds(1))) {
             assertEquals(
                     Duration.ofSeconds(1),
                     ((ZLinkJavaSocketBacked) dealer).nativeSocket().options().sendTimeout());

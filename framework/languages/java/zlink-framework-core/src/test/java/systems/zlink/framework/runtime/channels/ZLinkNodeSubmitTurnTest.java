@@ -787,7 +787,7 @@ final class ZLinkNodeSubmitTurnTest {
 
         @Override
         public systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
-                createDealerSocket(ZLinkBackendContext context) {
+                createDealerSocket(ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -798,7 +798,7 @@ final class ZLinkNodeSubmitTurnTest {
 
         @Override
         public systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket
-                createPublisherSocket(ZLinkBackendContext context) {
+                createPublisherSocket(ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 

@@ -8,7 +8,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSoc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
-import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 
 import java.time.Duration;
 
@@ -16,11 +15,6 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
     @Override
     public ZLinkBackendContext createContext() {
         return new ZLinkJavaContext(Zlink.createContext());
-    }
-
-    @Override
-    public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
-        return createDealerSocket(context, ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
     }
 
     @Override
@@ -38,11 +32,6 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
         return new ZLinkJavaRouterSocket(
                 ZLinkJavaSocketOptions.configureFrameworkRouterSocket(
                         nativeContext(context).createRouterSocket()));
-    }
-
-    @Override
-    public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
-        return createPublisherSocket(context, ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT);
     }
 
     @Override
