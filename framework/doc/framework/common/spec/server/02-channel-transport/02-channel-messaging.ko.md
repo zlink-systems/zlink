@@ -168,10 +168,11 @@ RouteMesh select-one을 호출하면 후보가 없으며, 이때는 target 없�
 process에서 처리하려면 ClientServer 경로를 사용한다.
 
 두 경로는 후보가 아직 없을 때의 처리도 다르다. RouteMesh는 위와 같이 즉시 target 없음으로
-실패한다. ClientServer는 ready 후보가 없으면 호출 시점에 제한된 시간 동안 기다린 뒤
-실패한다. 대기 한도는 해당 호출의 request timeout과 5초 중 짧은 쪽이고, 그 안에 ready
-후보가 생기지 않으면 target 없음으로 실패한다. Framework startup은 local ClientServer
-admission 완료를 기다리지 않는다.
+실패한다. ClientServer는 ready 후보가 없으면 호출의 admission deadline
+([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙))
+안에서 기다린다. 그 안에 ready 후보가 생기지 않으면, 모든 후보의 admission이 끝났는데 선택할
+수 있는 후보가 없을 때는 target 없음으로, 그 밖에는 `DeadlineExceeded`로 실패한다. Framework
+startup은 local ClientServer admission 완료를 기다리지 않는다.
 
 두 경로를 다르게 정하는 이유는 후보가 없다는 사실의 의미가 다르기 때문이다. RouteMesh에서
 후보 없음은 그 ChannelName의 Server membership을 게시한 peer가 없다는 뜻이고, 기다린다고

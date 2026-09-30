@@ -187,11 +187,12 @@ candidates, and it fails with no target. To handle it in the same process, use a
 ClientServer path.
 
 The two paths also handle the "no candidate yet" case differently. RouteMesh fails
-immediately with no target, as above. ClientServer waits a bounded time at the call
-moment if there's no ready candidate, then fails. The wait limit is the shorter of
-that call's request timeout and 5 seconds; if no ready candidate appears within that
-time, it fails with no target. Framework startup doesn't wait for local ClientServer
-admission to complete.
+immediately with no target, as above. If there's no ready candidate, ClientServer
+waits within the call's admission deadline
+([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules)).
+If no ready candidate appears within it, the call fails with no target when every
+candidate has finished admission and none is selectable, and with `DeadlineExceeded`
+otherwise. Framework startup doesn't wait for local ClientServer admission to complete.
 
 The two paths are handled differently because the meaning of "no candidate" differs.
 On RouteMesh, no candidate means no peer has published Server membership for that
