@@ -3,6 +3,7 @@ package zlink_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -344,5 +345,57 @@ func TestStreamPacketPullCanonicalRoundTrip(t *testing.T) {
 	buffer := readStreamPacketBody(t, conn)
 	if !bytes.Equal(buffer, payload) {
 		t.Fatalf("stream packet reply = %q, want %q", string(buffer), string(payload))
+	}
+}
+
+func TestStreamDisconnectRIDClosesPeerAndReturnsConnectNotFound(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	stream, err := ctx.StreamSocket()
+	if err != nil {
+		t.Fatalf("StreamSocket() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
+	endpoint := tcpEndpoint(t)
+	if err := stream.Bind(endpoint); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(endpoint, "tcp://"), 5*time.Second)
+	if err != nil {
+		t.Fatalf("net.DialTimeout() error = %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	writeStreamPacket(t, conn, []byte("disconnect-peer"))
+	var packet zlink.StreamPacket
+	ok, err := stream.RecvPacket(&packet, zlink.RecvFlagsNone)
+	if err != nil || !ok {
+		t.Fatalf("RecvPacket() = (%v, %v), want (true, nil)", ok, err)
+	}
+	peerRID := packet.RoutingID()
+	if err := stream.DisconnectRID(peerRID); err != nil {
+		t.Fatalf("DisconnectRID() error = %v", err)
+	}
+	var probe [1]byte
+	n, err := conn.Read(probe[:])
+	if n != 0 || err != io.EOF {
+		t.Fatalf("client read after DisconnectRID() = (%d, %v), want EOF", n, err)
+	}
+
+	err = stream.DisconnectRID(peerRID)
+	var connectErr *zlink.ConnectError
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("second DisconnectRID() error = %v, want *ConnectError", err)
+	}
+	if connectErr.Result != zlink.ConnectNotFound || connectErr.Code() != 605 {
+		t.Fatalf("second DisconnectRID() result = %v (code %d), want ConnectNotFound (605)",
+			connectErr.Result, connectErr.Code())
 	}
 }
