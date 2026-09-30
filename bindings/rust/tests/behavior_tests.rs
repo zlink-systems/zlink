@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, StreamPacket,
-    StreamRecvMode, SubscriptionEvent, TopicMessage,
+    ConnectResult, Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor,
+    StreamPacket, StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
 fn await_send(
@@ -351,6 +351,38 @@ fn stream_packet_output_resets_and_reuses_without_double_close() {
     assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
     assert_eq!(packet.body().unwrap().as_bytes(), b"second");
     packet.close().unwrap();
+}
+
+#[test]
+fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() {
+    let ctx = Context::new().unwrap();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    stream.bind(&tcp_endpoint()).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write_framed_packet(&mut raw, b"disconnect-peer");
+
+    let mut packet = StreamPacket::empty();
+    assert!(stream
+        .recv_packet(&mut packet, RecvFlags::NONE)
+        .unwrap());
+    let peer_rid = *packet.routing_id().expect("missing STREAM routing id");
+    stream.disconnect_rid(&peer_rid).unwrap();
+
+    let mut probe = [0u8; 1];
+    assert_eq!(raw.read(&mut probe).unwrap(), 0, "client did not observe EOF");
+
+    let error = stream
+        .disconnect_rid(&peer_rid)
+        .expect_err("a removed peer must return a connect error");
+    assert_eq!(error.code(), ConnectResult::NotFound);
+    assert_eq!(error.code() as i32, 605);
 }
 
 #[test]

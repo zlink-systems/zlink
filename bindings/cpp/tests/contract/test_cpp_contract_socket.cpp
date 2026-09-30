@@ -259,8 +259,8 @@ static_assert (!has_connect_t<zlink::stream_socket_t>::value,
                "stream_socket_t must not expose connect");
 static_assert (!has_disconnect_t<zlink::stream_socket_t>::value,
                "stream_socket_t must not expose disconnect");
-static_assert (!has_disconnect_rid_t<zlink::stream_socket_t>::value,
-               "stream_socket_t must not expose disconnect_rid");
+static_assert (has_disconnect_rid_t<zlink::stream_socket_t>::value,
+               "stream_socket_t must expose disconnect_rid");
 
 void test_pair_send_recv_single_part ()
 {

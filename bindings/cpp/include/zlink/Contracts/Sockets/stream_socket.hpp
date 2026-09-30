@@ -28,11 +28,12 @@ class stream_socket_t : public routed_message_socket_t
 
     stream_socket_options_t options () { return stream_socket_options_t (*this); }
 
+    using socket_t::disconnect_rid;
+
   private:
     using routed_message_socket_t::recv;
     using socket_t::connect;
     using socket_t::disconnect;
-    using socket_t::disconnect_rid;
 };
 
 } // namespace zlink

@@ -446,6 +446,10 @@ func (s *StreamSocket) Unbind(endpoint string) error {
 	return s.core.Unbind(endpoint)
 }
 
+func (s *StreamSocket) DisconnectRID(peerRID RoutingID) error {
+	return s.core.socketCore.DisconnectRID(peerRID)
+}
+
 func (s *StreamSocket) Close() error {
 	if s == nil || s.core == nil {
 		return nil
