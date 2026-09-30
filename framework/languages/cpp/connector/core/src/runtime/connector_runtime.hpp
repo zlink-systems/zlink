@@ -170,7 +170,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * one arrival order. A packet takes its number when it is decoded, a
      * callback when it is queued; the pump runs both queues by it. */
     std::atomic_uint64_t next_arrival{1};
-    std::vector<packet_t> sent_packets;
     std::map<std::string, std::vector<packet_handler_entry_t>> packet_handlers;
     std::vector<handler_entry_t<std::function<void (const connection_state_changed_t &)>>>
       state_handlers;
@@ -190,8 +189,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * §10). Guarded by transport_mutex, like dispatch_queue: a packet is
      * counted in the step that queues or hands it off. */
     std::map<std::string, std::size_t, std::less<>> received_counts;
-    codec_t default_codec = codec_t::json;
-    std::set<codec_t> enabled_codecs{codec_t::json};
     std::shared_ptr<const compression_codec_t> compression_codec;
     bool lz4_enabled = false;
     /* Set once by the close that starts the close work (stream-connector §7);
@@ -320,7 +317,6 @@ class connector_runtime_t
     static connector_runtime_t from (const connector_t &connector);
 
     void receive_packet (packet_t packet);
-    const std::vector<packet_t> &sent_packets () const noexcept;
     std::size_t pending_request_count () const noexcept;
 
   private:
@@ -410,9 +406,10 @@ std::shared_ptr<boost::asio::steady_timer>
 post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
                               std::chrono::milliseconds delay,
                               std::function<void ()> operation);
-void change_state (std::shared_ptr<connector_state_t> state,
+bool change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
-                   std::optional<error_t> error = std::nullopt);
+                   std::optional<error_t> error = std::nullopt,
+                   std::unique_ptr<stream_connection_t> connection = nullptr);
 /* Removes every registered wait and hands it back, timers cancelled
  * and pending_waits_version bumped. The caller must hold transport_mutex and
  * owns the delivery. */

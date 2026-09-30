@@ -13,7 +13,10 @@
 #include <boost/asio/steady_timer.hpp>
 
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
+#include <boost/asio/ssl/error.hpp>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
+#include <openssl/sslerr.h>
 #endif
 
 #include <algorithm>
@@ -560,6 +563,12 @@ void schedule_actor_delivery (const std::shared_ptr<connector_state_t> &state,
       std::move (callbacks));
 }
 
+void publish_stream_error (const std::shared_ptr<void> &state, error_t error)
+{
+    if (state)
+        publish_error (*state_from (state), std::move (error));
+}
+
 std::vector<std::uint8_t> encode_typed_payload (const std::shared_ptr<void> &state_handle,
                                                 const std::vector<std::uint8_t> &payload)
 {
@@ -752,11 +761,6 @@ void connector_runtime_t::receive_packet (packet_t packet)
     deliver_received_packet (*_state, std::move (packet));
 }
 
-const std::vector<packet_t> &connector_runtime_t::sent_packets () const noexcept
-{
-    return _state->sent_packets;
-}
-
 std::size_t connector_runtime_t::pending_request_count () const noexcept
 {
     return _state->pending_requests.size ();
@@ -785,15 +789,20 @@ close_reason_t close_reason_for (const std::optional<error_t> &error) noexcept
 
 } // namespace
 
-void change_state (std::shared_ptr<connector_state_t> state,
+bool change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
-                   std::optional<error_t> error)
+                   std::optional<error_t> error,
+                   std::unique_ptr<stream_connection_t> connection)
 {
     connection_state_t previous;
     std::vector<std::uint64_t> state_handler_ids;
     std::vector<std::uint64_t> disconnected_handler_ids;
     std::optional<close_reason_t> close_reason;
     {
+        std::unique_lock<std::mutex> transport_lock (state->transport_mutex, std::defer_lock);
+        if (connection) {
+            transport_lock.lock ();
+        }
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         // close() is terminal. A read error, reconnect timer, or late
         // connect completion can otherwise publish a non-closed state after
@@ -801,7 +810,17 @@ void change_state (std::shared_ptr<connector_state_t> state,
         if (next != connection_state_t::closed
             && (state->state == connection_state_t::closed
                 || state->close_requested.load (std::memory_order_acquire))) {
-            return;
+            return false;
+        }
+        if (connection) {
+            state->connection = std::move (connection);
+            const auto connected_at = std::chrono::steady_clock::now ();
+            state->last_heartbeat_sent = connected_at;
+            state->last_inbound_received = connected_at;
+            // §10: a new connection owns a fresh receive queue and counts.
+            state->dispatch_queue.clear ();
+            ++state->dispatch_queue_generation;
+            state->received_counts.clear ();
         }
         previous = state->state;
         state->state = next;
@@ -872,6 +891,7 @@ void change_state (std::shared_ptr<connector_state_t> state,
     // callback set for that transition.
     state->lifecycle_changed.notify_all ();
     state->state_changed.notify_all ();
+    return true;
 }
 
 } // namespace zlink::stream_connector::detail
@@ -914,52 +934,8 @@ std::shared_ptr<void> connector_internal_handle (const connector_t &connector)
     return connector._state;
 }
 
-codec_registry_t::codec_registry_t () :
-    _state (std::make_shared<detail::connector_state_t> (connector_options_t{}))
-{
-}
-
-codec_registry_t::codec_registry_t (std::shared_ptr<void> state) : _state (std::move (state))
-{
-}
-
-codec_registry_t::~codec_registry_t () = default;
-codec_registry_t::codec_registry_t (codec_registry_t &&) noexcept = default;
-codec_registry_t &codec_registry_t::operator= (codec_registry_t &&) noexcept = default;
-
-codec_registry_t &codec_registry_t::enable_codec (codec_t codec)
-{
-    auto state = detail::state_from (_state);
-    state->enabled_codecs.insert (codec);
-    return *this;
-}
-
-codec_registry_t &codec_registry_t::use_default_codec (codec_t codec)
-{
-    if (!supports (codec)) {
-        throw std::invalid_argument ("stream connector codec is not enabled");
-    }
-    auto state = detail::state_from (_state);
-    state->default_codec = codec;
-    return *this;
-}
-
-bool codec_registry_t::supports (codec_t codec) const
-{
-    auto state = detail::state_from (_state);
-    switch (codec) {
-        case codec_t::raw:
-            return true;
-        case codec_t::message_pack:
-        case codec_t::protobuf:
-        case codec_t::json:
-            return state->enabled_codecs.find (codec) != state->enabled_codecs.end ();
-    }
-    return false;
-}
-
 send_call_t::send_call_t () = default;
-send_call_t::send_call_t (std::shared_ptr<void> state, packet_t packet) :
+send_call_t::send_call_t (std::shared_ptr<void> state, result_t<packet_t> packet) :
     _state (std::move (state)), _packet (std::move (packet))
 {
 }
@@ -969,25 +945,29 @@ send_call_t &send_call_t::operator= (send_call_t &&) noexcept = default;
 
 send_call_t &send_call_t::packet_name (std::string name)
 {
-    _packet.name = std::move (name);
+    if (_packet)
+        _packet.value ().name = std::move (name);
     return *this;
 }
 
 send_call_t &send_call_t::metadata (std::string key, std::string value)
 {
-    _packet.metadata.with (std::move (key), std::move (value));
+    if (_packet)
+        _packet.value ().metadata.with (std::move (key), std::move (value));
     return *this;
 }
 
 send_call_t &send_call_t::metadata (metadata_t metadata)
 {
-    _packet.metadata = std::move (metadata);
+    if (_packet)
+        _packet.value ().metadata = std::move (metadata);
     return *this;
 }
 
 send_call_t &send_call_t::compress ()
 {
-    _packet.compressed = true;
+    if (_packet)
+        _packet.value ().compressed = true;
     return *this;
 }
 
@@ -996,7 +976,11 @@ void send_call_t::submit ()
     if (!_state) {
         return;
     }
-    detail::submit_send (detail::state_from (_state), std::move (_packet), _actor_binding);
+    if (!_packet) {
+        detail::publish_stream_error (_state, *_packet.error ());
+        return;
+    }
+    detail::submit_send (detail::state_from (_state), std::move (_packet.value ()), _actor_binding);
 }
 
 connector_t::connector_t () : connector_t (connector_options_t{})
@@ -1004,7 +988,7 @@ connector_t::connector_t () : connector_t (connector_options_t{})
 }
 
 connector_t::connector_t (connector_options_t options) :
-    _state (std::make_shared<detail::connector_state_t> (std::move (options))), _codecs (_state)
+    _state (std::make_shared<detail::connector_state_t> (std::move (options)))
 {
     auto state = detail::state_from (_state);
     _external_owner = std::shared_ptr<void> (state.get (), [state] (void *) {
@@ -1026,10 +1010,6 @@ connector_t::connector_t (connector_options_t options) :
         state->options.compression_codec = lz4_compression_codec ();
     }
     state->compression_codec = state->options.compression_codec;
-    if (state->options.typed_codec) {
-        state->default_codec = state->options.typed_codec->codec_id ();
-        state->enabled_codecs.insert (state->default_codec);
-    }
 #ifndef ZLINK_STREAM_CONNECTOR_WITH_LZ4
     state->lz4_enabled = false;
 #else
@@ -1037,8 +1017,7 @@ connector_t::connector_t (connector_options_t options) :
 #endif
 }
 
-connector_t::connector_t (std::shared_ptr<void> state) :
-    _state (std::move (state)), _codecs (_state)
+connector_t::connector_t (std::shared_ptr<void> state) : _state (std::move (state))
 {
 }
 
@@ -1121,11 +1100,6 @@ std::size_t connector_t::pending_dispatch_count () const
     return packets + state->delivery_queue.size ();
 }
 
-codec_registry_t &connector_t::codecs ()
-{
-    return _codecs;
-}
-
 namespace
 {
 
@@ -1190,29 +1164,26 @@ begin_connect_attempt (const std::shared_ptr<detail::connector_state_t> &state,
                        bool automatic_reconnect)
 {
     std::unique_lock<std::mutex> lock (state->lifecycle_mutex);
+    std::optional<result_t<void>> completed_attempt;
     if (automatic_reconnect) {
         state->reconnect_scheduled = false;
         state->reconnect_timer.reset ();
     } else if (state->connect_attempt_active || state->reconnect_scheduled) {
         state->lifecycle_changed.wait (
           lock, [&] { return !state->connect_attempt_active && !state->reconnect_scheduled; });
-        if (state->state == connection_state_t::connected) {
-            return result_t<void>::success ();
-        }
-        if (state->state == connection_state_t::closed) {
-            return result_t<void>::failure (error_code_t::disconnected,
-                                            "stream connector is closed");
-        }
         const auto error = state->last_disconnect_error;
-        return result_t<void>::failure (error ? error->code : error_code_t::disconnected,
-                                        error ? error->message
-                                              : "stream connector is not connected");
+        completed_attempt =
+          result_t<void>::failure (error ? error->code : error_code_t::disconnected,
+                                   error ? error->message : "stream connector is not connected");
+    }
+    if (state->state == connection_state_t::closed || state->close_requested.load ()) {
+        return result_t<void>::failure (error_code_t::disconnected, "stream connector is closed");
     }
     if (state->state == connection_state_t::connected) {
         return result_t<void>::success ();
     }
-    if (state->state == connection_state_t::closed || state->close_requested.load ()) {
-        return result_t<void>::failure (error_code_t::disconnected, "stream connector is closed");
+    if (completed_attempt) {
+        return completed_attempt;
     }
     state->connect_attempt_active = true;
     return std::nullopt;
@@ -1287,8 +1258,8 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
     }
     auto timeout_timer =
       detail::post_runtime_operation_after (state, timeout, [operation, control] {
-          control->cancel ();
           operation->complete (boost::asio::error::timed_out, nullptr);
+          control->cancel ();
       });
     auto completion =
       [operation] (boost::system::error_code error,
@@ -1296,64 +1267,69 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
           operation->complete (error, std::move (connection));
       };
 
-    if (state->effective_transport == transport_t::websocket) {
-        detail::connect_websocket_async (state->io_context, *parsed.websocket, control,
-                                         std::move (completion));
-    } else if (state->effective_transport == transport_t::websocket_secure) {
+    try {
+        if (state->effective_transport == transport_t::websocket) {
+            detail::connect_websocket_async (state->io_context, *parsed.websocket, control,
+                                             std::move (completion));
+        } else if (state->effective_transport == transport_t::websocket_secure) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
-        detail::connect_websocket_secure_async (state->io_context, *parsed.websocket_secure,
-                                                state->options.skip_server_certificate_validation,
-                                                control, std::move (completion));
+            detail::connect_websocket_secure_async (
+              state->io_context, *parsed.websocket_secure,
+              state->options.skip_server_certificate_validation, control, std::move (completion));
 #else
-        operation->complete (boost::asio::error::operation_not_supported, nullptr);
+            operation->complete (boost::asio::error::operation_not_supported, nullptr);
 #endif
-    } else if (state->effective_transport == transport_t::tls) {
+        } else if (state->effective_transport == transport_t::tls) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
-        detail::connect_tls_async (state->io_context, *parsed.tls,
-                                   state->options.skip_server_certificate_validation, control,
-                                   std::move (completion));
+            detail::connect_tls_async (state->io_context, *parsed.tls,
+                                       state->options.skip_server_certificate_validation, control,
+                                       std::move (completion));
 #else
-        operation->complete (boost::asio::error::operation_not_supported, nullptr);
+            operation->complete (boost::asio::error::operation_not_supported, nullptr);
 #endif
-    } else {
-        auto resolver = std::make_shared<boost::asio::ip::tcp::resolver> (state->io_context);
-        auto socket = std::make_shared<boost::asio::ip::tcp::socket> (state->io_context);
-        control->set_cancel_handler ([resolver, socket] {
-            boost::system::error_code ignored;
-            resolver->cancel ();
-            socket->cancel (ignored);
-            socket->close (ignored);
-        });
-        resolver->async_resolve (
-          parsed.tcp->host, parsed.tcp->port,
-          [resolver, socket, state, control, completion = std::move (completion)] (
-            boost::system::error_code error,
-            boost::asio::ip::tcp::resolver::results_type endpoints) mutable {
-              if (control->cancelled ()) {
-                  completion (boost::asio::error::operation_aborted, nullptr);
-                  return;
-              }
-              if (error) {
-                  completion (error, nullptr);
-                  return;
-              }
-              boost::asio::async_connect (
-                *socket, endpoints,
-                [socket, state, control, completion = std::move (completion)] (
-                  boost::system::error_code connect_error,
-                  const boost::asio::ip::tcp::endpoint &) mutable {
-                    if (control->cancelled ()) {
-                        completion (boost::asio::error::operation_aborted, nullptr);
-                        return;
-                    }
-                    if (connect_error) {
-                        completion (connect_error, nullptr);
-                        return;
-                    }
-                    completion (
-                      {}, detail::make_tcp_connection (state->io_context, std::move (*socket)));
-                });
-          });
+        } else {
+            auto resolver = std::make_shared<boost::asio::ip::tcp::resolver> (state->io_context);
+            auto socket = std::make_shared<boost::asio::ip::tcp::socket> (state->io_context);
+            control->set_cancel_handler ([resolver, socket] {
+                boost::system::error_code ignored;
+                resolver->cancel ();
+                socket->cancel (ignored);
+                socket->close (ignored);
+            });
+            resolver->async_resolve (
+              parsed.tcp->host, parsed.tcp->port,
+              [resolver, socket, state, control, completion = std::move (completion)] (
+                boost::system::error_code error,
+                boost::asio::ip::tcp::resolver::results_type endpoints) mutable {
+                  if (control->cancelled ()) {
+                      completion (boost::asio::error::operation_aborted, nullptr);
+                      return;
+                  }
+                  if (error) {
+                      completion (error, nullptr);
+                      return;
+                  }
+                  boost::asio::async_connect (
+                    *socket, endpoints,
+                    [socket, state, control, completion = std::move (completion)] (
+                      boost::system::error_code connect_error,
+                      const boost::asio::ip::tcp::endpoint &) mutable {
+                        if (control->cancelled ()) {
+                            completion (boost::asio::error::operation_aborted, nullptr);
+                            return;
+                        }
+                        if (connect_error) {
+                            completion (connect_error, nullptr);
+                            return;
+                        }
+                        completion (
+                          {}, detail::make_tcp_connection (state->io_context, std::move (*socket)));
+                    });
+              });
+        }
+    }
+    catch (const boost::system::system_error &error) {
+        operation->complete (error.code (), nullptr);
     }
 
     auto [error, connection] = operation->wait ();
@@ -1364,9 +1340,16 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
             state->connect_control.reset ();
     }
     if (error || !connection) {
+        auto code = error == boost::asio::error::timed_out ? error_code_t::connect_timeout
+                                                           : error_code_t::disconnected;
+#ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
+        if (error.category () == boost::asio::error::get_ssl_category ()
+            && ERR_GET_REASON (error.value ()) == SSL_R_CERTIFICATE_VERIFY_FAILED) {
+            code = error_code_t::tls_validation_failed;
+        }
+#endif
         return result_t<std::unique_ptr<detail::stream_connection_t>>::failure (
-          error_code_t::connect_timeout,
-          error ? error.message () : "stream connector transport connect failed");
+          code, error ? error.message () : "stream connector transport connect failed");
     }
     return result_t<std::unique_ptr<detail::stream_connection_t>>::success (std::move (connection));
 }
@@ -1398,7 +1381,7 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
                                 ? state->options.reconnect.max_attempts
                                 : std::optional<int> (1);
     auto retry_delay = detail::first_reconnect_delay (state->options);
-    std::string last_error;
+    error_t last_error{error_code_t::connect_timeout, "stream connector connect timed out"};
     const auto deadline = std::chrono::steady_clock::now () + state->options.connect_timeout;
 
     for (int attempt_number = 1; !max_attempts || attempt_number <= std::max (1, *max_attempts);
@@ -1408,7 +1391,6 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
                                             "stream connector is closed");
         const auto now = std::chrono::steady_clock::now ();
         if (now >= deadline) {
-            last_error = "stream connector connect timed out";
             break;
         }
         if (!automatic_reconnect || attempt_number != 1) {
@@ -1419,40 +1401,20 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
           std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
         auto connected = connect_transport (state, parsed.value (), remaining);
         if (connected) {
-            if (state->close_requested.load (std::memory_order_acquire)) {
-                if (connected.value ()) {
-                    std::shared_ptr<detail::stream_connection_t> owned (
-                      std::move (connected.value ()));
-                    owned->shutdown_and_close_async ();
-                }
-                return result_t<void>::failure (error_code_t::disconnected,
-                                                "stream connector is closed");
-            }
             connected.value ()->set_read_message_limit (
               state->options.max_receive_payload_size
               + static_cast<std::size_t> (std::numeric_limits<std::uint16_t>::max ()) + 6u);
-            {
-                std::lock_guard<std::mutex> lock (state->transport_mutex);
-                state->connection = std::move (connected.value ());
-                const auto connected_at = std::chrono::steady_clock::now ();
-                state->last_heartbeat_sent = connected_at;
-                state->last_inbound_received = connected_at;
-                /* stream-connector §10: a connection that is established starts
-         * the receive counts at zero and drops what the previous
-         * connection left unconsumed. Resetting only the counts would
-         * let the counts and the queue describe different connections,
-         * and a wait would hand back a packet from before the drop. */
-                state->dispatch_queue.clear ();
-                ++state->dispatch_queue_generation;
-                state->received_counts.clear ();
+            if (!detail::change_state (state, connection_state_t::connected, std::nullopt,
+                                       std::move (connected.value ()))) {
+                return result_t<void>::failure (error_code_t::disconnected,
+                                                "stream connector is closed");
             }
-            detail::change_state (state, connection_state_t::connected);
             schedule_start_read_loop (state);
             detail::start_heartbeat_monitor (state);
             return result_t<void>::success ();
         }
-        last_error = connected.error () ? connected.error ()->message
-                                        : "stream connector transport connect failed";
+        last_error = connected.error ().value_or (
+          error_t{error_code_t::disconnected, "stream connector transport connect failed"});
         if (state->close_requested.load (std::memory_order_acquire))
             return result_t<void>::failure (error_code_t::disconnected,
                                             "stream connector is closed");
@@ -1474,9 +1436,8 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
                            retry_delay.count () * state->options.reconnect.backoff_factor))));
     }
 
-    detail::change_state (state, connection_state_t::disconnected,
-                          error_t{error_code_t::connect_timeout, last_error});
-    return result_t<void>::failure (error_code_t::connect_timeout, last_error);
+    detail::change_state (state, connection_state_t::disconnected, last_error);
+    return result_t<void>::failure (last_error.code, last_error.message);
 }
 
 } // namespace
@@ -1549,7 +1510,8 @@ namespace
  * dispatch mode like every other callback: Immediate posts them to the
  * delivery strand, Manual leaves them to the next pump. The close work does
  * not wait for them, so a handler that never finishes does not hold it. */
-void run_close_work (const std::shared_ptr<detail::connector_state_t> &state)
+void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
+                     std::shared_ptr<detail::stream_connection_t> connection)
 {
     std::shared_ptr<boost::asio::steady_timer> reconnect_timer;
     std::shared_ptr<detail::transport_connect_control_t> connect_control;
@@ -1569,11 +1531,9 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state)
     state->lifecycle_changed.notify_all ();
     detail::stop_heartbeat_monitor (state);
     detail::connection_operations_t operations;
-    std::shared_ptr<detail::stream_connection_t> connection;
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         operations = detail::take_connection_operations_locked (*state);
-        connection = state->connection;
     }
     if (connection) {
         // Outside transport_mutex so pending completion handlers can still
@@ -1582,7 +1542,6 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state)
     }
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
-        state->connection.reset ();
         state->read_in_progress = false;
         state->inbound_buffer.clear ();
     }
@@ -1603,15 +1562,27 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state)
  * close called outside waits for its result (stream-connector §7). */
 result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
 {
-    const bool starts = !state->close_requested.exchange (true, std::memory_order_acq_rel);
+    bool starts;
+    std::shared_ptr<detail::stream_connection_t> connection;
+    {
+        std::lock_guard<std::mutex> transport_lock (state->transport_mutex);
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        starts = !state->close_requested.exchange (true, std::memory_order_acq_rel);
+        if (starts) {
+            connection = std::move (state->connection);
+        }
+    }
     if (detail::callback_scope_t::running_callback_of (*state)) {
         if (starts) {
-            detail::post_connect_operation (state, [state] { run_close_work (state); });
+            detail::post_connect_operation (
+              state, [state, connection = std::move (connection)] () mutable {
+                  run_close_work (state, std::move (connection));
+              });
         }
         return result_t<void>::success ();
     }
     if (starts) {
-        run_close_work (state);
+        run_close_work (state, std::move (connection));
         return result_t<void>::success ();
     }
     std::unique_lock<std::mutex> lock (state->lifecycle_mutex);
@@ -1771,7 +1742,8 @@ packet_t connector_t::make_packet (std::type_index type, std::string packet_name
     packet_t packet;
     packet.name = detail::packet_name_resolver_t{}.resolve (type, std::move (packet_name));
     const auto state = detail::state_from (_state);
-    packet.codec = state->default_codec;
+    packet.codec =
+      state->options.typed_codec ? state->options.typed_codec->codec_id () : codec_t::json;
     packet.payload = {'{', '}'};
     return packet;
 }

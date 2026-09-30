@@ -130,11 +130,6 @@ result_t<void> validate_packet_limits (const connector_state_t &state, const pac
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "stream connector metadata is too large");
     }
-    if (packet.codec != codec_t::raw
-        && state.enabled_codecs.find (packet.codec) == state.enabled_codecs.end ()) {
-        return result_t<void>::failure (error_code_t::validation_failed,
-                                        "stream connector codec is not enabled");
-    }
     if (packet.compressed) {
         if (!state.compression_codec) {
             return result_t<void>::failure (error_code_t::compression_failed,
@@ -1372,6 +1367,7 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
         if (state->connection != observed_connection) {
             return false;
         }
+        state->connection.reset ();
         close_bound_actors (state);
         publish_error (*state, error);
         change_state (state, connection_state_t::disconnected, error);
@@ -1457,10 +1453,6 @@ void submit_send_with (std::shared_ptr<connector_state_t> state,
                                : "result=failure error="
                                    + std::to_string (static_cast<int> (result.error ()->code)));
                   });
-                  if (result) {
-                      std::lock_guard<std::mutex> lock (state->transport_mutex);
-                      state->sent_packets.push_back (std::move (*outbound));
-                  }
                   complete (std::move (result));
               });
         }
@@ -1673,23 +1665,13 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
              * next Manual pump even if the callback registers its handler. */
             passed_arrival = delivery.arrival - 1;
             if (delivery.run) {
-                try {
-                    delivery.run ();
-                }
-                catch (...) {
-                }
+                invoke_user_callback (*state, "connector callback failed", delivery.run);
             }
             continue;
         }
-        try {
+        invoke_user_callback (*state, "packet callback failed", [&] {
             dispatch_packet (*state, packet->envelope, packet->handlers);
-        }
-        catch (const std::exception &error) {
-            publish_error (*state, {error_code_t::user_callback_failed, error.what ()});
-        }
-        catch (...) {
-            publish_error (*state, {error_code_t::user_callback_failed, "packet callback failed"});
-        }
+        });
         passed_arrival = packet->envelope.arrival;
     }
     return result_t<void>::success ();

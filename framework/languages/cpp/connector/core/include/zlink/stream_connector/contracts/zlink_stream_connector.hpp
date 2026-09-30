@@ -2,7 +2,6 @@
 #pragma once
 
 #include <zlink/stream_connector/contracts/calls/zlink_stream_calls.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_subscription.hpp>
@@ -75,9 +74,6 @@ class connector_t
 
     /// Returns the number of received packets waiting for manual callback dispatch.
     std::size_t pending_dispatch_count () const;
-
-    /// Returns the codec registry owned by this connector.
-    codec_registry_t &codecs ();
 
     /// Opens the stream connection and blocks until it succeeds or fails.
     result_t<void> connect ();
@@ -203,9 +199,8 @@ class connector_t
     template <typename TMessage> send_call_t send (const TMessage &message)
     {
         auto packet = make_packet<TMessage> ();
-        packet.payload =
-          detail::encode_typed_payload (_state, detail::to_packet_payload (message, 0));
-        return send_call_t (_state, std::move (packet));
+        return send_call_t (_state,
+                            detail::encode_typed_packet (_state, std::move (packet), message));
     }
 
     /// Starts a send call and transfers the packet into the call object.
@@ -214,16 +209,16 @@ class connector_t
         if (packet.name.empty ()) {
             packet.name = "packet";
         }
-        return send_call_t (_state, std::move (packet));
+        return send_call_t (_state, result_t<packet_t>::success (std::move (packet)));
     }
 
     /// Starts a request call by copying the request payload into a packet.
     template <typename TRequest> request_call_t request (const TRequest &request)
     {
         auto packet = make_packet<TRequest> ();
-        packet.payload =
-          detail::encode_typed_payload (_state, detail::to_packet_payload (request, 0));
-        return request_call_t (_state, std::move (packet), options ().request_timeout);
+        return request_call_t (_state,
+                               detail::encode_typed_packet (_state, std::move (packet), request),
+                               options ().request_timeout);
     }
 
     /// Starts a request call and transfers the packet into the call object.
@@ -232,7 +227,8 @@ class connector_t
         if (packet.name.empty ()) {
             packet.name = "packet";
         }
-        return request_call_t (_state, std::move (packet), options ().request_timeout);
+        return request_call_t (_state, result_t<packet_t>::success (std::move (packet)),
+                               options ().request_timeout);
     }
 
     /// Registers a packet callback for the given packet name.
@@ -249,15 +245,8 @@ class connector_t
          * reference back: a strong one would keep the connector state alive
          * through its own handler list. */
         std::weak_ptr<void> weak_state = _state;
-        return on_packet_erased (
-          std::move (packet_name),
-          [weak_state, callback = std::move (callback)] (const packet_t &packet) {
-              auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
-              if (!message) {
-                  return;
-              }
-              callback (message.value ());
-          });
+        return on_packet_erased (std::move (packet_name), detail::typed_delivery<TMessage> (
+                                                            weak_state, std::move (callback)));
     }
 
     /// Registers a packet callback for the packet name resolved from TMessage.
@@ -305,7 +294,6 @@ class connector_t
 
     std::shared_ptr<void> _state;
     std::shared_ptr<void> _external_owner;
-    codec_registry_t _codecs;
 };
 
 class actor_t
@@ -336,11 +324,7 @@ class actor_t
         std::weak_ptr<void> weak_state = _connector._state;
         return _connector.on_actor_packet_erased (
           std::move (packet_name), actor_slot,
-          [weak_state, callback = std::move (callback)] (const packet_t &packet) {
-              auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
-              if (message)
-                  callback (message.value ());
-          });
+          detail::typed_delivery<TMessage> (weak_state, std::move (callback)));
     }
 
     template <typename TMessage>
