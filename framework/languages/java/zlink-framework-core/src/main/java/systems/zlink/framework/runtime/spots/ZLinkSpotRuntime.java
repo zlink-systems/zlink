@@ -120,7 +120,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -128,7 +127,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -716,10 +714,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         for (EntrySpotInitialization initialization : entrySpotInitializations) {
             for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : initialization.entrySpots()) {
                 spotLifecycle.addEntrySpot(
-                        activationFactory.activateEntry(
-                                initialization.nodeRid(),
-                                initialization.backendSpot(),
-                                entrySpotType));
+                        systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls.submit(
+                                () ->
+                                        activationFactory.activateEntry(
+                                                initialization.nodeRid(),
+                                                initialization.backendSpot(),
+                                                entrySpotType)));
             }
         }
     }
@@ -1802,24 +1802,34 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .closeAllAsync()
                 .handle(
                         (ignored, failure) -> {
+                            CompletionStage<Void> closing = CompletableFuture.completedFuture(null);
+                            for (ZLinkInstanceSpotActivation activation :
+                                    instanceSpotActivations.values()) {
+                                closing =
+                                        closing.handle(
+                                                        (nothing, closeFailure) ->
+                                                                SpotActivationBase.finishCleanup(
+                                                                        closeFailure,
+                                                                        activation.closeAsync(
+                                                                                systems.zlink
+                                                                                        .framework
+                                                                                        .spots
+                                                                                        .ZLinkSpotCloseReason
+                                                                                        .HOST_SHUTDOWN,
+                                                                                Instant.now())))
+                                                .thenCompose(stage -> stage);
+                            }
+                            return SpotActivationBase.finishCleanup(failure, closing);
+                        })
+                .thenCompose(stage -> stage)
+                .handle(
+                        (ignored, failure) -> {
                             RuntimeException firstFailure =
                                     failure == null
                                             ? null
                                             : failure instanceof RuntimeException runtime
                                                     ? runtime
                                                     : new RuntimeException(failure);
-                            for (ZLinkInstanceSpotActivation activation :
-                                    instanceSpotActivations.values()) {
-                                firstFailure =
-                                        closeRuntimeComponent(
-                                                () ->
-                                                        activation.close(
-                                                                systems.zlink.framework.spots
-                                                                        .ZLinkSpotCloseReason
-                                                                        .HOST_SHUTDOWN,
-                                                                Instant.now()),
-                                                firstFailure);
-                            }
                             instanceSpotActivations.clear();
                             firstFailure = closeRuntimeComponent(publishers::close, firstFailure);
                             for (ZLinkInternalSpotNode node : nodes) {
@@ -1883,12 +1893,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> notifyClosing(Instant deadline) {
-        spotLifecycle.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+        List<CompletableFuture<Void>> closing = new ArrayList<>();
+        closing.add(
+                spotLifecycle
+                        .notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline)
+                        .toCompletableFuture());
         for (ZLinkInstanceSpotActivation activation :
                 List.copyOf(instanceSpotActivations.values())) {
-            activation.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+            closing.add(
+                    activation
+                            .closingStage(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline)
+                            .toCompletableFuture());
         }
-        return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new));
     }
 
     public CompletionStage<Void> continueDrain(ZLinkSpotCloseReason reason, Instant deadline) {
@@ -3051,22 +3068,27 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                             .locations
                                                                                             .ZLinkObjectCommitResult
                                                                                             .ALREADY_COMMITTED) {
-                                                                        activation.close(
-                                                                                systems.zlink
-                                                                                        .framework
-                                                                                        .spots
-                                                                                        .ZLinkSpotCloseReason
-                                                                                        .EXPLICIT_CLOSE,
-                                                                                Instant.now());
-                                                                        return CompletableFuture
-                                                                                .failedFuture(
-                                                                                        new IllegalStateException(
-                                                                                                "Instance"
-                                                                                                        + " Spot"
-                                                                                                        + " Ready"
-                                                                                                        + " commit"
-                                                                                                        + " lost"
-                                                                                                        + " its reservation"));
+                                                                        return activation
+                                                                                .closeAsync(
+                                                                                        systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .spots
+                                                                                                .ZLinkSpotCloseReason
+                                                                                                .EXPLICIT_CLOSE,
+                                                                                        Instant
+                                                                                                .now())
+                                                                                .thenCompose(
+                                                                                        ignored ->
+                                                                                                CompletableFuture
+                                                                                                        .failedFuture(
+                                                                                                                new IllegalStateException(
+                                                                                                                        "Instance"
+                                                                                                                                + " Spot"
+                                                                                                                                + " Ready"
+                                                                                                                                + " commit"
+                                                                                                                                + " lost"
+                                                                                                                                + " its reservation")));
                                                                     }
                                                                     activation.setAuthorityFence(
                                                                             route.ownerId(),
@@ -4846,13 +4868,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
     }
 
-    void discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
+    CompletionStage<Void> discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
         instanceSpotActivations.remove(activation.context.spotId(), activation);
-        activation.closeResources();
-        ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(activation.context.meshName());
-        if (routeNode != null) {
-            routeNode.forgetInstanceIntent(activation.authorityRouteFence());
-        }
+        return activation
+                .closeResourcesAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            ZLinkInternalMeshNode routeNode =
+                                    routeMeshNodesByName.get(activation.context.meshName());
+                            if (routeNode != null) {
+                                routeNode.forgetInstanceIntent(activation.authorityRouteFence());
+                            }
+                        });
     }
 
     CompletionStage<Boolean> discardStaleInstanceSpotActivation(
@@ -4862,7 +4889,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                                 activation.context.spotId()),
                         () -> false)
-                .thenApply(
+                .thenCompose(
                         read -> {
                             if (read instanceof ZLinkAuthoritySnapshot snapshot) {
                                 var authority = userSpotAuthorities.decode(snapshot.payload());
@@ -4882,11 +4909,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 snapshot.ownerId(),
                                                 snapshot.ownerLeaseGeneration(),
                                                 snapshot.authorityOwnerGeneration())) {
-                                    return false;
+                                    return CompletableFuture.completedFuture(false);
                                 }
                             }
-                            discardInstanceSpotActivation(activation);
-                            return false;
+                            return discardInstanceSpotActivation(activation)
+                                    .thenApply(ignored -> false);
                         });
     }
 
@@ -5887,21 +5914,5 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     static boolean isProbeFrame(List<Message> parts) {
         return parts.isEmpty() || parts.get(0).size() == 0;
-    }
-
-    void awaitClosing(CompletionStage<Void> closingStage) {
-        try {
-            closingStage
-                    .toCompletableFuture()
-                    .get(defaultRequestTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException ex) {
-            throw new ZLinkConfigurationException(
-                    "SPOT closing hook did not complete before timeout.", ex);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new ZLinkConfigurationException("SPOT closing hook was interrupted.", ex);
-        } catch (ExecutionException ex) {
-            throw new ZLinkConfigurationException("SPOT closing hook failed.", ex.getCause());
-        }
     }
 }
