@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Message } from '@zlink-systems/zlink';
 import type { ActorRef, RoutingId } from '../../packages/framework/src/contracts';
+import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
@@ -12,8 +13,12 @@ import {
   ServiceWireFrameworkErrorCode
 } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
-import { wireReplyFailureException } from '../../packages/framework/src/runtime/framework-errors-internal';
+import {
+  internalFrameworkWireReply,
+  wireReplyFailureException
+} from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
   type ZLinkParkedActorArrival
@@ -21,6 +26,11 @@ import {
 import { ZLinkFormalRemoteActorTransferRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-transfer-registry';
 import { ZLinkPostCommitActorBinder } from '../../packages/framework/src/runtime/actors/post-commit-actor-binder';
 import { ZLinkPostCommitActorLocation } from '../../packages/framework/src/runtime/actors/post-commit-actor-location';
+import {
+  actorMessageFollowPayloadChecksum,
+  messageFollowOwnerFenceKey,
+  ownerFence
+} from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import {
   ZLinkSpotActorPacketDispatch,
   type ZLinkActorPacketDelivery,
@@ -52,6 +62,23 @@ const OBJECT_GENERATION = 5n;
 const MESH_NAME = 'mesh-a';
 const NODE_RID = 'target' as unknown as RoutingId;
 const SPOT_ID = 'spot-1' as unknown as RoutingId;
+
+test('canonical Join public error kinds retain their exact wire terminals', () => {
+  const cases = [
+    [ZLinkFrameworkErrorKind.TypeMismatch, 107, 4],
+    [ZLinkFrameworkErrorKind.ProtocolError, 104, 16],
+    [ZLinkFrameworkErrorKind.InvalidOperation, 107, 21],
+    [ZLinkFrameworkErrorKind.NotFound, 102, 1],
+    [ZLinkFrameworkErrorKind.Unavailable, 105, 17],
+    [ZLinkFrameworkErrorKind.Rejected, 106, 15]
+  ] as const;
+  for (const [kind, terminalResult, failureCode] of cases) {
+    assert.deepEqual(
+      internalFrameworkWireReply(new ZLinkFrameworkException(kind, 'Join failed.')),
+      { terminalResult, failureCode }
+    );
+  }
+});
 
 test('canonical Join rejects missing targets as Unavailable and closing targets as Rejected', async () => {
   const closingBarrier = new ZLinkExecutionBarrier();
@@ -115,6 +142,203 @@ test('canonical Join rejects missing targets as Unavailable and closing targets 
       state
     );
     assert.equal(dispatched, false, state);
+  }
+});
+
+test('Entry Join commit failure after accepted reply reaches completion without another wire reply', async () => {
+  for (const stage of ['entry-commit', 'handoff-backlog'] as const) {
+    const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+    const transfers = new ZLinkFormalRemoteActorTransferRegistry();
+    const actor = { context: { actorId: ACTOR_ID } };
+    const replies: number[] = [];
+    const completions: Array<{ status: string; kind?: ZLinkFrameworkErrorKind }> = [];
+    const detached: Array<() => Promise<void>> = [];
+    const events: string[] = [];
+    const actorGate = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      ZLinkUserSpotExecutionMode.PerActor,
+      SPOT_ID
+    );
+    const sourceActorRef = {
+      actorId: ACTOR_ID,
+      generation: OBJECT_GENERATION,
+      nodeRid: NODE_RID
+    };
+    const handoffParts = [
+      Message.from(Buffer.from('header')),
+      Message.from(Buffer.from('payload'))
+    ];
+    const handoffChecksum = actorMessageFollowPayloadChecksum(handoffParts);
+    handoffParts.forEach((part) => part.close());
+    const handoffOwner = ownerFence({
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 1n,
+      nodeRid: String(NODE_RID),
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    });
+    const transfer = {
+      packetName: '__zlink.actor.join_spot.request',
+      actorId: ACTOR_ID,
+      actorType: 'Player',
+      actorNodeRid: String(NODE_RID),
+      actorGeneration: String(OBJECT_GENERATION),
+      routerChannelId: MESH_NAME,
+      transferId: `entry-${stage}-fails-after-reply`,
+      request: Buffer.from('join').toString('base64'),
+      handoffBacklog:
+        stage === 'handoff-backlog'
+          ? [
+              {
+                index: 0,
+                header: Buffer.from('header').toString('base64'),
+                payload: Buffer.from('payload').toString('base64'),
+                returnResponse: false,
+                messageFollowContext: {
+                  operationId: '11111111111111111111111111111111',
+                  objectGeneration: String(OBJECT_GENERATION),
+                  sourceOwner: handoffOwner,
+                  targetOwner: handoffOwner,
+                  request: false,
+                  hopCount: 0,
+                  visitedOwners: [messageFollowOwnerFenceKey(handoffOwner)],
+                  payloadChecksumSha256: handoffChecksum
+                }
+              }
+            ]
+          : [],
+      completionOperationHigh: '7',
+      completionOperationLow: '9'
+    };
+    const manager = {
+      activations: { resolve: () => undefined },
+      formalRemoteActorAdmissions: admissions,
+      formalRemoteTransfers: transfers,
+      dispatchMeshActorJoinCore: (
+        DefaultZLinkSpotManager.prototype as unknown as { dispatchMeshActorJoinCore: unknown }
+      ).dispatchMeshActorJoinCore,
+      options: {
+        entryNodeRid: SPOT_ID,
+        actorResolver: () => undefined,
+        dispatchEntryActorJoin: async () => {
+          events.push('entry-commit');
+          if (stage === 'entry-commit') throw new Error('target Entry commit failed');
+        },
+        dispatchEntryActorPacket: async () => {
+          events.push('handoff-replay');
+          throw new Error('target Entry handoff failed');
+        },
+        executeEntryActor: async (
+          _meshName: string,
+          _actorId: string,
+          operation: () => Promise<void>
+        ) => {
+          return await actorGate.executeActor(ACTOR_ID, async () => {
+            events.push('target-actor-gate');
+            return await operation();
+          });
+        },
+        actorTransferRuntime: {
+          prepareDeferredJoinAccepted: () => ({
+            status: 'accepted',
+            operationId: { high: 7n, low: 9n },
+            actor: fallbackRef(),
+            rawReply: Buffer.alloc(0)
+          }),
+          materializeRoutedActor: async () => ({ actor }),
+          commitRoutedActorAuthority: async () => {},
+          rollbackRoutedActor: async () => {},
+          deliverDeferredJoinCompletion: async (
+            completion: { status: string; kind?: ZLinkFrameworkErrorKind },
+            _actor: unknown,
+            _ref: unknown,
+            submitMailbox: (operation: () => Promise<void>) => Promise<void>
+          ) => {
+            await submitMailbox(async () => {
+              events.push(`completion-${completion.status}`);
+              completions.push({ status: completion.status, kind: completion.kind });
+            });
+          }
+        },
+        detachedTaskRunner: {
+          runDetached: (_name: string, callback: () => Promise<void>) => detached.push(callback)
+        }
+      }
+    };
+    const dispatch = async (phase: 'admission' | 'commit'): Promise<void> => {
+      const message = Message.from(
+        Buffer.from(
+          JSON.stringify({
+            ...transfer,
+            phase,
+            ...(phase === 'commit'
+              ? { transferState: Buffer.from('state').toString('base64') }
+              : {})
+          })
+        )
+      );
+      try {
+        await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+          manager as never,
+          MESH_NAME,
+          { spotId: SPOT_ID } as never,
+          {
+            kindData: {
+              kind: 'actorControl',
+              currentActor: sourceActorRef,
+              currentSpotGeneration: 1n,
+              currentMembershipEpoch: 1n
+            },
+            parts: [message],
+            isPending: () => true,
+            replyActorJoin(result: number) {
+              replies.push(result);
+              return 0;
+            },
+            replyFailure() {
+              throw new Error('second wire reply');
+            }
+          } as never
+        );
+      } finally {
+        message.close();
+      }
+    };
+
+    await dispatch('admission');
+    await dispatch('commit');
+    assert.deepEqual(replies, [0, 0]);
+    assert.equal(detached.length, 1);
+    let releaseGate!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const earlierActorTurn = actorGate.executeActor(ACTOR_ID, async () => await held);
+    const terminal = detached[0]!();
+    if (stage === 'handoff-backlog') {
+      assert.equal(
+        await transfers.completeSourceLeaveTerminal(ACTOR_ID, transfer.transferId, true),
+        true
+      );
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(completions, []);
+    releaseGate();
+    await earlierActorTurn;
+    await assert.rejects(
+      terminal,
+      stage === 'entry-commit' ? /target Entry commit failed/ : /saved Entry handoff packet/
+    );
+    assert.deepEqual(completions, [
+      { status: 'failed', kind: ZLinkFrameworkErrorKind.InternalFailure }
+    ]);
+    assert.deepEqual(replies, [0, 0]);
+    assert.deepEqual(
+      events,
+      stage === 'entry-commit'
+        ? ['entry-commit', 'target-actor-gate', 'completion-failed']
+        : ['entry-commit', 'handoff-replay', 'target-actor-gate', 'completion-failed']
+    );
   }
 });
 

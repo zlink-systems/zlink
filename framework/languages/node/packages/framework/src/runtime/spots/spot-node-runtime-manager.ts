@@ -1085,6 +1085,16 @@ export class ZLinkSpotNodeRuntimeManager {
     await activation.commitServiceActorJoin(actor, handoffBacklog);
   }
 
+  executeEntryActor<T>(meshName: string, actorId: string, operation: () => Promise<T>): Promise<T> {
+    const activation = this.entryActivations.get(meshName);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(
+        `Entry Spot Actor '${actorId}' has no activation for MeshNode '${meshName}'.`
+      );
+    }
+    return activation.executeActor(actorId, operation);
+  }
+
   publish(
     meshName: string,
     channelName: string,

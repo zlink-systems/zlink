@@ -205,6 +205,11 @@ export interface ZLinkSpotManagerOptions {
     actor: ZLinkActor,
     handoffBacklog?: readonly ZLinkActorHandoffPacket[]
   ) => Promise<void>;
+  readonly executeEntryActor?: <T>(
+    meshName: string,
+    actorId: string,
+    operation: () => Promise<T>
+  ) => Promise<T>;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
   readonly userSpotExecutionMode?: (
     meshName: string,
@@ -1887,55 +1892,51 @@ export class DefaultZLinkSpotManager {
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const activation = spotId === null ? undefined : this.activations.resolve(meshName, spotId);
-    if (
-      record.kindData?.kind === 'actorControl' &&
-      record.kindData.canonicalActorJoin !== undefined
-    ) {
-      const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
+    const replyState = { targetCommitPublished: false };
+    try {
       if (
-        spotId !== null && entrySpotId !== undefined && String(spotId) === String(entrySpotId)
-          ? this.options.dispatchEntryActorJoin === undefined
-          : activation === undefined
+        record.kindData?.kind === 'actorControl' &&
+        record.kindData.canonicalActorJoin !== undefined
       ) {
-        const unavailable = createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Spot '${String(spotId)}' is not active on this node.`
+        const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
+        if (
+          spotId !== null && entrySpotId !== undefined && String(spotId) === String(entrySpotId)
+            ? this.options.dispatchEntryActorJoin === undefined
+            : activation === undefined
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+            `Spot '${String(spotId)}' is not active on this node.`
+          );
+        }
+      }
+      if (activation?.domain.kind === 'user') {
+        await activation.serial.executeLifecycleOperation(() =>
+          this.dispatchMeshActorJoinCore(meshName, owner, record, replyState)
         );
-        const terminal = internalFrameworkWireReply(unavailable);
-        requireMeshSpotReply(record.replyFailure!(terminal.terminalResult, terminal.failureCode));
         return;
       }
+      await this.dispatchMeshActorJoinCore(meshName, owner, record, replyState);
+    } catch (error) {
+      if (replyState.targetCommitPublished || record.replyFailure === undefined) throw error;
+      const failure =
+        error instanceof ZLinkFrameworkException
+          ? error
+          : createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RequestFailed,
+              'Actor Join target admission failed.',
+              error
+            );
+      const terminal = internalFrameworkWireReply(failure);
+      requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
     }
-    if (activation?.domain.kind === 'user') {
-      // The execution barrier decides Closing admission before the callback runs. That
-      // rejection is this Join's terminal, so it is replied here; failures after entry
-      // belong to dispatchMeshActorJoinCore.
-      const turn = { entered: false };
-      try {
-        await activation.serial.executeLifecycleOperation(async () => {
-          turn.entered = true;
-          await this.dispatchMeshActorJoinCore(meshName, owner, record);
-        });
-      } catch (error) {
-        if (
-          turn.entered ||
-          !(error instanceof ZLinkFrameworkException) ||
-          record.replyFailure === undefined
-        ) {
-          throw error;
-        }
-        const terminal = internalFrameworkWireReply(error);
-        requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
-      }
-      return;
-    }
-    await this.dispatchMeshActorJoinCore(meshName, owner, record);
   }
 
   private async dispatchMeshActorJoinCore(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    replyState: { targetCommitPublished: boolean }
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const control = record.kindData;
@@ -2004,11 +2005,6 @@ export class DefaultZLinkSpotManager {
         canonicalActorType = (await resolver({ actorId, ...control.canonicalActorJoin })).actorType;
       } catch (error) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
-        if (error instanceof ZLinkFrameworkException && record.replyFailure !== undefined) {
-          const terminal = internalFrameworkWireReply(error);
-          requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
-          return;
-        }
         throw error;
       }
     }
@@ -2037,7 +2033,6 @@ export class DefaultZLinkSpotManager {
     let admissionOutcome: ZLinkFormalRemoteActorAdmissionResult | undefined;
     let accepted = false;
     let committedAdmissionReplay = isRemoteCommit && admissionRecord?.state === 'committed';
-    let targetCommitPublished: boolean | undefined;
     const actorJoinIsCurrent = (): boolean =>
       (record.deadlineUnixMs === undefined || record.deadlineUnixMs > BigInt(Date.now())) &&
       (record.isPending?.() ?? true);
@@ -2460,7 +2455,7 @@ export class DefaultZLinkSpotManager {
           // Core commits the target membership while it accepts this reply.
           // From this call onward a later callback/transport failure is
           // post-commit and must not roll the materialized Actor back.
-          targetCommitPublished = true;
+          replyState.targetCommitPublished = true;
         }
         requireMeshSpotReply(joinReplyResult);
         return true;
@@ -2485,49 +2480,80 @@ export class DefaultZLinkSpotManager {
           if (!replyActorJoin()) return;
           const commitEntryTransfer = async (): Promise<void> => {
             try {
-              await this.options.dispatchEntryActorJoin?.(meshName, entryActor, []);
-            } finally {
-              this.formalRemoteTransfers.completeTargetLifecycle(
-                entryActor.context.actorId,
-                pendingTransfer.transferId
-              );
-            }
-            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
-            if (!sourceLeaveSubmitted) {
-              throw new Error(
-                `Actor '${entryActor.context.actorId}' source authority commit failed before leave submission.`
-              );
-            }
-            const handoffResults = await replayActorHandoffBacklog(
-              pendingTransfer.handoffBacklog,
-              async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
-                if (this.options.dispatchEntryActorPacket === undefined) {
-                  throw new Error(
-                    'Entry Spot saved handoff replay requires its Actor packet runtime.'
-                  );
-                }
-                return await this.options.dispatchEntryActorPacket(
+              try {
+                await this.options.dispatchEntryActorJoin?.(meshName, entryActor, []);
+              } finally {
+                this.formalRemoteTransfers.completeTargetLifecycle(
                   entryActor.context.actorId,
-                  parts,
-                  returnResponse,
-                  remoteBoundSessionTarget,
-                  fallbackActorRef
+                  pendingTransfer.transferId
                 );
-              },
-              (index) =>
-                this.options.runtimeEventPublisher?.publish({
-                  sourceName: 'zlink.framework.actor-handoff',
-                  timestamp: new Date(),
-                  marker: 'backlog_enqueued',
-                  actorId: entryActor.context.actorId,
-                  index
-                })
-            );
-            const failedHandoff = handoffResults.find((result) => !result.ok);
-            if (failedHandoff !== undefined) {
-              throw new Error(
-                `Actor '${entryActor.context.actorId}' saved Entry handoff packet ` +
-                  `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+              }
+              const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
+              if (!sourceLeaveSubmitted) {
+                throw new Error(
+                  `Actor '${entryActor.context.actorId}' source authority commit failed before leave submission.`
+                );
+              }
+              const handoffResults = await replayActorHandoffBacklog(
+                pendingTransfer.handoffBacklog,
+                async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+                  if (this.options.dispatchEntryActorPacket === undefined) {
+                    throw new Error(
+                      'Entry Spot saved handoff replay requires its Actor packet runtime.'
+                    );
+                  }
+                  return await this.options.dispatchEntryActorPacket(
+                    entryActor.context.actorId,
+                    parts,
+                    returnResponse,
+                    remoteBoundSessionTarget,
+                    fallbackActorRef
+                  );
+                },
+                (index) =>
+                  this.options.runtimeEventPublisher?.publish({
+                    sourceName: 'zlink.framework.actor-handoff',
+                    timestamp: new Date(),
+                    marker: 'backlog_enqueued',
+                    actorId: entryActor.context.actorId,
+                    index
+                  })
+              );
+              const failedHandoff = handoffResults.find((result) => !result.ok);
+              if (failedHandoff !== undefined) {
+                throw new Error(
+                  `Actor '${entryActor.context.actorId}' saved Entry handoff packet ` +
+                    `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+                );
+              }
+            } catch (error) {
+              const completion = pendingTransfer.deferredJoinCompletion;
+              if (completion !== undefined) {
+                await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
+                  {
+                    ...completion,
+                    status: 'failed',
+                    kind:
+                      error instanceof ZLinkFrameworkException
+                        ? error.kind
+                        : ZLinkFrameworkErrorKind.InternalFailure
+                  },
+                  entryActor,
+                  completion.actor,
+                  (operation) =>
+                    this.options.executeEntryActor!(meshName, entryActor.context.actorId, operation)
+                );
+              }
+              throw error;
+            }
+            const completion = pendingTransfer.deferredJoinCompletion;
+            if (completion !== undefined) {
+              await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
+                completion,
+                entryActor,
+                completion.actor,
+                (operation) =>
+                  this.options.executeEntryActor!(meshName, entryActor.context.actorId, operation)
               );
             }
             this.formalRemoteTransfers.delete(entryActor.context.actorId);
@@ -2537,7 +2563,18 @@ export class DefaultZLinkSpotManager {
             commitEntryTransfer
           );
           if (this.options.detachedTaskRunner === undefined) {
-            void commitEntryTransfer().catch(() => undefined);
+            void commitEntryTransfer().catch((error) =>
+              this.options.dispatchErrors?.report({
+                surface: ZLinkDispatchErrorSurface.SpotActor,
+                messageKind: ZLinkDispatchMessageKind.Control,
+                packetName: 'ActorJoin',
+                meshName,
+                actorId: entryActor.context.actorId,
+                reason: ZLinkDispatchErrorReason.HandlerException,
+                action: ZLinkDispatchErrorAction.FailCaller,
+                error
+              })
+            );
           }
         }
       } else {
@@ -2547,10 +2584,10 @@ export class DefaultZLinkSpotManager {
       if (control.canonicalActorJoin !== undefined) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
       }
-      if (targetCommitPublished !== true) {
+      if (!replyState.targetCommitPublished) {
         this.formalRemoteTransfers.delete(actorId);
       }
-      if (materialized && targetCommitPublished !== true) {
+      if (materialized && !replyState.targetCommitPublished) {
         await this.options.actorTransferRuntime?.rollbackRoutedActor(actor!);
       }
       throw error;
@@ -2698,7 +2735,7 @@ export class DefaultZLinkSpotManager {
                 `Actor '${actor.context.actorId}' has no target ref for deferred Join completion.`
               );
             }
-            await this.options.actorTransferRuntime?.deliverDeferredJoinAccepted(
+            await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
               deferredJoinCompletion,
               actor,
               currentRef,
@@ -2887,7 +2924,7 @@ export class DefaultZLinkSpotManager {
             }
             return activation.executeActor(actor.context.actorId, operation);
           };
-      await this.options.actorTransferRuntime.deliverDeferredJoinAccepted(
+      await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
         outcome.deferredJoinCompletion,
         actor,
         actorRef,

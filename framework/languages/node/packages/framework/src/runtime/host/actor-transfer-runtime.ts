@@ -282,11 +282,11 @@ export class ZLinkActorTransferRuntime {
   }
 
   /**
-   * Runs the Accepted completion callback once in the target Actor mailbox.
+   * Runs the completion callback once in the target Actor mailbox.
    * A repeated delivery of the same OperationId in this process observes the
    * first terminal (completion idempotency only).
    */
-  async deliverDeferredJoinAccepted(
+  async deliverDeferredJoinCompletion(
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
@@ -300,7 +300,7 @@ export class ZLinkActorTransferRuntime {
     }
     const active = this.activeDeferredJoinTerminals.get(terminalKey);
     if (active !== undefined) return await waitForOperation(active, signal);
-    const delivery = this.deliverDeferredJoinAcceptedCore(
+    const delivery = this.deliverDeferredJoinCompletionCore(
       completion,
       actor,
       actorRef,
@@ -323,7 +323,7 @@ export class ZLinkActorTransferRuntime {
     return await waitForOperation(delivery, signal);
   }
 
-  private async deliverDeferredJoinAcceptedCore(
+  private async deliverDeferredJoinCompletionCore(
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
@@ -347,6 +347,14 @@ export class ZLinkActorTransferRuntime {
       );
     }
     await submitMailbox(async () => {
+      if (completion.status === 'failed') {
+        await actor.onJoinCompleted?.({
+          status: 'failed',
+          operationId: completion.operationId,
+          kind: completion.kind
+        });
+        return;
+      }
       await actor.onJoinCompleted?.({
         status: 'accepted',
         operationId: completion.operationId,

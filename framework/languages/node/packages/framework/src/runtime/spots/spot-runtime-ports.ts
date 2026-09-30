@@ -46,7 +46,7 @@ export interface ZLinkSpotActorTransferRuntime {
     rawReply: Uint8Array,
     replyContentType?: string
   ): ZLinkDeferredJoinCompletion;
-  deliverDeferredJoinAccepted(
+  deliverDeferredJoinCompletion(
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,

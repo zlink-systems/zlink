@@ -2447,7 +2447,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           events.push('recovery:prepared');
           return { reference: 'recovered-root' };
         },
-        async deliverDeferredJoinAccepted() {
+        async deliverDeferredJoinCompletion() {
           events.push('accepted:started');
           await acceptedGate;
           events.push('accepted:completed');
