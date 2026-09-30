@@ -100,19 +100,18 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<void> send (const std::string &channel_name,
                        std::string packet_name,
                        std::string content_type,
-                       zlink::message_t message,
-                       std::chrono::milliseconds timeout);
+                       zlink::message_t message);
     task_t<zlink::message_t> request (const std::string &channel_name,
                                       std::string packet_name,
                                       std::string content_type,
                                       zlink::message_t message,
                                       std::chrono::milliseconds timeout);
-    task_t<std::shared_ptr<raw_client_server_client_t>>
-    select_ready (std::string channel_name, std::chrono::steady_clock::time_point deadline);
+    task_t<std::shared_ptr<raw_client_server_client_t>> select_ready (std::string channel_name);
     result_t<client_channel_t *> select_channel_locked (const std::string &channel_name);
     result_t<std::shared_ptr<raw_client_server_client_t>>
-    select_ready_locked (const std::string &channel_name);
-    task_t<void> complete_ready_waiters (std::chrono::steady_clock::time_point now);
+    select_ready_locked (const std::string &channel_name,
+                         std::chrono::steady_clock::time_point deadline);
+    task_t<void> complete_ready_waiters ();
 
     static std::uint64_t make_lifecycle_generation ();
     static std::uint32_t

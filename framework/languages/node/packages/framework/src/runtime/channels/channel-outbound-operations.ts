@@ -72,7 +72,7 @@ export class ZLinkChannelOutboundOperations {
     throwIfAborted(signal);
     const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
     if (dealer === undefined) {
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
+      return { status: ZLinkSubmitStatus.TimedOut };
     }
     const parts = encodeChannelEnvelopeParts(
       ZLinkChannelMessageKind.Command,
@@ -151,7 +151,6 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    const deadlineAtMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     let correlationId: string | undefined;
     let selectedServerRid: string | undefined;
     let terminalRecorded = false;
@@ -171,18 +170,11 @@ export class ZLinkChannelOutboundOperations {
     };
     try {
       throwIfAborted(signal);
-      const dealer = await this.sockets.awaitClientDealerForOutbound(
-        channelName,
-        signal,
-        deadlineAtMs
-      );
-      // Binding timeouts are whole milliseconds; rounding down keeps the call's deadline.
-      const remainingMs =
-        deadlineAtMs === undefined ? undefined : Math.floor(deadlineAtMs - performance.now());
-      if (dealer === undefined || (remainingMs !== undefined && remainingMs <= 0)) {
+      const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
+      if (dealer === undefined) {
         throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Channel '${channelName}' has no ready ClientServer server.`
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          `Channel '${channelName}' has no ready ClientServer server before its admission deadline.`
         );
       }
       const serverRid = this.sockets.selectedClientServerRid(channelName, dealer);
@@ -193,7 +185,7 @@ export class ZLinkChannelOutboundOperations {
         channelName,
         packetName,
         request,
-        remainingMs,
+        timeoutMs,
         undefined,
         this.codecs,
         correlationId,
@@ -213,7 +205,7 @@ export class ZLinkChannelOutboundOperations {
         let replyParts: readonly Message[] = [];
         try {
           try {
-            replyParts = await awaitWithAbort(dealer.request(parts, remainingMs), signal);
+            replyParts = await awaitWithAbort(dealer.request(parts, timeoutMs), signal);
           } catch (error) {
             if (signal?.aborted === true) throw error;
             //  Spec 32-framework-error-model:81-92 — classify the backend request
@@ -226,12 +218,7 @@ export class ZLinkChannelOutboundOperations {
                 error
               );
             }
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-              `Channel '${channelName}' request failed before a reply was received.`,
-              true,
-              error
-            );
+            throw error;
           }
           return decodeChannelReply<TReply>(replyParts, this.codecs);
         } finally {

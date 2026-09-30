@@ -45,10 +45,9 @@ static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &
 static_assert (std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().send (
                                 std::declval<const backend::raw_message_t &> ())),
                               zlink::framework::task_t<bool>>);
-static_assert (
-  std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().send (
-                   std::declval<const backend::raw_message_t &> (), std::chrono::milliseconds (1))),
-                 zlink::framework::task_t<zlink::submit_result_t>>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().send_result (
+                                std::declval<const backend::raw_message_t &> ())),
+                              zlink::framework::task_t<zlink::submit_result_t>>);
 static_assert (
   std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().request (
                    std::declval<const backend::raw_message_t &> (), std::chrono::milliseconds (1))),
@@ -201,6 +200,7 @@ void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
         socket->options ().recv_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
     }
     dealer.options ().linger (0ms);
+    dealer.options ().send_timeout (2s);
     dealer.options ().send_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
     dealer.options ().recv_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
     target.bind ("inproc://framework-ok-send-depth");
@@ -233,7 +233,7 @@ void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
         assert (routed.await_ready ());
         assert (routed.result ().value ());
 
-        auto dealer_result = dealer_port.send (request_parts (), 2s);
+        auto dealer_result = dealer_port.send_result (request_parts ());
         record_depth (dealer_result.await_ready ());
         assert (dealer_result.await_ready ());
         assert (dealer_result.result ().value () == zlink::submit_result_t::ok);
@@ -264,6 +264,7 @@ void verify_backpressured_send_waits_for_admission ()
     source.set_routing_id (source_rid);
     source.options ().linger (0ms);
     target.options ().linger (0ms);
+    source.options ().send_timeout (2s);
     source.options ().send_hwm (zlink::byte_count_t::bytes (16));
     target.options ().recv_hwm (zlink::byte_count_t::bytes (16));
     target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
@@ -281,7 +282,7 @@ void verify_backpressured_send_waits_for_admission ()
     backend::raw_dealer_port_t source_port (source, nullptr, &source_poller);
     std::optional<zlink::framework::task_t<zlink::submit_result_t>> waiting;
     for (std::size_t index = 0; index < 256 && !waiting; ++index) {
-        auto sent = source_port.send (request_parts (), 2s);
+        auto sent = source_port.send_result (request_parts ());
         if (!sent.await_ready ()) {
             waiting.emplace (std::move (sent));
         } else {

@@ -274,6 +274,7 @@ public sealed class RuntimeConformanceFixtureTests
             CancellationToken.None
         );
         var release = Signal();
+        var releaseSecond = Signal();
         try
         {
             Assert.Equal(
@@ -306,18 +307,20 @@ public sealed class RuntimeConformanceFixtureTests
                 ZLinkAcceptedWorkAdmission.Accepted,
                 queue.TryPostAccepted(
                     new byte[7],
-                    static _ => ValueTask.CompletedTask,
+                    async _ => await releaseSecond.Task.ConfigureAwait(false),
                     static () => { },
                     out var second
                 )
             );
             Assert.Equal(3UL, second.AcceptedSequence);
             Assert.Equal(1, queue.ApplicationPendingCount);
+            releaseSecond.TrySetResult();
             await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
             release.TrySetResult();
+            releaseSecond.TrySetResult();
         }
     }
 

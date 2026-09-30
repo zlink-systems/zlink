@@ -88,6 +88,28 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void configuredClientAndFanoutSendTimeoutsReachSocketFactories() {
+        Duration clientTimeout = Duration.ofMillis(375);
+        Duration publisherTimeout = Duration.ofMillis(625);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addClientServerChannel("client").client().setSendTimeout(clientTimeout);
+        options.addFanoutChannel("fanout")
+                .setSendTimeout(publisherTimeout)
+                .enablePublisher("inproc://configured-timeout");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+
+        try (ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            assertEquals(List.of(clientTimeout), backend.dealerSendTimeouts);
+            assertEquals(List.of(publisherTimeout), backend.publisherSendTimeouts);
+        }
+    }
+
+    @Test
     void exactMessageContextsExposeTheirContractFields() {
         Map<String, String> metadata = Map.of("tenant", "blue");
         var request =
@@ -1858,9 +1880,9 @@ final class ZLinkChannelRuntimeTest {
                             .join());
             return true;
         } catch (CompletionException failure) {
-            // Channel messaging §8: no selectable target ends as NotFound.
+            // Framework API #channel-selection-result: ready but ineligible is Unavailable.
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             return false;
         }
@@ -2046,7 +2068,8 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             ManagedAdmissionDealer dealer = new ManagedAdmissionDealer(endpoint, router.peerWeight);
             dealers.add(dealer);
             return dealer;
@@ -2058,7 +2081,8 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -2199,8 +2223,11 @@ final class ZLinkChannelRuntimeTest {
         final FakeContext context = new FakeContext();
         final FakeDealerSocket dealer = new FakeDealerSocket();
         final FakeRouterSocket router = new FakeRouterSocket();
+        final FakePublisherSocket publisher = new FakePublisherSocket();
         final FakeSpotRouteBridge bridge = new FakeSpotRouteBridge();
         final FakeSpotNode spotNode = new FakeSpotNode(bridge);
+        final List<Duration> dealerSendTimeouts = new ArrayList<>();
+        final List<Duration> publisherSendTimeouts = new ArrayList<>();
 
         @Override
         public ZLinkBackendContext createContext() {
@@ -2208,7 +2235,9 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
+            dealerSendTimeouts.add(sendTimeout);
             return dealer;
         }
 
@@ -2218,13 +2247,42 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
-            throw new UnsupportedOperationException();
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
+            publisherSendTimeouts.add(sendTimeout);
+            return publisher;
         }
 
         @Override
         public ZLinkBackendSubscriberSocket createSubscriberSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class FakePublisherSocket implements ZLinkBackendPublisherSocket {
+        @Override
+        public String name() {
+            return "publisher";
+        }
+
+        @Override
+        public void bind(String endpoint) {}
+
+        @Override
+        public void close() {}
+
+        @Override
+        public void setChannelName(String channelName) {}
+
+        @Override
+        public void setRoutingId(RoutingId routingId) {}
+
+        @Override
+        public void setNoDrop(boolean noDrop) {}
+
+        @Override
+        public boolean publish(String topic, List<Message> parts, SendFlags flags) {
+            return false;
         }
     }
 

@@ -14,7 +14,9 @@
 #include <zlink/framework/contracts/spots/spot_identity.hpp>
 
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <functional>
 #include <map>
 #include <memory>
@@ -59,6 +61,23 @@ enum class channel_capability_t
     subscriber = 3
 };
 
+namespace detail
+{
+template <typename Rep, typename Period>
+std::chrono::milliseconds
+normalize_channel_send_timeout (std::chrono::duration<Rep, Period> timeout)
+{
+    const auto milliseconds = std::chrono::duration<long double, std::milli> (timeout).count ();
+    if (!std::isfinite (milliseconds) || milliseconds <= 0
+        || milliseconds > (std::numeric_limits<int>::max) ()) {
+        throw std::invalid_argument ("channel send timeout must be finite and from 1 through "
+                                     "INT_MAX milliseconds after rounding up");
+    }
+    return std::chrono::milliseconds (
+      static_cast<std::chrono::milliseconds::rep> (std::ceil (milliseconds)));
+}
+} // namespace detail
+
 struct channel_capability_snapshot_t
 {
     bool enabled = false;
@@ -67,6 +86,7 @@ struct channel_capability_snapshot_t
     std::optional<zlink::byte_size_t> max_message_size =
       zlink::byte_size_t::bytes (16 * 1024 * 1024);
     std::optional<zlink::peer_weight_t> peer_weight;
+    std::optional<std::chrono::milliseconds> send_timeout;
     int service_weight = 100;
     std::vector<std::string> bind_endpoints;
     std::vector<std::string> connect_endpoints;
@@ -121,6 +141,11 @@ class capability_builder_t
     capability_builder_t &max_message_size (zlink::byte_size_t value);
     capability_builder_t &peer_weight (zlink::peer_weight_t value);
     capability_builder_t &service_weight (int value);
+    template <typename Rep, typename Period>
+    capability_builder_t &send_timeout (std::chrono::duration<Rep, Period> timeout)
+    {
+        return set_send_timeout (detail::normalize_channel_send_timeout (timeout));
+    }
 
     channel_capability_snapshot_t snapshot () const;
 
@@ -129,6 +154,7 @@ class capability_builder_t
     friend class fanout_channel_builder_t;
     explicit capability_builder_t (std::shared_ptr<detail::capability_builder_state_t> state);
     capability_builder_t &set_no_drop (bool no_drop);
+    capability_builder_t &set_send_timeout (std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::capability_builder_state_t> _state;
 };

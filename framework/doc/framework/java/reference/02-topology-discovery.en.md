@@ -134,6 +134,7 @@ options.addClientServerChannel("payments.api").server()
     .addRequestHandler(ChargeHandler.class, Charge.class, ChargeResult.class);
 
 options.addClientServerChannel("payments.api").client()
+    .setSendTimeout(Duration.ofSeconds(2))
     .connect("payments-1:6001");
 ```
 
@@ -145,6 +146,11 @@ options.addClientServerChannel("payments.api").client()
 | `.server().setBindHost(host)` / `.setAdvertiseHost(host)` | Root default | The bind/advertise host that applies only to this Server |
 | `.server().setWeight(weight)` / `.addSendHandler`/`.addRequestHandler` | Same as RouteMesh Channel Server | Weight and handler registration |
 | `.client().connect(endpoint)` | manual | Connects to a specific Server manually. Omitting it finds the target via automatic discovery |
+| `.client().setSendTimeout(duration)` | 1 second | The client's DEALER SNDTIMEO and server readiness wait limit |
+
+`setSendTimeout` accepts a finite `Duration` whose value rounded up to milliseconds is in
+`1..Integer.MAX_VALUE`. Positive sub-millisecond values become 1 ms. Passing `null` restores the
+one-second default.
 
 **Completion result.** Registers synchronously with no return value. A Client/Server using
 automatic discovery without a Location Store registration surfaces as a configuration error in
@@ -164,6 +170,7 @@ Registers a channel dedicated to classic fanout. It is the target `ZLinkFanoutCl
 
 ```java
 options.addFanoutChannel("lobby.events")
+    .setSendTimeout(Duration.ofMillis(500))
     .enablePublisher(7001)
     .addHandlerGroup("events");
 
@@ -183,6 +190,7 @@ options.addFanoutChannel("lobby.events")
 | Modifier | Default | Meaning |
 | --- | --- | --- |
 | `.enablePublisher(endpoint)` / `.enablePublisher()` / `.enablePublisher(port)` | None | Registers this channel's publisher role and receiving endpoint |
+| `.setSendTimeout(duration)` | 1 second | The publisher socket's SNDTIMEO |
 | `.setBindHost(host)` / `.setAdvertiseHost(host)` / `.setRoutingId(rid)` / `.setRoutingIdPrefix(prefix)` | Root default, or issued by the Framework | The bind/advertise host and RID that apply only to the publisher |
 | `.enableSubscriber()` | — | automatic subscriber. Finds every valid publisher of the same ChannelName from the Location Store |
 | `.connect(endpoint)` | — | manual subscriber. Uses only the specified endpoint |
@@ -191,6 +199,9 @@ options.addFanoutChannel("lobby.events")
 
 **Completion result.** Registers synchronously with no return value. Configuring both automatic
 subscriber and manual subscriber on the same fanout channel surfaces as a startup failure.
+
+Fanout `setSendTimeout` uses the same `Duration` range as ClientServer. Passing `null` restores the
+one-second default.
 
 **When to use.** Use this when creating a new observation/notification channel where the
 publisher need not know its subscribers. If a reply is needed, use RouteMesh Channel or

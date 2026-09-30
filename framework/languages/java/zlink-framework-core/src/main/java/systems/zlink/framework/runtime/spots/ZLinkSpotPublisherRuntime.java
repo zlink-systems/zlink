@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -323,7 +324,8 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 return result;
             }
             int timeoutMillis =
-                    normalizedTimeoutMillis(admissionTimeout.apply(requireChannel(meshName)));
+                    ZLinkChannelAdmissionTimeout.normalizedMillis(
+                            admissionTimeout.apply(requireChannel(meshName)));
             try {
                 multicastHandoffExecutor.execute(
                         () -> awaitExecutorAdmission(handoffOperation, result, timeoutMillis));
@@ -418,21 +420,6 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
 
     private static ZLinkOneWayPublishAdmission emptyAdmission(int status) {
         return new ZLinkOneWayPublishAdmission(status);
-    }
-
-    private static int normalizedTimeoutMillis(Duration timeout) {
-        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
-            throw new IllegalArgumentException("send timeout must be positive");
-        }
-        long millis = timeout.toMillis();
-        if (timeout.compareTo(Duration.ofMillis(millis)) > 0) {
-            millis++;
-        }
-        if (millis < 1L || millis > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException(
-                    "send timeout must normalize to 1..Integer.MAX_VALUE ms");
-        }
-        return (int) millis;
     }
 
     @Override

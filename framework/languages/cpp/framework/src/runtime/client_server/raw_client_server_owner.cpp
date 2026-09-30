@@ -3,6 +3,7 @@
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
@@ -739,7 +740,7 @@ task_t<void> raw_client_server_client_t::start_task ()
         }
         auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
         dealer->options ().linger (std::chrono::milliseconds (0));
-        dealer->options ().send_timeout (std::chrono::seconds (1));
+        detail::apply_channel_send_timeout (*dealer, _options.send_timeout);
         dealer->options ().max_message_size (
           zlink::byte_size_t::bytes (_options.admission.effective_max_message_bytes));
         trace_client_server_lazy ("client-socket-options", [&] {
@@ -1051,7 +1052,7 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::accept_server_ad
           || _connection_id.empty ();
         if (!value.invalid) {
             _options.expected_server = server;
-            _ready = server.state == mesh::service_node_state_t::serving && server.weight > 0;
+            _ready = true;
             value.ready = _ready;
             value.connection = _connection_id;
         }
@@ -1277,12 +1278,8 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
 }
 
 task_t<zlink::submit_result_t>
-raw_client_server_client_t::send (const protocol::application_payload_t &payload,
-                                  std::chrono::milliseconds timeout)
+raw_client_server_client_t::send (const protocol::application_payload_t &payload)
 {
-    if (timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("ClientServer send timeout must be positive");
-    }
     const auto state = _lane
                          .run_checked ([this] {
                              struct state_t
@@ -1320,7 +1317,7 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     });
     if (!port)
         co_return zlink::submit_result_t::terminated;
-    const auto submitted = co_await port->send (wire, timeout);
+    const auto submitted = co_await port->send_result (wire);
     trace_client_server_lazy ("client-send-result", [&] {
         return "endpoint=" + _options.expected_server.advertised_endpoint
                + " packet=" + payload.packet_name

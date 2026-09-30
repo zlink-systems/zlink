@@ -6092,107 +6092,59 @@ test('runtime host actor packet target lets local joined actors use native gatew
   assert.equal(host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-local-room'), undefined);
 });
 
-test('runtime host local spot join uses the formal MeshNode completion contract for actors with native refs', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
-    registration: framework.createFrameworkRegistration()
-  });
-  const operationId = { high: 0n, low: 1n };
+test('runtime host same-node Actor Join uses local admission and membership commit', async () => {
+  const host = new framework.ZLinkFrameworkRuntimeHost({ registration: framework.createFrameworkRegistration() });
   const actorRid = zlink.RoutingId.from('local-node');
   const roomRid = zlink.RoutingId.from('room-1');
-  const submitted = [];
+  const actorRef = { nodeRid: actorRid, actorId: 'actor-local-room', generation: 4n };
+  let location = { actor: actorRef, spotId: actorRid, spotGeneration: 1n, membershipEpoch: 2n };
+  const events = [];
   host.spotNodeRuntime = {
     primaryMeshNode: {
-      status: () => ({ routingId: actorRid }),
-      joinActorSpot(actorRef, targetNodeRid, targetSpotId, targetGeneration, request) {
-        submitted.push({
-          actorRef,
-          targetNodeRid,
-          targetSpotId,
-          targetGeneration,
-          request: Buffer.from(request.payload).toString(),
-          contentType: request.contentType
-        });
-        return operationId;
+      status: () => ({ routingId: actorRid, lifecycleGeneration: 1n }),
+      actorLookup: () => location,
+      restoreActorAuthority(_id, type, generation, _owner, spotId, spotGeneration, membershipEpoch) {
+        assert.equal(type, 'player');
+        assert.equal(generation, 4n);
+        events.push('membership');
+        location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };
+        return actorRef;
       }
-    },
-    primaryMeshCompletions: {
-      async submit(operation) {
-        const actualOperationId = operation();
-        assert.deepEqual(actualOperationId, operationId);
-        return {
-          terminalResult: 0,
-          failureErrno: 0,
-          operationKind: framework.OperationKind.ActorJoin,
-          kindData: {
-            kind: 'actorJoinCompletion',
-            joinResult: 0,
-            actor: {
-              nodeRid: actorRid,
-              actorId: 'actor-local-room',
-              generation: 4n
-            },
-            location: {
-              actor: {
-                nodeRid: actorRid,
-                actorId: 'actor-local-room',
-                generation: 4n
-              },
-              spotId: roomRid,
-              spotGeneration: 9n,
-              membershipEpoch: 3n
-            }
-          },
-          parts: [zlink.Message.from('joined')]
-        };
-      }
+    }
+  };
+  host.spotManager = {
+    async admitActorJoin(spotId, actor, request, commit, _signal, sourceLeave, contentType) {
+      assert.equal(spotId.toHex(), roomRid.toHex());
+      assert.equal(actor.context.actorId, 'actor-local-room');
+      assert.equal(request.getString(), 'hello');
+      assert.equal(contentType, 'application/json');
+      events.push('admission');
+      await commit({});
+      events.push('joined');
+      await sourceLeave();
+      return { accepted: true, reply: zlink.Message.from('joined') };
     }
   };
   host.createLocationSpotRouteResolver = () => ({
     async resolve(spotId) {
       assert.equal(spotId, 'room-1');
-      return {
-        meshName: 'game',
-        routerChannelId: 'game.route',
-        targetNodeRid: actorRid,
-        spotId: roomRid,
-        spotKind: framework.ZLinkSpotKind.User,
-        targetSpotGeneration: 9n
-      };
+      return { routerChannelId: 'game.route', targetNodeRid: actorRid, spotId: roomRid, spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 9n };
     }
   });
-  const actor = { actorId: 'actor-local-room' };
-  const state = new framework.ZLinkActorRuntimeState(actor.actorId);
-  const refreshed = [];
-  host.streamBindingRuntime.refreshActor = async (actorRef, _signal) => {
-    refreshed.push({
-      nodeRid: actorRef.nodeRid,
-      actorId: actorRef.actorId,
-      generation: actorRef.generation
-    });
-  };
-  state.setNativeActorRef({
-    nodeRid: actorRid,
-    actorId: actor.actorId,
-    generation: 4n
-  });
-
+  host.streamBindingRuntime.commitActorRoute = async () => { events.push('bind'); };
+  const actor = { context: { actorId: 'actor-local-room', meshName: 'game' } };
+  const state = new framework.ZLinkActorRuntimeState(actor.context.actorId);
+  state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
+  state.bindActor(actor, actor.context);
+  state.setNativeActorRef(actorRef);
   const request = zlink.Message.from('hello');
-  const result = await host.createActorManagerOptions()
-    .joinCoordinator
-    .joinSpot(actor, state, 'room-1', request, undefined, undefined);
-
-  assert.equal(submitted.length, 1);
-  assert.equal(submitted[0].actorRef.actorId, 'actor-local-room');
-  assert.equal(submitted[0].targetNodeRid.toHex(), actorRid.toHex());
-  assert.equal(submitted[0].targetSpotId.toHex(), roomRid.toHex());
-  assert.equal(submitted[0].targetGeneration, 9n);
-  assert.equal(submitted[0].request, 'hello');
-  assert.equal(submitted[0].contentType, 'application/json');
+  const result = await host.createActorManagerOptions().joinCoordinator.joinSpot(actor, state, 'room-1', request, undefined, undefined);
+  assert.deepEqual(events, ['admission', 'membership', 'joined', 'bind']);
   assert.equal(state.spotId.toHex(), roomRid.toHex());
+  assert.equal(location.membershipEpoch, 3n);
   assert.equal(result.actor.nodeRid.toHex(), actorRid.toHex());
   assert.equal(result.actor.actorId, 'actor-local-room');
-  assert.equal(result.actor.generation, 4n);
-  assert.deepEqual(refreshed, []);
+  assert.equal(result.actor.objectGeneration, 4n);
   assert.equal(result.reply.getString(), 'joined');
   request.close();
   result.reply.close();
