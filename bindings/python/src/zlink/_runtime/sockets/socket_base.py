@@ -52,6 +52,7 @@ from ..messaging.native_parts import _payload_parts
 from ..handles.native_support import (
     _BytesReceivedPartsOwner,
     _ReceivedPartsOwner,
+    _close_multipart,
     _as_bytes_view,
     _copy_routing_id,
     _recv_native_parts,
@@ -79,6 +80,108 @@ _native_subscribe_owner = (
     if _native_extension is not None
     else None
 )
+
+
+def _new_topic_receive_buffer(initial_buffer=None):
+    if initial_buffer is None:
+        buffer = ctypes.create_string_buffer(256)
+        return buffer, buffer, 256
+    capacity = len(initial_buffer)
+    return (
+        initial_buffer,
+        (ctypes.c_char * capacity).from_buffer(initial_buffer),
+        capacity,
+    )
+
+
+def _grow_topic_receive_buffer(storage, buffer, capacity, topic_len, rc):
+    if (
+        int(rc) != int(RecvResult.BUFFER_TOO_SMALL)
+        or topic_len.value <= capacity
+    ):
+        return storage, buffer, capacity, False
+    capacity = topic_len.value
+    storage = ctypes.create_string_buffer(capacity)
+    return storage, storage, capacity, True
+
+
+def _topic_receive_bytes(buffer, capacity, length):
+    if length > capacity:
+        _raise_result_error(RecvError, RecvResult.INTERNAL_ERROR, _errno.EPROTO)
+    return ctypes.string_at(ctypes.addressof(buffer), length)
+
+
+def _receive_subscribe_owner(handle, flags, initial_topic_buffer=None):
+    topic_storage, topic_buffer, topic_capacity = _new_topic_receive_buffer(
+        initial_topic_buffer
+    )
+    topic_len = ctypes.c_size_t()
+    source_rid = ctypes.POINTER(ZlinkRoutingId)()
+    capacity = 1
+    parts = (ZlinkMsg * capacity)()
+
+    while True:
+        part_count = ctypes.c_size_t()
+
+        while True:
+            topic_len.value = 0
+            part_count.value = 0
+            rc = lib().zlink_subscribe(
+                int(handle),
+                ctypes.byref(source_rid),
+                topic_buffer,
+                topic_capacity,
+                ctypes.byref(topic_len),
+                parts,
+                capacity,
+                ctypes.byref(part_count),
+                int(flags),
+            )
+            topic_storage, topic_buffer, topic_capacity, retry = (
+                _grow_topic_receive_buffer(
+                    topic_storage, topic_buffer, topic_capacity, topic_len, rc
+                )
+            )
+            if not retry:
+                break
+
+        if rc != int(RecvResult.BUFFER_TOO_SMALL) or part_count.value <= capacity:
+            break
+        capacity = part_count.value
+        parts = (ZlinkMsg * capacity)()
+
+    if rc != int(RecvResult.OK):
+        err = lib().zlink_errno()
+        if int(flags) & 1 and rc == int(RecvResult.NO_DATA):
+            return False
+        return rc, err, None, None, None
+    if part_count.value == 0 or part_count.value > capacity:
+        return (
+            int(RecvResult.INTERNAL_ERROR),
+            _errno.EPROTO,
+            None,
+            None,
+            None,
+        )
+
+    owner = None
+    try:
+        topic_raw = _topic_receive_bytes(
+            topic_buffer, topic_capacity, topic_len.value
+        )
+        routing = (
+            bytes(source_rid.contents.data[: source_rid.contents.size])
+            if source_rid and source_rid.contents.size > 0
+            else None
+        )
+        owner = _ReceivedPartsOwner(parts, part_count.value)
+        return int(RecvResult.OK), 0, routing, topic_raw, owner
+    except BaseException:
+        if owner is None:
+            _close_multipart(parts, part_count.value)
+        else:
+            owner.close()
+        raise
 
 
 def _native_socket_type(sock_type):
@@ -578,75 +681,20 @@ class _PublisherSocket(_Socket):
 
 
 class _SubscriberSocket(_Socket):
-    def _subscribe_parts_via_native_bridge(self, flags):
-        if _native_subscribe_owner is not None:
-            result = _native_subscribe_owner(int(self._socket_handle.handle), int(flags))
-            if result is False:
-                return False
-            if result is None:
-                return None
-            rc, err, routing, topic_raw, owner = result
-            if int(rc) != 0:
-                _raise_result_error(RecvError, RecvResult, rc, err)
-            routing_id = RoutingId.from_(routing) if routing is not None else None
-            return topic_raw, owner, routing_id
-        if _native_extension is None:
-            return None
-        result = _native_extension.subscribe_parts(int(self._handle), int(flags))
-        if result is None:
-            return None
-        rc, err, routing, topic_raw, parts = result
-        if int(rc) != 0:
+    def _subscribe_parts_owner(self, flags):
+        handle = int(self._socket_handle.handle)
+        result = (
+            _native_subscribe_owner(handle, int(flags))
+            if _native_subscribe_owner is not None
+            else _receive_subscribe_owner(handle, int(flags))
+        )
+        if result is False:
+            return False
+        rc, err, routing, topic_raw, owner = result
+        if int(rc) != int(RecvResult.OK):
             _raise_result_error(RecvError, RecvResult, rc, err)
         routing_id = RoutingId.from_(routing) if routing is not None else None
-        return (
-            topic_raw,
-            _BytesReceivedPartsOwner._from_trusted_bytes_tuple(parts),
-            routing_id,
-        )
-
-    def _subscribe_parts_owner(self, flags):
-        bridged = self._subscribe_parts_via_native_bridge(flags)
-        if bridged is False:
-            return False
-        if bridged is not None:
-            return bridged
-
-        routing_id = ctypes.POINTER(ZlinkRoutingId)()
-        topic_buf = ctypes.create_string_buffer(256)
-        topic_len = ctypes.c_size_t()
-        capacity = 1
-        parts_array = (ZlinkMsg * capacity)()
-        while True:
-            part_count = ctypes.c_size_t()
-            rc = lib().zlink_subscribe(
-                self._handle,
-                ctypes.byref(routing_id),
-                topic_buf,
-                len(topic_buf),
-                ctypes.byref(topic_len),
-                parts_array,
-                capacity,
-                ctypes.byref(part_count),
-                int(flags),
-            )
-            if rc != int(RecvResult.BUFFER_TOO_SMALL):
-                break
-            if part_count.value <= capacity:
-                _raise_result_error(
-                    RecvError, RecvResult, RecvResult.INTERNAL_ERROR, _errno.EPROTO
-                )
-            capacity = part_count.value
-            parts_array = (ZlinkMsg * capacity)()
-        if rc != int(RecvResult.OK):
-            _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-        if part_count.value == 0 or part_count.value > capacity:
-            _raise_result_error(
-                RecvError, RecvResult, RecvResult.INTERNAL_ERROR, _errno.EPROTO
-            )
-        topic_raw = bytes(topic_buf.raw[: topic_len.value])
-        routing = _routing_id_bytes(routing_id.contents) if routing_id else None
-        return topic_raw, _ReceivedPartsOwner(parts_array, part_count.value), routing
+        return topic_raw, owner, routing_id
 
     def _subscribe_once(self, flags):
         result = self._subscribe_parts_owner(flags)

@@ -6,7 +6,7 @@ mod test_support;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Barrier};
-use std::task::Poll;
+use std::task::{Context as TaskContext, Poll, Wake, Waker};
 use std::thread;
 use std::time::Duration;
 
@@ -347,6 +347,81 @@ fn poller_modify_transfers_completion_ownership() {
 }
 
 #[test]
+fn completion_waker_can_modify_its_public_poller() {
+    if std::env::var_os("ZLINK_RUST_POLLER_WAKE_CHILD").is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "completion_waker_can_modify_its_public_poller"])
+            .env("ZLINK_RUST_POLLER_WAKE_CHILD", "1")
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "reentrant poller child failed: {status}");
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("completion Waker blocked while modifying its poller");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    struct ModifyOnWake {
+        poller: usize,
+        socket: usize,
+    }
+    impl Wake for ModifyOnWake {
+        fn wake(self: Arc<Self>) {
+            // The child calls wait and wake on this thread; both addresses stay
+            // valid until wait returns. Poller is Send but intentionally !Sync.
+            let poller = unsafe { &*(self.poller as *const Poller) };
+            let socket = unsafe { &*(self.socket as *const DealerSocket) };
+            poller.modify_socket(socket, POLLIN).unwrap();
+        }
+    }
+
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-reentrant-completion").unwrap();
+    dealer
+        .connect("inproc://rust-reentrant-completion")
+        .unwrap();
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 1).unwrap();
+    let request = dealer
+        .request()
+        .message(Message::try_from(b"request").unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .unwrap();
+    test_support::block_on(request.admitted).unwrap();
+    let mut reply = request.reply;
+    let waker = Waker::from(Arc::new(ModifyOnWake {
+        poller: (&poller as *const Poller) as usize,
+        socket: (&dealer as *const DealerSocket) as usize,
+    }));
+    let mut task = TaskContext::from_waker(&waker);
+    assert!(reply.as_mut().poll(&mut task).is_pending());
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    received
+        .reply()
+        .message(Message::try_from(b"reply").unwrap())
+        .submit()
+        .unwrap();
+    let mut events = [zlink::PollEvent::default()];
+    poller.wait(&mut events, 5_000).unwrap();
+    match reply.as_mut().poll(&mut task) {
+        Poll::Ready(Ok(parts)) => assert_eq!(parts[0].as_bytes(), b"reply"),
+        _ => panic!("expected completed reply"),
+    }
+}
+
+#[test]
 fn poller_wait_with_no_event_capacity_reports_core_config_error() {
     let poller = Poller::new().unwrap();
     let error = poller.wait(&mut [], 0).unwrap_err();
@@ -357,6 +432,27 @@ fn poller_wait_with_no_event_capacity_reports_core_config_error() {
         }
         other => panic!("expected Core configuration error, got {other:?}"),
     }
+}
+
+#[test]
+fn ownerless_async_send_rejects_before_core_submission() {
+    let ctx = Context::new().unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    receiver.bind("inproc://rust-ownerless-send").unwrap();
+    sender.connect("inproc://rust-ownerless-send").unwrap();
+
+    let error = match sender
+        .send()
+        .message(Message::try_from(b"must-not-submit").unwrap())
+        .submit()
+    {
+        Err(error) => error,
+        Ok(_) => panic!("ownerless async SEND was accepted"),
+    };
+    assert_eq!(error.code(), SubmitResult::InvalidState);
+    let mut received = Received::empty();
+    assert!(!receiver.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
 }
 
 #[test]
@@ -494,6 +590,7 @@ fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
     let send = dealer
         .send()
         .message(Message::try_from(b"send-ok").unwrap())
@@ -504,8 +601,6 @@ fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     assert_eq!(test_support::poll_once(&mut admitted), Poll::Ready(Ok(())));
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(received.parts()[0].as_bytes(), b"send-ok");
-    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
-
     let request = dealer
         .request()
         .message(Message::try_from(b"request-ok").unwrap())
@@ -652,6 +747,7 @@ fn ordinary_router_message_has_no_reply_token() {
         .connect("inproc://rust-request-reply-data")
         .unwrap();
 
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer_socket);
     let submission = dealer_socket
         .send()
         .message(Message::try_from(b"plain-data").unwrap())
