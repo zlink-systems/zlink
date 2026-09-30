@@ -51,11 +51,8 @@ internal sealed class RequestPerformer(
                 current,
                 authorizationAllowed
             );
-            var completion = request.Sink is null
-                ? HttpCompletionOption.ResponseContentRead
-                : HttpCompletionOption.ResponseHeadersRead;
             using var response = await httpClient
-                .SendAsync(message, completion, cancellationToken)
+                .SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
             var status = (int)response.StatusCode;

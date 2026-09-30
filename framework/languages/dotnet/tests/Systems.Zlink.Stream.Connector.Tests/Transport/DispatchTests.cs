@@ -85,6 +85,9 @@ public sealed partial class StreamConnectorTests
         var handledAll = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var releaseServer = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var server = Task.Run(async () =>
         {
             using var tcp = await listener.AcceptTcpClientAsync();
@@ -126,6 +129,7 @@ public sealed partial class StreamConnectorTests
                 );
 
             await handledAll.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await releaseServer.Task;
         });
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
@@ -150,21 +154,30 @@ public sealed partial class StreamConnectorTests
         );
 
         await connector.Connect.Async();
-        await handledAll.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await server;
+        ZlinkStreamException nothingLeft;
+        try
+        {
+            await handledAll.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, handled);
-        Assert.Equal(2, connector.ReceivedCount("buffered-before-handler"));
+            Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, handled);
+            Assert.Equal(2, connector.ReceivedCount("buffered-before-handler"));
 
-        // ReceivedCount counts arrivals, so a handler taking every message leaves it at
-        // the number received (stream-connector spec §10)...
-        Assert.Equal(messageCount, connector.ReceivedCount("handled"));
+            // ReceivedCount counts arrivals, so a handler taking every message leaves it at
+            // the number received (stream-connector spec §10)...
+            Assert.Equal(messageCount, connector.ReceivedCount("handled"));
 
-        // ...while the unread history really is empty, which the wait surface shows by
-        // finding nothing to consume.
-        var nothingLeft = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await connector.WaitFor("handled").Timeout(TimeSpan.FromMilliseconds(50)).Async()
-        );
+            // ...while the unread history really is empty, which the wait surface shows by
+            // finding nothing to consume.
+            nothingLeft = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await connector.WaitFor("handled").Timeout(TimeSpan.FromMilliseconds(50)).Async()
+            );
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+            await server;
+        }
+
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, nothingLeft.Error.Code);
     }
 
