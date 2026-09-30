@@ -1889,7 +1889,6 @@ class RawStreamSessionService implements StreamSessionService {
         (targetSessionRid, payloadFrame) =>
           this.deliver(targetSessionRid, actor.actorId, payloadFrame),
         onBindingReplaced,
-        serviceSessionBindingIngressPortIfRegistered(this),
         actorAuthority
       )
     );

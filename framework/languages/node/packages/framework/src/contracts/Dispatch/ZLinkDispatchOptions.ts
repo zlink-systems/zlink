@@ -194,6 +194,7 @@ export type ZLinkDispatchErrorReason =
   | 'reply_path_missing'
   | 'unexpected_reply'
   | 'backpressure'
+  | 'target_closed'
   | 'stale_target'
   | 'shutdown';
 

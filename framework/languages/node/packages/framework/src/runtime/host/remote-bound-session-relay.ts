@@ -197,17 +197,6 @@ export class ZLinkRemoteBoundSessionRelay {
   async receiveRemoteBoundSessionSend(payload: unknown): Promise<{ readonly ok: boolean }> {
     const send = decodeRemoteBoundSessionSendPayload(payload);
     await this.options.updateRemoteActorPacketTarget(send.actorId, send.actorPacketTarget);
-    const owner = actorSessionBindingRuntimeOwnerIfRegistered(this.options.streamBindingRuntime());
-    const retained = await owner?.retainRelocationOutbound(
-      send.actorId,
-      {
-        deliver: () => this.deliverRemoteBoundSessionSend(send),
-        fail: (error) => this.options.reportOwnershipRefreshError?.(send.actorId, error)
-      },
-      send.relocationSealId
-    );
-    if (retained === 'retained') return { ok: true };
-    if (retained === 'rejected') return { ok: false };
     return { ok: await this.deliverRemoteBoundSessionSend(send) };
   }
 
@@ -425,15 +414,6 @@ export class ZLinkRemoteBoundSessionRelay {
     }
     const state = this.activeServiceWireRelocations.get(key);
     if (state === undefined) {
-      await actorSessionBindingRuntimeOwner(
-        this.options.streamBindingRuntime()
-      ).discardRelocationOutbound(
-        value.actor.actorId,
-        key,
-        new ZLinkRemoteBoundSessionFenceError(
-          `Actor '${value.actor.actorId}' command 44 did not match an active command 42.`
-        )
-      );
       this.warnLateSessionRouteUpdate(value);
       return;
     }
