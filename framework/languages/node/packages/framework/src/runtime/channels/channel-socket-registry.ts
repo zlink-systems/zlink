@@ -24,7 +24,7 @@ import type {
   ZLinkChannelBackendAdapter,
   ZLinkMonitoringBackendAdapter
 } from '../backend/contracts';
-import { throwIfAborted } from '../abort';
+import { createAbortError, throwIfAborted } from '../abort';
 import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
 import {
@@ -60,9 +60,7 @@ import { isBackendRequestTimeoutError } from '../backend/runtime-values';
 const MAX_LIFECYCLE_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const CLIENT_SERVER_PROBE_INTERVAL_MS = 5_000;
 const CLIENT_SERVER_PEER_DEADLINE_MS = 15_000;
-const CLIENT_SERVER_READY_WAIT_CAP_MS = 5_000;
-const CLIENT_SERVER_READY_POLL_INTERVAL_MS = 5;
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_SEND_TIMEOUT_MS = 1_000;
 
 export interface ZLinkClientServerServerSocketIdentity {
   readonly serverRid: string;
@@ -185,6 +183,12 @@ export class ZLinkChannelSocketRegistry {
   }
 
   async dispose(): Promise<void> {
+    this.clientServerDiscovery.dispose(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+        'Channel sockets are shutting down.'
+      )
+    );
     const clientServerConnections = [...new Set(this.clientServerConnections.values())];
     const clientServerPollers = clientServerConnections.map(
       (connection) => connection.readablePoller
@@ -257,7 +261,10 @@ export class ZLinkChannelSocketRegistry {
     if (channel?.routingId !== undefined && channel.routingId.length > 0) {
       dealer.setRoutingId(deriveRoutingId(channel.routingId, 'dealer'));
     }
-    applySocketConfig(dealer, client);
+    applySocketConfig(dealer, {
+      ...client,
+      sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
+    });
     this.clientDealers.set(channelName, dealer);
     return dealer;
   }
@@ -393,7 +400,10 @@ export class ZLinkChannelSocketRegistry {
     this.registerReceiveFlowSocket(dealer);
     dealer.setChannelName(channelName);
     dealer.setRoutingId(`cs-client-${randomUUID()}`);
-    applySocketConfig(dealer, client);
+    applySocketConfig(dealer, {
+      ...client,
+      sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
+    });
     const cleanupDealer = (): void => {
       this.unregisterReceiveFlowSocket(dealer);
       void Promise.allSettled([dealer.dispose()]);
@@ -636,52 +646,60 @@ export class ZLinkChannelSocketRegistry {
     return undefined;
   }
 
-  /**
-   * Resolves a ClientServer send target, waiting when the ready candidate set is still empty, as
-   * `framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md` §3.2 requires: the call waits
-   * at call time for a bounded period and then fails with no-target. The bound is the shorter of
-   * the call's remaining deadline and five seconds, mirroring the .NET reference
-   * `ZLinkClientServerClientRuntime.WaitForReadyAsync`. The wait lives here because this registry
-   * owns ClientServer connections, admission and weighted selection. Sends have no per-call
-   * timeout, so they use the Channel's request timeout.
-   *
-   * The wait only observes admission that is already in flight: it never opens or reconnects a
-   * connection, so it cannot trigger the admission it waits for, and Framework startup keeps not
-   * waiting for local ClientServer admission. It applies whenever nothing is selectable, including
-   * candidate sets excluded by weight 0 or drain, because `selectClientServerDealer` filters the
-   * same way the reference `SelectReady()` does.
-   *
-   * Every attempt yields to the event loop between polls. ClientServer admission completes on the
-   * monitor drains that the backend poll timer pumps, so a synchronous wait would starve the
-   * admission it is waiting for and burn the whole bound before failing anyway. That is this
-   * execution model's form of the hazard the JVM mirror avoids by not holding the admission
-   * monitor across its sleep.
-   */
+  /** Observes discovery changes until the client DEALER admission deadline. */
   async awaitClientDealerForOutbound(
     channelName: string,
-    signal?: AbortSignal,
-    deadlineAtMs?: number
+    signal?: AbortSignal
   ): Promise<ZLinkBackendDealerSocket | undefined> {
-    const startedAtMs = performance.now();
-    const deadline = Math.min(
-      deadlineAtMs ??
-        startedAtMs +
-          (this.registration.channels.get(channelName)?.requestTimeoutMs ??
-            this.registration.requestTimeoutMs ??
-            DEFAULT_REQUEST_TIMEOUT_MS),
-      startedAtMs + CLIENT_SERVER_READY_WAIT_CAP_MS
-    );
-    for (;;) {
-      this.drainSocketMonitors();
+    throwIfAborted(signal);
+    const select = (): ZLinkBackendDealerSocket | undefined => {
       const dealer = this.clientDealerForOutbound(channelName);
       if (dealer !== undefined) return dealer;
-      const remainingMs = deadline - performance.now();
-      if (remainingMs <= 0) return undefined;
-      throwIfAborted(signal);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(CLIENT_SERVER_READY_POLL_INTERVAL_MS, remainingMs));
-      });
-    }
+      if (this.clientServerDiscovery.hasReadyClientServer(channelName)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Channel '${channelName}' has no eligible ClientServer member.`
+        );
+      }
+      return undefined;
+    };
+    const dealer = select();
+    if (dealer !== undefined) return dealer;
+    const sendTimeoutMs = configuredSendTimeoutMs(
+      this.registration.channels.get(channelName)?.client?.sendTimeoutMs
+    );
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => {
+        clearTimeout(deadline);
+        unsubscribe();
+        signal?.removeEventListener('abort', abort);
+      };
+      const abort = (): void => {
+        cleanup();
+        reject(createAbortError());
+      };
+      const changed = (error?: Error): void => {
+        try {
+          if (error !== undefined) throw error;
+          const selected = select();
+          if (selected === undefined) return;
+          cleanup();
+          resolve(selected);
+        } catch (error) {
+          cleanup();
+          reject(error);
+        }
+      };
+      const unsubscribe = this.clientServerDiscovery.onClientServerChanged(changed);
+      const deadline = setTimeout(() => {
+        cleanup();
+        resolve(undefined);
+      }, sendTimeoutMs);
+      signal?.addEventListener('abort', abort, { once: true });
+      // Registration and selection share one event-loop turn; recheck after subscribing.
+      changed();
+      if (signal?.aborted === true) abort();
+    });
   }
 
   startManualClientServerConnections(): void {
@@ -1866,6 +1884,7 @@ function applyFanoutPublisherSocketOptions(
   channel: ZLinkChannelOptions
 ): void {
   publisher.noDrop = channel.noDrop ?? false;
+  publisher.sendTimeoutMs = configuredSendTimeoutMs(channel.publisher?.sendTimeoutMs);
 }
 
 function fanoutDiscoveryConnectionId(connectionId: string): string {
@@ -1930,4 +1949,8 @@ function applySocketConfig(
   if (config.maxMessageSize !== undefined) {
     socket.maxMessageSize = config.maxMessageSize;
   }
+}
+
+function configuredSendTimeoutMs(value: number | undefined): number {
+  return value ?? DEFAULT_SEND_TIMEOUT_MS;
 }
