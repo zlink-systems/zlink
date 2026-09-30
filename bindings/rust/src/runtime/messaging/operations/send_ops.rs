@@ -530,6 +530,10 @@ mod writable_wait_tests {
         assert!(!is_writable_wait(backpressured, 0, 7));
         assert!(!is_writable_wait(backpressured, libc::EAGAIN, 0));
         assert!(!is_writable_wait(SubmitResult::Ok as i32, libc::EAGAIN, 7));
-        assert!(!is_writable_wait(SubmitResult::NotConnected as i32, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(
+            SubmitResult::NotConnected as i32,
+            libc::EAGAIN,
+            7
+        ));
     }
 }

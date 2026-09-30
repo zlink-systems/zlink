@@ -462,14 +462,16 @@ fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() 
     write_framed_packet(&mut raw, b"disconnect-peer");
 
     let mut packet = StreamPacket::empty();
-    assert!(stream
-        .recv_packet(&mut packet, RecvFlags::NONE)
-        .unwrap());
+    assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
     let peer_rid = *packet.routing_id().expect("missing STREAM routing id");
     stream.disconnect_rid(&peer_rid).unwrap();
 
     let mut probe = [0u8; 1];
-    assert_eq!(raw.read(&mut probe).unwrap(), 0, "client did not observe EOF");
+    assert_eq!(
+        raw.read(&mut probe).unwrap(),
+        0,
+        "client did not observe EOF"
+    );
 
     let error = stream
         .disconnect_rid(&peer_rid)
