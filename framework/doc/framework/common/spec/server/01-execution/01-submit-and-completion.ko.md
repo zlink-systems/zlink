@@ -177,7 +177,8 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 |---|---|
 | Actor authority 없음 | `NotFound` |
 | Spot authority 없음 | `NotFound` |
-| Mesh나 선택 가능한 Server 없음 | `NotFound` |
+| Mesh 없음 | `NotFound` |
+| ChannelName target 선택 실패 | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다 |
 | 사용할 route가 없음 | `Unavailable` |
 | admission deadline 만료 | `DeadlineExceeded` |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
