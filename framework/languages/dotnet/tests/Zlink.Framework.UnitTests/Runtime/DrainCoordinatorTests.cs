@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -7,7 +8,9 @@ using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -1213,6 +1216,134 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var forced = Assert.IsType<ForceStopped>(result);
         Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, forced.Reason);
         Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, executor.ForceReason);
+    }
+
+    [Fact]
+    public async Task Deadline_Force_Stop_Records_Unfinished_Owners_Before_Teardown()
+    {
+        var executor = new FakeDrainExecutor();
+        var unfinished = new[]
+        {
+            new ZLinkUnfinishedOperation("actor-lifecycle-barrier count=1", "actor:sample"),
+            new ZLinkUnfinishedOperation("close-transaction:spot-a", "spot-node-catalog"),
+        };
+        var records = new List<string>();
+        var snapshotCount = 0;
+        using var coordinator = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor,
+            flowCaptureEnabled: static () => true,
+            snapshotUnfinished: () =>
+            {
+                snapshotCount++;
+                return ValueTask.FromResult<IReadOnlyList<ZLinkUnfinishedOperation>>(unfinished);
+            },
+            traceUnfinished: message =>
+            {
+                Assert.Equal(0, executor.ForceCount);
+                records.Add(message);
+            }
+        );
+
+        var result = await coordinator.ForceStopAsync(
+            ZLinkDrainForceReason.DeadlineExceeded,
+            TimeSpan.FromSeconds(1)
+        );
+
+        Assert.IsType<ForceStopped>(result);
+        Assert.Equal(1, snapshotCount);
+        var recorded = Assert.Single(records);
+        Assert.Contains("actor-lifecycle-barrier count=1 owner=actor:sample", recorded);
+        Assert.Contains("close-transaction:spot-a owner=spot-node-catalog", recorded);
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, executor.ForceReason);
+    }
+
+    [Fact]
+    public async Task Deadline_Force_Stop_Continues_When_Snapshot_Owner_Does_Not_Respond()
+    {
+        var executor = new FakeDrainExecutor();
+        var snapshot = new TaskCompletionSource<IReadOnlyList<ZLinkUnfinishedOperation>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var records = new List<string>();
+        using var coordinator = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor,
+            flowCaptureEnabled: static () => true,
+            snapshotUnfinished: () =>
+                new ValueTask<IReadOnlyList<ZLinkUnfinishedOperation>>(snapshot.Task),
+            traceUnfinished: records.Add
+        );
+
+        try
+        {
+            var result = await coordinator
+                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, TimeSpan.FromSeconds(1))
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.IsType<ForceStopped>(result);
+            Assert.Equal(1, executor.ForceCount);
+            Assert.Single(records);
+        }
+        finally
+        {
+            snapshot.TrySetResult([]);
+        }
+    }
+
+    [Fact]
+    public async Task Deadline_Force_Stop_Continues_When_Actor_Registry_Owner_Is_Busy()
+    {
+        var registry = new ZLinkActorSessionRegistry();
+        var lane = Assert.IsType<ZLinkStateLane>(
+            typeof(ZLinkActorSessionRegistry)
+                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(registry)
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var owner = Task.Run(async () =>
+            await lane.RunAsync(() =>
+            {
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+                return 0;
+            })
+        );
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var executor = new FakeDrainExecutor();
+        var records = new List<string>();
+        async ValueTask<IReadOnlyList<ZLinkUnfinishedOperation>> SnapshotOwner()
+        {
+            await registry.SnapshotAsync();
+            return [];
+        }
+
+        using var coordinator = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor,
+            flowCaptureEnabled: static () => true,
+            snapshotUnfinished: SnapshotOwner,
+            traceUnfinished: records.Add
+        );
+        try
+        {
+            var result = await coordinator
+                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, TimeSpan.FromSeconds(1))
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.IsType<ForceStopped>(result);
+            Assert.Equal(1, executor.ForceCount);
+            Assert.Contains("owner snapshot pending", Assert.Single(records));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await owner.WaitAsync(TimeSpan.FromSeconds(1));
+        }
     }
 
     [Fact]
