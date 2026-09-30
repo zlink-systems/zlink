@@ -144,7 +144,7 @@ call of this section; it follows the transport execution-context contract of
 |---|---|
 | Remote target | Local transport queue |
 | Local target | The matching mailbox or relay queue |
-| Session Actor relay to a binding under a relocation seal | The Session owner's seal holding store ([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)) |
+| One-way session Actor relay to a binding under a relocation seal | The Session owner's seal holding store ([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)) |
 | [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) — a separate PUB/SUB path that sends events only to targets that finished connecting and subscribing — /STREAM | The matching socket queue |
 
 Global Spot/Actor send waits from the current [Ready](../00-foundation/02-glossary.en.md#ready) authority

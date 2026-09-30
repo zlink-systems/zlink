@@ -605,7 +605,7 @@ message size and transport limits still apply unchanged.
 For a one-way relay accepted at the admission boundary of
 [Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary), the caller doesn't wait
 for the seal to be released; having completed by acceptance, it isn't subject to later deadlines or cancellation.
-A relay request keeps its existing correlation, deadline, and cancellation. If a held message can't be submitted after route
+A relay request keeps its existing correlation, deadline, and cancellation. If a held one-way relay can't be submitted after route
 application or abort, or is cleaned up by the seal timeout, the caller's already completed result doesn't change;
 the failure is recorded once in that message's flow
 ([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)).
@@ -970,6 +970,9 @@ here.
   messages aren't delivered.
 - A command 44 arriving after the timeout, or a duplicate one, doesn't
   change the route again and only leaves a Warning.
+- While a binding is sealed for Actor relocation, an Actor-to-Session push that passes the
+  current binding check is submitted to the STREAM session without waiting for route update
+  or seal release.
 - If the target explicitly fails before relay-ready, the held messages are
   processed via the source route and the connection is kept.
 - After relay-ready, source route resumption follows the source `Preserve` fence in common relocation §4.4. Seal timeout during settlement follows its existing rule.

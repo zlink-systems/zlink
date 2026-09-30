@@ -500,7 +500,7 @@ Session route
 
 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 admission 경계에서 수락한 one-way relay는
 호출자가 seal 해제를 기다리지 않으며, 수락으로 완료됐으므로 이후 deadline과 취소가 적용되지 않는다. Relay request는
-기존 correlation, deadline과 취소로 끝난다. 보관한 message를 route 적용이나 abort 뒤 제출하지 못하거나
+기존 correlation, deadline과 취소를 유지한다. 보관한 one-way relay를 route 적용이나 abort 뒤 제출하지 못하거나
 seal timeout으로 정리하면, 이미 끝난 호출자 결과는 바꾸지 않고 그 message의 flow에 한 번 기록한다
 ([Message-flow tracing §6](../06-observability/03-message-flow-tracing.ko.md#6-완료-실패와-수명)).
 
@@ -785,6 +785,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Command 44가 `SessionRelocationSealTimeout`(기본 3,000 ms) 안에 오지 않으면 physical session이
   닫히고 그 binding의 held message는 전달되지 않는다.
 - Timeout 뒤 또는 중복으로 온 command 44는 route를 다시 바꾸지 않고 Warning만 남긴다.
+- Actor relocation으로 binding이 seal된 동안 current binding 판정을 통과한 Actor→Session push는 route update나
+  seal 해제를 기다리지 않고 STREAM session에 제출된다.
 - Relay-ready 전에 target이 명시적으로 실패하면 held message가 source route로 처리되고 connection은
   유지된다.
 - Relay-ready 뒤 source route 재개는 공통 relocation §4.4의 source `Preserve` fence 결과를 따른다. Fence 판정 중 seal timeout은 기존대로 처리한다.
