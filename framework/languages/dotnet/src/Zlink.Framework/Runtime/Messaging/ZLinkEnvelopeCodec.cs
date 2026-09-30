@@ -654,15 +654,7 @@ internal static class ZLinkEnvelopeCodec
         ZLinkCodecRegistryBuilder? codecs
     )
     {
-        IZLinkMessageSerializer? customSerializer = null;
-        if (
-            !contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
-            && (codecs is null || !codecs.TryGetSerializer(contentType, out customSerializer))
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                $"No payload serializer is registered for received content type '{contentType}'."
-            );
+        var serializer = ResolveReceivedSerializer(contentType, codecs);
 
         if (bodyType == typeof(Message))
             return bodyMessage;
@@ -680,21 +672,13 @@ internal static class ZLinkEnvelopeCodec
         if (bodyMessage.Size == 0)
             return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
-        if (customSerializer is not null)
-        {
-            // Hot path: span deserializers parse directly from the native message
-            // buffer. Avoid routing this through ZLinkEncodedPayload unless the
-            // codec only exposes the owned-memory contract.
-            if (customSerializer is IZLinkMessageSpanDeserializer spanDeserializer)
-                return spanDeserializer.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
+        if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
+            return spanDeserializer.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
 
-            return customSerializer.Deserialize(
-                ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
-                bodyType
-            );
-        }
-
-        return ZLinkFrameworkJsonPayloadCodec.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
+        return serializer.Deserialize(
+            ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
+            bodyType
+        );
     }
 
     internal static object? DecodeBody(
@@ -706,15 +690,7 @@ internal static class ZLinkEnvelopeCodec
     {
         EnsurePart(parts, 1, "body");
         var body = parts.GetSpan(1);
-        IZLinkMessageSerializer? customSerializer = null;
-        if (
-            !contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
-            && (codecs is null || !codecs.TryGetSerializer(contentType, out customSerializer))
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                $"No payload serializer is registered for received content type '{contentType}'."
-            );
+        var serializer = ResolveReceivedSerializer(contentType, codecs);
 
         if (bodyType == typeof(Message))
             return Message.From(body);
@@ -728,16 +704,27 @@ internal static class ZLinkEnvelopeCodec
             return parts.GetMemory(1);
         if (body.IsEmpty)
             return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
-        if (customSerializer is not null)
-        {
-            if (customSerializer is IZLinkMessageSpanDeserializer spanDeserializer)
-                return spanDeserializer.Deserialize(body, bodyType);
-            return customSerializer.Deserialize(
-                ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)),
-                bodyType
-            );
-        }
-        return ZLinkFrameworkJsonPayloadCodec.Deserialize(body, bodyType);
+
+        if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
+            return spanDeserializer.Deserialize(body, bodyType);
+
+        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)), bodyType);
+    }
+
+    internal static IZLinkMessageSerializer ResolveReceivedSerializer(
+        string? contentType,
+        IZLinkMessageCodecResolver? codecs
+    )
+    {
+        var resolver = codecs ?? ZLinkCodecRegistrySnapshot.Empty;
+        var resolvedContentType = contentType ?? JsonContentType;
+        if (resolver.TryGetSerializer(resolvedContentType, out var serializer))
+            return serializer;
+
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            $"No payload serializer is registered for received content type '{resolvedContentType}'."
+        );
     }
 
     public static Message EncodeJsonPart<T>(T value)
@@ -792,13 +779,6 @@ internal static class ZLinkEnvelopeCodec
             && codecs.TryResolveSerializer(bodyType, out contentType, out serializer)
         )
             return true;
-
-        if (codecs?.SingleCustomSerializer() is { } custom)
-        {
-            contentType = custom.ContentType;
-            serializer = custom.Serializer;
-            return true;
-        }
 
         contentType = JsonContentType;
         return false;

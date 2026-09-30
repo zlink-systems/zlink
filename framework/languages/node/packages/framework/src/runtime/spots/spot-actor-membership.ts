@@ -18,6 +18,12 @@ import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotActorTransferRuntime } from './spot-runtime-ports';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
+import {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 
 export interface ZLinkSpotActorMembershipOptions {
   readonly resolveActivation: (
@@ -39,8 +45,6 @@ export interface ZLinkSpotActorMembershipOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
 }
 
-export type ZLinkActorJoinRollback = () => Promise<void> | void;
-
 export class ZLinkSpotActorMembership {
   constructor(private readonly options: ZLinkSpotActorMembershipOptions) {}
 
@@ -48,9 +52,7 @@ export class ZLinkSpotActorMembership {
     spotId: RoutingId,
     actor: ZLinkActor,
     request: Message,
-    commit: (
-      spot: ZLinkSpot
-    ) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
+    commit: (spot: ZLinkSpot) => Promise<void> | void,
     signal?: AbortSignal,
     leaveSource?: () => Promise<void>,
     contentType = 'application/json'
@@ -74,41 +76,34 @@ export class ZLinkSpotActorMembership {
     activation: ZLinkSpotActivation,
     actor: ZLinkActor,
     request: Message,
-    commit: (
-      spot: ZLinkSpot
-    ) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
+    commit: (spot: ZLinkSpot) => Promise<void> | void,
     signal: AbortSignal | undefined,
     leaveSource: (() => Promise<void>) | undefined,
     contentType: string
   ): Promise<ZLinkSpotActorJoinResult> {
     const dispatcher = this.createActorDispatcher(activation);
-    const transaction: {
-      rollbackExternal?: ZLinkActorJoinRollback;
-      rollbackMembership?: () => void;
-      committed: boolean;
-    } = { committed: false };
-    let response: ZLinkSpotActorJoinResult;
-    try {
-      response = await dispatcher.evaluateActorJoin(actor, request, contentType);
-      if (response.accepted) {
+    const response = await dispatcher.evaluateActorJoin(actor, request, contentType);
+    if (response.accepted) {
+      await commit(activation.spot);
+      activation.commitActorJoin(actor);
+      try {
+        await dispatcher.notifyJoinActor(actor);
+      } finally {
         if (leaveSource === undefined) {
-          await this.options.entrySpotCallbacks?.onLeaveActor(actor, signal);
+          void this.options.entrySpotCallbacks?.onLeaveActor(actor, signal).catch((error) => {
+            this.options.dispatchErrors?.report({
+              surface: ZLinkDispatchErrorSurface.SpotActor,
+              messageKind: ZLinkDispatchMessageKind.ActorSend,
+              reason: ZLinkRuntimeDispatchErrorReason.HandlerException,
+              action: ZLinkRuntimeDispatchErrorAction.Drop,
+              actorId: actor.context.actorId,
+              error
+            });
+          });
         } else {
           await leaveSource();
         }
-        await dispatcher.commitActorJoin(actor, async () => {
-          const rollback = await commit(activation.spot);
-          if (rollback !== undefined) transaction.rollbackExternal = rollback;
-          transaction.rollbackMembership = activation.commitActorJoin(actor);
-          transaction.committed = true;
-        });
       }
-    } catch (error) {
-      if (transaction.committed) {
-        transaction.rollbackMembership?.();
-        await transaction.rollbackExternal?.();
-      }
-      throw error;
     }
     return {
       accepted: response.accepted,

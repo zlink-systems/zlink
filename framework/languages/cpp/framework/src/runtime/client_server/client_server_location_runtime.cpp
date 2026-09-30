@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/client_server_location_runtime.hpp"
+#include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -37,7 +38,6 @@ namespace
 {
 
 constexpr std::string_view default_security_identity = "default";
-constexpr auto maximum_ready_wait = std::chrono::seconds (5);
 constexpr std::uint32_t default_effective_max_message_bytes =
   static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ());
 
@@ -695,9 +695,9 @@ void client_server_location_runtime_t::start_client (const channel_snapshot_t &c
     _channel_runtime.bind_client_server_transport (
       channel.name,
       [this, name = channel.name] (std::string packet_name, std::string content_type,
-                                   zlink::message_t message, std::chrono::milliseconds timeout) {
-          return send (name, std::move (packet_name), std::move (content_type), std::move (message),
-                       timeout);
+                                   zlink::message_t message, std::chrono::milliseconds) {
+          return send (name, std::move (packet_name), std::move (content_type),
+                       std::move (message));
       },
       [this, name = channel.name] (std::string packet_name, std::string content_type,
                                    zlink::message_t message, std::chrono::milliseconds timeout) {
@@ -1033,6 +1033,7 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
+        options.send_timeout = channel.snapshot.client.send_timeout;
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
         co_await raw->start_task ();
@@ -1161,7 +1162,7 @@ task_t<void> client_server_location_runtime_t::pump ()
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
     }
-    return complete_ready_waiters (now);
+    return complete_ready_waiters ();
 }
 
 task_t<client_server_location_runtime_t::worker_lane_snapshot_t>
@@ -1205,11 +1206,7 @@ client_server_location_runtime_t::refresh_client_pump_snapshot ()
                 const auto status = current_ready.find (connection.owner.get ());
                 if (status == current_ready.end ())
                     continue;
-                const bool ineligible =
-                  !status->second
-                  || connection.descriptor.state != framework_runtime_state_t::serving
-                  || connection.descriptor.weight <= 0;
-                const bool selectable = !ineligible;
+                const bool selectable = status->second;
                 if (selectable != connection.selector_ready) {
                     connection.selector_ready = selectable;
                     channel->selector_dirty = true;
@@ -1419,27 +1416,11 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
 task_t<void> client_server_location_runtime_t::send (const std::string &channel_name,
                                                      std::string packet_name,
                                                      std::string content_type,
-                                                     zlink::message_t message,
-                                                     std::chrono::milliseconds timeout)
+                                                     zlink::message_t message)
 {
-    const auto effective =
-      timeout > std::chrono::milliseconds::zero () ? timeout : std::chrono::seconds (1);
-    const auto wait = std::min (
-      effective, std::chrono::duration_cast<std::chrono::milliseconds> (maximum_ready_wait));
-    const auto deadline = std::chrono::steady_clock::now () + effective;
-    auto selected = co_await select_ready (channel_name, std::chrono::steady_clock::now () + wait);
-    const auto now = std::chrono::steady_clock::now ();
-    if (now >= deadline) {
-        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                               "ClientServer send timed out");
-    }
-    const auto remaining =
-      std::max (std::chrono::milliseconds (1),
-                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
-    const auto submitted = co_await selected->send (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      remaining);
+    auto selected = co_await select_ready (channel_name);
+    const auto submitted = co_await selected->send (protocol::application_payload_t{
+      std::move (packet_name), std::move (content_type), message.to_bytes ()});
     if (submitted == zlink::submit_result_t::backpressured) {
         throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
                                                "ClientServer send timed out");
@@ -1460,29 +1441,17 @@ client_server_location_runtime_t::request (const std::string &channel_name,
 {
     const auto effective =
       timeout > std::chrono::milliseconds::zero () ? timeout : std::chrono::seconds (30);
-    const auto wait = std::min (
-      effective, std::chrono::duration_cast<std::chrono::milliseconds> (maximum_ready_wait));
-    const auto deadline = std::chrono::steady_clock::now () + effective;
     std::shared_ptr<raw_client_server_client_t> selected;
     try {
-        selected = co_await select_ready (channel_name, std::chrono::steady_clock::now () + wait);
+        selected = co_await select_ready (channel_name);
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
-    const auto now = std::chrono::steady_clock::now ();
-    if (now >= deadline) {
-        co_return detail::result_access_t::failure<zlink::message_t> (
-          client_server_operation_exception (foundation::operation_terminal_t::timed_out,
-                                             "ClientServer request"));
-    }
-    const auto remaining =
-      std::max (std::chrono::milliseconds (1),
-                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
     const auto completion = co_await selected->request (
       protocol::application_payload_t{std::move (packet_name), std::move (content_type),
                                       message.to_bytes ()},
-      remaining);
+      effective);
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));
@@ -1498,17 +1467,23 @@ client_server_location_runtime_t::request (const std::string &channel_name,
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>>
-client_server_location_runtime_t::select_ready (std::string channel_name,
-                                                std::chrono::steady_clock::time_point deadline)
+client_server_location_runtime_t::select_ready (std::string channel_name)
 {
     using client_t = std::shared_ptr<raw_client_server_client_t>;
     using completion_t = detail::task_completion_source_t<client_t>;
     using selection_t = std::variant<result_t<client_t>, std::shared_ptr<completion_t>>;
     auto selected = co_await _lane.run_task (
-      [this, channel_name = std::move (channel_name), deadline] () mutable -> selection_t {
-          auto result = select_ready_locked (channel_name);
-          if (result || result.error_kind () != framework_error_kind_t::not_found
-              || std::chrono::steady_clock::now () >= deadline)
+      [this, channel_name = std::move (channel_name)] () mutable -> selection_t {
+          const auto channel = select_channel_locked (channel_name);
+          if (!channel)
+              return selection_t (
+                std::in_place_index<0>,
+                result_t<client_t>::failure (channel.error_kind (), channel.error ()->what ()));
+          const auto deadline =
+            std::chrono::steady_clock::now ()
+            + detail::channel_send_timeout (channel.value ()->snapshot.client.send_timeout);
+          auto result = select_ready_locked (channel_name, deadline);
+          if (result || result.error_kind () != framework_error_kind_t::not_found)
               return selection_t (std::in_place_index<0>, std::move (result));
           auto completion = std::make_shared<completion_t> ();
           auto waiter = std::make_unique<ready_waiter_t> ();
@@ -1545,18 +1520,23 @@ client_server_location_runtime_t::select_channel_locked (const std::string &chan
 }
 
 result_t<std::shared_ptr<raw_client_server_client_t>>
-client_server_location_runtime_t::select_ready_locked (const std::string &channel_name)
+client_server_location_runtime_t::select_ready_locked (
+  const std::string &channel_name, std::chrono::steady_clock::time_point deadline)
 {
     const auto found = select_channel_locked (channel_name);
     if (!found)
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
           found.error_kind (), found.error ()->what ());
+    if (std::chrono::steady_clock::now () >= deadline)
+        return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
+          framework_error_kind_t::deadline_exceeded, "ClientServer admission deadline expired");
     auto &channel = *found.value ();
     if (channel.selector_dirty) {
         channel.selector_candidates.clear ();
         channel.selector_candidates.reserve (channel.connections.size ());
         for (auto &[key, connection] : channel.connections) {
-            if (!connection.selector_ready)
+            if (!connection.selector_ready
+                || connection.descriptor.state != framework_runtime_state_t::serving)
                 continue;
             channel.selector_candidates.push_back (
               {key, static_cast<std::uint32_t> (connection.descriptor.weight),
@@ -1567,8 +1547,13 @@ client_server_location_runtime_t::select_ready_locked (const std::string &channe
     }
     const auto selected = channel.selector.select ();
     if (!selected) {
+        const bool has_ready_target =
+          std::any_of (channel.connections.begin (), channel.connections.end (),
+                       [] (const auto &entry) { return entry.second.selector_ready; });
+        const auto kind = has_ready_target ? framework_error_kind_t::unavailable
+                                           : framework_error_kind_t::not_found;
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_found, "ClientServer has no selectable target snapshot");
+          kind, "ClientServer has no selectable target snapshot");
     }
     const auto connection = channel.connections.find (*selected);
     if (connection == channel.connections.end ()) {
@@ -1581,20 +1566,18 @@ client_server_location_runtime_t::select_ready_locked (const std::string &channe
       connection->second.owner);
 }
 
-task_t<void>
-client_server_location_runtime_t::complete_ready_waiters (std::chrono::steady_clock::time_point now)
+task_t<void> client_server_location_runtime_t::complete_ready_waiters ()
 {
     using client_t = std::shared_ptr<raw_client_server_client_t>;
     using completion_t = detail::task_completion_source_t<client_t>;
     std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> completed;
-    completed = co_await _lane.run_task ([this, now] {
+    completed = co_await _lane.run_task ([this] {
         std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> result;
         auto write = _ready_waiters.begin ();
         for (auto read = _ready_waiters.begin (); read != _ready_waiters.end (); ++read) {
-            auto selected = select_ready_locked ((*read)->channel_name);
-            const bool terminal = selected
-                                  || selected.error_kind () != framework_error_kind_t::not_found
-                                  || now >= (*read)->deadline;
+            auto selected = select_ready_locked ((*read)->channel_name, (*read)->deadline);
+            const bool terminal =
+              selected || selected.error_kind () != framework_error_kind_t::not_found;
             if (!terminal) {
                 if (write != read)
                     *write = std::move (*read);
@@ -1620,7 +1603,7 @@ void client_server_location_runtime_t::stop () noexcept
     }
     _descriptor_publish_changed.notify_all ();
     _wake_timer->signal ();
-    complete_ready_waiters (std::chrono::steady_clock::now ()).result ().value ();
+    complete_ready_waiters ().result ().value ();
     if (_thread.joinable ())
         runtime::infrastructure_wait_guard::join (_thread, "client-server-location/worker");
     if (_application_supply) {

@@ -37,42 +37,13 @@ raw_dealer_port_t::raw_dealer_port_t (zlink::dealer_socket_t &socket,
 
 task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
 {
-    if (parts.empty ()) {
-        throw std::invalid_argument ("raw dealer send requires message parts");
-    }
-    auto messages = materialize_binding_parts (parts);
-    std::optional<zlink::async_result_t<void>> pending;
-    try {
-        {
-            std::lock_guard lock (*_socket_mutex);
-            if (!_socket) {
-                co_return false;
-            }
-            auto operation = std::move (_socket->send ()).message (messages[0]);
-            for (std::size_t index = 1; index < messages.size (); ++index) {
-                operation = std::move (operation).message (messages[index]);
-            }
-            auto submission = std::move (operation).async ();
-            if (submission.result == ZLINK_SUBMIT_OK)
-                co_return true;
-            if (submission.result != ZLINK_SUBMIT_BACKPRESSURED)
-                co_return false;
-            pending.emplace (std::move (submission.admitted));
-        }
-        co_await std::move (*pending);
-        co_return true;
-    }
-    catch (const zlink::submit_error_t &) {
-        co_return false;
-    }
+    co_return (co_await send_result (parts)) == zlink::submit_result_t::ok;
 }
 
-task_t<zlink::submit_result_t> raw_dealer_port_t::send (const raw_message_t &parts,
-                                                        std::chrono::milliseconds timeout)
+task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message_t &parts)
 {
-    if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument (
-          "raw dealer send requires message parts and a positive timeout");
+    if (parts.empty ()) {
+        throw std::invalid_argument ("raw dealer send requires message parts");
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<void>> pending;
@@ -86,18 +57,9 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send (const raw_message_t &par
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            const auto configured_timeout = _socket->options ().send_timeout ();
-            _socket->options ().send_timeout (timeout);
-            try {
-                auto submission = std::move (operation).async ();
-                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                    pending.emplace (std::move (submission.admitted));
-            }
-            catch (...) {
-                _socket->options ().send_timeout (configured_timeout);
-                throw;
-            }
-            _socket->options ().send_timeout (configured_timeout);
+            auto submission = std::move (operation).async ();
+            if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                pending.emplace (std::move (submission.admitted));
         }
         if (pending)
             co_await std::move (*pending);

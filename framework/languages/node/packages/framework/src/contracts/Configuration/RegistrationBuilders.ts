@@ -1591,6 +1591,7 @@ interface MutableClientCapabilityOptions {
 }
 
 interface MutablePublisherCapabilityOptions {
+  sendTimeoutMs?: number;
   bind?: string;
   bindHost?: string;
   advertiseHost?: string;

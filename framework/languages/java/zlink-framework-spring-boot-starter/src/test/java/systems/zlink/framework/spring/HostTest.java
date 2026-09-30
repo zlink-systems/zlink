@@ -58,6 +58,7 @@ final class HostTest {
                         "factory.channel",
                         "create.context",
                         "factory.monitoring",
+                        "create.dealer.sendTimeout.PT1S",
                         "create.dealer",
                         "dealer.setChannelName.profile",
                         "monitoring.open.dealer",

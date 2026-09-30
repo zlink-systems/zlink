@@ -564,16 +564,12 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
     for (const auto &peer : peers) {
         const auto peer_rid = zlink::routing_id_t::from (peer.descriptor.node_routing_id);
         const auto location = location_by_rid.find (peer_rid.to_hex ());
-        if (location_is_healthy
-            && (location == location_by_rid.end ()
-                || location->second->state != framework_runtime_state_t::serving
+        if (location_is_healthy && location != location_by_rid.end ()
+            && (location->second->state != framework_runtime_state_t::serving
                 || location->second->lifecycle_generation
                      != peer.descriptor.lifecycle_generation)) {
             classified_peer_ids.insert (peer_rid.to_hex ());
-            if (location == location_by_rid.end ())
-                continue;
-            const bool draining = location != location_by_rid.end ()
-                                  && location->second->state == framework_runtime_state_t::draining;
+            const bool draining = location->second->state == framework_runtime_state_t::draining;
             peer_snapshots.push_back (mesh_peer_snapshot_t{
               .node_rid = peer_rid,
               .state = draining ? peer_state_t::draining : peer_state_t::not_connected,
@@ -604,13 +600,8 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                                   : std::nullopt});
     }
     for (const auto &peer : not_required_peers) {
-        std::vector<std::string> channel_names;
-        for (const auto &channel : peer.channels)
-            channel_names.push_back (channel.name);
         const auto rid = zlink::routing_id_t::from (peer.node_routing_id);
         if (!classified_peer_ids.insert (rid.to_hex ()).second)
-            continue;
-        if (location_is_healthy && location_by_rid.find (rid.to_hex ()) == location_by_rid.end ())
             continue;
         peer_snapshots.push_back (mesh_peer_snapshot_t{.node_rid = rid,
                                                        .state = peer_state_t::not_required,

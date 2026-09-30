@@ -387,6 +387,12 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         CompleteRelease(released);
     }
 
+    internal async ValueTask ReleaseForHandlerStartAsync(ZLinkApplicationJobQueueLease lease)
+    {
+        var released = await _lane.RunAsync(() => ReleaseOnLane(lease)).ConfigureAwait(false);
+        CompleteRelease(released);
+    }
+
     internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
     {
         var released = AwaitStateLane(
@@ -995,7 +1001,7 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
 
     internal bool IsReleased => Volatile.Read(ref _state) == (int)LeaseState.Released;
 
-    internal void ReleaseForHandlerStart() => _owner.Release(this);
+    internal ValueTask ReleaseForHandlerStartAsync() => _owner.ReleaseForHandlerStartAsync(this);
 
     internal bool TryMarkQueued() =>
         Interlocked.CompareExchange(ref _state, (int)LeaseState.Queued, (int)LeaseState.Reserved)
@@ -1062,11 +1068,13 @@ internal static class ZLinkApplicationJobQueueInvocation
         return scope;
     }
 
-    internal static void ReleaseForHandlerStart()
+    internal static ValueTask ReleaseForHandlerStartAsync()
     {
         var scope = Current.Value;
-        if (scope is not null)
-            Interlocked.Exchange(ref scope.Lease, null)?.ReleaseForHandlerStart();
+        return scope is null
+            ? ValueTask.CompletedTask
+            : Interlocked.Exchange(ref scope.Lease, null)?.ReleaseForHandlerStartAsync()
+                ?? ValueTask.CompletedTask;
     }
 
     // A mesh mailbox claim may cross exactly one owner-queue admission

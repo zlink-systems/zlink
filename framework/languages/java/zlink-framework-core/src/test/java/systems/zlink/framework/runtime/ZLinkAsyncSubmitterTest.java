@@ -239,7 +239,8 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             return new NoReplyDealer();
         }
 
@@ -249,7 +250,8 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             throw new UnsupportedOperationException();
         }
 
@@ -264,21 +266,24 @@ final class ZLinkChannelSubmissionContractTest {
         private int submissions;
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             return new RecordingPublisher(this);
         }
     }
 
     private static final class CloseFailureBackend extends NoReplyBackend {
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             return new CloseFailureDealer();
         }
     }
 
     private static final class BackpressuredBackend extends NoReplyBackend {
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             return new NoReplyDealer() {
                 //  Since 8bae89dc0f the BINDING owns one-way admission and its
                 //  deadline (ZLinkOneWayCalls: "the binding owns retries");
@@ -308,7 +313,8 @@ final class ZLinkChannelSubmissionContractTest {
         private Duration timeout;
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(
+                ZLinkBackendContext context, Duration sendTimeout) {
             return new NoReplyDealer() {
                 @Override
                 public CompletionStage<ZLinkBackendReceived> request(

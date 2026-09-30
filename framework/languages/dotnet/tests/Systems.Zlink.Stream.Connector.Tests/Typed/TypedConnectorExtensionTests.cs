@@ -103,6 +103,31 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
+    public void TypedSubmitInvokesSuccessCallbackOnceWhenItThrows()
+    {
+        var connector = new RecordingConnector
+        {
+            NextCallbackPayloadResult = ZlinkStreamResult<ZlinkStreamEncodedPayload>.Success(
+                new JsonPayload("callback").ToJson()
+            ),
+        };
+        var callbackInvocations = 0;
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            connector
+                .Request(new JsonPayload("request"))
+                .Submit<JsonPayload>(_ =>
+                {
+                    callbackInvocations++;
+                    throw new InvalidOperationException("callback failed");
+                })
+        );
+
+        Assert.Equal("callback failed", exception.Message);
+        Assert.Equal(1, callbackInvocations);
+    }
+
+    [Fact]
     public async Task MessagePackConnectorExtensionsDelegateBuilderAndDecodeReply()
     {
         var connector = new RecordingConnector(ZLinkMessagePackCodec.Default);
