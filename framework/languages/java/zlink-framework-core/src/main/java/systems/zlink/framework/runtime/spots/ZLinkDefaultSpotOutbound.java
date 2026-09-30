@@ -8,7 +8,6 @@ import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -167,13 +166,18 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
     }
 
-    private CompletionStage<SpotTransportAddress> resolve(String spotId) {
+    private SpotTransportAddressResolver resolver() {
         SpotTransportAddressResolver resolver;
         try {
             resolver = spotAddressResolver == null ? null : spotAddressResolver.get();
         } catch (RuntimeException ignored) {
             resolver = null;
         }
+        return resolver;
+    }
+
+    private CompletionStage<SpotTransportAddress> resolve(
+            String spotId, SpotTransportAddressResolver resolver) {
         if (resolver == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException("SpotHandle resolver is not configured"));
@@ -190,18 +194,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                                 .NOT_FOUND,
                                                                         "SpotHandle route is stale"
                                                                                 + " or unavailable"))));
-    }
-
-    private void invalidate(String spotId) {
-        SpotTransportAddressResolver resolver;
-        try {
-            resolver = spotAddressResolver == null ? null : spotAddressResolver.get();
-        } catch (RuntimeException ignored) {
-            resolver = null;
-        }
-        if (resolver != null) {
-            resolver.invalidate(spotId);
-        }
     }
 
     private final class DeferredSpotSendCall implements ZLinkSpotSendCall {
@@ -360,12 +352,14 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             if (duplicate != null) {
                 return duplicate;
             }
+            SpotTransportAddressResolver resolver = resolver();
             CompletionStage<Void> stage =
-                    resolve(target)
+                    resolve(target, resolver)
                             .handle(
                                     (address, failure) -> {
                                         if (failure == null) {
-                                            return sendExistingOrActivate(address);
+                                            return resolver.observeTerminal(
+                                                    target, sendExisting(address));
                                         }
                                         if (!instanceIntent || instanceSpots == null) {
                                             return CompletableFuture.<Void>failedFuture(
@@ -422,44 +416,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private Message copyPayload() {
             return Message.from(payload.dataBuffer());
-        }
-
-        private CompletionStage<Void> sendExistingOrActivate(SpotTransportAddress address) {
-            return sendExisting(address)
-                    .handle(
-                            (ignored, failure) -> {
-                                if (failure == null) {
-                                    return CompletableFuture.<Void>completedFuture(null);
-                                }
-                                RuntimeException error = unwrap(failure);
-                                if (isStaleRoute(error)) {
-                                    invalidate(target);
-                                }
-                                return shouldReactivate(address)
-                                        .thenCompose(
-                                                reactivate -> {
-                                                    if (reactivate) {
-                                                        return instanceSpots.send(
-                                                                target,
-                                                                stableType,
-                                                                selectedMesh,
-                                                                payload,
-                                                                packetName,
-                                                                contentType,
-                                                                metadata.values());
-                                                    }
-                                                    return CompletableFuture.<Void>failedFuture(
-                                                            error);
-                                                });
-                            })
-                    .thenCompose(Function.identity());
-        }
-
-        private CompletionStage<Boolean> shouldReactivate(SpotTransportAddress address) {
-            if (!instanceIntent || instanceSpots == null) {
-                return CompletableFuture.completedFuture(false);
-            }
-            return instanceSpots.isStaleRoute(target, address).exceptionally(ignored -> false);
         }
     }
 
@@ -665,15 +621,17 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             ? ZLinkRequestMetrics.instanceSpot(metricMeshName)
                             : ZLinkRequestMetrics.spot(meshName);
             ZLinkRequestMetrics.start(metric);
+            SpotTransportAddressResolver resolver = resolver();
             CompletionStage<TReply> stage;
             try {
                 stage =
-                        resolve(target)
+                        resolve(target, resolver)
                                 .handle(
                                         (address, failure) -> {
                                             if (failure == null) {
-                                                return requestExistingOrActivate(
-                                                        address, replyType);
+                                                return resolver.observeTerminal(
+                                                        target,
+                                                        requestExisting(address, replyType));
                                             }
                                             if (!instanceIntent || instanceSpots == null) {
                                                 return CompletableFuture.<TReply>failedFuture(
@@ -704,37 +662,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                     started, System.nanoTime()),
                                     failure));
             return ZLinkSerialExecutionQueue.manageCurrent(result);
-        }
-
-        private <TReply> CompletionStage<TReply> requestExistingOrActivate(
-                SpotTransportAddress address, Class<TReply> replyType) {
-            return requestExisting(address, replyType)
-                    .exceptionallyCompose(
-                            failure -> {
-                                RuntimeException error = unwrap(failure);
-                                if (isStaleRoute(error)) {
-                                    invalidate(target);
-                                }
-                                return shouldReactivate(address, error)
-                                        .thenCompose(
-                                                reactivate ->
-                                                        reactivate
-                                                                ? activateRequest(replyType)
-                                                                : CompletableFuture
-                                                                        .<TReply>failedFuture(
-                                                                                error));
-                            });
-        }
-
-        private CompletionStage<Boolean> shouldReactivate(
-                SpotTransportAddress address, RuntimeException failure) {
-            if (!instanceIntent || instanceSpots == null) {
-                return CompletableFuture.completedFuture(false);
-            }
-            if (isStaleRoute(failure)) {
-                return CompletableFuture.completedFuture(true);
-            }
-            return instanceSpots.isStaleRoute(target, address).exceptionally(ignored -> false);
         }
 
         private <TReply> CompletionStage<TReply> activateRequest(Class<TReply> replyType) {
@@ -816,15 +743,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         return current instanceof RuntimeException runtime
                 ? runtime
                 : new RuntimeException(current);
-    }
-
-    private static boolean isStaleRoute(Throwable failure) {
-        //  A stale route is signalled only by a framework-generated NotFound
-        //  (zlink.origin=framework). An application handler's preserved
-        //  NotFound kind must not re-trigger route refresh or activation.
-        return failure instanceof ZLinkFrameworkException error
-                && error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
-                && ZLinkFrameworkErrorOrigin.isFramework(error);
     }
 
     private static String requireStableType(String value) {

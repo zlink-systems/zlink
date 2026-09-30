@@ -6,17 +6,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /** Internal bridge from the public fluent call to Instance Spot activation. */
 public interface ZLinkInstanceSpotCallRuntime {
     default String metricMeshName(String requestedMesh, String callerMesh) {
         return callerMesh;
-    }
-
-    default CompletionStage<Boolean> isStaleRoute(String spotId, SpotTransportAddress address) {
-        return CompletableFuture.completedFuture(false);
     }
 
     CompletionStage<Void> send(
