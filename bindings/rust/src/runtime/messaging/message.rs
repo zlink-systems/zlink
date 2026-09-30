@@ -106,6 +106,11 @@ pub(crate) fn message_drop(message: &mut Message) {
 }
 
 impl Message {
+    pub(crate) fn into_raw(self) -> ffi::zlink_msg_t {
+        let message = std::mem::ManuallyDrop::new(self);
+        unsafe { std::ptr::read(&message.inner.raw) }
+    }
+
     pub(crate) fn raw_mut(&mut self) -> &mut ffi::zlink_msg_t {
         raw_mut(self)
     }

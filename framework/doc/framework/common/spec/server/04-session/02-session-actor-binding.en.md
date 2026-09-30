@@ -222,9 +222,10 @@ conflicting with the judging-authority principle of §8.1.
 
 Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
-session sequence. The payload is
-added directly to the target Actor's application queue, regardless of local
-or remote. The current Spot is used for authority verification but isn't
+session sequence. Outside a relocation seal, the payload is
+added directly to the target Actor's application queue, whether local
+or remote. During a relocation seal, the Session owner holds it under §8.1
+and submits it after route application or abort. The current Spot is used for authority verification but isn't
 the callback execution context. The Actor handler doesn't run on the
 session callback thread, and different Actors aren't serialized into a
 session's execution context. Execution order between Actors is determined by
@@ -552,8 +553,8 @@ Even when an Actor moves to another MeshNode, the physical STREAM
 connection and Session scope remain in the Session owner process. The
 socket, transport handle, and Session callback state aren't moved or
 copied to the target Actor process. The Session's responsibility is to
-keep the binding closed during the move, change its route once according
-to the relocation result, and reopen it. The Session doesn't choose the
+install a seal on the binding during the move, change its Actor route once according
+to the relocation result, and release the seal. The Session doesn't choose the
 relocation target, judge Actor or Spot readiness, or read or change the
 Location Store.
 
@@ -567,8 +568,9 @@ the Session owner handles within that flow.
 - **A relocation seal and retired-binding rejection are different
   transitions.** §6's retired-binding rejection blocks ingress of a
   previous generation after replacing the current binding with a new
-  session. A relocation seal holds Session messages while moving the same
-  binding's Actor route. The two rules apply together and don't substitute
+  session. A relocation seal holds messages from the Session to the Actor while moving the same
+  binding's Actor route. A push from the Actor to the Session isn't held; it passes only
+  the binding check of [§5](#5-bind-and-relay) and is submitted immediately. The two rules apply together and don't substitute
   for each other.
 
 ### 8.1 Seal, Held Messages, and Route Switchover
@@ -597,9 +599,16 @@ using the expected source owner and generation.
 
 Session route change doesn't use a numeric high-water,
 per-message ACK journal, or relocation-specific capacity condition. A
-message arriving during the seal is held by the aggregate, but the per-
-message size, transport, deadline, and cancellation limits still apply
-unchanged.
+message from the Session to the Actor arriving during the seal is held by the aggregate; the per-
+message size and transport limits still apply unchanged.
+
+For a one-way relay accepted at the admission boundary of
+[Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary), the caller doesn't wait
+for the seal to be released; having completed by acceptance, it isn't subject to later deadlines or cancellation.
+A relay request keeps its existing correlation, deadline, and cancellation. If a held one-way relay can't be submitted after route
+application or abort, or is cleaned up by the seal timeout, the caller's already completed result doesn't change;
+the failure is recorded once in that message's flow
+([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)).
 
 The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 
@@ -961,6 +970,9 @@ here.
   messages aren't delivered.
 - A command 44 arriving after the timeout, or a duplicate one, doesn't
   change the route again and only leaves a Warning.
+- While a binding is sealed for Actor relocation, an Actor-to-Session push that passes the
+  current binding check is submitted to the STREAM session without waiting for route update
+  or seal release.
 - If the target explicitly fails before relay-ready, the held messages are
   processed via the source route and the connection is kept.
 - After relay-ready, source route resumption follows the source `Preserve` fence in common relocation §4.4. Seal timeout during settlement follows its existing rule.

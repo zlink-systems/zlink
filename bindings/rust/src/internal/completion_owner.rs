@@ -435,21 +435,21 @@ impl CompletionOwner {
     /// Registers the SEND entry behind `context` before the native submit, so
     /// a WRITABLE record pulled before the submit returns finds it and joins
     /// inside the entry. Without a public owner nobody can drain a wait token,
-    /// so no entry is registered and a wait token is refused later.
+    /// so submission is rejected before calling Core.
     pub(crate) fn register_send(
         self: &Arc<Self>,
         context: *mut c_void,
-    ) -> Result<Option<Arc<CompletionEntry>>, SubmitError> {
+    ) -> Result<Arc<CompletionEntry>, SubmitError> {
         let mut state = self.state.lock().expect("completion owner");
         if self.closed.load(Ordering::Acquire) {
             return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
         }
         if state.public_owner.is_none() {
-            return Ok(None);
+            return Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY));
         }
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         state.entries.insert(context as usize, Arc::clone(&entry));
-        Ok(Some(entry))
+        Ok(entry)
     }
 
     /// Publishes the wait token Core just issued for a registered SEND entry.
@@ -519,6 +519,7 @@ impl CompletionOwner {
             );
             processed += 1;
         }
+        drop(_completion);
         for waker in wakers {
             waker.wake();
         }

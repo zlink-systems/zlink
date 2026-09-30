@@ -70,6 +70,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
             .connect("inproc://rust-send-complete-inline")
             .unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let mut future = send_stage(
         dealer
@@ -96,7 +97,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 }
 
 #[test]
-fn ownerless_backpressured_send_fails_fast() {
+fn ownerless_send_rejects_before_core_submission() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
     let receiver = ctx.pair_socket().unwrap();
@@ -119,19 +120,12 @@ fn ownerless_backpressured_send_fails_fast() {
     let mut received = Received::empty();
     assert!(receiver.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let error = (0..64)
-        .find_map(
-            |_| match sender.send().message(large_filler(b'o')).submit() {
-                Ok(submission) => {
-                    assert_eq!(submission.result, SubmitResult::Ok);
-                    test_support::block_on(submission.admitted).unwrap();
-                    None
-                }
-                Err(error) => Some(error),
-            },
-        )
-        .expect("test target did not reach ownerless backpressure");
+    let error = match sender.send().message(large_filler(b'o')).submit() {
+        Ok(_) => panic!("ownerless SEND reached Core"),
+        Err(error) => error,
+    };
     assert_eq!(error.code(), SubmitResult::InvalidState);
+    assert!(!receiver.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
 }
 
 #[test]
