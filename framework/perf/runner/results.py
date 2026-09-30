@@ -241,6 +241,9 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                 for key, item in value[group].items():
                     if item is None and not value["nullReasons"].get(f"/{group}/{key}", {}).get("reason"):
                         raise ValueError("SchemaMismatch: null has no reason")
+            for pointer, reason in value["nullReasons"].items():
+                if not isinstance(reason, dict) or "lowerBoundMs" not in reason:
+                    raise ValueError(f"SchemaMismatch: {name} null reason {pointer} has no lowerBoundMs")
             originals[name] = value
         except (OSError, KeyError, ValueError, TypeError) as error:
             issues.append({"code": "SchemaMismatch" if str(error).startswith("SchemaMismatch:") else "CollectionFailure",
@@ -330,9 +333,6 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
         status = "invalid"
         issues.append({"code": "ZeroDenominator" if ps else "NoCompletedEcho",
                        "message": "No window publish success." if ps else "No window echo success.", "sourceFile": ",".join(owners)})
-    # Inputs from language roles can predate lowerBoundMs; every runner result uses the §15.5 reason shape.
-    reasons = {key: null_reason(value["code"], value["reason"], value.get("owner"), value.get("lowerBoundMs"))
-               for key, value in reasons.items()}
     result = {
         "schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash", "scenario")},
         "language": config["language"], "configFile": "config.json", "endpointsFile": "endpoints.json",

@@ -303,31 +303,40 @@ class HarnessTests(unittest.TestCase):
                     "metrics": metrics, "histograms": {"latencyMs": histogram({0: successes}) if successes else histogram({}),
                                                        "settleLatencyMs": histogram({})},
                     "nullReasons": {}, "provenance": {"pid": instance + 100}, "clock": {}}
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            client_zero = original("client", 0, 10, 1, 10, 0)
-            client_zero["metrics"]["sourceProbe"] = None
-            client_zero["nullReasons"] = {"/metrics/sourceProbe": {"code": "PUBLIC_OBSERVATION_UNSUPPORTED",
-                                                                       "reason": "Source metric reason lacks the optional lower bound.",
-                                                                       "owner": "test/source"}}
-            write_json(root / "client-0.json", client_zero)
-            write_json(root / "client-1.json", original("client", 1, 90, 9, 90, 0))
-            write_json(root / "server-session-0.json", original("session", 2, 0, 10, 0, 100))
-            result = aggregate(root, config, ["client-0.json", "client-1.json"], ["server-session-0.json"], [], ["client-0.json", "client-1.json"])
-            self.assertEqual(result["status"], "valid")
-            self.assertEqual(result["metrics"]["messages.completed"], "100")
-            self.assertEqual(result["metrics"]["throughput.kops"], .02)
-            self.assertEqual(result["metrics"]["throughput.messagesPerSec"], 30)
-            self.assertEqual(result["metrics"]["applicationMessages.request"], "100")
-            self.assertEqual(result["metrics"]["applicationMessages.reply"], "100")
-            self.assertEqual(result["histograms"]["latencyMs"]["count"], "100")
-            self.assertIsNone(result["measuredSeconds"])
-            self.assertEqual(result["nullReasons"]["/measuredSeconds"]["code"], "MULTIPLE_OWNERS")
-            self.assertEqual(result["nullReasons"]["/metrics/sourceProbe"]["owner"], "test/source")
-            self.assertIsNone(result["nullReasons"]["/metrics/sourceProbe"]["lowerBoundMs"])
-            for output in (root / "result.json", root / "summary.json"):
-                saved = json.loads(output.read_text())
-                self.assertTrue(all("lowerBoundMs" in reason for reason in saved["nullReasons"].values()))
+        for has_lower_bound in (True, False):
+            with self.subTest(has_lower_bound=has_lower_bound), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                client_zero = original("client", 0, 10, 1, 10, 0)
+                client_zero["metrics"]["sourceProbe"] = None
+                source_reason = {"code": "PUBLIC_OBSERVATION_UNSUPPORTED",
+                                 "reason": "Source metric observation is unsupported.",
+                                 "owner": "test/source"}
+                if has_lower_bound:
+                    source_reason["lowerBoundMs"] = None
+                client_zero["nullReasons"] = {"/metrics/sourceProbe": source_reason}
+                write_json(root / "client-0.json", client_zero)
+                write_json(root / "client-1.json", original("client", 1, 90, 9, 90, 0))
+                write_json(root / "server-session-0.json", original("session", 2, 0, 10, 0, 100))
+                result = aggregate(root, config, ["client-0.json", "client-1.json"], ["server-session-0.json"], [], ["client-0.json", "client-1.json"])
+                self.assertEqual(result["status"], "valid" if has_lower_bound else "invalid")
+                if has_lower_bound:
+                    self.assertEqual(result["metrics"]["messages.completed"], "100")
+                    self.assertEqual(result["metrics"]["throughput.kops"], .02)
+                    self.assertEqual(result["metrics"]["throughput.messagesPerSec"], 30)
+                    self.assertEqual(result["metrics"]["applicationMessages.request"], "100")
+                    self.assertEqual(result["metrics"]["applicationMessages.reply"], "100")
+                    self.assertEqual(result["histograms"]["latencyMs"]["count"], "100")
+                    self.assertIsNone(result["measuredSeconds"])
+                    self.assertEqual(result["nullReasons"]["/measuredSeconds"]["code"], "MULTIPLE_OWNERS")
+                    self.assertEqual(result["nullReasons"]["/metrics/sourceProbe"]["owner"], "test/source")
+                    self.assertIsNone(result["nullReasons"]["/metrics/sourceProbe"]["lowerBoundMs"])
+                else:
+                    mismatch = next(issue for issue in result["reasons"] if issue["code"] == "SchemaMismatch")
+                    self.assertEqual(mismatch["sourceFile"], "client-0.json")
+                    self.assertIn("lowerBoundMs", mismatch["message"])
+                for output in (root / "result.json", root / "summary.json"):
+                    saved = json.loads(output.read_text())
+                    self.assertTrue(all("lowerBoundMs" in reason for reason in saved["nullReasons"].values()))
 
 
 if __name__ == "__main__":

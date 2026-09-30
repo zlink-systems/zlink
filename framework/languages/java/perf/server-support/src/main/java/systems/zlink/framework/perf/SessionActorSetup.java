@@ -4,7 +4,6 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 
@@ -24,7 +23,6 @@ public final class SessionActorSetup {
     private final Measurement measurement;
     private final ObjectsReadiness readiness;
     private final ZLinkActorManager actors;
-    private final ZLinkRouteMeshRuntime mesh;
     private long created;
     private long existing;
     private long bound;
@@ -33,29 +31,12 @@ public final class SessionActorSetup {
     private long createMaxNs;
     private long bindNs;
     private long bindMaxNs;
-    // Public status shows when the Actor node is a ready peer; every session shares this one wait, and the create itself
-    // is never retried.
-    private CompletableFuture<Void> peer;
-
     public SessionActorSetup(RoleConfig config, Measurement measurement, ObjectsReadiness readiness,
-            ZLinkActorManager actors, ZLinkRouteMeshRuntime mesh) {
+            ZLinkActorManager actors) {
         this.config = config;
         this.measurement = measurement;
         this.readiness = readiness;
         this.actors = actors;
-        this.mesh = mesh;
-    }
-
-    private CompletableFuture<Void> waitForPeer() {
-        synchronized (gate) {
-            if (peer == null) {
-                peer = "ObjectClient".equals(config.objectRole())
-                        ? Polling.until(() -> mesh.snapshot(config.meshName()).readyPeerCount() > 0, 10,
-                                config.workload().setupTimeoutMs())
-                        : CompletableFuture.completedFuture(null);
-            }
-            return peer;
-        }
     }
 
     public CompletionStage<ZLinkSessionActor> prepare(ZLinkSessionContext session, ZLinkMessage probe) {
@@ -69,11 +50,9 @@ public final class SessionActorSetup {
             }
             Duration setupTimeout = Duration.ofMillis(config.workload().setupTimeoutMs());
             long[] marks = new long[3];
-            return waitForPeer().thenCompose(ignored -> {
-                marks[0] = PerfClock.now();
-                return actors.getOrCreate(config.actorIds().get(request.clientId()), PerfActorType.NAME)
-                        .inMesh(config.meshName()).timeout(setupTimeout).submit();
-            }).thenCompose(result -> {
+            marks[0] = PerfClock.now();
+            return actors.getOrCreate(config.actorIds().get(request.clientId()), PerfActorType.NAME)
+                    .inMesh(config.meshName()).timeout(setupTimeout).submit().thenCompose(result -> {
                 ActorRef actor;
                 boolean wasCreated;
                 if (result instanceof ZLinkActorCreateResult.Created value) {

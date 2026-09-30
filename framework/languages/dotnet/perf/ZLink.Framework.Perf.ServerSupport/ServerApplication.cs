@@ -168,6 +168,8 @@ public static class ServerApplication
             var channel = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!);
             infrastructure &= channel.IsReady && channel.ReadyTargetCount > 0;
         }
+        if (config.objectRole == "ObjectClient" && config.meshName is not null)
+            infrastructure &= services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName).ReadyPeerCount > 0;
         var probe = measurement.SetupEvidence.Length > 0;
         // A role without this cell's public create/bind result registers ObjectsReadiness; baselines have none.
         var objects = services.GetService<ObjectsReadiness>();

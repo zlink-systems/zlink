@@ -341,6 +341,9 @@ public final class ServerApplication {
             ZLinkClientServerStatus channel = runtime.clientServerRuntime().snapshot(config.channelName());
             infrastructure &= channel.isReady() && channel.readyTargetCount() > 0;
         }
+        if ("ObjectClient".equals(config.objectRole()) && config.meshName() != null) {
+            infrastructure &= runtime.routeMeshRuntime().snapshot(config.meshName()).readyPeerCount() > 0;
+        }
         boolean probe = !measurement.setupEvidence().isEmpty();
         // A role without this cell's public create/bind result registers ObjectsReadiness; baselines have none.
         ObjectsReadiness objects = running.getBeanProvider(ObjectsReadiness.class).getIfAvailable();

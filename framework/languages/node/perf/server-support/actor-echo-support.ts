@@ -1,6 +1,6 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import {
-  ZLINK_ACTOR_MANAGER, ZLINK_ROUTE_CLIENT, ZLINK_ROUTE_MESH_RUNTIME, zlinkEntrySpotActorRequestHandler, zlinkEntrySpotActorSendHandler
+  ZLINK_ACTOR_MANAGER, ZLINK_ROUTE_CLIENT, zlinkEntrySpotActorRequestHandler, zlinkEntrySpotActorSendHandler
 } from '@zlink-systems/nestjs';
 import type {
   ZLinkActor, ZLinkActorContext, ZLinkActorFactory, ZLinkActorManager, ZLinkEntrySpot, ZLinkEntrySpotContext, ZLinkMessage, ZLinkMessageContext,
@@ -113,28 +113,13 @@ export class SessionActorSetup {
   private createMaxNs = 0n;
   private bindNs = 0n;
   private bindMaxNs = 0n;
-  // Public status shows when the Actor node is a ready peer; every session shares this one wait, and the create
-  // itself is never retried.
-  private peer: Promise<void> | undefined;
 
   constructor(
     @Inject(ROLE_CONFIG) private readonly config: RoleConfig,
     @Inject(Measurement) private readonly measurement: Measurement,
     @Inject(ObjectsReadiness) private readonly readiness: ObjectsReadiness,
-    @Inject(ZLINK_ACTOR_MANAGER) private readonly actors: ZLinkActorManager,
-    @Inject(ZLINK_ROUTE_MESH_RUNTIME) private readonly mesh: ZLinkRouteMeshRuntime
+    @Inject(ZLINK_ACTOR_MANAGER) private readonly actors: ZLinkActorManager
   ) {}
-
-  private waitForPeer(): Promise<void> {
-    this.peer ??= (async () => {
-      const deadline = Date.now() + this.config.workload.setupTimeoutMs;
-      while (this.config.objectRole === 'ObjectClient' && this.mesh.snapshot(this.config.meshName!).readyPeerCount === 0) {
-        if (Date.now() >= deadline) throw new Error('No ready Actor peer inside setupTimeoutMs.');
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    })();
-    return this.peer;
-  }
 
   async prepare(session: ZLinkSessionContext, probe: ZLinkMessage): Promise<ZLinkSessionActor> {
     if (this.measurement.phase !== 'setup') throw new Error('Actors are created and bound during setup only.');
@@ -142,7 +127,6 @@ export class SessionActorSetup {
       const request = probe.decode(PerfEchoRequest);
       if (!(request.clientId >= 0 && request.clientId < this.config.actorIds.length)) throw new PerfValidationException('IdentityMismatch', 'clientId has no Actor ID in this cell.');
       const signal = AbortSignal.timeout(this.config.workload.setupTimeoutMs);
-      await this.waitForPeer();
       const createStarted = PerfClock.now();
       const result = await this.actors.getOrCreate(this.config.actorIds[request.clientId], PERF_ACTOR_TYPE)
         .inMesh(this.config.meshName!).timeout(this.config.workload.setupTimeoutMs).submit(signal);

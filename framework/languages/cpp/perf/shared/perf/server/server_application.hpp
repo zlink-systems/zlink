@@ -167,6 +167,11 @@ class role_t
             const auto snapshot = client_server.load ()->snapshot (*config.channel_name);
             infrastructure = snapshot.ready_server_count > 0;
         }
+        if (config.object_role == "ObjectClient" && config.mesh_name) {
+            const auto *mesh_runtime = mesh.load ();
+            infrastructure = infrastructure && mesh_runtime
+                             && mesh_runtime->snapshot (*config.mesh_name).ready_peer_count > 0;
+        }
         const bool probe = measurement.has_setup_evidence ();
         const bool objects_ready = objects ? objects->ready () : true;
         json evidence = json::array ({{{"kind", "publicStatus"}, {"source", "public Framework runtime status"}, {"observedValue", public_status ()}}});

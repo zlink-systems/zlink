@@ -112,20 +112,11 @@ public sealed class ActorPlacementWatcher(RoleConfig config, Measurement measure
 // which selects the Actor ID of that connector; the Actor is created through the public manager and bound to the
 // session before the probe itself is relayed. Setup latencies are kept apart from the measured operations.
 public sealed class SessionActorSetup(RoleConfig config, Measurement measurement, ObjectsReadiness readiness,
-    IZLinkActorManager actors, IZLinkRouteMeshRuntime mesh)
+    IZLinkActorManager actors)
 {
     private readonly object gate = new();
     private long created, existing, bound, failed;
     private long createNs, createMaxNs, bindNs, bindMaxNs;
-    // Public status shows when the Actor node is a ready peer; every session shares this one wait, and the create
-    // itself is never retried.
-    private readonly Lazy<Task> peer = new(() => WaitForPeerAsync(config, mesh));
-    private static async Task WaitForPeerAsync(RoleConfig config, IZLinkRouteMeshRuntime mesh)
-    {
-        using var timeout = new CancellationTokenSource(config.workload.setupTimeoutMs);
-        while (config.objectRole == "ObjectClient" && mesh.GetStatus(config.meshName!).ReadyPeerCount == 0)
-            await Task.Delay(10, timeout.Token);
-    }
 
     public async ValueTask<IZLinkSessionActor> PrepareAsync(IZLinkSessionContext session, ZLinkMessage probe, CancellationToken cancellationToken)
     {
@@ -137,7 +128,6 @@ public sealed class SessionActorSetup(RoleConfig config, Measurement measurement
                 throw new PerfValidationException("IdentityMismatch", "clientId has no Actor ID in this cell.");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(config.workload.setupTimeoutMs);
-            await peer.Value.WaitAsync(timeout.Token);
             var createStarted = PerfClock.Now;
             var result = await actors.GetOrCreate(config.actorIds[request.clientId], PerfActorType.Name)
                 .InMesh(config.meshName!).Timeout(TimeSpan.FromMilliseconds(config.workload.setupTimeoutMs)).Async(timeout.Token);

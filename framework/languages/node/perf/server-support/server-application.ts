@@ -206,6 +206,8 @@ class AdminServer {
       const channel = runtimes.clientServer.snapshot(config.channelName!);
       infrastructure &&= channel.isReady && channel.readyTargetCount > 0;
     }
+    if (runtimes && config.objectRole === 'ObjectClient' && config.meshName != null)
+      infrastructure &&= runtimes.mesh.snapshot(config.meshName).readyPeerCount > 0;
     const probe = measurement.setupEvidence.length > 0;
     const objects = this.options.objects;
     const objectsReady = objects?.ready ?? true;
