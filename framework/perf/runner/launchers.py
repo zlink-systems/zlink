@@ -217,6 +217,11 @@ def _java_install(perf_dir: Path, role: str) -> Path:
     return perf_dir / module / "build/install" / module
 
 
+def _gradle_install_dist(perf_dir: Path, project: str) -> list[str]:
+    return ["flock", "--exclusive", "--close", JAVA_LOCK, str(perf_dir.parent / "gradlew"), "--project-dir", str(perf_dir),
+            project + ":installDist", "-q"]
+
+
 def _java_provenance(perf_dir: Path, roles: list[str]) -> dict:
     """Packages are what Gradle resolved into each role's installDist lib folder (published Maven artifacts only)."""
     artifacts, packages, runtime_settings = [], {}, {}
@@ -233,7 +238,7 @@ def _java_provenance(perf_dir: Path, roles: list[str]) -> dict:
                 artifacts.append(jar)
                 if match:
                     packages[jar.name] = {"name": "systems.zlink:" + match.group(1), "version": match.group(2), "jarSha256": _java_sha256(jar)}
-            elif jar.name in (module + ".jar", "shared.jar", "server-support.jar"):
+            elif jar.name in (module + ".jar", "shared.jar", "server-support.jar") or jar.name.startswith("kotlin-"):
                 artifacts.append(jar)
         runtime_settings[role] = {"startScript": str(install / "bin" / module), "defaultJvmOpts": ["--enable-native-access=ALL-UNNAMED"]}
     listed = sorted(packages.values(), key=lambda item: item["name"])
@@ -290,8 +295,7 @@ LAUNCHERS = {
                           "framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerRuntimeService.cs:99.",
     ),
     "java": Launcher(
-        build=lambda perf_dir, role: ["flock", "--exclusive", "--close", JAVA_LOCK, str(perf_dir.parent / "gradlew"), "--project-dir", str(perf_dir),
-                                      ":" + _java_module(role) + ":installDist", "-q"],
+        build=lambda perf_dir, role: _gradle_install_dist(perf_dir, ":" + _java_module(role)),
         command=lambda perf_dir, role: [str(_java_install(perf_dir, role) / "bin" / _java_module(role))],
         provenance=_java_provenance,
         loaded_artifact_markers=("libzlink.so", ".jar"),
@@ -300,16 +304,27 @@ LAUNCHERS = {
         clientserver_gate="Runtime implementation gates ready on hostServing && readyTargetCount > 0 at "
                           "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkTopologyRuntimeViews.java:71.",
     ),
+    "kotlin": Launcher(
+        build=lambda perf_dir, role: _gradle_install_dist(perf_dir.parent, ":kotlin:" + _java_module(role)),
+        command=lambda perf_dir, role: [str(_java_install(perf_dir, role) / "bin" / _java_module(role))],
+        provenance=_java_provenance,
+        loaded_artifact_markers=("libzlink.so", ".jar"),
+        stream_scheme="tcp",
+        clientserver_interface="framework/doc/framework/common/spec/server/languages/kotlin/interfaces/monitoring.ko.md:39",
+        clientserver_gate="Runtime implementation gates ready on hostServing && readyTargetCount > 0 at "
+                          "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkTopologyRuntimeViews.java:71.",
+    ),
 }
 
 
 def _declared_framework_version(perf_dir: Path) -> str | None:
-    """Read this language's fixed framework release from its VERSION file."""
-    version_file = perf_dir.parent / "VERSION"
-    if not version_file.is_file():
-        return None
-    return next((line.split("=", 1)[1].strip() for line in version_file.read_text().splitlines()
-                 if line.startswith("ZLINK_FRAMEWORK_VERSION=")), None)
+    """Read the nearest language VERSION file, including shared build-root children such as Kotlin."""
+    for directory in (perf_dir, *perf_dir.parents):
+        version_file = directory / "VERSION"
+        if version_file.is_file():
+            return next((line.split("=", 1)[1].strip() for line in version_file.read_text().splitlines()
+                         if line.startswith("ZLINK_FRAMEWORK_VERSION=")), None)
+    return None
 
 
 def launcher(language: str) -> Launcher:

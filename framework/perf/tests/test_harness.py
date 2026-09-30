@@ -182,7 +182,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(launcher("dotnet").command(Path("/p"), "Client")[0], "dotnet")
 
     def test_launcher_owns_each_languages_stream_scheme_and_loaded_artifact_markers(self):
-        expected_schemes = {"dotnet": "tcp", "java": "tcp", "node": "ws", "cpp": "tcp"}
+        expected_schemes = {"dotnet": "tcp", "java": "tcp", "kotlin": "tcp", "node": "ws", "cpp": "tcp"}
         for language, scheme in expected_schemes.items():
             with self.subTest(language=language):
                 selected = launcher(language)
@@ -191,6 +191,8 @@ class HarnessTests(unittest.TestCase):
         self.assertIn(".node", launcher("node").loaded_artifact_markers)
         self.assertIn("libzlink.so", launcher("java").loaded_artifact_markers)
         self.assertIn(".jar", launcher("java").loaded_artifact_markers)
+        self.assertIn("libzlink.so", launcher("kotlin").loaded_artifact_markers)
+        self.assertIn(".jar", launcher("kotlin").loaded_artifact_markers)
         self.assertIn("libzlink_framework.so", launcher("cpp").loaded_artifact_markers)
 
     def test_planned_stream_endpoint_uses_the_launcher_scheme(self):
@@ -198,7 +200,7 @@ class HarnessTests(unittest.TestCase):
         cell = expand(args, False)[0]
         common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "workload": {}, "worker": None,
                   "store": None, "diagnostics": lambda name: None, "provenance": {}}
-        expected = {"dotnet": "tcp", "java": "tcp", "node": "ws", "cpp": "tcp"}
+        expected = {"dotnet": "tcp", "java": "tcp", "kotlin": "tcp", "node": "ws", "cpp": "tcp"}
         for language, scheme in expected.items():
             port = iter(range(20000, 30000))
             planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
@@ -209,6 +211,17 @@ class HarnessTests(unittest.TestCase):
                 endpoint = role.config["transportEndpoints"]["stream"]
                 self.assertTrue(endpoint.startswith(scheme + "://"))
                 self.assertEqual(role.manifest["streamEndpoint"], endpoint)
+
+    def test_declared_framework_version_walks_to_shared_language_version(self):
+        from launchers import _declared_framework_version
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "java").mkdir()
+            (root / "java" / "VERSION").write_text("ZLINK_FRAMEWORK_VERSION=1.2.3\n")
+            kotlin_perf = root / "java" / "perf" / "kotlin"
+            kotlin_perf.mkdir(parents=True)
+            self.assertEqual(_declared_framework_version(kotlin_perf), "1.2.3")
 
     def test_cell_comparison_excludes_run_identity_but_keeps_workload(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}

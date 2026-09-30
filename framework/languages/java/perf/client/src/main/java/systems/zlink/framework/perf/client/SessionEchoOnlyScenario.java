@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
 // connector.request(dto).submit(PerfEchoReply.class) through full identity/byte validation is one operation.
 // 1024/4096 JSON, request/ordinary, IMMEDIATE public dispatch mode; no Store or Actor.
 // Server logical stream, Actor, Spot, worker and fanout metrics are not applicable.
-public class SessionEchoOnlyScenario implements AutoCloseable {
+public class SessionEchoOnlyScenario implements ClientControl.Workload {
     private record Connected(int id, ZLinkStreamConnector connector) {}
     private record SetupProbe(int local, int id, long started, ZLinkStreamConnector connector, PerfEchoRequest request,
             PerfEchoReply reply, Throwable error) {}
