@@ -359,7 +359,7 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_NOT_FOUND` | `ENOENT` | terminal target 부재 |
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | owner lifecycle 종료 |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | malformed 또는 호환되지 않는 reply |
-| `ZLINK_REQUEST_INTERNAL_ERROR` | 보존된 errno | 다른 terminal 분류가 없는 내부 실패 |
+| `ZLINK_REQUEST_INTERNAL_ERROR` | `EIO` | 다른 terminal 분류가 없는 내부 실패 |
 | `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED`, `EPROTOTYPE` | peer, admission 또는 peer socket type 거절 |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | request correlation 충돌(`EEXIST`) 또는 transport pair [generation](glossary.ko.md#generation) 불일치(`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | active request lifecycle 존재 |
@@ -370,7 +370,8 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | non-blocking admission 또는 reservation 실패 |
 
 Request submit 성공 뒤에는 nonzero completion ID마다 terminal result를 정확히 한 번
-`zlink_completion_recv()`로 전달한다.
+`zlink_completion_recv()`로 전달한다. REQUEST completion에는 request errno 필드가 없다. Binding이
+실패한 REQUEST result를 errno로 나타낼 때는 이 표에서 해당 result의 첫 errno를 쓴다.
 
 ### 4. Receive result
 
