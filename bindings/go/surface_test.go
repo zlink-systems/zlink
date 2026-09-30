@@ -83,6 +83,7 @@ func TestSurfaceRawSocketCapabilities(t *testing.T) {
 		{(*zlink.RouterSocket)(nil), "Send", false},
 		{(*zlink.StreamSocket)(nil), "SetNotify", true},
 		{(*zlink.StreamSocket)(nil), "RecvPacket", true},
+		{(*zlink.StreamSocket)(nil), "DisconnectRID", true},
 		{(*zlink.StreamSocket)(nil), "Connect", false},
 		{(*zlink.StreamSocket)(nil), "Disconnect", false},
 		{(*zlink.XPubSocket)(nil), "ReceiveSubscriptionEvent", true},
