@@ -134,7 +134,13 @@ export function createIntegrationChannelClient(
   registration: ZLinkFrameworkRegistration,
   runtime: ZLinkNestIntegrationRuntimeHost
 ): ZLinkChannelClient {
-  return new DefaultZLinkChannelClient(registration, runtimeHost(runtime).channelTransport);
+  const host = runtimeHost(runtime);
+  return new DefaultZLinkChannelClient(
+    registration,
+    host.channelTransport,
+    host.routeTransport,
+    host.spotRouterChannelIdForMesh
+  );
 }
 
 export function createIntegrationFanoutClient(
@@ -152,7 +158,8 @@ export function createIntegrationRouteClient(
   return new DefaultZLinkRouteClient(
     registration,
     host.routeTransport,
-    host.spotRouterChannelIdForMesh
+    host.spotRouterChannelIdForMesh,
+    host.channelTransport
   );
 }
 

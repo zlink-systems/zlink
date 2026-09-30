@@ -88,7 +88,6 @@ interface ZLinkEntrySpotActivationOptions {
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
-  readonly channelMeshNameForChannel?: (channelName: string) => string | undefined;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;

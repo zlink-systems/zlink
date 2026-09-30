@@ -528,6 +528,82 @@ test('ZLinkChannelClient rejects calls to channels without client capability', a
   );
 });
 
+test('Spot outbound selects a RouteMesh ChannelName for send and request', async () => {
+  const registration = meshChannelRegistration('spot-target', 'api', {
+    meshRequestTimeoutMs: 235
+  });
+  const calls = [];
+  const routeTransport = {
+    async submitToChannel(...args) {
+      calls.push({ kind: 'send', args });
+      return { status: ZLinkSubmitStatus.Submitted };
+    },
+    async requestToChannel(...args) {
+      calls.push({ kind: 'request', args });
+      return { accepted: true };
+    }
+  };
+  const channelClient = new framework.DefaultZLinkChannelClient(
+    registration,
+    undefined,
+    routeTransport
+  );
+  const outbound = new framework.DefaultZLinkSpotOutbound({
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
+    channelClient
+  });
+
+  await outbound.sendToChannel('api', typedPacket('Notice', { id: 1 })).submit();
+  const reply = await outbound.requestToChannel('api', typedPacket('Ping', { id: 2 })).submit();
+
+  assert.deepEqual(reply, { accepted: true });
+  assert.equal(calls[0].kind, 'send');
+  assert.equal(calls[0].args[0], 'spot-target');
+  assert.equal(calls[0].args[1], 'api');
+  assert.equal(calls[1].kind, 'request');
+  assert.equal(calls[1].args[0], 'spot-target');
+  assert.equal(calls[1].args[1], 'api');
+  assert.equal(calls[1].args[4], 235);
+});
+
+test('ZLinkRouteClient selects the ClientServer path for ChannelName calls', async () => {
+  const registration = framework.createFrameworkRegistration({
+    channels: {
+      clientServer: {
+        client: { manualConnections: ['inproc://client-server'] },
+        requestTimeoutMs: 145
+      }
+    }
+  });
+  const calls = [];
+  const channelTransport = {
+    async send(...args) {
+      calls.push({ kind: 'send', args });
+      return { status: ZLinkSubmitStatus.Submitted };
+    },
+    async request(...args) {
+      calls.push({ kind: 'request', args });
+      return { accepted: true };
+    }
+  };
+  const client = new framework.DefaultZLinkRouteClient(
+    registration,
+    undefined,
+    undefined,
+    channelTransport
+  );
+
+  await client.sendToChannel('clientServer', typedPacket('Notice', { id: 1 })).submit();
+  const reply = await client.requestToChannel('clientServer', typedPacket('Ping', { id: 2 })).submit();
+
+  assert.deepEqual(reply, { accepted: true });
+  assert.equal(calls[0].kind, 'send');
+  assert.equal(calls[0].args[0], 'clientServer');
+  assert.equal(calls[1].kind, 'request');
+  assert.equal(calls[1].args[0], 'clientServer');
+  assert.equal(calls[1].args[3], 145);
+});
+
 test('ZLinkChannelClient reports NotConfigured when only the Server role exists', async () => {
   const client = new framework.DefaultZLinkChannelClient(framework.createFrameworkRegistration({
     channels: {

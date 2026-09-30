@@ -230,7 +230,6 @@ export interface ZLinkSpotManagerOptions {
   readonly routedTransport?: ZLinkSpotRoutedTransport;
   readonly addressTransport?: import('./spot-outbound').ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
-  readonly channelMeshNameForChannel?: (channelName: string) => string | undefined;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly closeErrorSink?: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
