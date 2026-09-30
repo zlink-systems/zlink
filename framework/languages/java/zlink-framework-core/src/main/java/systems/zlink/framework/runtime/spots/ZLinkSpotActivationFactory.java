@@ -383,14 +383,6 @@ final class ZLinkSpotActivationFactory {
                     }
 
                     @Override
-                    public CompletionStage<Void> handleJoin(
-                            systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendActorJoinRequest
-                                    request) {
-                        return activation.admitJoin(request);
-                    }
-
-                    @Override
                     public CompletionStage<Void> handleActor(
                             java.util.List<
                                             systems.zlink.framework.runtime.internal.backend

@@ -11,22 +11,33 @@ internal sealed class ZLinkSerializerSelectionRegistry
     private readonly ConcurrentDictionary<Type, Resolution> _resolvedByDeclaredType = new();
     private readonly object _cacheGate = new();
     private int _frozen;
-    private (string ContentType, IZLinkMessageSerializer Serializer)? _fallback;
 
     internal IReadOnlyDictionary<string, IZLinkMessageSerializer> Serializers =>
-        _registrations.ToDictionary(
-            static entry => entry.Key,
-            static entry => entry.Value.Serializer,
+        _registrationOrder.ToDictionary(
+            static contentType => contentType,
+            contentType => _registrations[contentType].Serializer,
             StringComparer.Ordinal
         );
 
-    internal (string ContentType, IZLinkMessageSerializer Serializer)? Fallback => _fallback;
+    internal ZLinkSerializerSelectionRegistry() { }
+
+    internal ZLinkSerializerSelectionRegistry(
+        string receiveContentType,
+        IZLinkMessageSerializer receiveSerializer
+    )
+    {
+        ArgumentNullException.ThrowIfNull(receiveSerializer);
+        var canonicalContentType = NormalizeRegisteredContentType(receiveContentType);
+        _registrations.Add(
+            canonicalContentType,
+            new Registration(receiveSerializer, static _ => false)
+        );
+    }
 
     internal void Add(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize,
-        bool isFallback
+        Func<Type, bool> canSerialize
     )
     {
         ThrowIfFrozen();
@@ -36,16 +47,11 @@ internal sealed class ZLinkSerializerSelectionRegistry
         var canonicalContentType = NormalizeRegisteredContentType(contentType);
         _registrations.Remove(canonicalContentType);
         _registrationOrder.Remove(canonicalContentType);
-        _registrations[canonicalContentType] = new Registration(
-            serializer,
-            canSerialize,
-            isFallback
-        );
+        _registrations[canonicalContentType] = new Registration(serializer, canSerialize);
         _registrationOrder.Add(canonicalContentType);
 
         lock (_cacheGate)
             _resolvedByDeclaredType.Clear();
-        RefreshFallback();
     }
 
     internal bool TryGetExact(string contentType, out IZLinkMessageSerializer serializer)
@@ -90,13 +96,9 @@ internal sealed class ZLinkSerializerSelectionRegistry
     internal ZLinkSerializerSelectionRegistry FrozenCopy()
     {
         var copy = new ZLinkSerializerSelectionRegistry();
-        foreach (var contentType in _registrationOrder)
-        {
-            var registration = _registrations[contentType];
-            copy._registrations.Add(contentType, registration);
-            copy._registrationOrder.Add(contentType);
-        }
-        copy.RefreshFallback();
+        foreach (var entry in _registrations)
+            copy._registrations.Add(entry.Key, entry.Value);
+        copy._registrationOrder.AddRange(_registrationOrder);
         copy.Freeze();
         return copy;
     }
@@ -176,17 +178,6 @@ internal sealed class ZLinkSerializerSelectionRegistry
         return new Resolution(false, string.Empty, null);
     }
 
-    private void RefreshFallback()
-    {
-        _fallback = null;
-        foreach (var contentType in _registrationOrder)
-        {
-            var registration = _registrations[contentType];
-            if (registration.IsFallback)
-                _fallback = (contentType, registration.Serializer);
-        }
-    }
-
     private static bool Return(
         Resolution resolution,
         out string contentType,
@@ -235,8 +226,7 @@ internal sealed class ZLinkSerializerSelectionRegistry
 
     private sealed record Registration(
         IZLinkMessageSerializer Serializer,
-        Func<Type, bool> CanSerialize,
-        bool IsFallback
+        Func<Type, bool> CanSerialize
     );
 
     private readonly record struct Resolution(
