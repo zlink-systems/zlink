@@ -306,7 +306,7 @@ sequenceDiagram
     participant L as Location Store
 
     opt Actor가 Session에 bind되어 있음
-        A->>S: [request] Session seal · binding route 고정과 이후 message 보관
+        A->>S: [request] Session seal · binding route 고정과 이후 Session→Actor message 보관
         S-->>A: [reply] 그 binding의 seal 설치 완료
     end
     A->>A: [local] 현재 turn 완료 뒤 application dispatch 중단

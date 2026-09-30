@@ -568,8 +568,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 - Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
   relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
   않는다.
-- Seal 뒤 Session에서 Actor로 들어온 message만 route 변경 또는 abort까지 Session owner가 보관한다.
-  Actor에서 Session으로 가는 push는 보관하지 않는다([Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)).
+- Session owner의 seal 처리와 보관하는 message의 범위는 [Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)을 따른다.
   Relocation 전용 record 수 또는 byte 상한은 두지 않는다.
 - Source object route로 들어온 일반 server message는 target temporary queue로 계속 relay한다.
   같은 TCP connection의 순서와 재전송을 사용하며 message별 ACK나 durable journal을 추가하지

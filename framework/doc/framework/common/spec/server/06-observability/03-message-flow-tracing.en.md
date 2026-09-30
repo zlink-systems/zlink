@@ -352,10 +352,9 @@ request or replay.
 If a session Actor relay accepted by the relocation seal holding store can't be delivered
 ([Session–Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)),
 it is recorded exactly once as `surface=stream`, `phase=dropped`, `outcome=dropped`. The `reason` uses only
-§3.1's values: `target_closed` if the seal timeout closed the Session, `backpressure` if the submit ended in
-backpressure, `stale_target` if the target route isn't current or the target is absent (`Unavailable`/`NotFound`),
-and `shutdown` if the runtime is stopping. If a held message's deadline passes or it is cancelled, it is
-recorded as `outcome=cancelled` without a `reason`.
+§3.1's values: `target_closed` if the seal timeout closed the Session, `stale_target` if after route application
+or abort the target route isn't current or the target is absent, and `shutdown` if the runtime is stopping.
+A relay request isn't recorded here; its request terminal trace records the result.
 
 ## 7. Verification Requirements
 

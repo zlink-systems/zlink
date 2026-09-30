@@ -222,10 +222,10 @@ conflicting with the judging-authority principle of §8.1.
 
 Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
-session sequence. The payload is
-added directly to the target Actor's application queue, regardless of local
-or remote. During a relocation seal, the Session owner's holding store of §8.1 receives it
-first and submits it after route application or abort. The current Spot is used for authority verification but isn't
+session sequence. Outside a relocation seal, the payload is
+added directly to the target Actor's application queue, whether local
+or remote. During a relocation seal, the Session owner holds it under §8.1
+and submits it after route application or abort. The current Spot is used for authority verification but isn't
 the callback execution context. The Actor handler doesn't run on the
 session callback thread, and different Actors aren't serialized into a
 session's execution context. Execution order between Actors is determined by
@@ -599,13 +599,13 @@ using the expected source owner and generation.
 
 Session route change doesn't use a numeric high-water,
 per-message ACK journal, or relocation-specific capacity condition. A
-message from the Session to the Actor arriving during the seal is held by the aggregate, but the per-
-message size, transport, deadline, and cancellation limits still apply
-unchanged.
+message from the Session to the Actor arriving during the seal is held by the aggregate; the per-
+message size and transport limits still apply unchanged.
 
 For a one-way relay accepted at the admission boundary of
 [Submit and Completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary), the caller doesn't wait
-for the seal to be released. A relay request keeps its existing correlation and deadline. If a held message can't be submitted after route
+for the seal to be released; having completed by acceptance, it isn't subject to later deadlines or cancellation.
+A relay request keeps its existing correlation, deadline, and cancellation. If a held message can't be submitted after route
 application or abort, or is cleaned up by the seal timeout, the caller's already completed result doesn't change;
 the failure is recorded once in that message's flow
 ([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)).

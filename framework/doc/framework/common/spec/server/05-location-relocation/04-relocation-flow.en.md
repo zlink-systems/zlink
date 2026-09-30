@@ -341,7 +341,7 @@ sequenceDiagram
     participant L as Location Store
 
     opt Actor is bound to a Session
-        A->>S: [request] Session seal · freeze binding route and hold later messages
+        A->>S: [request] Session seal · freeze binding route and hold later Session-to-Actor messages
         S-->>A: [reply] seal installed for that binding
     end
     A->>A: [local] stop application dispatch after current turn
