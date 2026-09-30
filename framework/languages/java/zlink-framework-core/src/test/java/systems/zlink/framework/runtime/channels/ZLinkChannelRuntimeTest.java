@@ -1027,14 +1027,12 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void staleSpotReplyRefreshesAuthorityBeforeRetryingTheRequest() {
+    void staleSpotReplyEndsTheRequestWithoutResolvingOrSubmittingAgain() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.spotNode.entrySpot.requestResults.add(ZLinkBackendRequestResult.NOT_FOUND);
         backend.spotNode.entrySpot.requestResults.add(ZLinkBackendRequestResult.OK);
-        backend.spotNode.entrySpot.requestReplyParts =
-                List.of(Message.from("{\"value\":\"fresh\"}".getBytes()));
         AtomicInteger resolves = new AtomicInteger();
         AtomicInteger invalidations = new AtomicInteger();
         SpotTransportAddressResolver resolver =
@@ -1065,17 +1063,23 @@ final class ZLinkChannelRuntimeTest {
                         handlers(resolver))) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
 
-            TestReply reply =
-                    runtime.requestToSpot("room-spot", new TestRequest("stale"))
-                            .timeout(Duration.ofMillis(300))
-                            .submit(TestReply.class)
-                            .toCompletableFuture()
-                            .join();
+            CompletionException failure =
+                    Assertions.assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    runtime.requestToSpot("room-spot", new TestRequest("stale"))
+                                            .timeout(Duration.ofMillis(300))
+                                            .submit(TestReply.class)
+                                            .toCompletableFuture()
+                                            .join());
 
-            assertEquals("fresh", reply.value());
-            assertEquals(2, resolves.get());
+            ZLinkFrameworkException terminal =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, terminal.kind());
+            assertEquals(1, resolves.get());
             assertEquals(1, invalidations.get());
-            assertEquals(2L, backend.spotNode.entrySpot.lastSpotGeneration);
+            assertEquals(1L, backend.spotNode.entrySpot.lastSpotGeneration);
+            assertEquals(1, backend.spotNode.entrySpot.requestResults.size());
         }
     }
 
