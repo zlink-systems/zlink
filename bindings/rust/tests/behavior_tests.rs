@@ -245,16 +245,13 @@ fn sub_receives_topics_beyond_inline_buffer() {
 
     for topic_len in [300, 70_000] {
         let topic = "t".repeat(topic_len);
-        xpub
-            .publish(&topic)
+        xpub.publish(&topic)
             .message(Message::try_from(b"payload").unwrap())
             .submit()
             .unwrap();
 
         let mut received = TopicMessage::empty();
-        assert!(sub_sock
-            .subscribe(&mut received, RecvFlags::NONE)
-            .unwrap());
+        assert!(sub_sock.subscribe(&mut received, RecvFlags::NONE).unwrap());
         assert_eq!(received.topic(), topic);
         assert_eq!(received.parts()[0].as_bytes(), b"payload");
     }
