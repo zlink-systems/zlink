@@ -8,12 +8,6 @@ use std::time::Duration;
 
 use zlink::{Context, Message, Poller, Received, RecvFlags, RoutingId, Timer};
 
-fn await_send(
-    submission: Result<zlink::SendSubmission, zlink::SubmitError>,
-) -> Result<(), zlink::SubmitError> {
-    test_support::block_on(submission?.admitted)
-}
-
 #[test]
 fn send_consumes_message_ownership() {
     let ctx = Context::new().unwrap();
@@ -28,7 +22,7 @@ fn send_consumes_message_ownership() {
     // After send, the message is consumed (moved into native).
     // Rust's move semantics prevent reuse at compile time.
     let msg = Message::try_from(b"owned-data").unwrap();
-    await_send(a.send().message(msg).submit()).unwrap();
+    a.send().message(msg).submit_sync().unwrap();
     // `msg` cannot be used here – Rust ownership enforced
 
     let mut received = Received::empty();
@@ -58,7 +52,7 @@ fn send_multipart_consumes_all_parts() {
     for part in iter {
         op = op.message(part);
     }
-    await_send(op.submit()).unwrap();
+    op.submit_sync().unwrap();
 }
 
 #[test]
@@ -73,7 +67,7 @@ fn recv_ownership_transfers_to_caller() {
     });
 
     let msg = Message::try_from(b"recv-test").unwrap();
-    await_send(b.send().message(msg).submit()).unwrap();
+    b.send().message(msg).submit_sync().unwrap();
 
     let mut received = Received::empty();
     a.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -109,7 +103,7 @@ fn send_failure_does_not_leak() {
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let _ = await_send(router.send(&rid).message(msg).submit());
+    let _ = router.send(&rid).message(msg).submit_sync();
     // msg is consumed regardless of success/failure – no native leak
 }
 
@@ -135,7 +129,7 @@ fn repeated_multipart_recv_preserves_shape() {
     for part in iter {
         op = op.message(part);
     }
-    await_send(op.submit()).unwrap();
+    op.submit_sync().unwrap();
     let mut direct = Received::empty();
     a1.recv(&mut direct, RecvFlags::NONE).unwrap();
     let direct_count = direct.parts().len();
@@ -164,7 +158,7 @@ fn repeated_multipart_recv_preserves_shape() {
     for part in iter {
         op = op.message(part);
     }
-    await_send(op.submit()).unwrap();
+    op.submit_sync().unwrap();
     let mut repeated = Received::empty();
     a2.recv(&mut repeated, RecvFlags::NONE).unwrap();
     let repeated_data: Vec<Vec<u8>> = repeated
@@ -231,7 +225,7 @@ fn pull_receive_owns_parts() {
     });
 
     let msg = Message::try_from(b"cb-payload").unwrap();
-    await_send(client.send().message(msg).submit()).unwrap();
+    client.send().message(msg).submit_sync().unwrap();
     let mut received = Received::empty();
     server.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"cb-payload");
@@ -334,14 +328,18 @@ fn blocking_send_and_reply_do_not_copy_message_parts() {
     assert_eq!(reply_parts[1].as_bytes(), b"reply-second");
 
     let marker_path = std::env::var_os(MARKER_ENV).expect("fault-injection marker path");
-    let marker = std::fs::read_to_string(marker_path).expect("message-copy counter shim did not run");
+    let marker =
+        std::fs::read_to_string(marker_path).expect("message-copy counter shim did not run");
     let events = marker.lines().collect::<Vec<_>>();
     assert!(events.contains(&"send:submit-send"));
     assert!(events.contains(&"reply:submit-reply"));
     assert!(events.contains(&"send:multipart-close-2"));
     assert!(events.contains(&"reply:multipart-close-2"));
     let send_copies = events.iter().filter(|event| **event == "send:copy").count();
-    let reply_copies = events.iter().filter(|event| **event == "reply:copy").count();
+    let reply_copies = events
+        .iter()
+        .filter(|event| **event == "reply:copy")
+        .count();
     assert_eq!(
         (send_copies, reply_copies),
         (0, 0),

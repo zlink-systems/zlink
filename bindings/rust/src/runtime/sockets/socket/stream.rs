@@ -39,13 +39,7 @@ pub(crate) fn recv_stream_packet(
     let mut body = Message::new()
         .map_err(|error| RecvError::new(RecvResult::InternalError, error.native_errno()))?;
     let rc = unsafe {
-        ffi::zlink_stream_recv_packet(
-            handle,
-            &mut rid,
-            header.raw_mut(),
-            body.raw_mut(),
-            flags,
-        )
+        ffi::zlink_stream_recv_packet(handle, &mut rid, header.raw_mut(), body.raw_mut(), flags)
     };
     if rc == RecvResult::NoData as i32 {
         return Ok(false);
@@ -56,10 +50,6 @@ pub(crate) fn recv_stream_packet(
     if rid.is_null() {
         return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
     }
-    out.replace(
-        unsafe { RoutingId::from_raw(*rid) },
-        header,
-        body,
-    );
+    out.replace(unsafe { RoutingId::from_raw(*rid) }, header, body);
     Ok(true)
 }

@@ -387,7 +387,9 @@ fn completion_waker_can_modify_its_public_poller() {
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://rust-reentrant-completion").unwrap();
-    dealer.connect("inproc://rust-reentrant-completion").unwrap();
+    dealer
+        .connect("inproc://rust-reentrant-completion")
+        .unwrap();
     let poller = Poller::new().unwrap();
     poller.add_socket(&dealer, POLLCOMPLETION, 1).unwrap();
     let request = dealer
@@ -588,6 +590,7 @@ fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
     let send = dealer
         .send()
         .message(Message::try_from(b"send-ok").unwrap())
@@ -598,8 +601,6 @@ fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     assert_eq!(test_support::poll_once(&mut admitted), Poll::Ready(Ok(())));
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(received.parts()[0].as_bytes(), b"send-ok");
-    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
-
     let request = dealer
         .request()
         .message(Message::try_from(b"request-ok").unwrap())
@@ -746,6 +747,7 @@ fn ordinary_router_message_has_no_reply_token() {
         .connect("inproc://rust-request-reply-data")
         .unwrap();
 
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer_socket);
     let submission = dealer_socket
         .send()
         .message(Message::try_from(b"plain-data").unwrap())
