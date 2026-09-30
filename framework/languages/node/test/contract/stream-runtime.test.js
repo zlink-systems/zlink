@@ -1425,26 +1425,41 @@ test('initial managed stream actor bind removes its provisional route and surfac
 });
 
 test('fire-and-forget remote actor session bind propagates its first send failure', async () => {
+  // Submit and completion §4: a one-way control completes with its first source-local
+  // admission result. The Framework neither resubmits nor hides the failure.
+  const actorRef = {
+    nodeRid: 'actor-node',
+    actorId: 'actor-bind-send-failure',
+    objectGeneration: 3n,
+    meshName: 'actor.route'
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      routeChannels: [{ routerChannelId: 'actor.route' }]
+    })
+  });
+  host.setActorManager({
+    getState() {
+      return {
+        remoteActorPacketTarget: {
+          routerChannelId: 'actor.route',
+          targetNodeRid: actorRef.nodeRid,
+          spotId: actorRef.nodeRid,
+          spotKind: framework.ZLinkSpotKind.Entry
+        }
+      };
+    }
+  });
   const sendFailure = new Error('route send failed');
   let sendCalls = 0;
-  const relay = new ZLinkActorPacketRelay({
-    routeTransport: {
-      async sendToSpot() {
-        sendCalls += 1;
-        throw sendFailure;
-      }
-    },
-    streamBindingRuntime: () => ({ find() {} }),
-    meshRouters: {},
-    actorManager: () => undefined,
-    spotManager: () => undefined,
-    spotNodeRuntime: () => undefined,
-    errorSink: () => ({ reportRuntimeTaskException() {} })
-  });
+  host.routeTransport.sendToSpot = async () => {
+    sendCalls += 1;
+    throw sendFailure;
+  };
 
   await assert.rejects(
-    relay.confirmRemoteSessionBinding(
-      { nodeRid: 'actor-node', actorId: 'actor-bind-send-failure', meshName: 'actor.route' },
+    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+      actorRef,
       'session-node',
       'session-rid',
       undefined,
