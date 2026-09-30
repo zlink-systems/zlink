@@ -33,12 +33,15 @@ std::atomic<std::uintptr_t> next_fanout_poller_slot{1};
 
 } // namespace
 
-raw_fanout_publisher_t::raw_fanout_publisher_t (std::string endpoint,
-                                                std::shared_ptr<zlink::context_t> context,
-                                                bool no_drop) :
+raw_fanout_publisher_t::raw_fanout_publisher_t (
+  std::string endpoint,
+  std::shared_ptr<zlink::context_t> context,
+  bool no_drop,
+  std::optional<std::chrono::milliseconds> send_timeout) :
     _configured_endpoint (std::move (endpoint)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _no_drop (no_drop)
+    _no_drop (no_drop),
+    _send_timeout (send_timeout)
 {
     if (_configured_endpoint.empty ()) {
         throw std::invalid_argument ("fanout publisher endpoint is required");
@@ -62,6 +65,7 @@ void raw_fanout_publisher_t::start ()
     auto socket = std::make_unique<zlink::pub_socket_t> (*_context);
     socket->options ().linger (std::chrono::milliseconds (0));
     detail::apply_fanout_publisher_socket_options (*socket, _no_drop);
+    detail::apply_channel_send_timeout (*socket, _send_timeout);
     socket->bind (_configured_endpoint);
     _endpoint = socket->options ().last_endpoint ();
     _next_beacon = std::chrono::steady_clock::now () + fanout_beacon_interval;
@@ -99,8 +103,7 @@ std::chrono::steady_clock::time_point raw_fanout_publisher_t::next_activity () c
 
 task_t<void> raw_fanout_publisher_t::publish (std::string channel_name,
                                               std::string topic,
-                                              protocol::application_payload_t payload,
-                                              std::chrono::milliseconds timeout)
+                                              protocol::application_payload_t payload)
 {
     if (topic.empty ()) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -124,27 +127,8 @@ task_t<void> raw_fanout_publisher_t::publish (std::string channel_name,
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "fanout publisher is stopped");
         }
-        /* Publish is a synchronous binding terminal. SNDTIMEO is the
-         * Core-owned wait bound, so a per-call timeout is installed for the
-         * duration of the submit and restored afterwards. */
-        const auto configured_timeout = _socket->options ().send_timeout ();
-        const bool override_timeout = timeout.count () > 0;
-        if (override_timeout)
-            _socket->options ().send_timeout (timeout);
-        try {
-            /* Lvalue chaining appends multipart frames (the rvalue overload
-             * replaces the staged single part). */
-            auto operation =
-              std::move (_socket->publish (topic)).message (items[0]).message (items[1]);
-            (void) std::move (operation).submit ();
-        }
-        catch (...) {
-            if (override_timeout)
-                _socket->options ().send_timeout (configured_timeout);
-            throw;
-        }
-        if (override_timeout)
-            _socket->options ().send_timeout (configured_timeout);
+        auto operation = std::move (_socket->publish (topic)).message (items[0]).message (items[1]);
+        (void) std::move (operation).submit ();
     }
     co_return;
 }

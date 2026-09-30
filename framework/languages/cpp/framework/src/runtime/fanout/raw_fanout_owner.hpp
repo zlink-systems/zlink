@@ -80,9 +80,11 @@ struct raw_fanout_connection_snapshot_t
 class raw_fanout_publisher_t
 {
   public:
-    explicit raw_fanout_publisher_t (std::string endpoint,
-                                     std::shared_ptr<zlink::context_t> context = {},
-                                     bool no_drop = false);
+    explicit raw_fanout_publisher_t (
+      std::string endpoint,
+      std::shared_ptr<zlink::context_t> context = {},
+      bool no_drop = false,
+      std::optional<std::chrono::milliseconds> send_timeout = std::nullopt);
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
@@ -91,10 +93,8 @@ class raw_fanout_publisher_t
     std::chrono::steady_clock::time_point next_activity () const;
     /* Publishes one application record as the cross-language channel
      * envelope: [JSON header (kind=publish, no correlation), payload]. */
-    task_t<void> publish (std::string channel_name,
-                          std::string topic,
-                          protocol::application_payload_t payload,
-                          std::chrono::milliseconds timeout = std::chrono::milliseconds{-1});
+    task_t<void>
+    publish (std::string channel_name, std::string topic, protocol::application_payload_t payload);
     bool tick (std::chrono::steady_clock::time_point now);
 
     static const std::string &reserved_topic ();
@@ -105,6 +105,7 @@ class raw_fanout_publisher_t
     mutable std::mutex _mutex;
     std::shared_ptr<zlink::context_t> _context;
     bool _no_drop = false;
+    std::optional<std::chrono::milliseconds> _send_timeout;
     std::unique_ptr<zlink::pub_socket_t> _socket;
     std::string _endpoint;
     std::chrono::steady_clock::time_point _next_beacon{};

@@ -996,6 +996,14 @@ capability_builder_t &capability_builder_t::set_no_drop (bool no_drop)
     return *this;
 }
 
+capability_builder_t &capability_builder_t::set_send_timeout (std::chrono::milliseconds timeout)
+{
+    auto &snapshot = capability_snapshot (*_state);
+    snapshot.enabled = true;
+    snapshot.send_timeout = timeout;
+    return *this;
+}
+
 channel_capability_snapshot_t capability_builder_t::snapshot () const
 {
     return capability_snapshot (*_state);
