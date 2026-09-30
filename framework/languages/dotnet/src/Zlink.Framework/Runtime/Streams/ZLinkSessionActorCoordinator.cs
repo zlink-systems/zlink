@@ -5,6 +5,7 @@ namespace Zlink.Framework.Runtime.Streams;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 
 internal sealed class ZLinkSessionActorCoordinator(
@@ -604,7 +605,88 @@ internal sealed class ZLinkSessionActorCoordinator(
         );
         var acceptedFrame = false;
         ulong acceptedHighWater = 0;
-        if (!isBindingControlFrame)
+        if (!isBindingControlFrame && header.Kind == ZlinkStreamMessageKind.Send)
+        {
+            var flow = runtime.Flow.CaptureEnabled ? ZLinkFlowContext.Current : null;
+            var acceptance = await runtime
+                .AcceptOneWaySessionActorFrameAsync(
+                    actorRef.ActorId,
+                    actorRef.BindingToken,
+                    sequence =>
+                    {
+                        var body = payload.ToArray();
+                        return new ZLinkHeldSessionRelay(
+                            sequence,
+                            async acceptedSequence =>
+                            {
+                                using var retained = Message.From(body);
+                                if (
+                                    stream is ZLinkManagedStream
+                                    && !IsLocalActorRef(actorRef.Route)
+                                )
+                                    await ForwardToRemoteActorAsync(
+                                            actorRef,
+                                            header,
+                                            retained,
+                                            null,
+                                            acceptedSequence,
+                                            CancellationToken.None,
+                                            admissionCompleted: true
+                                        )
+                                        .ConfigureAwait(false);
+                                else
+                                {
+                                    runtime
+                                        .GetOrCreateActorState(actorRef.ActorId)
+                                        .RecordBoundSessionAccepted(actorRef.BindingToken);
+                                    await DispatchLocalAsync(
+                                            actorRef,
+                                            header,
+                                            retained,
+                                            replyRawAsync,
+                                            CancellationToken.None
+                                        )
+                                        .ConfigureAwait(false);
+                                }
+                            },
+                            reason =>
+                            {
+                                if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
+                                    return;
+                                runtime.Flow.Trace(
+                                    new ZLinkMessageFlowEvent(
+                                        ZLinkMessageFlowOutcome.Dropped,
+                                        ZLinkDispatchErrorSurface.StreamSession,
+                                        ZLinkDispatchMessageKind.Send,
+                                        header.Name,
+                                        CorrelationId: header.CorrelationId,
+                                        ActorId: actorRef.ActorId,
+                                        Result: ZLinkMessageFlowResult.Dropped,
+                                        Reason: reason
+                                    )
+                                    {
+                                        FlowId = flow?.FlowId ?? string.Empty,
+                                        FlowOrigin = flow?.Origin,
+                                        StreamSessionId = actorRef.Context.SessionId,
+                                    }
+                                );
+                            }
+                        );
+                    }
+                )
+                .ConfigureAwait(false);
+            if (!acceptance.Accepted)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{actorRef.ActorId}' session binding changed before frame admission.",
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
+            if (acceptance.Held)
+                return;
+            acceptedHighWater = acceptance.AcceptedHighWater;
+            acceptedFrame = true;
+        }
+        else if (!isBindingControlFrame)
         {
             // A relocation seal is an infrastructure boundary, not an
             // application rejection. Keep this frame in the current stream
@@ -705,7 +787,8 @@ internal sealed class ZLinkSessionActorCoordinator(
         Message payload,
         string? replyCapability,
         ulong acceptedHighWater,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool admissionCompleted = false
     )
     {
         if (actorRef.Context.RoutingId is not { } sessionRid)
@@ -764,7 +847,8 @@ internal sealed class ZLinkSessionActorCoordinator(
             cancellationToken,
             runtime.ShutdownToken
         );
-        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
+        if (!admissionCompleted)
+            terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
         try
         {
             await runtime

@@ -4001,6 +4001,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         return acceptance?.Accepted ?? false;
     }
 
+    internal ValueTask<ZLinkSessionOneWayAcceptance> AcceptOneWaySessionActorFrameAsync(
+        string actorId,
+        string bindingToken,
+        Func<ulong, ZLinkHeldSessionRelay> createHeld
+    ) =>
+        _actorBoundSessionCoordinator.AcceptOneWaySessionFrameAsync(
+            actorId,
+            bindingToken,
+            createHeld
+        );
+
     internal ValueTask<bool> WaitForSessionActorRouteAvailableAsync(
         string actorId,
         string bindingToken,

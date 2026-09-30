@@ -88,7 +88,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public enum RemotePushDelivery
     {
         Delivered,
-        Retained,
         Backpressured,
         NoBinding,
         WrongSession,
@@ -102,8 +101,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     {
         var admission = await AdmitRemoteSessionFrameCoreAsync(identity, frame)
             .ConfigureAwait(false);
-        return await CompleteOutboundAdmissionAsync(admission, cancellationToken)
-            .ConfigureAwait(false);
+        return admission.Kind switch
+        {
+            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(admission.Delivery),
+            ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
+            _ => RemotePushDelivery.WrongSession,
+        };
     }
 
     internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameOneWayAsync(
@@ -112,11 +115,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         CancellationToken cancellationToken
     )
     {
-        var admission = await AdmitRemoteSessionFrameCoreAsync(identity, frame)
-            .ConfigureAwait(false);
-        if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Retained)
-            return RemotePushDelivery.Retained;
-        return await CompleteOutboundAdmissionAsync(admission, cancellationToken)
+        return await AdmitRemoteSessionFrameAsync(identity, frame, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -138,27 +137,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             frame
         );
 
-    private static async ValueTask<RemotePushDelivery> CompleteOutboundAdmissionAsync(
-        ZLinkSessionOutboundAdmission admission,
-        CancellationToken cancellationToken
-    )
-    {
-        return admission.Kind switch
-        {
-            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(
-                admission.Capability!.Settle(deliver: true)
-            ),
-            ZLinkSessionOutboundAdmissionKind.Retained => MapOutboundDelivery(
-                await admission
-                    .Capability!.Completion.WaitAsync(cancellationToken)
-                    .ConfigureAwait(false)
-            ),
-            ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
-            _ => RemotePushDelivery.WrongSession,
-        };
-    }
-
-    private static RemotePushDelivery MapOutboundDelivery(ZLinkSessionOutboundDelivery delivery) =>
+    private static RemotePushDelivery MapOutboundDelivery(ZLinkSessionOutboundDelivery? delivery) =>
         delivery switch
         {
             ZLinkSessionOutboundDelivery.Delivered => RemotePushDelivery.Delivered,
@@ -279,9 +258,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         );
         return admission.Kind switch
         {
-            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(
-                admission.Capability!.Settle(deliver: true)
-            ),
+            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(admission.Delivery),
             ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
             _ => RemotePushDelivery.WrongSession,
         };
@@ -373,6 +350,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public ZLinkSessionFrameAcceptance? AcceptSessionFrame(string actorId, string bindingToken) =>
         AwaitStateLane(_sessionBindings.AcceptAsync(actorId, bindingToken));
 
+    internal ValueTask<ZLinkSessionOneWayAcceptance> AcceptOneWaySessionFrameAsync(
+        string actorId,
+        string bindingToken,
+        Func<ulong, ZLinkHeldSessionRelay> createHeld
+    ) => _sessionBindings.AcceptOneWayAsync(actorId, bindingToken, createHeld);
+
     public ValueTask<bool> WaitForSessionRouteAvailableAsync(
         string actorId,
         string bindingToken,
@@ -397,24 +380,21 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute
     )
     {
-        return RunState(() =>
-        {
-            RequireOpenApplicationEpoch();
-            return AwaitStateLane(
-                _sessionBindings.RouteCanonicalAsync(request, authenticatedRoute)
-            );
-        });
+        RunState(RequireOpenApplicationEpoch);
+        return AwaitStateLane(_sessionBindings.RouteCanonicalAsync(request, authenticatedRoute));
     }
 
-    internal ValueTask RouteCanonicalSessionAsync(
+    internal async ValueTask RouteCanonicalSessionAsync(
         ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
         ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _ = RouteCanonicalSession(request, authenticatedCandidate);
-        return ValueTask.CompletedTask;
+        RunState(RequireOpenApplicationEpoch);
+        _ = await _sessionBindings
+            .RouteCanonicalAsync(request, authenticatedCandidate)
+            .ConfigureAwait(false);
     }
 
     private void RequireOpenApplicationEpoch()
@@ -891,13 +871,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 );
                 return admission.Kind switch
                 {
-                    ZLinkSessionOutboundAdmissionKind.Immediate => admission.Capability!.Settle(
-                        deliver: true
-                    ) == ZLinkSessionOutboundDelivery.Delivered,
-                    // 04-session/02-session-actor-binding §8.1: relocation seal
-                    // 중 도착한 message는 aggregate가 보관했다가 route 전환 뒤
-                    // 제출한다. 보관(Retained)은 수락이므로 실패로 접지 않는다.
-                    ZLinkSessionOutboundAdmissionKind.Retained => true,
+                    ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery
+                        == ZLinkSessionOutboundDelivery.Delivered,
                     _ => false,
                 };
             }
@@ -999,18 +974,13 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 .ConfigureAwait(false);
             var status = admission.Kind switch
             {
-                ZLinkSessionOutboundAdmissionKind.Immediate => admission.Capability!.Settle(
-                    deliver: true
-                ) switch
+                ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery switch
                 {
                     ZLinkSessionOutboundDelivery.Delivered => ZLinkOneWaySubmitStatus.Submitted,
                     ZLinkSessionOutboundDelivery.Backpressured =>
                         ZLinkOneWaySubmitStatus.Backpressured,
                     _ => ZLinkOneWaySubmitStatus.TargetNotFound,
                 },
-                // 04-session/02-session-actor-binding §8.1: seal 중 보관된
-                // message는 route 전환 시 제출된다 — 제출 완료로 보고한다.
-                ZLinkSessionOutboundAdmissionKind.Retained => ZLinkOneWaySubmitStatus.Submitted,
                 _ => ZLinkOneWaySubmitStatus.TargetNotFound,
             };
             return new ZLinkOneWaySubmitResult(status);

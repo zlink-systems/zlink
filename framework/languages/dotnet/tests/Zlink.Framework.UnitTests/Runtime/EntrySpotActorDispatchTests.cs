@@ -2645,7 +2645,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task SessionRelocationHoldPreservesSendAndRequestFramesAcrossConsecutiveRouteSwitches()
     {
         var node = new CapturingSpotNode();
-        var (runtime, _) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            observer,
+            includeActorFactory: false
+        );
         try
         {
             var sessionRid = RoutingId.From("session-relocation-hold");
@@ -2709,6 +2714,10 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var sendBody = Encoding.UTF8.GetBytes("send-body");
             using var sendPayload = Message.From(sendBody);
+            var nodeSendAttempted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            node.OnNodeSend = () => nodeSendAttempted.TrySetResult();
             var heldSend = context
                 .ActorCoordinator.RelayToActorAsync(
                     bound,
@@ -2718,8 +2727,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 )
                 .AsTask();
-            await Task.Delay(20);
-            Assert.False(heldSend.IsCompleted);
+            await heldSend.WaitAsync(TimeSpan.FromSeconds(1));
             Assert.Empty(node.NodeSendAttempts);
 
             var targetOne = RoutingId.From("target-actor-one");
@@ -2737,6 +2745,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
             await heldSend;
+            await nodeSendAttempted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
             var sentRelay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
                 Assert.Single(node.NodeSendAttempts)[1]
@@ -2838,6 +2847,63 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal(targetTwo, targetTwoBinding.Route.Ref.NodeRid);
             Assert.Equal(202UL, targetTwoBinding.OwnerLeaseGeneration);
+            node.NodeSendAttempts.Clear();
+
+            var thirdSeal = SessionSeal(
+                targetTwoBinding,
+                new ZLinkServiceWireCodec.RelocationWireId(8, 3),
+                targetTwo,
+                sourceNodeGeneration: 4,
+                coordinatorLease: 202
+            );
+            _ = await runtime.SealCanonicalSessionActorRouteAsync(
+                thirdSeal,
+                CancellationToken.None
+            );
+            var droppedHeader = sendHeader with { Name = "held-drop" };
+            using var droppedPayload = Message.From(sendBody);
+            using var flowScope = ZLinkFlowContext.Enter(
+                null,
+                null,
+                captureEnabled: true,
+                ZLinkFlowOrigin.Inbound
+            );
+            var droppedFlowId = ZLinkFlowContext.Current!.Value.FlowId;
+            await context.ActorCoordinator.RelayToActorAsync(
+                bound,
+                droppedHeader,
+                droppedPayload,
+                static (_, _, _) => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            Assert.Empty(node.NodeSendAttempts);
+            node.NodeSendAsyncFailure = new ZlinkSubmitException(
+                ZlinkSubmitException.ErrorCode.NotConnected
+            );
+            var thirdTarget = RoutingId.From("target-actor-three");
+            var thirdCommit = SessionCommit(
+                thirdSeal,
+                thirdTarget,
+                targetNodeGeneration: 5,
+                targetAuthority: 14,
+                targetOwnerLeaseGeneration: 303
+            );
+            Assert.True(
+                runtime.RouteCanonicalSessionActor(
+                    thirdCommit,
+                    new ZLinkSessionRelocationAuthenticatedRoute(thirdTarget, 5, "entry", 14, 303)
+                )
+            );
+            var dropped = await observer.WaitAsync("dropped", TimeSpan.FromSeconds(2));
+            Assert.Equal("dropped", dropped.Phase);
+            Assert.Equal("stream", dropped.Surface);
+            Assert.Equal("stale_target", dropped.Reason);
+            Assert.Equal(droppedFlowId, dropped.FlowId);
+            Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.Outcome == "dropped" && flow.FlowId == droppedFlowId
+                )
+            );
         }
         finally
         {
@@ -2904,21 +2970,12 @@ public sealed partial class EntrySpotActorDispatchTests
             );
     }
 
-    // Regression for 4c8036a494 (B1-dotnet 과잉 검증 제거), which deleted the
-    // ZLinkSessionOutboundAdmissionKind.Retained branch on both
-    // ZLinkActorBoundSessionCoordinator call sites. Per
-    // 04-session/02-session-actor-binding.ko.md §8.1, a Retained admission is
-    // an *acceptance* (the aggregate holds the frame until route commit) and
-    // must never be reported as a failed/not-found submit. §3 item 3 and §8.1
-    // also fix that the sealed binding alone decides: every push of the
-    // current binding is held whatever owner authority generation the Actor
-    // side carries (11 = source route, 99 = committed target), no
-    // relocation-specific count limit returns Backpressured, and held frames
-    // reach the session's stream once the relocation route commits.
+    // A relocation seal does not hold Actor-to-Session pushes. The current
+    // binding alone admits the push for either Actor owner generation.
     [Theory]
     [InlineData(11UL)]
     [InlineData(99UL)]
-    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync(
+    public async Task ActorBoundSessionOutboundSendDuringRelocationSealSubmitsImmediatelyAsync(
         ulong actorAuthorityOwnerGeneration
     )
     {
@@ -2958,9 +3015,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerLeaseGeneration: 8
             );
 
-            // The table's Route says 11 until the seal commits. The Actor-side
-            // owner authority generation is not an admission field, so the
-            // sealed binding holds the push for either value.
+            // The Actor-side owner authority generation is not an admission field.
             _ = runtime.BindActorSession(
                 actorId,
                 sessionNodeRid: node.RoutingId,
@@ -3022,29 +3077,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
 
-            //  This is the exact regression: before the fix, Retained fell
-            //  through to `_ => ZLinkOneWaySubmitStatus.TargetNotFound`,
-            //  silently dropping the push instead of holding it.
             Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, submitResult.Status);
-            // Not delivered yet: the frame is held until the seal commits.
-            Assert.Empty(stream.Writes);
-
-            // The old relocation-only limit was 4,096 retained frames. Held
-            // pushes beyond it stay accepted: only ordinary message limits
-            // apply during the seal (§8.1, relocation-flow §5.3).
-            const int heldPushCount = 4_097;
-            for (var retained = 1; retained < heldPushCount; retained++)
-            {
-                using var retainedPayload = Message.From(sendFrame);
-                var retainedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
-                    actorId,
-                    bindingToken,
-                    new[] { retainedPayload },
-                    CancellationToken.None
-                );
-                Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, retainedResult.Status);
-            }
-            Assert.Empty(stream.Writes);
+            Assert.Single(stream.Writes);
 
             var targetNode = RoutingId.From("target-actor-node-outbound-async");
             var commit = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
@@ -3068,8 +3102,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
 
-            Assert.Equal(heldPushCount, stream.Writes.Count);
-            Assert.All(stream.Writes, written => Assert.Equal(sendBody, written));
+            Assert.Equal(sendBody, Assert.Single(stream.Writes));
 
             // The adjacent Immediate path has the same contract: a local
             // stream write refusal is Backpressured, not TargetNotFound.
@@ -3082,7 +3115,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
             Assert.Equal(ZLinkOneWaySubmitStatus.Backpressured, refusedResult.Status);
-            Assert.Equal(heldPushCount, stream.Writes.Count);
+            Assert.Single(stream.Writes);
         }
         finally
         {
@@ -11768,7 +11801,11 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ConcurrentQueue<SubmitResult> NodeSendResults { get; } = new();
 
+        public Exception? NodeSendAsyncFailure { get; set; }
+
         public List<IReadOnlyList<byte[]>> NodeSendAttempts { get; } = [];
+
+        public Action? OnNodeSend { get; set; }
 
         public int NodeSendAsyncCalls { get; private set; }
 
@@ -12317,6 +12354,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var copied = CopyParts(parts);
             LastNodeSendParts = copied;
             NodeSendAttempts.Add(copied);
+            OnNodeSend?.Invoke();
             return NodeSendResults.TryDequeue(out var result) ? result : SubmitResult.Ok;
         }
 
@@ -12329,6 +12367,8 @@ public sealed partial class EntrySpotActorDispatchTests
         )
         {
             NodeSendAsyncCalls++;
+            if (NodeSendAsyncFailure is { } failure)
+                throw failure;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
