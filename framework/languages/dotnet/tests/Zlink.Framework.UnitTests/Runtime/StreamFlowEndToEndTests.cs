@@ -66,6 +66,9 @@ public sealed class StreamFlowEndToEndTests
             var sessionId = Assert.IsType<string>(callback.Value?.SessionId);
             Assert.False(string.IsNullOrWhiteSpace(sessionId));
 
+            await connector.Close.Async();
+            await host.StopAsync();
+
             var received = Assert.Single(
                 flowLogs.Messages.Where(line =>
                     line.Contains($"packet={nameof(FlowRequest)}", StringComparison.Ordinal)
@@ -92,9 +95,6 @@ public sealed class StreamFlowEndToEndTests
             Assert.Equal(correlation, ReadToken(replied, "corr"));
             Assert.Equal(sessionId, ReadToken(received, "session"));
             Assert.Equal(sessionId, ReadToken(replied, "session"));
-
-            await connector.Close.Async();
-            await host.StopAsync();
         }
         finally { }
     }
