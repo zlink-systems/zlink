@@ -393,7 +393,7 @@ public sealed partial class StreamConnectorTests
             connection.Deliver(PushFrame("after", new byte[] { 1 }, compressed: false));
 
             Assert.Equal("after", await delivered.Task.WaitAsync(EndingWait));
-            Assert.Equal([ZlinkStreamErrorCode.DecompressionFailed], errors);
+            Assert.Equal(new[] { ZlinkStreamErrorCode.DecompressionFailed }, errors);
             Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
             Assert.Null(connector.CloseReason);
         }
@@ -584,7 +584,7 @@ public sealed partial class StreamConnectorTests
             );
             await connector.Dispatch.Async();
 
-            Assert.Equal(["second"], calls);
+            Assert.Equal(new[] { "second" }, calls);
         }
         finally
         {
