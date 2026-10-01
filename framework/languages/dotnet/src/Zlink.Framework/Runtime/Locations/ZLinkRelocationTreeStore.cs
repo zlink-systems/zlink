@@ -85,7 +85,7 @@ internal static partial class ZLinkRelocationTreeStore
             var logicalLength = new FileInfo(path).Length;
             if (logicalLength <= 0 || (ulong)logicalLength > MaxLogicalBytes)
                 throw new InvalidOperationException(
-                    "Relocation logical stream exceeds its 256 GiB bound."
+                    $"Relocation logical stream exceeds its {MaxLogicalBytes} byte bound."
                 );
             var chunkCount = CalculateChunkCount(checked((ulong)logicalLength));
 
@@ -175,11 +175,13 @@ internal static partial class ZLinkRelocationTreeStore
     {
         if (logicalLength is 0 or > MaxLogicalBytes)
             throw new InvalidOperationException(
-                "Relocation logical stream exceeds its 256 GiB bound."
+                $"Relocation logical stream exceeds its {MaxLogicalBytes} byte bound."
             );
         var count = checked((int)((logicalLength + (ulong)ChunkBytes - 1) / (ulong)ChunkBytes));
         if (count > MaxChunks)
-            throw new InvalidOperationException("Relocation logical stream exceeds 4096 chunks.");
+            throw new InvalidOperationException(
+                $"Relocation logical stream exceeds {MaxChunks} chunks."
+            );
         return count;
     }
 

@@ -1170,7 +1170,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             data.SenderRole,
             data.Object,
             sourceNodeRid,
-            "31"
+            ServiceWireConstants.Command.RelocationData
         );
         return stage.AppendCanonicalInboundDataAsync(data);
     }
@@ -1191,7 +1191,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 cutover.SenderRole,
                 cutover.Object,
                 sourceNodeRid,
-                "34"
+                ServiceWireConstants.Command.RelocationCutover
             );
         }
         catch (ZLinkFrameworkException exception)
@@ -1263,7 +1263,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         byte senderRole,
         ZLinkServiceWireCodec.RelocationObjectRecord relocationObject,
         RoutingId sourceNodeRid,
-        string command
+        ServiceWireConstants.Command command
     )
     {
         var fence = new ZLinkAggregateFence(
@@ -1273,7 +1273,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         if (!_staged.TryGetValue(fence, out var entry) || entry is not TargetStage stage)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"Command {command} has no prepared target.",
+                $"Command {(byte)command} has no prepared target.",
                 ZLinkRetryAdvice.DoNotRetry
             );
         var spot = stage.SpotParticipant;
@@ -1307,7 +1307,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || relocationObject.ObjectGeneration != spot.ObjectGeneration
             || relocationObject.ExpectedAuthorityOwnerGeneration != expectedAuthorityOwnerGeneration
         )
-            throw new InvalidDataException($"Command {command} changed its prepared SPOT attempt.");
+            throw new InvalidDataException(
+                $"Command {(byte)command} changed its prepared SPOT attempt."
+            );
         return stage;
     }
 
@@ -2881,7 +2883,7 @@ internal sealed record TargetStage(
                     || cutover.BoundaryChecksumCrc32c != ~_relayCrcState
                 )
                     throw new InvalidDataException(
-                        "Command 34 boundary values do not match the staged relay span."
+                        $"Command {(byte)ServiceWireConstants.Command.RelocationCutover} boundary values do not match the staged relay span."
                     );
             })
         );
@@ -3047,7 +3049,9 @@ internal sealed record TargetStage(
         _lane.RunAsync(() =>
         {
             if (Volatile.Read(ref AuthorityPublished) != 0)
-                throw new InvalidDataException("Command 31 arrived after target cutover.");
+                throw new InvalidDataException(
+                    $"Command {(byte)ServiceWireConstants.Command.RelocationData} arrived after target cutover."
+                );
             var spot = SpotParticipant;
             var previous =
                 HeldRecords.Count == 0

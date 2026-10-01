@@ -56,7 +56,7 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
             );
         if (configuredManualMax is 0 or > MaximumQueueLimit)
             throw new ZLinkConfigurationException(
-                $"MaxQueuedApplicationJobs must be between 1 and {MaximumQueueLimit}."
+                $"MaxQueuedApplicationJobs must be positive and at most {MaximumQueueLimit}."
             );
         ValidatePressureThresholds(pauseThresholdPercent, resumeThresholdPercent);
 
@@ -84,7 +84,7 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
         }
         if (automatic > MaximumQueueLimit)
             throw new ZLinkConfigurationException(
-                "The automatic Application Job Queue limit exceeds 2,147,483,647."
+                $"The automatic Application Job Queue limit exceeds {MaximumQueueLimit}."
             );
 
         return new ZLinkApplicationJobQueueCapacity(

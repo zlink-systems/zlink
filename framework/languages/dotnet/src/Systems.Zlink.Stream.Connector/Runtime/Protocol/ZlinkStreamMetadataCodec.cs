@@ -78,7 +78,7 @@ internal static class ZlinkStreamMetadataCodec
         if (metadata.Count > byte.MaxValue)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Metadata entry count must not exceed 255."
+                $"Metadata entry count must not exceed {byte.MaxValue}."
             );
 
         var size = sizeof(byte);

@@ -14,7 +14,7 @@ internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime r
     {
         if (seal.Coordinator.NodeRid != authenticatedSourceNodeRid)
             throw new InvalidDataException(
-                "Command 42 coordinator does not match the authenticated source."
+                $"Command {(byte)ServiceWireConstants.Command.SessionRelocationSeal} coordinator does not match the authenticated source."
             );
         return runtime.SealCanonicalSessionActorRouteAsync(seal, cancellationToken);
     }
@@ -40,7 +40,7 @@ internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime r
                         == authenticatedRoute.AuthorityOwnerGeneration;
         if (!senderMatches)
             throw new InvalidDataException(
-                "Command 44 sender role does not match the authenticated source."
+                $"Command {(byte)ServiceWireConstants.Command.SessionRelocationRoute} sender role does not match the authenticated source."
             );
 
         return runtime.RouteCanonicalSessionActorAsync(

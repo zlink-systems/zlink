@@ -14,7 +14,7 @@ internal static class ZLinkRoutingIdPolicy
         var size = baseBytes.Length + 1 + suffixBytes.Length;
         if (size > byte.MaxValue)
             throw new ZLinkConfigurationException(
-                $"Derived routing id with suffix '{suffix}' exceeds the 255 byte limit."
+                $"Derived routing id with suffix '{suffix}' exceeds the {byte.MaxValue} byte limit."
             );
 
         var bytes = new byte[size];

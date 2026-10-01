@@ -90,7 +90,7 @@ internal readonly record struct ZLinkAuthorityScanCursor
         if (size is < 1 or > ZLinkLocationStoreLimits.MaximumCursorBytes)
             throw new ArgumentOutOfRangeException(
                 nameof(encoded),
-                "Authority scan cursors must be 1 to 4096 UTF-8 bytes."
+                $"Authority scan cursors must be non-empty UTF-8 values of at most {ZLinkLocationStoreLimits.MaximumCursorBytes} bytes."
             );
         Encoded = encoded;
     }

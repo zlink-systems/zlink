@@ -119,7 +119,7 @@ internal static class ZLinkSpotAcceptedJournal
             length = checked(length + 4 + part.Size);
         if (length > MaxRecordBytes)
             throw new InvalidOperationException(
-                "An accepted Spot journal record cannot exceed 64 MiB."
+                $"An accepted Spot journal record cannot exceed {MaxRecordBytes} bytes."
             );
         return length;
     }
@@ -188,7 +188,7 @@ internal static class ZLinkSpotAcceptedJournal
         writer.Flush();
         if (stream.Length > MaxRecordBytes)
             throw new InvalidOperationException(
-                "An accepted Spot journal record cannot exceed 64 MiB."
+                $"An accepted Spot journal record cannot exceed {MaxRecordBytes} bytes."
             );
         return stream.ToArray();
     }

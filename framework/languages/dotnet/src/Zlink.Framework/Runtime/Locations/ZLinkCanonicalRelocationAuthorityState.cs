@@ -343,7 +343,9 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             !source.Bytes(MagicBytes).SequenceEqual(AuthorityMagic)
             || source.U8() != AuthorityVersion
         )
-            throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
+            throw new InvalidDataException(
+                $"The authority payload is not canonical ZLAU v{AuthorityVersion}."
+            );
         var flags = source.U16();
         var body = source.Bytes(source.U32AsInt()).ToArray();
         var checksumOffset = source.Offset;
@@ -418,7 +420,9 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             !reader.Bytes(MagicBytes).SequenceEqual(AuthorityMagic)
             || reader.U8() != AuthorityVersion
         )
-            throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
+            throw new InvalidDataException(
+                $"The authority payload is not canonical ZLAU v{AuthorityVersion}."
+            );
         var flags = reader.U16();
         var body = reader.Bytes(reader.U32AsInt()).ToArray();
         var checksumOffset = reader.Offset;

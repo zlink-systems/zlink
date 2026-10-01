@@ -98,7 +98,9 @@ internal sealed class ZLinkLocationObjectQuery(
             result.Value.NextCursor?.Encoded
         );
         if (EncodedSizeUpperBound(pageResult) > MaximumEncodedPageBytes)
-            throw Unavailable("The encoded object location page exceeds 4 MiB.");
+            throw Unavailable(
+                $"The encoded object location page exceeds {MaximumEncodedPageBytes} bytes."
+            );
         return pageResult;
     }
 

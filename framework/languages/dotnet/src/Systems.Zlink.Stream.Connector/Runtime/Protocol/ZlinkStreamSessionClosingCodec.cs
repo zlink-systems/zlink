@@ -98,7 +98,7 @@ internal static class ZlinkStreamSessionClosingCodec
         if (diagnosticLength > MaximumDiagnosticBytes)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Session-closing diagnostic must not exceed 512 UTF-8 bytes."
+                $"Session-closing diagnostic must not exceed {MaximumDiagnosticBytes} UTF-8 bytes."
             );
 
         var payload = new byte[PrefixSize + diagnosticLength];

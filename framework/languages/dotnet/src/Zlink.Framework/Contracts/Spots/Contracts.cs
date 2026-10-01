@@ -83,7 +83,7 @@ public readonly record struct SpotRef(
     {
         if (string.IsNullOrEmpty(value) || value.Contains('\0'))
             throw new ArgumentException(
-                "Spot ID must be valid UTF-8 with an encoded size of 1..255 bytes.",
+                $"Spot ID must be valid UTF-8 with a non-empty encoded size of at most {byte.MaxValue} bytes.",
                 nameof(value)
             );
 
@@ -104,7 +104,7 @@ public readonly record struct SpotRef(
         if (byteCount is < 1 or > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Spot ID must be 1..255 UTF-8 bytes."
+                $"Spot ID must be non-empty UTF-8 text of at most {byte.MaxValue} bytes."
             );
         return value!;
     }

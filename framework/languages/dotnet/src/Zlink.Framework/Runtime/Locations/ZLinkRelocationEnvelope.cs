@@ -394,10 +394,12 @@ internal static class ZLinkRelocationEnvelopeCodec
             throw new InvalidDataException("The relocation root header is invalid.");
         var aggregateId = new Guid(reader.ReadBytes(16).Span);
         var aggregateGeneration = reader.ReadUInt64();
-        var decodedInventoryDigest = reader.ReadByteField(32);
-        if (decodedInventoryDigest.Length != 32)
+        var decodedInventoryDigest = reader.ReadByteField(
+            System.Security.Cryptography.SHA256.HashSizeInBytes
+        );
+        if (decodedInventoryDigest.Length != System.Security.Cryptography.SHA256.HashSizeInBytes)
             throw new InvalidDataException(
-                "The relocation inventory digest must contain 32 bytes."
+                $"The relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes."
             );
         var participantCount = reader.ReadCount(int.MaxValue, "participant");
         if (participantCount > reader.Remaining / MinEncodedParticipantBytes)
@@ -487,10 +489,13 @@ internal static class ZLinkRelocationEnvelopeCodec
             throw new InvalidDataException("The relocation root header is invalid.");
         var aggregateId = new Guid(ReadExact(reader, 16));
         var aggregateGeneration = reader.ReadUInt64();
-        var decodedInventoryDigest = ReadBytes(reader, 32);
-        if (decodedInventoryDigest.Length != 32)
+        var decodedInventoryDigest = ReadBytes(
+            reader,
+            System.Security.Cryptography.SHA256.HashSizeInBytes
+        );
+        if (decodedInventoryDigest.Length != System.Security.Cryptography.SHA256.HashSizeInBytes)
             throw new InvalidDataException(
-                "The relocation inventory digest must contain 32 bytes."
+                $"The relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes."
             );
         var participantCount = ReadCount(reader, int.MaxValue, "participant");
         if (participantCount > (input.Length - input.Position) / MinEncodedParticipantBytes)
@@ -738,10 +743,12 @@ internal static class ZLinkRelocationEnvelopeCodec
                     }
             )
             .ToArray();
-        var digest = inventoryDigest.IsEmpty ? new byte[32] : inventoryDigest.ToArray();
-        if (digest.Length != 32)
+        var digest = inventoryDigest.IsEmpty
+            ? new byte[System.Security.Cryptography.SHA256.HashSizeInBytes]
+            : inventoryDigest.ToArray();
+        if (digest.Length != System.Security.Cryptography.SHA256.HashSizeInBytes)
             throw new InvalidDataException(
-                "The relocation inventory digest must contain 32 bytes."
+                $"The relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes."
             );
         var result = new ZLinkRelocationEnvelope(
             RelocationGuid(generated.RelocationHigh, generated.RelocationLow),
@@ -1640,9 +1647,9 @@ internal static class ZLinkRelocationEnvelopeCodec
                 nameof(envelope),
                 "A relocation aggregate generation must be a non-zero signed 63-bit value."
             );
-        if (envelope.InventoryDigest.Length != 32)
+        if (envelope.InventoryDigest.Length != System.Security.Cryptography.SHA256.HashSizeInBytes)
             throw new ArgumentException(
-                "A relocation inventory digest must contain 32 bytes.",
+                $"A relocation inventory digest must contain {System.Security.Cryptography.SHA256.HashSizeInBytes} bytes.",
                 nameof(envelope)
             );
         if (envelope.Participants.Count < 1)
@@ -1708,7 +1715,7 @@ internal static class ZLinkRelocationEnvelopeCodec
         if (encoded.Length is < 1 or > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Relocation strings must be 1 to 65535 UTF-8 bytes."
+                $"Relocation strings must be non-empty UTF-8 byte sequences of at most {ushort.MaxValue} bytes."
             );
         writer.Write((ushort)encoded.Length);
         writer.Write(encoded);

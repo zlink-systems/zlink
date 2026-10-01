@@ -7,14 +7,6 @@ namespace Zlink.Framework.Locations.Redis;
 
 public sealed partial class ZLinkRedisLocationStore
 {
-    // Checklist C-2b: the authority record collapsed to one opaque row
-    // (21-location-runtime.md#2.4) now embeds its payload as base64 inside
-    // the same JSON value instead of a separate 1 MiB payload key. Spec §6
-    // caps the underlying creation/authority payload at 1 MiB; base64
-    // inflates that by ~4/3 plus JSON envelope overhead, so the per-key
-    // value bound must be raised above the old 1 MiB to keep admitting a
-    // maximum-size payload. This stays well under §8's 4 MiB whole-batch
-    // bound.
     private const int OpaqueFormatTag = 1;
     private const int OpaqueDataOffset = 2;
     private const int CleanupRetryMilliseconds = 1000;
@@ -691,7 +683,7 @@ public sealed partial class ZLinkRedisLocationStore
         _ = Encoding.UTF8.GetByteCount(prefix) is <= MaximumKeyBytes
             ? 0
             : throw new ArgumentException(
-                "The scan prefix exceeds 1024 UTF-8 bytes.",
+                $"The scan prefix exceeds {MaximumKeyBytes} UTF-8 bytes.",
                 nameof(request)
             );
         string scanId;
@@ -701,9 +693,9 @@ public sealed partial class ZLinkRedisLocationStore
         {
             var cursorValue = cursor.Value ?? string.Empty;
             var cursorBytes = Encoding.UTF8.GetByteCount(cursorValue);
-            if (cursorBytes is < 1 or > MaximumVersionBytes)
+            if (cursorBytes is < 1 or > MaximumCursorBytes)
                 throw new ArgumentException(
-                    "Store scan cursors must contain 1..4096 UTF-8 bytes.",
+                    $"Store scan cursors must be non-empty UTF-8 values of at most {MaximumCursorBytes} bytes.",
                     nameof(request)
                 );
             var separator = cursorValue.LastIndexOf(':');
@@ -828,7 +820,7 @@ public sealed partial class ZLinkRedisLocationStore
         var length = Encoding.UTF8.GetByteCount(key.Value ?? string.Empty);
         if (length is < 1 or > MaximumKeyBytes)
             throw new ArgumentException(
-                "Location Store keys must contain 1..1024 UTF-8 bytes.",
+                $"Location Store keys must be non-empty UTF-8 values of at most {MaximumKeyBytes} bytes.",
                 parameterName
             );
     }
@@ -870,7 +862,7 @@ public sealed partial class ZLinkRedisLocationStore
         if (conditionKeys.Concat(mutationKeys).Distinct().Count() > MaximumUniqueKeys)
         {
             throw new ArgumentException(
-                "A conditional batch can reference at most 2048 keys.",
+                $"A conditional batch can reference at most {MaximumUniqueKeys} keys.",
                 nameof(request)
             );
         }
@@ -888,7 +880,7 @@ public sealed partial class ZLinkRedisLocationStore
                     var length = Encoding.UTF8.GetByteCount(version.Expected.Value ?? string.Empty);
                     if (length is < 1 or > MaximumVersionBytes)
                         throw new ArgumentException(
-                            "Store versions must contain 1..4096 UTF-8 bytes.",
+                            $"Store versions must be non-empty UTF-8 values of at most {MaximumVersionBytes} bytes.",
                             nameof(request)
                         );
                     encodedBytes += length;
@@ -914,7 +906,7 @@ public sealed partial class ZLinkRedisLocationStore
                     encodedBytes += Encoding.UTF8.GetByteCount(put.Key.Value);
                     if (put.Bytes.Length > MaximumValueBytes)
                         throw new ArgumentException(
-                            "A Location Store value can contain at most 1 MiB.",
+                            $"A Location Store value can contain at most {MaximumValueBytes} bytes.",
                             nameof(request)
                         );
                     if (put.Retention is { } retention && retention <= TimeSpan.Zero)
@@ -928,6 +920,9 @@ public sealed partial class ZLinkRedisLocationStore
             }
         }
         if (encodedBytes > MaximumEncodedBatchBytes)
-            throw new ArgumentException("The encoded Store batch exceeds 4 MiB.", nameof(request));
+            throw new ArgumentException(
+                $"The encoded Store batch exceeds {MaximumEncodedBatchBytes} bytes.",
+                nameof(request)
+            );
     }
 }

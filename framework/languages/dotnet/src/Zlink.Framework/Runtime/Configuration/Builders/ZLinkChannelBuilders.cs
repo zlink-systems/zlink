@@ -49,9 +49,9 @@ internal sealed class ZLinkClientServerChannelServerBuilder(
 {
     public IZLinkClientServerChannelServerBuilder Listen(int port = 0)
     {
-        if (port is < 0 or > System.Net.IPEndPoint.MaxPort)
+        if (port is < System.Net.IPEndPoint.MinPort or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException(
-                "ClientServer listen port must be between 0 and 65535."
+                $"ClientServer listen port must be between {System.Net.IPEndPoint.MinPort} and {System.Net.IPEndPoint.MaxPort}."
             );
         server.ListenPort = port;
         return this;
@@ -129,9 +129,9 @@ internal sealed class ZLinkFanoutChannelBuilder(ZLinkChannelRegistration registr
 
     public IZLinkFanoutChannelBuilder EnablePublisher(int port = 0)
     {
-        if (port is < 0 or > System.Net.IPEndPoint.MaxPort)
+        if (port is < System.Net.IPEndPoint.MinPort or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException(
-                "Fanout publisher port must be between 0 and 65535."
+                $"Fanout publisher port must be between {System.Net.IPEndPoint.MinPort} and {System.Net.IPEndPoint.MaxPort}."
             );
         var publisher = Publisher();
         publisher.ListenPort = port;

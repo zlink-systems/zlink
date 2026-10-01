@@ -432,7 +432,7 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         )
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                "The application authority payload cannot exceed 1 MiB."
+                $"The application authority payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
     }
 
@@ -575,7 +575,7 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
         writer.Flush();
         if (stream.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new InvalidOperationException(
-                "The authority relocation payload cannot exceed 1 MiB."
+                $"The authority relocation payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
         return stream.ToArray();
     }

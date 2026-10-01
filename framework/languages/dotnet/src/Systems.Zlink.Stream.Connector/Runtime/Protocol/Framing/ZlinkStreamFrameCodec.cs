@@ -63,7 +63,7 @@ internal static class ZlinkStreamFrameCodec
     {
         if (destination.Length < PrefixSize)
             throw new ArgumentException(
-                "Frame prefix destination must be at least 6 bytes.",
+                $"Frame prefix destination must be at least {PrefixSize} bytes.",
                 nameof(destination)
             );
 

@@ -2419,7 +2419,7 @@ internal static partial class ZLinkServiceWireCodec
                 case (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight:
                     if (
                         !value.TryU32(out placementWeight)
-                        || placementWeight > ZLinkSocketConfig.MaximumPeerWeight
+                        || placementWeight > ZLinkSpotNodeRegistration.MaximumPlacementWeight
                         || value.Remaining != 0
                     )
                         return false;

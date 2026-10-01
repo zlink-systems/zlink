@@ -384,6 +384,7 @@ internal sealed class ZLinkMeshChannelMembership
 internal sealed class ZLinkSpotNodeRegistration
 {
     internal const int DefaultPlacementWeight = 100;
+    internal const int MaximumPlacementWeight = 10_000;
     internal const int DefaultActivationConcurrencyLimit = 128;
     public required string SpotNodeName { get; init; }
 

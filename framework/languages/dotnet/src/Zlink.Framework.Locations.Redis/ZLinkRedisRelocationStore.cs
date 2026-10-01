@@ -377,7 +377,7 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
         var bytes = Encoding.UTF8.GetByteCount(reference ?? string.Empty);
         if (bytes is < 1 or > MaximumReferenceBytes)
             throw new ArgumentException(
-                "Relocation references must contain 1..4096 UTF-8 bytes.",
+                $"Relocation references must be non-empty UTF-8 values of at most {MaximumReferenceBytes} bytes.",
                 nameof(reference)
             );
     }

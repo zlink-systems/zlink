@@ -2,7 +2,7 @@ namespace Zlink.Framework.Runtime.Configuration;
 
 internal static class ZLinkFanoutRoutingIdPolicy
 {
-    private const int MaximumPrefixLength = 64;
+    internal const int MaximumPrefixLength = 64;
 
     internal static bool IsValidPrefix(string? prefix) =>
         !string.IsNullOrEmpty(prefix)
@@ -19,7 +19,7 @@ internal static class ZLinkFanoutRoutingIdPolicy
         ArgumentNullException.ThrowIfNull(prefix);
         if (!IsValidPrefix(prefix))
             throw new ZLinkConfigurationException(
-                "Fanout publisher routing-id prefix must contain 1 to 64 ASCII "
+                $"Fanout publisher routing-id prefix must be non-empty and contain at most {MaximumPrefixLength} ASCII "
                     + "letters, digits, '.', '_' or '-'."
             );
     }

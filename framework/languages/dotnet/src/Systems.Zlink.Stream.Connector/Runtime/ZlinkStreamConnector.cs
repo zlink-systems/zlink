@@ -643,7 +643,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             throw Error(errorCode, "Message name uses a reserved zlink prefix.");
 
         if (Encoding.UTF8.GetByteCount(name) > byte.MaxValue)
-            throw Error(errorCode, "Message name must not exceed 255 UTF-8 bytes.");
+            throw Error(errorCode, $"Message name must not exceed {byte.MaxValue} UTF-8 bytes.");
     }
 
     private void ThrowIfDisposed()

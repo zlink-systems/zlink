@@ -70,7 +70,7 @@ public readonly record struct ActorRef(
         if (byteCount > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Actor ID must be 1..255 UTF-8 bytes."
+                $"Actor ID must be non-empty UTF-8 text of at most {byte.MaxValue} bytes."
             );
         return value;
     }
