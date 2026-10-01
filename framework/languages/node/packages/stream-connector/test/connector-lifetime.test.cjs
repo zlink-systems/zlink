@@ -10,6 +10,7 @@ const {
 } = require('../dist/Runtime/ZlinkStreamActors');
 const { ZlinkStreamHeaderCodec } = require('../dist/Runtime/Protocol/ZlinkStreamHeaderCodec');
 const wire = require('@zlink-systems/stream-wire');
+const { namedReplyHeader } = require('../../../test/contract/helpers/named-reply-header');
 const { ZlinkStreamReceiveDispatcher } = require('../dist/Runtime/ZlinkStreamReceiveDispatcher');
 const { ZlinkStreamMetadataCodec } = require('../dist/Runtime/Protocol/ZlinkStreamMetadataCodec');
 
@@ -372,10 +373,7 @@ test('F20 connector preserves valid names and maps named replies to FrameDecodeF
       metadata: new Map()
     });
     assert.equal(ZlinkStreamHeaderCodec.decode(header).name, '');
-    const named = new Uint8Array(header.length + 1);
-    named.set(header);
-    named[12] = 1;
-    named[13] = 65;
+    const named = namedReplyHeader(kind);
     assert.throws(
       () => ZlinkStreamHeaderCodec.decode(named),
       (error) =>
@@ -421,18 +419,7 @@ test(
       try {
         await instance.connect();
         await reading;
-        const header = wire.encodeStreamWireHeader({
-          kind,
-          codec: api.ZlinkStreamCodec.Json,
-          flags: 0,
-          requestSeq: 1n,
-          name: '',
-          metadata: new Map()
-        });
-        const named = new Uint8Array(header.length + 1);
-        named.set(header);
-        named[12] = 1;
-        named[13] = 65;
+        const named = namedReplyHeader(kind);
         deliver(wire.encodeStreamWireFrame(named, new Uint8Array()));
         await disconnected;
         assert.equal(instance.state, api.ZlinkStreamConnectionState.Disconnected);
