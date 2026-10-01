@@ -1681,6 +1681,67 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
     zlink::framework::app_t *_app;
 };
 
+class fanout_topic_context_handler_t
+{
+  public:
+    using event_type = auto_connect_event_t;
+
+    void handle (const auto_connect_event_t &event,
+                 const zlink::framework::publish_message_context_t &context)
+    {
+        if (event.value == 1 && context.topic == "a") {
+            observed_a.store (true, std::memory_order_release);
+        } else if (event.value == 2 && context.topic == "b") {
+            observed_b.store (true, std::memory_order_release);
+        }
+    }
+
+    inline static std::atomic_bool observed_a{false};
+    inline static std::atomic_bool observed_b{false};
+};
+
+class fanout_topic_context_publish_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit fanout_topic_context_publish_client_t (zlink::framework::app_t &app) : _app (&app) {}
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    {
+        auto publisher = _app->advanced ().zlink ().publisher ();
+        for (int attempt = 0;
+             attempt < 80
+             && (!fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire)
+                 || !fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire));
+             ++attempt) {
+            try {
+                if (!fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire)) {
+                    co_await publisher
+                      .publish ("fanout-topic-context", "a", auto_connect_event_t{1})
+                      .async ();
+                }
+                if (!fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire)) {
+                    co_await publisher
+                      .publish ("fanout-topic-context", "b", auto_connect_event_t{2})
+                      .async ();
+                }
+            }
+            catch (const std::exception &error) {
+                last_error = error.what ();
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (25));
+        }
+        _app->stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    std::string last_error;
+
+  private:
+    zlink::framework::app_t *_app;
+};
+
 template <typename Store>
 location_owner_token_t claim_test_owner (Store &store,
                                          std::string owner_id,
@@ -3143,6 +3204,37 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppFanoutPublishUsesLocationAutoConn
     EXPECT_GT (automatic_handler_scope_filter_t::blocked_fanout_dispatches.load (), 0);
     EXPECT_EQ (automatic_handler_scope_dependency_t::created.load (),
                automatic_handler_scope_dependency_t::destroyed.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      AppFanoutTypedHandlerUsesPacketNameAcrossTopicsAndPreservesContext)
+{
+    auto store = std::make_shared<in_memory_location_store_t> ();
+    auto app = zlink::framework::app_t::create ();
+    fanout_topic_context_handler_t::observed_a.store (false, std::memory_order_release);
+    fanout_topic_context_handler_t::observed_b.store (false, std::memory_order_release);
+    fanout_topic_context_publish_client_t *client = nullptr;
+
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
+        options.handlers ()
+          .group ("fanout-topic-context")
+          .add_publish<fanout_topic_context_handler_t> ();
+        options.add_fanout_channel ("fanout-topic-context")
+          .set_routing_id (zlink::routing_id_t::from ("fanout-topic-context-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("fanout-topic-context");
+    });
+    auto service = std::make_unique<fanout_topic_context_publish_client_t> (app);
+    client = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    EXPECT_EQ (0, app.run (0, nullptr));
+    ASSERT_NE (nullptr, client);
+    EXPECT_TRUE (fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire));
+    EXPECT_TRUE (fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire));
+    EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshConnections)
