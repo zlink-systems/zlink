@@ -35,11 +35,6 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         if (usesClientServerClientPath)
         {
-            if (!metadata.IsEmpty)
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-                throw ZLinkClassicCallSupport.MetadataNotSupported();
-            }
             ZLinkClientServerClientRuntime clientRuntime;
             try
             {
@@ -124,11 +119,6 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         if (usesClientServerClientPath)
         {
-            if (!metadata.IsEmpty)
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-                throw ZLinkClassicCallSupport.MetadataNotSupported();
-            }
             ZLinkClientServerClientRuntime clientRuntime;
             try
             {

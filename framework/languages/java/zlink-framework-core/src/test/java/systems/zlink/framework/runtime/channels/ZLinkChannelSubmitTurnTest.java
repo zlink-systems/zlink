@@ -82,8 +82,7 @@ final class ZLinkChannelSubmitTurnTest {
     }
 
     @Test
-    void clientServerStillRejectsExplicitMetadataIncludingAnEmptyMapBeforeReadinessWait()
-            throws Exception {
+    void clientServerMetadataIncludingAnEmptyMapUsesNormalReadinessAdmission() throws Exception {
         try (Fixture f = new Fixture()) {
             ChannelRegistration channel =
                     new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
@@ -93,16 +92,26 @@ final class ZLinkChannelSubmitTurnTest {
                     java.util.List.of(Map.<String, String>of(), Map.of("key", "value"))) {
                 ZLinkSendCall send = f.send().metadata(values);
                 ZLinkRequestCall request = f.request().metadata(values);
-                assertThrows(UnsupportedOperationException.class, send::submit);
-                assertInstanceOf(
-                        UnsupportedOperationException.class,
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                         assertThrows(
-                                        CompletionException.class,
-                                        () ->
-                                                request.submit(String.class)
-                                                        .toCompletableFuture()
-                                                        .join())
-                                .getCause());
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        send::submit)
+                                .kind());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        assertThrows(
+                                                        CompletionException.class,
+                                                        () ->
+                                                                request.submit(String.class)
+                                                                        .toCompletableFuture()
+                                                                        .join())
+                                                .getCause())
+                                .kind());
             }
         }
     }
@@ -233,7 +242,6 @@ final class ZLinkChannelSubmitTurnTest {
                                             "orders",
                                             null,
                                             DEFAULT_TIMEOUT,
-                                            false,
                                             (target, remaining) -> {
                                                 assertSame(dealer, target);
                                                 assertSame(f.lane, ZLinkStateLane.current());

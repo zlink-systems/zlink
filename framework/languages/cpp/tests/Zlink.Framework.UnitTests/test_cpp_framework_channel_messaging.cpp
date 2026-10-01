@@ -1216,11 +1216,12 @@ int main ()
     bool protobuf_strict_decode_succeeded = false;
     protobuf_client_runtime.bind_client_server_transport (
       "protobuf-client",
-      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds) {
+      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+          std::map<std::string, std::string>) {
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
       },
       [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
-           std::chrono::milliseconds) {
+           std::chrono::milliseconds, std::map<std::string, std::string>) {
           observed_protobuf_packet_name = std::move (packet_name);
           observed_protobuf_content_type = content_type;
           observed_protobuf_payload = payload.to_string ();
