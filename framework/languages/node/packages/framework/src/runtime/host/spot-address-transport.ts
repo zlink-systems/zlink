@@ -87,11 +87,6 @@ type MissingTargetSelection =
   | { readonly kind: 'capacity' }
   | { readonly kind: 'unavailable' };
 
-// Only a synchronous target-admission rejection is safe to retry. A
-// completion with the same public error kind may already represent an
-// admitted application operation, so it must not enter the retry loop.
-const PRE_ADMISSION_MISSING_INSTANCE_ERRORS = new WeakSet<ZLinkFrameworkException>();
-
 /** Owns global Spot authority lookup and Missing Instance placement. */
 export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport {
   constructor(private readonly options: ZLinkHostSpotAddressTransportOptions) {}
@@ -284,57 +279,28 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const timeoutMs = call.timeoutMs ?? this.options.defaultRequestTimeoutMs;
     const deadline = createSpotAddressDeadline(timeoutMs, call.signal);
     try {
-      for (;;) {
-        const existing = await this.resolveExisting(spotId, deadline.signal);
-        deadline.requireRemaining();
-
-        if (existing !== undefined) {
-          this.validateExisting(existing, call);
-          try {
-            return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
-          } catch (error) {
-            if (isSpotRouteRefreshError(error)) {
-              this.options.resolver()?.invalidate?.(spotId);
-            }
-            const recovery = await this.recoverStaleInstanceRoute(
-              spotId,
-              call,
-              deadline,
-              error,
-              existing
-            );
-            if (recovery.kind === 'route') {
-              // Retry only after the resolver exposes a different route. The
-              // stale target cannot have admitted the application operation.
-              continue;
-            }
-            if (recovery.kind !== 'cold') {
-              this.reportInstanceRequestError(
-                spotId,
-                request,
-                error,
-                existing.routerChannelId,
-                existing.targetNodeRid,
-                existing.stableType,
-                addressedInstanceErrorReason(error)
-              );
-              throw error;
-            }
-            // The logical authority is no longer Ready, so the Instance
-            // intent path below may submit the original operation once.
-          }
-        }
-
-        try {
-          return await this.requestToMissingInstance(spotId, request, call, deadline);
-        } catch (error) {
-          if (!isMissingInstanceRetryError(error)) throw error;
-          // A placement node can finish cleanup before its stale native result
-          // reaches this process. Refresh authority and select again under the
-          // same end-to-end deadline; the old envelope was not admitted.
+      const existing = await this.resolveExisting(spotId, deadline.signal);
+      deadline.requireRemaining();
+      if (existing === undefined) {
+        return await this.requestToMissingInstance(spotId, request, call, deadline);
+      }
+      this.validateExisting(existing, call);
+      try {
+        return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
+      } catch (error) {
+        if (isSpotRouteRefreshError(error)) {
           this.options.resolver()?.invalidate?.(spotId);
-          await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
         }
+        this.reportInstanceRequestError(
+          spotId,
+          request,
+          error,
+          existing.routerChannelId,
+          existing.targetNodeRid,
+          existing.stableType,
+          addressedInstanceErrorReason(error)
+        );
+        throw error;
       }
     } catch (error) {
       if (
@@ -450,28 +416,17 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const table = this.options.completions(selected.meshName);
     if (table === undefined)
       throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
-    let completionPromise: ReturnType<ZLinkMeshCompletionTable['submit']>;
-    try {
-      completionPromise = table.submit(
-        () =>
-          selected.node.requestToMissingInstanceSpot(
-            selected.target,
-            encoded,
-            deadlineUnixMs,
-            call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-            call.metadata
-          ),
-        deadline.signal
-      );
-    } catch (error) {
-      if (
-        error instanceof ZLinkFrameworkException &&
-        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      ) {
-        PRE_ADMISSION_MISSING_INSTANCE_ERRORS.add(error);
-      }
-      throw error;
-    }
+    const completionPromise = table.submit(
+      () =>
+        selected.node.requestToMissingInstanceSpot(
+          selected.target,
+          encoded,
+          deadlineUnixMs,
+          call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+          call.metadata
+        ),
+      deadline.signal
+    );
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.Sent,
       ZLinkDispatchMessageKind.Request,
@@ -581,35 +536,6 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         return undefined;
       }
       throw error;
-    }
-  }
-
-  private async recoverStaleInstanceRoute(
-    spotId: RoutingId,
-    call: ZLinkSpotAddressCallOptions,
-    deadline: ZLinkSpotAddressDeadline,
-    error: unknown,
-    staleRoute: ZLinkSpotRouteTarget
-  ): Promise<
-    | { readonly kind: 'route'; readonly route: ZLinkSpotRouteTarget }
-    | { readonly kind: 'cold' }
-    | { readonly kind: 'fail' }
-  > {
-    if (
-      !call.instanceSpot ||
-      !(error instanceof ZLinkFrameworkException) ||
-      !isInstanceRouteStaleError(error)
-    ) {
-      return { kind: 'fail' };
-    }
-    for (;;) {
-      deadline.requireRemaining();
-      const current = await this.resolveExisting(spotId, deadline.signal);
-      if (current === undefined) return { kind: 'cold' };
-      if (!sameSpotRouteSnapshot(current, staleRoute)) {
-        return { kind: 'route', route: current };
-      }
-      await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
     }
   }
 
@@ -775,25 +701,6 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   }
 }
 
-function isInstanceRouteStaleError(error: unknown): error is ZLinkFrameworkException {
-  if (!(error instanceof ZLinkFrameworkException)) return false;
-  const kind = internalFrameworkErrorKind(error);
-  // RequestTargetNotFound from an existing route is a pre-admission route
-  // lookup failure. A stale owner result is terminal for this application
-  // operation: the routed request may already have crossed the transport
-  // boundary, so refreshing the route and resubmitting it could execute the
-  // same operation twice. Instance cold activation is selected only when the
-  // authority resolver itself reports that the Ready route is absent.
-  if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) return true;
-  return false;
-}
-
-function isMissingInstanceRetryError(error: unknown): error is ZLinkFrameworkException {
-  return (
-    error instanceof ZLinkFrameworkException && PRE_ADMISSION_MISSING_INSTANCE_ERRORS.has(error)
-  );
-}
-
 function missingInstanceRequestFailure(
   result: number,
   nativeErrno: number
@@ -858,39 +765,6 @@ function isSpotRouteRefreshError(error: unknown): error is ZLinkFrameworkExcepti
     kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
     kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
   );
-}
-
-function sameSpotRouteSnapshot(left: ZLinkSpotRouteTarget, right: ZLinkSpotRouteTarget): boolean {
-  return (
-    String(left.targetNodeRid) === String(right.targetNodeRid) &&
-    String(left.spotId) === String(right.spotId) &&
-    left.routerChannelId === right.routerChannelId &&
-    left.spotKind === right.spotKind &&
-    left.stableType === right.stableType &&
-    left.targetSpotGeneration === right.targetSpotGeneration &&
-    left.targetNodeGeneration === right.targetNodeGeneration &&
-    left.authorityOwnerGeneration === right.authorityOwnerGeneration &&
-    left.targetOwnerId === right.targetOwnerId &&
-    left.ownerLeaseGeneration === right.ownerLeaseGeneration &&
-    left.authorityStoreVersion === right.authorityStoreVersion
-  );
-}
-
-function waitForSpotRouteRefresh(delayMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', abort);
-      resolve();
-    };
-    const abort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', abort);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(finish, delayMs);
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
-  });
 }
 
 function submitResultReason(status: ZLinkSubmitStatus): ZLinkDispatchErrorReason {
