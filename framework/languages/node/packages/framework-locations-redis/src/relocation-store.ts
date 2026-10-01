@@ -1,4 +1,4 @@
-import { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from '@zlink-systems/framework';
+import { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from './framework-internal';
 import type {
   ZLinkBlobPutResult,
   ZLinkBlobReadResult,
@@ -48,14 +48,11 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
         signal
       )
     );
-    const kind = asString(result[0]);
+    const outcome = asString(result[0]);
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (kind === REDIS_STORE_TOKEN.Conflict) return { kind, storeNow };
+    if (outcome === REDIS_STORE_TOKEN.Conflict) return { kind: 'conflict', storeNow };
     return {
-      kind:
-        kind === REDIS_STORE_TOKEN.AlreadyStored
-          ? REDIS_STORE_TOKEN.AlreadyStored
-          : REDIS_STORE_TOKEN.Stored,
+      kind: outcome === REDIS_STORE_TOKEN.AlreadyStored ? 'alreadyStored' : 'stored',
       storeNow,
       expiresAt: fromUnixMs(toNumber(result[2]))
     };
@@ -67,7 +64,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
       await this.connection.eval(BLOB_READ_SCRIPT, [this.blobKey(referenceValue)], [], signal)
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (toNumber(result[0]) !== 1) return { kind: REDIS_STORE_TOKEN.Missing, storeNow };
+    if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     return {
       kind: 'found',
       bytes: Uint8Array.from(asBuffer(result[2])),
@@ -92,7 +89,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
       )
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (toNumber(result[0]) !== 1) return { kind: REDIS_STORE_TOKEN.Missing, storeNow };
+    if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     return {
       kind: 'renewed',
       expiresAt: fromUnixMs(toNumber(result[2])),
@@ -118,14 +115,18 @@ function requireReference(reference: ZLinkBlobReference): string {
   const value = reference.value;
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes < 1 || bytes > ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES) {
-    throw new RangeError('Relocation Store reference must contain 1..4,096 UTF-8 bytes.');
+    throw new RangeError(
+      `Relocation Store reference must contain 1..${ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   return value;
 }
 
 function requirePayload(payload: Uint8Array): void {
   if (payload.byteLength > MAX_ENCODED_BLOB_BYTES) {
-    throw new RangeError('Relocation Store encoded blob exceeds 64 MiB + 23 bytes.');
+    throw new RangeError(
+      `Relocation Store encoded blob exceeds ${Math.floor(MAX_ENCODED_BLOB_BYTES / (1024 * 1024))} MiB + ${MAX_ENCODED_BLOB_BYTES % (1024 * 1024)} bytes.`
+    );
   }
 }
 

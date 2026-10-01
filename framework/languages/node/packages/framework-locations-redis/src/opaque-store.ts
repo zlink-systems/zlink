@@ -6,7 +6,7 @@ import {
   ZLINK_PROVIDER_MAX_WRITE_BYTES,
   ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES,
   ZLINK_PROVIDER_MAX_PAGE_SIZE
-} from '@zlink-systems/framework';
+} from './framework-internal';
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   ZLinkLocationStore,
@@ -55,7 +55,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
       await this.connection.eval(OPAQUE_READ_SCRIPT, [this.rowKey(logicalKey)], [], signal)
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (toNumber(result[0]) !== 1) return { kind: REDIS_STORE_TOKEN.Missing, storeNow };
+    if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     requireMatchingKey(asString(result[2]), logicalKey);
     return {
       kind: 'found',
@@ -96,8 +96,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
     const outcome = asString(result[0]);
-    if (outcome === REDIS_STORE_TOKEN.Conflict)
-      return { kind: REDIS_STORE_TOKEN.Conflict, storeNow };
+    if (outcome === REDIS_STORE_TOKEN.Conflict) return { kind: 'conflict', storeNow };
     if (outcome === REDIS_STORE_TOKEN.Backlog) {
       throw new Error('Redis Location Store version backlog is full.');
     }
@@ -111,7 +110,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
         version: storeVersion(asString(result[index + 1]))
       });
     }
-    return { kind: REDIS_STORE_TOKEN.Applied, putVersions, storeNow };
+    return { kind: 'applied', putVersions, storeNow };
   }
 
   async scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
@@ -147,7 +146,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
   private async readScanPage(snapshotId: string, raw: unknown): Promise<ZLinkStoreScanResult> {
     const result = asArray(raw);
     const outcome = asString(result[0]);
-    if (outcome === REDIS_STORE_TOKEN.Expired) return { kind: REDIS_STORE_TOKEN.Expired };
+    if (outcome === REDIS_STORE_TOKEN.Expired) return { kind: 'expired' };
     if (outcome === REDIS_STORE_TOKEN.Capacity) {
       throw new Error('Redis Location Store snapshot capacity is full.');
     }
@@ -169,7 +168,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
       });
     }
     return {
-      kind: REDIS_STORE_TOKEN.Page,
+      kind: 'page',
       value: {
         items,
         nextCursor:
@@ -245,7 +244,9 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   }
   const keys = [...new Set([...conditionKeys, ...mutationKeys])];
   if (keys.length > ZLINK_PROVIDER_MAX_WRITE_KEYS) {
-    throw new RangeError('Location Store write exceeds 2,048 unique keys.');
+    throw new RangeError(
+      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_KEYS.toLocaleString('en-US')} unique keys.`
+    );
   }
   // Row keys are appended after the six fixed auxiliary keys; the script
   // adds 6 to this 1-based index before indexing into KEYS.
@@ -255,9 +256,8 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   const conditions = request.conditions.map((condition) => {
     const key = requireKey(condition.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
-    if (condition.kind === REDIS_STORE_TOKEN.Missing)
-      return [REDIS_STORE_TOKEN.Missing, keyIndex.get(key), key];
-    if (condition.kind === REDIS_STORE_TOKEN.Value) {
+    if (condition.kind === 'missing') return [REDIS_STORE_TOKEN.Missing, keyIndex.get(key), key];
+    if (condition.kind === 'value') {
       requireValue(condition.expected, undefined);
       encodedBytes += condition.expected.byteLength;
       expectedBytes.push(Buffer.from(condition.expected));
@@ -271,8 +271,7 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   const mutations = request.mutations.map((mutation) => {
     const key = requireKey(mutation.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
-    if (mutation.kind === REDIS_STORE_TOKEN.Delete)
-      return [REDIS_STORE_TOKEN.Delete, keyIndex.get(key), key];
+    if (mutation.kind === 'delete') return [REDIS_STORE_TOKEN.Delete, keyIndex.get(key), key];
     const retentionMs = requireValue(mutation.bytes, mutation.retentionMs);
     encodedBytes += mutation.bytes.byteLength;
     putBytes.push(Buffer.from(mutation.bytes));
@@ -286,14 +285,18 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
   if (Buffer.byteLength(request.prefix, 'utf8') > ZLINK_PROVIDER_MAX_KEY_BYTES) {
-    throw new RangeError('Location Store scan prefix exceeds 1,024 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store scan prefix exceeds ${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   if (
     !Number.isSafeInteger(request.limit) ||
     request.limit < 1 ||
     request.limit > ZLINK_PROVIDER_MAX_PAGE_SIZE
   ) {
-    throw new RangeError('Location Store scan limit must be in 1..1000.');
+    throw new RangeError(
+      `Location Store scan limit must be in 1..${ZLINK_PROVIDER_MAX_PAGE_SIZE}.`
+    );
   }
   if (request.cursor !== undefined) requireCursor(request.cursor);
 }
@@ -302,7 +305,9 @@ function requireKey(key: ZLinkStoreKey): string {
   const value = key.value;
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_KEY_BYTES) {
-    throw new RangeError('Location Store key must contain 1..1,024 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store key must contain 1..${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   return value;
 }
@@ -317,7 +322,9 @@ function requireVersion(version: ZLinkStoreVersion): string {
   const value = version.value;
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_VERSION_BYTES) {
-    throw new RangeError('Location Store version must contain 1..4,096 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store version must contain 1..${ZLINK_PROVIDER_MAX_VERSION_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   return value;
 }
@@ -326,7 +333,9 @@ function requireCursor(cursor: ZLinkStoreScanCursor): string {
   const value = cursor.value;
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES) {
-    throw new RangeError('Location Store cursor must contain 1..4,096 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store cursor must contain 1..${ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   return value;
 }

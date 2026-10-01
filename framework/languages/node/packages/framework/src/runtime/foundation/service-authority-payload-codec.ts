@@ -1,3 +1,4 @@
+import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
 import { SERVICE_WIRE_TEXT8_MAX_BYTES } from './service-wire-binary-primitives';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { ZLinkSpotKind, zlinkSpotKindToWire } from '../../contracts';
@@ -426,16 +427,20 @@ function rid(value: string, name: string): Buffer {
 function text16(value: string, name: string): Buffer {
   const bytes = Buffer.from(value);
   if (bytes.byteLength < 1 || bytes.byteLength > AUTHORITY_TEXT16_MAX_BYTES || bytes.includes(0)) {
-    throw new RangeError(`${name} must contain 1..65535 UTF-8 bytes without NUL.`);
+    throw new RangeError(
+      `${name} must contain 1..${AUTHORITY_TEXT16_MAX_BYTES} UTF-8 bytes without NUL.`
+    );
   }
   return concat(u16(bytes.byteLength), bytes);
 }
 
 function sha256(value: Uint8Array): Buffer {
-  if (value.byteLength !== 32) {
-    throw new RangeError('activationRecovery.sha256 must contain exactly 32 bytes.');
+  if (value.byteLength !== SHA256_DIGEST_BYTES) {
+    throw new RangeError(
+      `activationRecovery.sha256 must contain exactly ${SHA256_DIGEST_BYTES} bytes.`
+    );
   }
-  return concat(Buffer.of(32), value);
+  return concat(Buffer.of(SHA256_DIGEST_BYTES), value);
 }
 
 function sized8(value: string, name: string): Buffer {
@@ -445,7 +450,9 @@ function sized8(value: string, name: string): Buffer {
     bytes.byteLength > SERVICE_WIRE_TEXT8_MAX_BYTES ||
     bytes.includes(0)
   ) {
-    throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
+    throw new RangeError(
+      `${name} must contain 1..${SERVICE_WIRE_TEXT8_MAX_BYTES} UTF-8 bytes without NUL.`
+    );
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
 }

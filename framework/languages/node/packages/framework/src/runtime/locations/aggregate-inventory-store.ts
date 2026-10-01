@@ -214,7 +214,7 @@ function buildTree(request: ZLinkAggregatePrepareRequest): InventoryTree {
     throw new RangeError('Aggregate inventory requires at least one participant.');
   }
   if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
-    throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
+    throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
   }
   const entries = request.participants.map((participant, index): InventoryEntry => ({
     index,
@@ -244,7 +244,7 @@ function buildTree(request: ZLinkAggregatePrepareRequest): InventoryTree {
   ) {
     level++;
     if (level >= MAX_TREE_LEVELS) {
-      throw new RangeError('Aggregate inventory tree exceeds 32 levels.');
+      throw new RangeError(`Aggregate inventory tree exceeds ${MAX_TREE_LEVELS} levels.`);
     }
     references = packIndexPages(level, references, pages);
   }

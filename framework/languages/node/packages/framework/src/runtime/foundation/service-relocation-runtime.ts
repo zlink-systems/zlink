@@ -2,7 +2,7 @@ const MAX_RELOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { enumWireRelocationPhase } from '../protocol/service_wire_codec.generated';
-const AUTHORITY_RECORD_MAX_BYTES = 1024 * 1024;
+import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 const RELOCATION_PREPARING_PHASE = enumWireRelocationPhase('preparing');
 const RELOCATION_ACTIVATING_PHASE = enumWireRelocationPhase('activating');
 const RELOCATION_COMPLETED_PHASE = enumWireRelocationPhase('completed');
@@ -334,7 +334,7 @@ function decodeCanonicalAuthorityPublication(
 function decodeCanonicalAuthorityLayout(payload: Uint8Array): CanonicalAuthorityLayout | undefined {
   try {
     const bytes = Buffer.from(payload);
-    if (bytes.byteLength < 20 || bytes.byteLength > AUTHORITY_RECORD_MAX_BYTES) return undefined;
+    if (bytes.byteLength < 20 || bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) return undefined;
     const reader = new CanonicalReader(bytes);
     reader.expect(Buffer.from('ZLAU'));
     if (reader.u8() !== 1) return undefined;
@@ -594,8 +594,10 @@ function replaceCanonicalRelocationSlot(
     body
   ]);
   const result = Buffer.concat([envelope, canonicalU32(crc32c(envelope))]);
-  if (result.byteLength > AUTHORITY_RECORD_MAX_BYTES) {
-    throw new TypeError('Canonical authority payload exceeds 1 MiB.');
+  if (result.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new TypeError(
+      `Canonical authority payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return result;
 }
@@ -1055,8 +1057,10 @@ function encodeAuthorityEnvelope(
     i64le(targetOwnerLeaseGeneration),
     bytes32le(base)
   ]);
-  if (payload.byteLength > AUTHORITY_RECORD_MAX_BYTES) {
-    throw new TypeError('Location authority relocation payload exceeds 1 MiB.');
+  if (payload.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new TypeError(
+      `Location authority relocation payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return payload;
 }
@@ -1196,8 +1200,10 @@ function text16le(value: string): Buffer {
 
 function bytes32le(value: Uint8Array): Buffer {
   const bytes = Buffer.from(value);
-  if (bytes.byteLength > AUTHORITY_RECORD_MAX_BYTES) {
-    throw new TypeError('Relocation byte field exceeds 1 MiB.');
+  if (bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new TypeError(
+      `Relocation byte field exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   const length = Buffer.alloc(4);
   length.writeInt32LE(bytes.byteLength);
@@ -1402,8 +1408,10 @@ class DotnetBinaryReader {
 
   constructor(payload: Uint8Array) {
     this.bytes = Buffer.from(payload);
-    if (this.bytes.byteLength > AUTHORITY_RECORD_MAX_BYTES) {
-      throw new TypeError('Location authority relocation payload exceeds 1 MiB.');
+    if (this.bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+      throw new TypeError(
+        `Location authority relocation payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+      );
     }
   }
 
@@ -1441,7 +1449,7 @@ class DotnetBinaryReader {
 
   bytes32(): Buffer {
     const length = this.take(4).readInt32LE(0);
-    if (length < 0 || length > AUTHORITY_RECORD_MAX_BYTES) {
+    if (length < 0 || length > AUTHORITY_ENVELOPE_MAX_BYTES) {
       throw new TypeError('Location authority relocation byte field is invalid.');
     }
     return Buffer.from(this.take(length));

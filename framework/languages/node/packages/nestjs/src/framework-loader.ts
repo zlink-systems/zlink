@@ -36,6 +36,9 @@ import type {
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
+  readonly MAX_LISTENER_PORT: number;
+  readonly ZLINK_MAX_PUBLIC_WEIGHT: number;
+  readonly ZLINK_MAX_CAPACITY: number;
   readonly ZLINK_MAX_STABLE_TYPE_BYTES: number;
   readonly ZLinkConfigurationException: new (message: string) => Error;
   createFrameworkRegistration(
@@ -130,9 +133,19 @@ interface FrameworkIntegrationModule {
 function loadFramework(): FrameworkIntegrationModule {
   const requireFramework = createRequire(__filename);
   const frameworkEntry = requireFramework.resolve('@zlink-systems/framework');
-  return requireFramework(
-    path.join(path.dirname(frameworkEntry), 'nest-integration')
-  ) as FrameworkIntegrationModule;
+  const internal = requireFramework(path.join(path.dirname(frameworkEntry), 'internal'));
+  return {
+    ...requireFramework(path.join(path.dirname(frameworkEntry), 'nest-integration')),
+    MAX_LISTENER_PORT: internal.MAX_LISTENER_PORT,
+    ZLINK_MAX_PUBLIC_WEIGHT: internal.ZLINK_MAX_PUBLIC_WEIGHT,
+    ZLINK_MAX_CAPACITY: internal.ZLINK_MAX_CAPACITY,
+    ZLINK_MAX_STABLE_TYPE_BYTES: internal.ZLINK_MAX_STABLE_TYPE_BYTES,
+    isValidPublicWeight: internal.isValidPublicWeight,
+    isValidPositiveCapacity: internal.isValidPositiveCapacity,
+    isValidListenerPort: internal.isValidListenerPort,
+    isValidCapacity: internal.isValidCapacity,
+    requirePublicWeight: internal.requirePublicWeight
+  } as FrameworkIntegrationModule;
 }
 
 // The Nest package is a workspace adapter. It loads the framework's private

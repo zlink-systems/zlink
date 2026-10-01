@@ -206,7 +206,9 @@ function textBytes(value: string, name: string): Buffer {
     bytes.byteLength > SERVICE_WIRE_TEXT8_MAX_BYTES ||
     bytes.includes(0)
   ) {
-    throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
+    throw new RangeError(
+      `${name} must contain 1..${SERVICE_WIRE_TEXT8_MAX_BYTES} UTF-8 bytes without NUL.`
+    );
   }
   return bytes;
 }

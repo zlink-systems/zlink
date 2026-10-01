@@ -10,7 +10,9 @@ export function encodeAuthorityKey(
 ): ZLinkAuthorityKey {
   const bytes = Buffer.from(globalId);
   if (bytes.byteLength < 1 || bytes.byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES) {
-    throw new RangeError('Authority identity must contain 1..255 UTF-8 bytes.');
+    throw new RangeError(
+      `Authority identity must contain 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes.`
+    );
   }
   const discriminator = kind === 'actor' ? 'a' : 's';
   return {

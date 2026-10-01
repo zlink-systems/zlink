@@ -1,6 +1,6 @@
+import { ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES } from '../Contracts/ZlinkStreamConnectorOptions';
 import {
   RequiredZlinkStreamConnectorOptions,
-  ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
   ZlinkStreamCompression,
   ZlinkStreamConnectorOptions,
   ZlinkStreamDispatchMode,
@@ -12,7 +12,7 @@ import {
 import { connectorError } from './ZlinkStreamSupport';
 import { inferTransport } from './Transport/ZlinkStreamEndpoint';
 
-export { ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES as ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../Contracts';
+export { ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES as ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../Contracts/ZlinkStreamConnectorOptions';
 
 export function normalizeOptions(
   options: ZlinkStreamConnectorOptions,

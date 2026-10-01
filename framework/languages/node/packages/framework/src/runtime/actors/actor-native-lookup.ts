@@ -1,5 +1,4 @@
-import { constants as osConstants } from 'node:os';
-const nativeErrnoValues = osConstants.errno;
+import { ConfigError, ConfigResult } from '@zlink-systems/zlink';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendMeshNode,
@@ -24,17 +23,9 @@ export function lookupNativeActorRef(
       generation: actor.generation
     };
   } catch (error) {
-    if (nativeErrno(error) === nativeErrnoValues.ENOENT) {
+    if (error instanceof ConfigError && error.result === ConfigResult.NotFound) {
       return undefined;
     }
     throw error;
   }
-}
-
-function nativeErrno(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('nativeErrno' in error)) {
-    return undefined;
-  }
-  const value = error.nativeErrno;
-  return typeof value === 'number' ? value : undefined;
 }

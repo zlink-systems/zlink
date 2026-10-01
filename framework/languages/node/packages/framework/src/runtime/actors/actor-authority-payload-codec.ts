@@ -14,11 +14,11 @@ const ACTOR_RELOCATION_VERSION_WITHOUT_SESSION_FENCE = 5;
 const ACTOR_RELOCATION_VERSION_WITH_SESSION_FENCE = 6;
 const ACTOR_RELOCATION_FIRST_PHASE = 1;
 const ACTOR_RELOCATION_STEADY_PHASE = 4;
-const ACTOR_TEXT8_MAX_BYTES = 255;
-const ACTOR_ROUTING_ID_MAX_BYTES = 255;
+import { SERVICE_WIRE_TEXT8_MAX_BYTES } from '../foundation/service-wire-binary-primitives';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
 const ENTRY_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Entry);
 const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
-const MAXIMUM_BYTES = 1024 * 1024;
+import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export type ZLinkActorAuthorityState = 'creating' | 'ready';
@@ -58,8 +58,10 @@ export function encodeCanonicalAuthorityPayload(value: ZLinkCanonicalAuthorityPa
     body
   );
   const encoded = concat(envelope, u32be(crc32c(envelope)));
-  if (encoded.byteLength > MAXIMUM_BYTES) {
-    throw new RangeError('Actor authority payload exceeds 1 MiB.');
+  if (encoded.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new RangeError(
+      `Actor authority payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return encoded;
 }
@@ -72,7 +74,7 @@ export function decodeCanonicalAuthorityPayload(
     const reader = new BigEndianReader(payload);
     if (
       reader.bytes.byteLength < AUTHORITY_MINIMUM_BYTES ||
-      reader.bytes.byteLength > MAXIMUM_BYTES
+      reader.bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES
     ) {
       return undefined;
     }
@@ -210,8 +212,10 @@ export function replaceActorRelocationAuthorityApplicationPayload(
     applicationPayload
   );
   const encoded = concat(withoutChecksum, u32le(crc32c(withoutChecksum)));
-  if (encoded.byteLength > MAXIMUM_BYTES) {
-    throw new RangeError('Actor relocation authority payload exceeds 1 MiB.');
+  if (encoded.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new RangeError(
+      `Actor relocation authority payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return encoded;
 }
@@ -219,7 +223,10 @@ export function replaceActorRelocationAuthorityApplicationPayload(
 function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnvelope | undefined {
   try {
     const bytes = Buffer.from(payload);
-    if (bytes.byteLength < ACTOR_RELOCATION_MINIMUM_BYTES || bytes.byteLength > MAXIMUM_BYTES)
+    if (
+      bytes.byteLength < ACTOR_RELOCATION_MINIMUM_BYTES ||
+      bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES
+    )
       return undefined;
     const checksumOffset = bytes.byteLength - 4;
     if (bytes.readUInt32LE(checksumOffset) !== crc32c(bytes.subarray(0, checksumOffset))) {
@@ -267,7 +274,7 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
     }
     const prefix = Buffer.from(reader.bytes.subarray(0, reader.offset));
     const applicationLength = reader.i32();
-    if (applicationLength < 1 || applicationLength > MAXIMUM_BYTES) return undefined;
+    if (applicationLength < 1 || applicationLength > AUTHORITY_ENVELOPE_MAX_BYTES) return undefined;
     const applicationPayload = Buffer.from(reader.take(applicationLength));
     if (!reader.done) return undefined;
     return { prefix, phase, applicationPayload };
@@ -278,16 +285,22 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
 
 function text8(value: string, name: string): Buffer {
   const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength < 1 || bytes.byteLength > ACTOR_TEXT8_MAX_BYTES || bytes.includes(0)) {
-    throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > SERVICE_WIRE_TEXT8_MAX_BYTES ||
+    bytes.includes(0)
+  ) {
+    throw new RangeError(
+      `${name} must contain 1..${SERVICE_WIRE_TEXT8_MAX_BYTES} UTF-8 bytes without NUL.`
+    );
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function rid(value: RoutingId, name: string): Buffer {
   const bytes = Buffer.from(encodeRoutingIdStorageHex(value), 'hex');
-  if (bytes.byteLength < 1 || bytes.byteLength > ACTOR_ROUTING_ID_MAX_BYTES) {
-    throw new RangeError(`${name} must contain 1..255 bytes.`);
+  if (bytes.byteLength < 1 || bytes.byteLength > ZLINK_MAX_ROUTING_ID_BYTES) {
+    throw new RangeError(`${name} must contain 1..${ZLINK_MAX_ROUTING_ID_BYTES} bytes.`);
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
 }

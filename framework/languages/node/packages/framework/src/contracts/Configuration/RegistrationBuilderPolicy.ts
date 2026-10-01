@@ -1,4 +1,4 @@
-const MAX_LISTENER_PORT = 65_535;
+export const MAX_LISTENER_PORT = 65_535;
 export function isValidListenerPort(value: number): boolean {
   return Number.isInteger(value) && value >= 0 && value <= MAX_LISTENER_PORT;
 }
@@ -24,7 +24,9 @@ export function isValidPublicWeight(value: number): boolean {
 
 export function requirePublicWeight(value: number, label: string): number {
   if (!isValidPublicWeight(value)) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
   return value;
 }

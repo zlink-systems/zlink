@@ -1288,7 +1288,9 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
   }
   if (descriptor.objectRole === ZLinkObjectRole.Server) {
     if (descriptor.entrySpotId !== undefined && !validDescriptorText(descriptor.entrySpotId)) {
-      throw new TypeError('MeshNode Entry Spot ID must contain 1..255 UTF-8 bytes.');
+      throw new TypeError(
+        `MeshNode Entry Spot ID must contain 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes.`
+      );
     }
   } else if (descriptor.entrySpotId !== undefined) {
     throw new TypeError('Only Object Server descriptors may publish an Entry Spot ID.');

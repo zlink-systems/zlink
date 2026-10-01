@@ -7,6 +7,7 @@ import {
   DEFAULT_SERVICE_PEER_TIMEOUT_MS
 } from '../foundation/service-liveness-registry';
 import {
+  ZLINK_MAX_PUBLIC_WEIGHT,
   isValidPublicWeight,
   ZLINK_DEFAULT_PUBLIC_WEIGHT
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
@@ -1889,7 +1890,7 @@ function deriveRoutingId(baseRoutingId: string, suffix: string): string {
   const derived = `${baseRoutingId}\0${suffix}`;
   if (Buffer.byteLength(derived, 'utf8') > ZLINK_MAX_ROUTING_ID_BYTES) {
     throw new ZLinkConfigurationException(
-      `Derived routing id with suffix '${suffix}' exceeds the 255 byte limit.`
+      `Derived routing id with suffix '${suffix}' exceeds the ${ZLINK_MAX_ROUTING_ID_BYTES} byte limit.`
     );
   }
   return derived;
@@ -1926,7 +1927,9 @@ function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undef
 
 function requirePublicWeight(weight: number): void {
   if (!isValidPublicWeight(weight)) {
-    throw new ZLinkConfigurationException('Weight must be an integer in 0..10000.');
+    throw new ZLinkConfigurationException(
+      `Weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 

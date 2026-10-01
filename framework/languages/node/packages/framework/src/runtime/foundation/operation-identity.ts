@@ -34,7 +34,9 @@ export function createRandomOperationIdentity(
   for (;;) {
     const bytes = source(OPERATION_IDENTITY_BYTES);
     if (bytes.length !== OPERATION_IDENTITY_BYTES) {
-      throw new RangeError('Operation identity entropy source must return exactly 16 bytes.');
+      throw new RangeError(
+        `Operation identity entropy source must return exactly ${OPERATION_IDENTITY_BYTES} bytes.`
+      );
     }
     const operationId = {
       high: bytes.readBigUInt64BE(0),

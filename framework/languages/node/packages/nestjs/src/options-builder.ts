@@ -563,7 +563,7 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   listen(port = 0): this {
     if (!framework.isValidListenerPort(port)) {
       throw new framework.ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' port must be between 0 and 65535.`
+        `ClientServer channel '${this.name}' port must be between 0 and ${framework.MAX_LISTENER_PORT}.`
       );
     }
     this.updateServer({ port });
@@ -587,7 +587,7 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   setWeight(weight: number): this {
     if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' weight must be between 0 and 10000.`
+        `ClientServer channel '${this.name}' weight must be between 0 and ${framework.ZLINK_MAX_PUBLIC_WEIGHT}.`
       );
     }
     this.updateServer({ weight });
@@ -644,7 +644,9 @@ function requireClientServerText(value: string, label: string): void {
 function requireListenerPort(port: number | undefined, label: string): number {
   const normalized = port ?? 0;
   if (!framework.isValidListenerPort(normalized)) {
-    throw new framework.ZLinkConfigurationException(`${label} port must be between 0 and 65535.`);
+    throw new framework.ZLinkConfigurationException(
+      `${label} port must be between 0 and ${framework.MAX_LISTENER_PORT}.`
+    );
   }
   return normalized;
 }
@@ -813,7 +815,7 @@ class DefaultZLinkNestMeshNodeBuilder
   setPlacementWeight(weight: number): this {
     if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
-        'Placement weight must be an integer in 0..10000.'
+        `Placement weight must be an integer in 0..${framework.ZLINK_MAX_PUBLIC_WEIGHT}.`
       );
     }
     this.spotOptions.placementWeight = weight;
@@ -1209,7 +1211,7 @@ function validateObjectFactory(stableType: string, label: string): string {
     stableType.includes('\0')
   ) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must contain 1..255 UTF-8 bytes and no NUL.`
+      `${label} must contain 1..${framework.ZLINK_MAX_STABLE_TYPE_BYTES} UTF-8 bytes and no NUL.`
     );
   }
   return stableType;
@@ -1254,9 +1256,9 @@ function validateUserSpotFactoryConfiguration(options: ZLinkUserSpotFactoryConfi
 }
 
 function validateStableTypeLimit(value: number | undefined): void {
-  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
+  if (value !== undefined && !framework.isValidCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      'stableTypeLimit must be an integer from 0 through 2147483647.'
+      `stableTypeLimit must be an integer from 0 through ${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
 }
@@ -1264,7 +1266,7 @@ function validateStableTypeLimit(value: number | undefined): void {
 function requirePositiveCapacity(value: number, label: string): number {
   if (!framework.isValidPositiveCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must be an integer in 1..2147483647.`
+      `${label} must be an integer in 1..${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
   return value;
@@ -1273,7 +1275,7 @@ function requirePositiveCapacity(value: number, label: string): number {
 function requireCapacity(value: number, label: string): number {
   if (!framework.isValidCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must be an integer in 0..2147483647.`
+      `${label} must be an integer in 0..${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
   return value;

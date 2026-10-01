@@ -18,7 +18,7 @@ export function encodeServiceMetadataFrame(entries: ReadonlyMap<string, string>)
 
 export function validateServiceMetadataFrame(frame: Uint8Array): Buffer {
   if (frame.byteLength > MAX_METADATA_BYTES) {
-    throw new RangeError('Application metadata frame exceeds 1024 bytes.');
+    throw new RangeError(`Application metadata frame exceeds ${MAX_METADATA_BYTES} bytes.`);
   }
   const bytes = Buffer.from(frame);
   let offset = 0;

@@ -123,7 +123,9 @@ export function validateApplicationJobQueueMaximum(
     value !== undefined &&
     (typeof value !== 'bigint' || value < 1n || value > MAX_QUEUED_APPLICATION_JOBS)
   ) {
-    throw createError('maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.');
+    throw createError(
+      `maxQueuedApplicationJobs must be a bigint in the range 1..${MAX_QUEUED_APPLICATION_JOBS}.`
+    );
   }
 }
 
@@ -133,10 +135,14 @@ export function validateApplicationJobQueuePressureThresholds(
   createError: (message: string) => Error
 ): void {
   if (!Number.isInteger(pause) || pause < 1 || pause > APPLICATION_JOB_QUEUE_PERCENT_SCALE) {
-    throw createError('pauseThresholdPercent must be an integer in the range 1..100.');
+    throw createError(
+      `pauseThresholdPercent must be an integer in the range 1..${APPLICATION_JOB_QUEUE_PERCENT_SCALE}.`
+    );
   }
   if (!Number.isInteger(resume) || resume < 0 || resume >= APPLICATION_JOB_QUEUE_PERCENT_SCALE) {
-    throw createError('resumeThresholdPercent must be an integer in the range 0..99.');
+    throw createError(
+      `resumeThresholdPercent must be an integer in the range 0..${APPLICATION_JOB_QUEUE_PERCENT_SCALE - 1}.`
+    );
   }
   if (resume >= pause) {
     throw createError('resumeThresholdPercent must be less than pauseThresholdPercent.');
@@ -213,7 +219,9 @@ function normalizeMaintenanceWave(value: string | undefined): string | undefined
     byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES ||
     value.includes('\0')
   ) {
-    throw new TypeError('maintenanceWave must be a 1..255 byte UTF-8 string without NUL.');
+    throw new TypeError(
+      `maintenanceWave must be a 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} byte UTF-8 string without NUL.`
+    );
   }
   return value;
 }

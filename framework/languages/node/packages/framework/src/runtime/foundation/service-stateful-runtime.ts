@@ -8,7 +8,7 @@ const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
 
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
-import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { awaitWithAbort } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
@@ -5358,7 +5358,7 @@ function userSpotDeadline(deadlineUnixMs: bigint): {
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
   const timeout = setTimeout(
     () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, ZLINK_MAX_SEND_TIMEOUT_MS))
+    Math.max(0, Math.min(delay, MAX_NODE_TIMER_DELAY_MS))
   );
   return {
     signal: controller.signal,

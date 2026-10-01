@@ -1,6 +1,6 @@
 const DEFAULT_ACTOR_JOIN_TIMEOUT_MS = 5_000;
 
-import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
+const MAX_ACTOR_JOIN_TIMEOUT_MS = 2_147_483_647;
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -483,9 +483,9 @@ function encodeJoinRequest(
 
 function validateJoinTimeout(timeoutMs: number): number {
   const rounded = Math.ceil(timeoutMs);
-  if (!Number.isFinite(timeoutMs) || rounded < 1 || rounded > ZLINK_MAX_SEND_TIMEOUT_MS) {
+  if (!Number.isFinite(timeoutMs) || rounded < 1 || rounded > MAX_ACTOR_JOIN_TIMEOUT_MS) {
     throw new ZLinkConfigurationException(
-      'Actor join timeout must be a finite value from 1 through 2147483647 milliseconds.'
+      `Actor join timeout must be a finite value from 1 through ${MAX_ACTOR_JOIN_TIMEOUT_MS} milliseconds.`
     );
   }
   return rounded;

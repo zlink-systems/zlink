@@ -1,3 +1,9 @@
+import {
+  ZLINK_MAX_PUBLIC_WEIGHT,
+  isValidPublicWeight,
+  isValidCapacity,
+  isValidPositiveCapacity
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 const LOCAL_DIAGNOSTIC_CONNECTION_ID = 'local';
 
@@ -54,8 +60,6 @@ export type PeerAdmissionResult =
 export type ServiceObjectPlacementStatus = 'available' | 'unsupported' | 'capacity' | 'unavailable';
 
 const REQUIRED_CAPABILITY = SERVICE_WIRE_REQUIRED_CAPABILITY;
-const MAX_CAPACITY = 0x7fff_ffff;
-const MAX_PUBLIC_WEIGHT = 10_000;
 
 interface ServiceSelectionCacheEntry {
   readonly selection: SmoothWeightedSelection<unknown>;
@@ -435,7 +439,9 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
   if (descriptor.maintenanceWave !== undefined) {
     requireText(descriptor.maintenanceWave, 'maintenanceWave');
     if (Buffer.byteLength(descriptor.maintenanceWave, 'utf8') > ZLINK_MAX_IDENTITY_TEXT_BYTES) {
-      throw new RangeError('maintenanceWave must not exceed 255 UTF-8 bytes.');
+      throw new RangeError(
+        `maintenanceWave must not exceed ${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes.`
+      );
     }
   }
   validatePublicWeight(descriptor.placementWeight, 'placementWeight');
@@ -472,14 +478,14 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
 }
 
 function validateCapacity(value: number, allowZero: boolean, field: string): void {
-  if (!Number.isInteger(value) || value < (allowZero ? 0 : 1) || value > MAX_CAPACITY) {
+  if (!(allowZero ? isValidCapacity(value) : isValidPositiveCapacity(value))) {
     throw new RangeError(`${field} is outside its supported range.`);
   }
 }
 
 function validatePublicWeight(value: number, field: string): void {
-  if (!Number.isInteger(value) || value < 0 || value > MAX_PUBLIC_WEIGHT) {
-    throw new RangeError(`${field} must be an integer in 0..10000.`);
+  if (!isValidPublicWeight(value)) {
+    throw new RangeError(`${field} must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`);
   }
 }
 

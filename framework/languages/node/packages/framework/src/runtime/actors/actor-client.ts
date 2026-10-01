@@ -583,7 +583,9 @@ function remainingActorRequestTimeout(
 function requireActorId(actorId: string): void {
   const byteLength = Buffer.byteLength(actorId, 'utf8');
   if (byteLength < 1 || byteLength > ZLINK_MAX_ACTOR_ID_BYTES) {
-    throw new ZLinkConfigurationException('Actor ID must contain 1..255 UTF-8 bytes.');
+    throw new ZLinkConfigurationException(
+      `Actor ID must contain 1..${ZLINK_MAX_ACTOR_ID_BYTES} UTF-8 bytes.`
+    );
   }
 }
 

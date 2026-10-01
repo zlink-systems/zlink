@@ -83,7 +83,7 @@ function normalizeJsonSchema(
     depth > MAX_CONTRACT_SCHEMA_DEPTH
   ) {
     throw new TypeError(
-      'ZLink packet JSON schema must be an acyclic object with at most 64 levels.'
+      `ZLink packet JSON schema must be an acyclic object with at most ${MAX_CONTRACT_SCHEMA_DEPTH} levels.`
     );
   }
   const normalizedSchema = runtimeSchema as ZLinkJsonSchema;

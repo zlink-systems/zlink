@@ -663,7 +663,9 @@ function actorKey(actor: ServiceActorRef): string {
 function requireText(value: string, name: string): void {
   const bytes = Buffer.byteLength(value);
   if (bytes < 1 || bytes > ZLINK_MAX_IDENTITY_TEXT_BYTES || value.includes('\0')) {
-    throw new RangeError(`${name} must be 1..255 UTF-8 bytes without NUL.`);
+    throw new RangeError(
+      `${name} must be 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes without NUL.`
+    );
   }
 }
 

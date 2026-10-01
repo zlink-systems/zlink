@@ -28,7 +28,7 @@ export function validateTimerRegistration(
       options.maxCatchUpTicks > MAX_TIMER_CATCH_UP_TICKS)
   ) {
     throw new ZLinkConfigurationException(
-      'SPOT timer MaxCatchUpTicks must be an integer from 1 through 2,147,483,647.'
+      `SPOT timer MaxCatchUpTicks must be an integer from 1 through ${MAX_TIMER_CATCH_UP_TICKS.toLocaleString('en-US')}.`
     );
   }
 }

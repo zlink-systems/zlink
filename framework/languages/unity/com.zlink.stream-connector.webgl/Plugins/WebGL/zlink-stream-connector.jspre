@@ -31,7 +31,6 @@ var ZlinkStreamConnectorBundle = (() => {
   // packages/stream-connector/src/index.ts
   var index_exports = {};
   __export(index_exports, {
-    ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES: () => ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
     ZlinkStreamCodec: () => ZlinkStreamCodec,
     ZlinkStreamCompression: () => ZlinkStreamCompression,
     ZlinkStreamConnectionState: () => ZlinkStreamConnectionState,
@@ -732,9 +731,6 @@ var ZlinkStreamConnectorBundle = (() => {
     return ZlinkStreamConnectionState3;
   })(ZlinkStreamConnectionState || {});
 
-  // packages/stream-connector/src/Contracts/ZlinkStreamConnectorOptions.ts
-  var ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES = 64 * 1024;
-
   // packages/stream-connector/src/Contracts/ZlinkStreamModels.ts
   var ZlinkStreamException = class extends Error {
     constructor(error) {
@@ -1340,6 +1336,9 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     return compressionCodec != null ? compressionCodec : zlinkStreamLz4CompressionCodec;
   }
+
+  // packages/stream-connector/src/Contracts/ZlinkStreamConnectorOptions.ts
+  var ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES = 64 * 1024;
 
   // packages/stream-connector/src/Runtime/Transport/ZlinkStreamEndpoint.ts
   function inferTransport(endpoint) {

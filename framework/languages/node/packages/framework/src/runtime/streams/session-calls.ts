@@ -138,7 +138,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
   timeout(timeoutMs: number): this {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > ZLINK_MAX_SEND_TIMEOUT_MS) {
       throw new ZLinkConfigurationException(
-        'STREAM session send timeout must be an integer from 1 through 2147483647 milliseconds.'
+        `STREAM session send timeout must be an integer from 1 through ${ZLINK_MAX_SEND_TIMEOUT_MS} milliseconds.`
       );
     }
     this.selectedTimeoutMs = timeoutMs;

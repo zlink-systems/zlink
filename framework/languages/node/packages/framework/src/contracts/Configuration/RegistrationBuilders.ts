@@ -1,5 +1,9 @@
-import { isValidListenerPort } from './RegistrationBuilderPolicy';
-import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../Common/CoreTypes';
+import {
+  ZLINK_MAX_CAPACITY,
+  MAX_LISTENER_PORT,
+  isValidListenerPort
+} from './RegistrationBuilderPolicy';
+import { ZLINK_MAX_STABLE_TYPE_BYTES } from '../Common/CoreTypes';
 import { isValidPositiveCapacity, isValidCapacity } from './RegistrationBuilderPolicy';
 import { requirePublicWeight } from './RegistrationBuilderPolicy';
 import type {
@@ -623,7 +627,7 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
   listen(port = 0): this {
     if (!isValidListenerPort(port)) {
       throw new ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' port must be between 0 and 65535.`
+        `ClientServer channel '${this.name}' port must be between 0 and ${MAX_LISTENER_PORT}.`
       );
     }
     this.server.port = port;
@@ -900,7 +904,7 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     }
     if (!isValidListenerPort(endpointOrPort)) {
       throw new ZLinkConfigurationException(
-        `RouteMesh '${this.name}' port must be between 0 and 65535.`
+        `RouteMesh '${this.name}' port must be between 0 and ${MAX_LISTENER_PORT}.`
       );
     }
     this.node.router.port = endpointOrPort;
@@ -1435,22 +1439,28 @@ function endpointList(endpoint: string | readonly string[]): string[] {
 
 function requireStableObjectType(value: string, label: string): string {
   const byteLength = Buffer.byteLength(value, 'utf8');
-  if (byteLength < 1 || byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES || value.includes('\0')) {
-    throw new ZLinkConfigurationException(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
+  if (byteLength < 1 || byteLength > ZLINK_MAX_STABLE_TYPE_BYTES || value.includes('\0')) {
+    throw new ZLinkConfigurationException(
+      `${label} must contain 1..${ZLINK_MAX_STABLE_TYPE_BYTES} UTF-8 bytes and no NUL.`
+    );
   }
   return value;
 }
 
 function requirePositiveCapacity(value: number, label: string): number {
   if (!isValidPositiveCapacity(value)) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 1..2147483647.`);
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 1..${ZLINK_MAX_CAPACITY}.`
+    );
   }
   return value;
 }
 
 function requireCapacity(value: number, label: string): number {
   if (!isValidCapacity(value)) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..2147483647.`);
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 0..${ZLINK_MAX_CAPACITY}.`
+    );
   }
   return value;
 }
@@ -1499,9 +1509,9 @@ function validateUserSpotFactoryOptions(
 }
 
 function validateStableTypeLimit(value: number | undefined): void {
-  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
+  if (value !== undefined && !isValidCapacity(value)) {
     throw new ZLinkConfigurationException(
-      'stableTypeLimit must be an integer from 0 through 2147483647.'
+      `stableTypeLimit must be an integer from 0 through ${ZLINK_MAX_CAPACITY}.`
     );
   }
 }
@@ -1704,7 +1714,7 @@ function requireRegistrationName(value: string, label: string): void {
 
 function requireListenerPort(value: number, label: string): number {
   if (!isValidListenerPort(value)) {
-    throw new ZLinkConfigurationException(`${label} must be between 0 and 65535.`);
+    throw new ZLinkConfigurationException(`${label} must be between 0 and ${MAX_LISTENER_PORT}.`);
   }
   return value;
 }

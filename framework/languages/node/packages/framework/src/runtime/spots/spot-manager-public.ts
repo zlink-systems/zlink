@@ -333,7 +333,9 @@ function selectFactory(
 function requireText(value: string, label: string): string {
   const bytes = Buffer.byteLength(value);
   if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES || value.includes('\0')) {
-    throw invalidConfiguration(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
+    throw invalidConfiguration(
+      `${label} must contain 1..${ZLINK_MAX_SPOT_ID_BYTES} UTF-8 bytes and no NUL.`
+    );
   }
   return value;
 }

@@ -1,13 +1,15 @@
 import { APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES } from '../../foundation/service-wire-m6a-codec';
 import { SERVICE_WIRE_COMMAND_OFFSET } from '../../foundation/service-wire-binary-primitives';
-import { constants as osConstants } from 'node:os';
-const nativeErrnoValues = osConstants.errno;
 import {
   MeshPeerRuntimeState,
   StreamSessionRuntimeState
 } from '../../foundation/service-runtime-contracts';
 import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
-import { isValidPositiveCapacity } from '../../../contracts/Configuration/RegistrationBuilderPolicy';
+import {
+  ZLINK_MAX_PUBLIC_WEIGHT,
+  ZLINK_MAX_CAPACITY,
+  isValidPositiveCapacity
+} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
 const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
 const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
@@ -31,6 +33,8 @@ import { translateBindingResultError } from './node-backend-adapter-support';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
+  ConfigError,
+  ConfigResult,
   Message,
   RoutingId as BindingRoutingId,
   RequestResult,
@@ -1172,9 +1176,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   actorLookup(actorId: string) {
     const actor = this.requireStateful().actor(actorId);
     if (actor === undefined) {
-      throw Object.assign(new Error(`Actor '${actorId}' was not found.`), {
-        nativeErrno: nativeErrnoValues.ENOENT
-      });
+      const error = new ConfigError(ConfigResult.NotFound);
+      error.message = `Actor '${actorId}' was not found.`;
+      throw error;
     }
     return {
       actor: actor.ref,
@@ -2694,14 +2698,14 @@ function createLifecycleGeneration(): bigint {
 
 function requirePositivePlacementValue(value: number, name: string): number {
   if (!isValidPositiveCapacity(value)) {
-    throw new RangeError(`${name} must be an integer in 1..2147483647.`);
+    throw new RangeError(`${name} must be an integer in 1..${ZLINK_MAX_CAPACITY}.`);
   }
   return value;
 }
 
 function requirePublicWeight(value: number, name: string): number {
   if (!isValidPublicWeight(value)) {
-    throw new RangeError(`${name} must be an integer in 0..10000.`);
+    throw new RangeError(`${name} must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`);
   }
   return value;
 }

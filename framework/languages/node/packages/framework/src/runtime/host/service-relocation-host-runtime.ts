@@ -1,3 +1,4 @@
+import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
 import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
@@ -4169,7 +4170,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     if (captured.byteLength > RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES) {
       throw new ZLinkRelocationStateIncompatibleError(
-        'Relocation application state exceeds the 64 MiB participant limit.'
+        `Relocation application state exceeds the ${RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES / (1024 * 1024)} MiB participant limit.`
       );
     }
     return captured;
@@ -5120,9 +5121,11 @@ export function createServiceRelocationId(
   entropy: (size: number) => Uint8Array = randomBytes
 ): string {
   for (;;) {
-    const bytes = entropy(16);
-    if (bytes.byteLength !== 16) {
-      throw new Error('Relocation identity entropy must return exactly 16 bytes.');
+    const bytes = entropy(OPERATION_IDENTITY_BYTES);
+    if (bytes.byteLength !== OPERATION_IDENTITY_BYTES) {
+      throw new Error(
+        `Relocation identity entropy must return exactly ${OPERATION_IDENTITY_BYTES} bytes.`
+      );
     }
     let nonZero = false;
     for (const byte of bytes) {

@@ -153,7 +153,7 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
   }
   if (options.relocationPayloadChunkLimitBytes > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
     throw new ZLinkConfigurationException(
-      'relocationPayloadChunkLimitBytes must not exceed the 64 MiB wire chunk bound.'
+      `relocationPayloadChunkLimitBytes must not exceed the ${RELOCATION_STATE_CHUNK_DATA_MAX_BYTES / (1024 * 1024)} MiB wire chunk bound.`
     );
   }
   for (const [name, value] of Object.entries({
@@ -180,7 +180,7 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     options.routeCacheMaxAgeMs > options.messageFollowDurationMs - ROUTE_CACHE_FOLLOW_MARGIN_MS
   ) {
     throw new ZLinkConfigurationException(
-      'routeCacheMaxAgeMs must be at least 5000 ms shorter than messageFollowDurationMs.'
+      `routeCacheMaxAgeMs must be at least ${ROUTE_CACHE_FOLLOW_MARGIN_MS} ms shorter than messageFollowDurationMs.`
     );
   }
 }

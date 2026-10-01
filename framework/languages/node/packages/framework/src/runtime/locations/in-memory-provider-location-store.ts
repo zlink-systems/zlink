@@ -208,14 +208,18 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
   if (Buffer.byteLength(request.prefix, 'utf8') > ZLINK_PROVIDER_MAX_KEY_BYTES) {
-    throw new RangeError('Location Store scan prefix exceeds 1,024 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store scan prefix exceeds ${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   if (
     !Number.isSafeInteger(request.limit) ||
     request.limit < 1 ||
     request.limit > ZLINK_PROVIDER_MAX_PAGE_SIZE
   ) {
-    throw new RangeError('Location Store scan limit must be in 1..1000.');
+    throw new RangeError(
+      `Location Store scan limit must be in 1..${ZLINK_PROVIDER_MAX_PAGE_SIZE}.`
+    );
   }
 }
 
@@ -237,6 +241,8 @@ function requireValue(bytes: Uint8Array, retentionMs: number | undefined): numbe
 function requireKey(value: string): void {
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_KEY_BYTES) {
-    throw new RangeError('Location Store key must contain 1..1,024 UTF-8 bytes.');
+    throw new RangeError(
+      `Location Store key must contain 1..${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
 }
