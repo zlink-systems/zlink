@@ -36,12 +36,17 @@ import type {
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
+  ZLinkSpotActorSend(packetName?: string): MethodDecorator;
+  ZLinkSpotActorRequest(packetName?: string): MethodDecorator;
   readonly MAX_LISTENER_PORT: number;
   readonly ZLINK_MAX_PUBLIC_WEIGHT: number;
   readonly ZLINK_MAX_CAPACITY: number;
   readonly ZLINK_MAX_STABLE_TYPE_BYTES: number;
   readonly ZLinkConfigurationException: new (message: string) => Error;
   createFrameworkRegistration(
+    options: ZLinkFrameworkRegistrationOptions
+  ): ZLinkFrameworkRegistration;
+  normalizeFrameworkRegistration(
     options: ZLinkFrameworkRegistrationOptions
   ): ZLinkFrameworkRegistration;
   hasActorManager(registration: ZLinkFrameworkRegistration): boolean;
@@ -120,6 +125,10 @@ interface FrameworkIntegrationModule {
     options: { actorFactories?: Record<string, Type> },
     actorType: string,
     factoryType: Type
+  ): void;
+  registerRelocationStore(
+    options: { relocationStoreInstance?: import('@zlink-systems/framework').ZLinkRelocationStore },
+    store: import('@zlink-systems/framework').ZLinkRelocationStore
   ): void;
   registerIntegrationHandlerFilterScope(
     resolver: ZLinkProviderResolver,

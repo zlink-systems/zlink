@@ -11,6 +11,7 @@ import type {
   ZLinkTimerOptions
 } from '@zlink-systems/framework';
 import { ZLINK_NEST_HANDLER_GROUP } from './tokens';
+import { framework } from './framework-loader';
 
 export type ZLinkNestHandlerKind = 'request' | 'send' | 'publish';
 type ZLinkNestTypeResolver<T> = Type<T> | (() => Type<T>);
@@ -36,7 +37,6 @@ export type ZLinkNestSpotActorHandlerKind =
 export interface ZLinkNestSpotActorHandlerMetadata {
   readonly kind: ZLinkNestSpotActorHandlerKind;
   readonly packetName: string;
-  readonly methodName: string;
   readonly handlerType: Type;
   readonly actor: ZLinkNestTypeResolver<ZLinkActor>;
   readonly spot?: ZLinkNestTypeResolver<ZLinkSpot>;
@@ -112,10 +112,16 @@ export function readNestHandlerMetadata(
 
 export function appendNestSpotActorHandlerMetadata(
   handlerToken: InjectionToken,
-  metadata: ZLinkNestSpotActorHandlerMetadata
+  metadata: ZLinkNestSpotActorHandlerMetadata & { readonly methodName: string }
 ): void {
+  const { methodName, ...registration } = metadata;
+  const decorator =
+    metadata.kind === 'spotActorSend' || metadata.kind === 'entrySpotActorSend'
+      ? framework.ZLinkSpotActorSend(metadata.packetName)
+      : framework.ZLinkSpotActorRequest(metadata.packetName);
+  decorator(metadata.handlerType.prototype, methodName, {});
   const current = readNestSpotActorHandlerMetadata(handlerToken);
-  spotActorHandlerMetadata.set(handlerToken, [...current, metadata]);
+  spotActorHandlerMetadata.set(handlerToken, [...current, registration]);
 }
 
 export function readNestSpotActorHandlerMetadata(

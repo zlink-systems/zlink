@@ -1277,11 +1277,13 @@ test('ZLinkModule.forRoot with grouped handlers omits only capabilities not impl
 
   const app = await NestFactory.createApplicationContext(HandlerModule, { logger: false, abortOnError: false });
 
-  assert.equal(app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false }), null);
-  assert.equal(app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false }), null);
-  assert.equal(app.get(nestjs.ZLINK_SPOT_PUBLISHER_CLIENT, { strict: false }) instanceof framework.DefaultZLinkSpotPublisherClient, true);
-
-  await app.close();
+  try {
+    assert.throws(() => app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false }), /does not exist/);
+    assert.throws(() => app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false }), /does not exist/);
+    assert.equal(app.get(nestjs.ZLINK_SPOT_PUBLISHER_CLIENT, { strict: false }) instanceof framework.DefaultZLinkSpotPublisherClient, true);
+  } finally {
+    await app.close();
+  }
 });
 
 test('ZLinkModule.forRoot exposes exact create calls for registered Spot factories', async () => {
@@ -1723,11 +1725,11 @@ test('ZLinkModule.forRoot validates channel capability endpoints and peer acquis
     automaticPublisher.channels.get('events').publisher.bind,
     'tcp://127.0.0.1:0'
   );
-  assert.throws(
-    () => nestjs.ZLinkModule.forRoot(nestjs.zlinkFramework()
+  await assert.rejects(
+    () => resolveFrameworkRegistration(nestjs.ZLinkModule.forRoot(nestjs.zlinkFramework()
       .addFanoutChannel('events')
         .enableSubscriber()
-      .build()),
+      .build())),
     /subscriber requires location stores or manual connections/
   );
   await assert.rejects(
@@ -2119,11 +2121,11 @@ test('ZLinkModule.forRoot maps stream node options into runtime registration', a
     automaticStream.streamNodes.get('automatic-bind').bind,
     'tcp://127.0.0.1:0'
   );
-  assert.throws(
-    () => nestjs.ZLinkModule.forRoot(nestjs.zlinkFramework()
+  await assert.rejects(
+    () => resolveFrameworkRegistration(nestjs.ZLinkModule.forRoot(nestjs.zlinkFramework()
       .addStreamNode('missing-session')
         .bind('tcp://127.0.0.1:9101')
-      .build()),
+      .build())),
     /STREAM node 'missing-session' must register a header stream session/
   );
 });
