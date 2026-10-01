@@ -46,7 +46,6 @@ public sealed class CapacityMonitoringProjectionTests
         var registration = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "mesh",
-            MaxActiveObjects = 0,
             ActivationConcurrencyLimit = 64,
         };
         registration.SpotRelocations.Add(

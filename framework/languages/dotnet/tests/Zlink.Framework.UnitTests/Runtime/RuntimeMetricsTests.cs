@@ -8,6 +8,19 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RuntimeMetricsTests
 {
     [Fact]
+    public void State_Tag_Values_Are_Exact()
+    {
+        Assert.Equal("current", ZLinkRuntimeMetrics.StateTagValues.Current);
+        Assert.Equal("peak", ZLinkRuntimeMetrics.StateTagValues.Peak);
+        Assert.Equal("reserved", ZLinkRuntimeMetrics.StateTagValues.Reserved);
+        Assert.Equal("queued", ZLinkRuntimeMetrics.StateTagValues.Queued);
+        Assert.Equal("in_use", ZLinkRuntimeMetrics.StateTagValues.InUse);
+        Assert.Equal("running", ZLinkRuntimeMetrics.StateTagValues.Running);
+        Assert.Equal("paused", ZLinkRuntimeMetrics.StateTagValues.Paused);
+        Assert.Equal("cumulative", ZLinkRuntimeMetrics.StateTagValues.Cumulative);
+    }
+
+    [Fact]
     public void Meter_Catalog_Uses_Exact_Names_Kinds_Units_And_Scope()
     {
         var instruments = new List<Instrument>();

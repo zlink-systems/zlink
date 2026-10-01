@@ -28,10 +28,20 @@ internal static class ZLinkRuntimeMetrics
     private const string ModeTag = "mode";
     private const string OutcomeTag = "outcome";
     private const string StateTag = "state";
-    private const string CurrentTag = "current";
-    private const string PeakTag = "peak";
     private const string SecondsUnit = "s";
     private const string BytesUnit = "By";
+
+    internal static class StateTagValues
+    {
+        internal const string Current = "current";
+        internal const string Peak = "peak";
+        internal const string Reserved = "reserved";
+        internal const string Queued = "queued";
+        internal const string InUse = "in_use";
+        internal const string Running = "running";
+        internal const string Paused = "paused";
+        internal const string Cumulative = "cumulative";
+    }
 
     private static readonly Meter Meter = new(ZLinkMeters.Framework);
 
@@ -803,11 +813,11 @@ internal static class ZLinkRuntimeMetrics
         {
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CurrentAccountedBytes),
-                new KeyValuePair<string, object?>(StateTag, CurrentTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Current)
             );
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.PeakAccountedBytes),
-                new KeyValuePair<string, object?>(StateTag, PeakTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Peak)
             );
         }
     }
@@ -818,11 +828,11 @@ internal static class ZLinkRuntimeMetrics
         {
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CompletionCurrentAccountedBytes),
-                new KeyValuePair<string, object?>(StateTag, CurrentTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Current)
             );
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CompletionPeakAccountedBytes),
-                new KeyValuePair<string, object?>(StateTag, PeakTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Peak)
             );
         }
     }
@@ -834,19 +844,19 @@ internal static class ZLinkRuntimeMetrics
             var queue = capacity.ApplicationJobQueue;
             yield return new Measurement<long>(
                 ToMetricValue(queue.ReservedSupplyPermits),
-                new KeyValuePair<string, object?>(StateTag, "reserved")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Reserved)
             );
             yield return new Measurement<long>(
                 ToMetricValue(queue.QueuedApplicationJobs),
-                new KeyValuePair<string, object?>(StateTag, "queued")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Queued)
             );
             yield return new Measurement<long>(
                 ToMetricValue(queue.PermitsInUse),
-                new KeyValuePair<string, object?>(StateTag, "in_use")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.InUse)
             );
             yield return new Measurement<long>(
                 ToMetricValue(queue.PeakPermitsInUse),
-                new KeyValuePair<string, object?>(StateTag, PeakTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Peak)
             );
         }
     }
@@ -867,8 +877,8 @@ internal static class ZLinkRuntimeMetrics
                 new KeyValuePair<string, object?>(
                     StateTag,
                     pressure.State == ZLinkApplicationJobQueuePressureState.Paused
-                        ? "paused"
-                        : "running"
+                        ? StateTagValues.Paused
+                        : StateTagValues.Running
                 )
             );
     }
@@ -881,11 +891,11 @@ internal static class ZLinkRuntimeMetrics
         {
             yield return new Measurement<long>(
                 ToMetricValue(pressure.RunningTransitionCount),
-                new KeyValuePair<string, object?>(StateTag, "running")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Running)
             );
             yield return new Measurement<long>(
                 ToMetricValue(pressure.PausedTransitionCount),
-                new KeyValuePair<string, object?>(StateTag, "paused")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Paused)
             );
         }
     }
@@ -896,11 +906,11 @@ internal static class ZLinkRuntimeMetrics
         {
             yield return new Measurement<double>(
                 Math.Max(0d, pressure.CurrentPauseDuration.TotalSeconds),
-                new KeyValuePair<string, object?>(StateTag, CurrentTag)
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Current)
             );
             yield return new Measurement<double>(
                 Math.Max(0d, pressure.CumulativePauseDuration.TotalSeconds),
-                new KeyValuePair<string, object?>(StateTag, "cumulative")
+                new KeyValuePair<string, object?>(StateTag, StateTagValues.Cumulative)
             );
         }
     }

@@ -393,14 +393,14 @@ public class ZLinkHttpRequestBuilder
 
         if (_form.Count > 0)
         {
-            headers[HttpHeaderLookup.ContentTypeKey] = "application/x-www-form-urlencoded";
+            headers[HttpHeaderLookup.ContentTypeKey] = FormContentType;
             return (Encoding.UTF8.GetBytes(EncodeFormBody()), headers);
         }
 
         if (_multipart.Count > 0)
         {
             var boundary = HttpClientText.MakeMultipartBoundary();
-            headers[HttpHeaderLookup.ContentTypeKey] = "multipart/form-data; boundary=" + boundary;
+            headers[HttpHeaderLookup.ContentTypeKey] = MultipartContentTypePrefix + boundary;
             return (Encoding.UTF8.GetBytes(EncodeMultipartBody(boundary)), headers);
         }
 
@@ -432,6 +432,8 @@ public class ZLinkHttpRequestBuilder
         return encoded.ToString();
     }
 
+    private const string FormContentType = "application/x-www-form-urlencoded";
+    private const string MultipartContentTypePrefix = "multipart/form-data; boundary=";
     private const string MultipartDelimiterPrefix = "--";
     private const string MimeLineEnd = "\r\n";
     private const string FormDataDispositionPrefix = "Content-Disposition: form-data; name=\"";

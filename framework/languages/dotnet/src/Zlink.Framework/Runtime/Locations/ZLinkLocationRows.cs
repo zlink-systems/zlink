@@ -117,15 +117,7 @@ internal sealed record ZLinkMeshNodeDescriptor(
         );
 
     public ZLinkActivationConcurrency ActivationConcurrency { get; init; } =
-        new(
-            0,
-            Zlink
-                .Framework
-                .Runtime
-                .Configuration
-                .ZLinkSpotNodeRegistration
-                .DefaultActivationConcurrencyLimit
-        );
+        new(0, ZLinkSpotNodeRegistration.DefaultActivationConcurrencyLimit);
 }
 
 // Embedded as the authority record's allocation.descriptor field

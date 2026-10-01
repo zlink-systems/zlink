@@ -457,10 +457,6 @@ internal sealed class ZLinkSpotNodeRegistration
 
     public int ActivationConcurrencyLimit { get; set; } = DefaultActivationConcurrencyLimit;
 
-    public int MaxActiveObjects { get; set; } =
-        (int)
-            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.NodeActiveCapacityDefault;
-
     public TimeSpan InstanceSpotIdleTimeout { get; set; }
 }
 
