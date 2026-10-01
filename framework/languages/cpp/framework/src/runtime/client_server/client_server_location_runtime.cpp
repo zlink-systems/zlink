@@ -5,6 +5,7 @@
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -1355,7 +1356,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             catch (const framework_exception_t &error) {
                 report_client_server_dispatch_error (
                   _channel_runtime.dispatch_options_ref (), record,
-                  record.parts.size () > 1 ? "<decoded>" : "<unknown>",
+                  record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                           : zlink::framework::detail::diagnostic_absent_value,
                   record.reply_token ? dispatch_message_kind_t::request
                                      : dispatch_message_kind_t::send,
                   record.reply_token ? dispatch_error_action_t::reply_error
@@ -1371,7 +1373,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                                                      error.what ());
                 report_client_server_dispatch_error (
                   _channel_runtime.dispatch_options_ref (), record,
-                  record.parts.size () > 1 ? "<decoded>" : "<unknown>",
+                  record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                           : zlink::framework::detail::diagnostic_absent_value,
                   record.reply_token ? dispatch_message_kind_t::request
                                      : dispatch_message_kind_t::send,
                   record.reply_token ? dispatch_error_action_t::reply_error
@@ -1387,7 +1390,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                                                      "ClientServer dispatch failed");
                 report_client_server_dispatch_error (
                   _channel_runtime.dispatch_options_ref (), record,
-                  record.parts.size () > 1 ? "<decoded>" : "<unknown>",
+                  record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                           : zlink::framework::detail::diagnostic_absent_value,
                   record.reply_token ? dispatch_message_kind_t::request
                                      : dispatch_message_kind_t::send,
                   record.reply_token ? dispatch_error_action_t::reply_error

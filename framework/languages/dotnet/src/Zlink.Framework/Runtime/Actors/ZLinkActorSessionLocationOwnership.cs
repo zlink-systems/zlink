@@ -200,9 +200,7 @@ internal sealed partial class ZLinkActorSessionManager
         }
         catch (Exception exception)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"ownership-loss teardown retry for '{actorId}': {exception.Message}"
-            );
+            ZLinkFrameworkDebugLog.SpotDiscovery($"ownership-loss teardown retry for '{actorId}': {exception.Message}");
             StartActorTeardownReconciliation(state, nativeActor, "actor-ownership-loss");
         }
     }
@@ -404,9 +402,7 @@ internal sealed partial class ZLinkActorSessionManager
         }
         catch (Exception failure)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"deferred actor teardown failed for '{state.ActorId}': {failure.Message}"
-            );
+            ZLinkFrameworkDebugLog.SpotDiscovery($"deferred actor teardown failed for '{state.ActorId}': {failure.Message}");
             StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
         }
     }
@@ -422,9 +418,7 @@ internal sealed partial class ZLinkActorSessionManager
         }
         catch (Exception exception)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"deferred source finalization failed for actor '{state.ActorId}': {exception.Message}"
-            );
+            ZLinkFrameworkDebugLog.SpotDiscovery($"deferred source finalization failed for actor '{state.ActorId}': {exception.Message}");
         }
     }
 
@@ -451,9 +445,7 @@ internal sealed partial class ZLinkActorSessionManager
             )
             {
                 _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred actor teardown disposal failed for '{state.ActorId}': {failure.Message}"
-                );
+                ZLinkFrameworkDebugLog.SpotDiscovery($"deferred actor teardown disposal failed for '{state.ActorId}': {failure.Message}");
                 return;
             }
 
@@ -468,9 +460,7 @@ internal sealed partial class ZLinkActorSessionManager
             }
             catch (Exception reconciliationFailure)
             {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred actor teardown state reconciliation failed for '{state.ActorId}': {reconciliationFailure.Message}"
-                );
+                ZLinkFrameworkDebugLog.SpotDiscovery($"deferred actor teardown state reconciliation failed for '{state.ActorId}': {reconciliationFailure.Message}");
             }
 
             StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
@@ -494,9 +484,7 @@ internal sealed partial class ZLinkActorSessionManager
                     .RunAsync(
                         token => ExecuteActorTeardownAttemptAsync(state, nativeActor, token),
                         exception =>
-                            ZLinkFrameworkDebugLog.SpotDiscovery(
-                                $"{operationName} retry for '{state.ActorId}': {exception.Message}"
-                            ),
+                            ZLinkFrameworkDebugLog.SpotDiscovery($"{operationName} retry for '{state.ActorId}': {exception.Message}"),
                         cancellationToken,
                         static exception => exception is OperationCanceledException
                     )
@@ -531,9 +519,7 @@ internal sealed partial class ZLinkActorSessionManager
                             token =>
                                 DestroyUncommittedNativeActorAttemptAsync(node, nativeActor, token),
                             exception =>
-                                ZLinkFrameworkDebugLog.SpotDiscovery(
-                                    $"{operationName} retry for '{nativeActor.ActorId}': {exception.Message}"
-                                ),
+                                ZLinkFrameworkDebugLog.SpotDiscovery($"{operationName} retry for '{nativeActor.ActorId}': {exception.Message}"),
                             cancellationToken,
                             static exception => exception is OperationCanceledException
                         )

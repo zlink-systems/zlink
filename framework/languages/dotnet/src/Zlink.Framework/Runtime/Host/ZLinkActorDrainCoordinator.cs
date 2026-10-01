@@ -208,10 +208,7 @@ internal sealed class ZLinkActorDrainCoordinator(
                     if (result == ZLinkStandaloneActorRelocationResult.Deferred)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            "relocation_actor_deferred actor="
-                                + actorState.ActorId
-                                + " target="
-                                + candidate.Descriptor.Rid
+                            $"relocation_actor_deferred actor={(actorState.ActorId)} target={(candidate.Descriptor.Rid)}"
                         );
                         return new ZLinkActorDrainResult(
                             false,
@@ -315,7 +312,7 @@ internal sealed class ZLinkActorDrainCoordinator(
             //  target이 없다"이므로 그 이름을 싣는다. 다시 불러도 같은 후보를
             //  같은 이유로 거부하므로 재시도가 상태를 바꾸지 못한다.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "relocation_actor_no_target_accepted actor=" + actorState.ActorId
+                $"relocation_actor_no_target_accepted actor={(actorState.ActorId)}"
             );
             return new ZLinkActorDrainResult(
                 false,

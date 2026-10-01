@@ -1612,7 +1612,7 @@ internal abstract partial class ZLinkSpotActivation
             if (removeRoute)
                 _ = Interlocked.CompareExchange(ref _messageFollow, null, messageFollow);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                removeRoute ? "message_follow_expired" : "message_follow_rejected"
+                $"{(removeRoute ? "message_follow_expired" : "message_follow_rejected")}"
             );
             return ZLinkSpotMessageFollowResult.StaleRejected;
         }
@@ -1711,7 +1711,7 @@ internal abstract partial class ZLinkSpotActivation
                 received.OperationId,
                 checked((byte)(received.MessageFollowHopCount + 1))
             );
-            ZLinkFrameworkDebugLog.SpotDiscovery("message_follow_relay");
+            ZLinkFrameworkDebugLog.SpotDiscovery($"message_follow_relay");
         }
         return followed;
     }
@@ -1753,7 +1753,7 @@ internal abstract partial class ZLinkSpotActivation
                     operationId,
                     messageFollowHopCount
                 );
-                ZLinkFrameworkDebugLog.SpotDiscovery("message_follow_relay");
+                ZLinkFrameworkDebugLog.SpotDiscovery($"message_follow_relay");
                 return;
             }
 

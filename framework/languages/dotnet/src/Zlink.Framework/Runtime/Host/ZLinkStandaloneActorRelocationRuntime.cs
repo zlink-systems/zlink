@@ -80,20 +80,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (actor is null || sourceRef is null || string.IsNullOrWhiteSpace(actorType))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "relocation_target_rejected reason=incomplete_actor_state actor="
-                    + actorState.ActorId
+                $"relocation_target_rejected reason=incomplete_actor_state actor={(actorState.ActorId)}"
             );
             return ZLinkStandaloneActorRelocationResult.TargetRejected;
         }
         if (target.Rid == sourceRef.Value.NodeRid)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "relocation_target_rejected reason=target_is_source actor="
-                    + actorState.ActorId
-                    + " targetRid="
-                    + target.Rid
-                    + " sourceRid="
-                    + sourceRef.Value.NodeRid
+                $"relocation_target_rejected reason=target_is_source actor={(actorState.ActorId)} targetRid={(target.Rid)} sourceRid={(sourceRef.Value.NodeRid)}"
             );
             return ZLinkStandaloneActorRelocationResult.TargetRejected;
         }
@@ -1389,7 +1383,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (stage.AuthorityPublished)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            "late_cutover object=actor reason=already_committed"
+                            $"late_cutover object=actor reason=already_committed"
                         );
                         return;
                     }
@@ -1607,7 +1601,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         using (lease)
             if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
                 return;
-        ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=actor");
+        ZLinkFrameworkDebugLog.SpotDiscovery($"cutover_timeout object=actor");
         ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout("actor");
         //  Location runtime §10: from here the target also reads its source
         //  fence. Only a confirmed source Preserve (the fence moved to another
@@ -1850,9 +1844,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             // only legal owner of this journal. Park until the exact target
             // lifecycle returns; there is no source rollback after commit.
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"standalone_recovery_parked actor={targetAuthority.ActorId} "
-                    + $"relocation={candidate.Envelope.AggregateId:N} "
-                    + "reason=committed_target_unavailable"
+                $"standalone_recovery_parked actor={targetAuthority.ActorId} relocation={candidate.Envelope.AggregateId:N} reason=committed_target_unavailable"
             );
             return;
         }
@@ -1931,8 +1923,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             // the same journal; the regular completion path owns its replies
             // and source cleanup.
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"standalone_recovery_deferred actor={actorState.ActorId} "
-                    + $"handoff={handoffId} reason=standard_handoff_active"
+                $"standalone_recovery_deferred actor={actorState.ActorId} handoff={handoffId} reason=standard_handoff_active"
             );
             return;
         }
@@ -2092,8 +2083,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             )
             .ConfigureAwait(false);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            "standalone_recovery_precommit_aborted "
-                + $"relocation={candidate.Envelope.AggregateId:N}"
+            $"standalone_recovery_precommit_aborted relocation={candidate.Envelope.AggregateId:N}"
         );
     }
 
@@ -4082,7 +4072,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"relocation_target_complete_entry actor={actorState.ActorId} " + $"handoff={handoffId}"
+            $"relocation_target_complete_entry actor={actorState.ActorId} handoff={handoffId}"
         );
         await ActivateStandaloneActorRelocationTargetAsync(
                 actorState,

@@ -287,10 +287,7 @@ internal sealed class ZLinkActorDispatchRouter(
             .ExecuteLockedAsync(() => state.SelectPlacementLocked(false), cancellationToken)
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_dispatch_placement actor={actor.Context.ActorId} "
-                + $"correlation_id={header.CorrelationId} "
-                + $"activation={placement.Activation?.SpotId ?? "<entry>"} "
-                + $"node={placement.Activation?.NodeRid.ToString() ?? "<entry>"}"
+            $"actor_dispatch_placement actor={actor.Context.ActorId} correlation_id={header.CorrelationId} activation={placement.Activation?.SpotId ?? ZLinkFrameworkDebugLog.EntryPlaceholder} node={placement.Activation?.NodeRid.ToString() ?? ZLinkFrameworkDebugLog.EntryPlaceholder}"
         );
 
         if (placement.Activation is not null)
@@ -316,8 +313,7 @@ internal sealed class ZLinkActorDispatchRouter(
                 )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_dispatch_placement_completed actor={actor.Context.ActorId} "
-                    + $"correlation_id={header.CorrelationId} reply={reply is not null}"
+                $"actor_dispatch_placement_completed actor={actor.Context.ActorId} correlation_id={header.CorrelationId} reply={reply is not null}"
             );
             return reply
                 ?? throw new InvalidOperationException(

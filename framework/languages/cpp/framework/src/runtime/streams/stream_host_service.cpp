@@ -1865,10 +1865,12 @@ class stream_host_service_t::listener_t
                 && previous_binding && previous_binding->binding_generation > binding_generation) {
                 auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
                 actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()), "session_registry_bind_stale_ignored",
-                  "session_rid=" + session_rid.to_hex () + " binding_generation="
-                    + std::to_string (binding_generation) + " current_binding_generation="
-                    + std::to_string (previous_binding->binding_generation),
+                  actor.actor_id ().value (), "session_registry_bind_stale_ignored",
+                  [&] {
+                      return "session_rid=" + session_rid.to_hex () + " binding_generation="
+                             + std::to_string (binding_generation) + " current_binding_generation="
+                             + std::to_string (previous_binding->binding_generation);
+                  },
                   &session_rid);
             }
             throw framework_exception_t (framework_error_kind_t::not_configured,
@@ -1894,19 +1896,23 @@ class stream_host_service_t::listener_t
                                                   : "bound Session route registration failed");
             }
             actor_gateway.trace_bound_session_send_stage (
-              std::string (actor.actor_id ().value ()), "session_owner_route_publish",
-              "session_rid=" + session_rid.to_hex ()
-                + " binding_generation=" + std::to_string (binding.binding_generation)
-                + " replaced=" + (transition.value ().changed ? "true" : "false"),
+              actor.actor_id ().value (), "session_owner_route_publish",
+              [&] {
+                  return "session_rid=" + session_rid.to_hex ()
+                         + " binding_generation=" + std::to_string (binding.binding_generation)
+                         + " replaced=" + (transition.value ().changed ? "true" : "false");
+              },
               &session_rid);
             if (transition.value ().current
                 && transition.value ().current->binding_generation != binding.binding_generation) {
                 actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()),
-                  "session_owner_route_publish_stale_ignored",
-                  "session_rid=" + session_rid.to_hex () + " binding_generation="
-                    + std::to_string (binding.binding_generation) + " current_binding_generation="
-                    + std::to_string (transition.value ().current->binding_generation),
+                  actor.actor_id ().value (), "session_owner_route_publish_stale_ignored",
+                  [&] {
+                      return "session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " current_binding_generation="
+                             + std::to_string (transition.value ().current->binding_generation);
+                  },
                   &session_rid);
             }
             if (transition.value ().changed && transition.value ().previous
@@ -2000,10 +2006,12 @@ class stream_host_service_t::listener_t
             } else {
                 auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
                 actor_gateway.trace_bound_session_send_stage (
-                  std::string (actor.actor_id ().value ()), "session_owner_route_publish_complete",
-                  "session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " held_pushes=" + std::to_string (retained->size ()),
+                  actor.actor_id ().value (), "session_owner_route_publish_complete",
+                  [&] {
+                      return "session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " held_pushes=" + std::to_string (retained->size ());
+                  },
                   &session_rid);
                 for (auto &settle : *retained) {
                     asio::post (*io, [settle = std::move (settle)] () mutable {
@@ -2076,9 +2084,10 @@ class stream_host_service_t::listener_t
         const auto local = _mesh_node->native_node ().status ();
         const auto bindings = _mesh_node->native_node ().sessions ().bindings (connection);
         auto actor_gateway = _services->get_required<detail::actor_gateway_runtime_t> ();
-        const auto retire_connection =
-          "connection_id=" + connection.connection_id
-          + " connection_generation=" + std::to_string (connection.connection_generation);
+        const auto retire_connection_details = [&connection] {
+            return "connection_id=" + connection.connection_id
+                   + " connection_generation=" + std::to_string (connection.connection_generation);
+        };
         std::vector<std::pair<runtime::stateful::stream_binding_t, task_t<void>>>
           remote_retirements;
         remote_retirements.reserve (bindings.size ());
@@ -2088,11 +2097,14 @@ class stream_host_service_t::listener_t
                                                                                        binding)) {
                     actor_gateway.trace_bound_session_send_stage (
                       binding.actor.key, "session_owner_route_tombstone_stale_ignored",
-                      retire_connection + " session_rid=" + session_rid.to_hex ()
-                        + " binding_generation=" + std::to_string (binding.binding_generation)
-                        + " binding_connection_id=" + binding.connection.connection_id
-                        + " binding_connection_generation="
-                        + std::to_string (binding.connection.connection_generation),
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation)
+                                 + " binding_connection_id=" + binding.connection.connection_id
+                                 + " binding_connection_generation="
+                                 + std::to_string (binding.connection.connection_generation);
+                      },
                       &session_rid);
                     continue;
                 }
@@ -2112,16 +2124,20 @@ class stream_host_service_t::listener_t
                 }
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation);
+                  },
                   &session_rid);
             }
             catch (const std::exception &error) {
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone_failed",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " error=" + error.what (),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " error=" + error.what ();
+                  },
                   &session_rid);
             }
         }
@@ -2130,16 +2146,20 @@ class stream_host_service_t::listener_t
                 co_await retirement;
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation);
+                  },
                   &session_rid);
             }
             catch (const std::exception &error) {
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone_failed",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " error=" + error.what (),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " error=" + error.what ();
+                  },
                   &session_rid);
             }
         }
