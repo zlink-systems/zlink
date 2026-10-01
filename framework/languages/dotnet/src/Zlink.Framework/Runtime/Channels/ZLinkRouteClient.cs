@@ -621,29 +621,28 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
         return ExecuteAsync<TReply>(cancellationToken);
     }
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
-    {
-        var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
-        var reply = await ZLinkSpotHandleRequestExecution
-            .ExecuteAsync(
-                target,
-                snapshot =>
-                {
-                    var timeout =
-                        _timeout
-                        ?? runtime.Registration.ResolveMeshRequestTimeout(snapshot.RouterChannelId);
-                    var header = ZLinkClientCallCodec.CreateEnvelope(
-                        ZLinkMessageKind.Request,
-                        snapshot.RouterChannelId,
-                        packetName,
-                        timeout
-                    );
-                    var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                        header,
-                        request,
-                        runtime.Registration.Codecs
-                    );
-                    return runtime.RequestToSpotViaRouterChannelAsync(
+    private ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken) =>
+        ZLinkSpotHandleRequestExecution.ExecuteAsync(
+            target,
+            async snapshot =>
+            {
+                var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
+                var timeout =
+                    _timeout
+                    ?? runtime.Registration.ResolveMeshRequestTimeout(snapshot.RouterChannelId);
+                var header = ZLinkClientCallCodec.CreateEnvelope(
+                    ZLinkMessageKind.Request,
+                    snapshot.RouterChannelId,
+                    packetName,
+                    timeout
+                );
+                var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                    header,
+                    request,
+                    runtime.Registration.Codecs
+                );
+                var reply = await runtime
+                    .RequestToSpotViaRouterChannelAsync(
                         snapshot.RouterChannelId,
                         snapshot.NodeRid,
                         snapshot.SpotId,
@@ -655,17 +654,16 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                         timeout,
                         cancellationToken,
                         _metadata.Encode()
-                    );
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-            reply,
-            "SPOT route request reply is empty.",
-            $"SPOT route request failed for '{packetName}'.",
-            runtime.Registration.Codecs,
-            runtime.Flow.CaptureEnabled
+                    )
+                    .ConfigureAwait(false);
+                return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                    reply,
+                    "SPOT route request reply is empty.",
+                    $"SPOT route request failed for '{packetName}'.",
+                    runtime.Registration.Codecs,
+                    runtime.Flow.CaptureEnabled
+                );
+            },
+            cancellationToken
         );
-    }
 }
