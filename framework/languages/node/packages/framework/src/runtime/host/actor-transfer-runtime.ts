@@ -1613,7 +1613,6 @@ export class ZLinkActorTransferRuntime {
         state.markLocationReleased();
       } catch (error) {
         locationError = error;
-        void lifecycle.releaseActorEventually(actorType, actor.context.actorId);
       }
     }
     try {

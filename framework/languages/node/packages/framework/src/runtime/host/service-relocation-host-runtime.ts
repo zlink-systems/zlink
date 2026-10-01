@@ -2216,7 +2216,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       signal?.aborted === true || performance.now() >= controlDeadlineAtMs;
     let readyReceived = false;
     let settlement: 'target' | 'source' | 'lost' | undefined;
-    let sourceCommitted = false;
     try {
       const prepare = {
         kind: 'prepare',
@@ -2380,17 +2379,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       for (const session of sessions) session.prepared.setReplayResults([]);
       await captured.commitSource();
-      sourceCommitted = true;
       await this.options.reconcileStatefulAuthorityRoutes?.(signal);
     } catch (error) {
       if (settlement !== 'target') throw error;
       // Target commit is confirmed; later source cleanup failures cannot move
-      // the authority back (spec 28 §9).
-      if (!sourceCommitted) {
-        for (const session of sessions) session.prepared.setReplayResults([]);
-        await captured.commitSource().catch(() => undefined);
-      }
-      await this.options.reconcileStatefulAuthorityRoutes?.().catch(() => undefined);
+      // the authority back (spec 28 §10).
       const authority = await requireAuthority(
         this.requireLocationStore(),
         { value: primaryKey(captured.envelope) } as ZLinkAuthorityKey,

@@ -98,9 +98,6 @@ import {
 } from './opaque-record-key';
 const LOCATION_STORE_WRITE_CONCURRENCY = 64;
 const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
-const MAX_REPOSITORY_RETRY_DELAY_MS = 100;
-const INITIAL_REPOSITORY_RETRY_DELAY_MS = 2;
-const MAX_REPOSITORY_RETRY_SHIFT = 5;
 
 const LOCATION_RECORD_VERSION = 1;
 
@@ -115,8 +112,6 @@ const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_U64 = UINT64_MAX;
 
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
-const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
-const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
 const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
 
 type StoredAuthoritySnapshot = Omit<ZLinkAuthoritySnapshot, 'kind' | 'storeVersion' | 'storeNow'>;
@@ -822,195 +817,190 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
     validateAggregateFence(fence);
-    return await this.commitAggregateCore(
-      fence,
-      0,
-      performance.now() + AGGREGATE_COMMIT_RETRY_WINDOW_MS,
-      signal
-    );
+    return await this.commitAggregateCore(fence, signal);
   }
 
   private async commitAggregateCore(
     fence: ZLinkAggregateFence,
-    retryAttempt: number,
-    retryDeadlineAtMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
-    const rowKey = aggregateKey(fence);
-    let aggregateRead = await this.provider.read(rowKey, signal);
-    if (aggregateRead.kind === 'missing') return { kind: 'stale' };
-    let aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    if (aggregate.state === 'aborted' || aggregate.state === 'staging') {
-      return { kind: 'stale' };
-    }
-    if (aggregate.state === 'committed') {
-      await this.normalizeCommittedAggregate(fence, aggregate, signal);
-      return { kind: 'alreadyCommitted' };
-    }
-    const entries = await this.aggregateInventory.read(
-      fence,
-      Buffer.from(aggregate.inventoryDigest),
-      signal
-    );
-    if (entries.length !== aggregate.participantCount) {
-      throw new Error('Aggregate inventory count differs from its authority record.');
-    }
-    const authorityRows = [];
-    for (let index = 0; index < entries.length; index++) {
-      const entry = entries[index]!;
-      const rowKeyForParticipant = authorityKey(entry.authorityKey);
-      const current = await this.provider.read(rowKeyForParticipant, signal);
-      if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeAuthorityRecord(current.value.bytes);
-      if (!sameAggregateMarkerEntry(record.aggregate, fence, index, entry)) {
-        // A competing committer may already have published the aggregate and
-        // normalized this participant before this reader reached it.  The
-        // committed aggregate is the terminal outcome to adopt, not a stale
-        // failure caused by observing the post-normalization row.
-        const latest = await this.provider.read(rowKey, signal);
-        if (latest.kind === 'found') {
-          const latestAggregate = decodeJson<AggregateRecord>(latest.value.bytes);
-          if (latestAggregate.state === 'committed') {
-            await this.normalizeCommittedAggregate(fence, latestAggregate, signal);
-            return { kind: 'alreadyCommitted' };
-          }
-        }
+    for (;;) {
+      signal?.throwIfAborted();
+      const rowKey = aggregateKey(fence);
+      let aggregateRead = await this.provider.read(rowKey, signal);
+      if (aggregateRead.kind === 'missing') return { kind: 'stale' };
+      let aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+      if (aggregate.state === 'aborted' || aggregate.state === 'staging') {
         return { kind: 'stale' };
       }
-      const [payload, membership] = await Promise.all([
-        requireProviderBytes(this.provider, aggregateParticipantPayloadKey(fence, index), signal),
-        requireProviderBytes(this.provider, aggregateParticipantMembershipKey(fence, index), signal)
+      if (aggregate.state === 'committed') {
+        await this.normalizeCommittedAggregate(fence, aggregate, signal);
+        return { kind: 'alreadyCommitted' };
+      }
+      const entries = await this.aggregateInventory.read(
+        fence,
+        Buffer.from(aggregate.inventoryDigest),
+        signal
+      );
+      if (entries.length !== aggregate.participantCount) {
+        throw new Error('Aggregate inventory count differs from its authority record.');
+      }
+      const authorityRows = [];
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]!;
+        const rowKeyForParticipant = authorityKey(entry.authorityKey);
+        const current = await this.provider.read(rowKeyForParticipant, signal);
+        if (current.kind === 'missing') return { kind: 'stale' };
+        const record = decodeAuthorityRecord(current.value.bytes);
+        if (!sameAggregateMarkerEntry(record.aggregate, fence, index, entry)) {
+          // A competing committer may already have published the aggregate and
+          // normalized this participant before this reader reached it.  The
+          // committed aggregate is the terminal outcome to adopt, not a stale
+          // failure caused by observing the post-normalization row.
+          const latest = await this.provider.read(rowKey, signal);
+          if (latest.kind === 'found') {
+            const latestAggregate = decodeJson<AggregateRecord>(latest.value.bytes);
+            if (latestAggregate.state === 'committed') {
+              await this.normalizeCommittedAggregate(fence, latestAggregate, signal);
+              return { kind: 'alreadyCommitted' };
+            }
+          }
+          return { kind: 'stale' };
+        }
+        const [payload, membership] = await Promise.all([
+          requireProviderBytes(this.provider, aggregateParticipantPayloadKey(fence, index), signal),
+          requireProviderBytes(
+            this.provider,
+            aggregateParticipantMembershipKey(fence, index),
+            signal
+          )
+        ]);
+        if (
+          sha256Hex(payload) !== entry.authorityPayloadSha256 ||
+          sha256Hex(membership) !== entry.membershipMutationSha256
+        ) {
+          throw new Error('Aggregate participant staging checksum does not match inventory.');
+        }
+        authorityRows.push({ key: rowKeyForParticipant, current, record, entry });
+      }
+
+      const targetDescriptorKey = meshKey(
+        aggregate.targetDescriptor.meshName,
+        aggregate.targetDescriptor.rid
+      );
+      const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
+      const targetCapacityKey = capacityKey(
+        aggregate.targetDescriptor.meshName,
+        String(aggregate.targetDescriptor.rid)
+      );
+      const [descriptorRead, leaseRead] = await Promise.all([
+        this.provider.read(targetDescriptorKey, signal),
+        this.provider.read(targetLeaseKey, signal)
       ]);
       if (
-        sha256Hex(payload) !== entry.authorityPayloadSha256 ||
-        sha256Hex(membership) !== entry.membershipMutationSha256
+        liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
+        undefined
       ) {
-        throw new Error('Aggregate participant staging checksum does not match inventory.');
+        return { kind: 'stale' };
       }
-      authorityRows.push({ key: rowKeyForParticipant, current, record, entry });
-    }
 
-    const targetDescriptorKey = meshKey(
-      aggregate.targetDescriptor.meshName,
-      aggregate.targetDescriptor.rid
-    );
-    const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
-    const targetCapacityKey = capacityKey(
-      aggregate.targetDescriptor.meshName,
-      String(aggregate.targetDescriptor.rid)
-    );
-    const [descriptorRead, leaseRead] = await Promise.all([
-      this.provider.read(targetDescriptorKey, signal),
-      this.provider.read(targetLeaseKey, signal)
-    ]);
-    if (
-      liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
-      undefined
-    ) {
-      return { kind: 'stale' };
-    }
-
-    const capacityDeltas = new Map<string, ZLinkCapacityVector>();
-    for (const row of authorityRows) {
-      if (row.entry.ownerTransition !== 'newOwner') continue;
-      const key = capacityKey(
-        row.record.snapshot.allocation.descriptor.meshName,
-        String(row.record.snapshot.allocation.descriptor.rid)
-      ).value;
-      capacityDeltas.set(
-        key,
-        addCapacityVector(
-          capacityDeltas.get(key) ?? { actors: 0, spots: 0 },
-          row.record.snapshot.allocation.capacity
-        )
+      const capacityDeltas = new Map<string, ZLinkCapacityVector>();
+      for (const row of authorityRows) {
+        if (row.entry.ownerTransition !== 'newOwner') continue;
+        const key = capacityKey(
+          row.record.snapshot.allocation.descriptor.meshName,
+          String(row.record.snapshot.allocation.descriptor.rid)
+        ).value;
+        capacityDeltas.set(
+          key,
+          addCapacityVector(
+            capacityDeltas.get(key) ?? { actors: 0, spots: 0 },
+            row.record.snapshot.allocation.capacity
+          )
+        );
+      }
+      const capacityKeys = new Map<string, ZLinkStoreKey>();
+      capacityKeys.set(targetCapacityKey.value, targetCapacityKey);
+      for (const value of capacityDeltas.keys()) capacityKeys.set(value, storeKey(value));
+      const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
+      for (const [value, key] of capacityKeys) {
+        const read = await this.provider.read(key, signal);
+        if (read.kind === 'missing') {
+          // Capacity rows are provider-private. A foreign source legitimately
+          // has no row under this provider's key encoding; its source runtime
+          // releases that capacity after observing the committed authority.
+          // The target row remains mandatory because this provider reserved it
+          // during prepare and must consume it atomically with commit.
+          if (value === targetCapacityKey.value) return { kind: 'stale' };
+          capacityKeys.delete(value);
+          continue;
+        }
+        capacityReads.set(value, read);
+      }
+      const capacityMutations = [];
+      for (const [value, key] of capacityKeys) {
+        const read = capacityReads.get(value)!;
+        let capacity = decodeJson<CapacityRecord>(read.value.bytes);
+        const sourceDelta = capacityDeltas.get(value);
+        if (sourceDelta !== undefined) {
+          capacity = {
+            active: subtractCapacity(capacity.active, sourceDelta),
+            pending: capacity.pending
+          };
+        }
+        if (value === targetCapacityKey.value) {
+          capacity = {
+            active: addCapacity(capacity.active, aggregate.capacity),
+            pending: subtractCapacity(capacity.pending, aggregate.capacity)
+          };
+        }
+        capacityMutations.push({
+          kind: 'put' as const,
+          key,
+          bytes: encodeJson(capacity)
+        });
+      }
+      const published = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+            versionCondition(targetDescriptorKey, descriptorRead),
+            leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
+            ...[...capacityReads.entries()].map(([value, read]) => ({
+              kind: 'version' as const,
+              key: capacityKeys.get(value)!,
+              expected: read.value.version
+            }))
+          ],
+          mutations: [
+            {
+              kind: 'put',
+              key: rowKey,
+              bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
+            },
+            ...capacityMutations
+          ]
+        },
+        signal
       );
-    }
-    const capacityKeys = new Map<string, ZLinkStoreKey>();
-    capacityKeys.set(targetCapacityKey.value, targetCapacityKey);
-    for (const value of capacityDeltas.keys()) capacityKeys.set(value, storeKey(value));
-    const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
-    for (const [value, key] of capacityKeys) {
-      const read = await this.provider.read(key, signal);
-      if (read.kind === 'missing') {
-        // Capacity rows are provider-private. A foreign source legitimately
-        // has no row under this provider's key encoding; its source runtime
-        // releases that capacity after observing the committed authority.
-        // The target row remains mandatory because this provider reserved it
-        // during prepare and must consume it atomically with commit.
-        if (value === targetCapacityKey.value) return { kind: 'stale' };
-        capacityKeys.delete(value);
-        continue;
+      if (published.kind === 'conflict') {
+        aggregateRead = await this.provider.read(rowKey, signal);
+        if (aggregateRead.kind === 'missing') return { kind: 'stale' };
+        aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+        if (aggregate.state === 'prepared') {
+          // The commit CAS also fences the target's live owner lease, descriptor,
+          // and capacity rows. Re-read the whole prepared fence after an
+          // auxiliary-row race; a changed aggregate or participant fence exits
+          // through the normal stale checks on the next attempt.
+          continue;
+        }
+        if (aggregate.state !== 'committed') return { kind: 'stale' };
+      } else {
+        aggregate = { ...aggregate, state: 'committed' };
       }
-      capacityReads.set(value, read);
+      await this.normalizeCommittedAggregate(fence, aggregate, signal);
+      return { kind: 'committed' };
     }
-    const capacityMutations = [];
-    for (const [value, key] of capacityKeys) {
-      const read = capacityReads.get(value)!;
-      let capacity = decodeJson<CapacityRecord>(read.value.bytes);
-      const sourceDelta = capacityDeltas.get(value);
-      if (sourceDelta !== undefined) {
-        capacity = {
-          active: subtractCapacity(capacity.active, sourceDelta),
-          pending: capacity.pending
-        };
-      }
-      if (value === targetCapacityKey.value) {
-        capacity = {
-          active: addCapacity(capacity.active, aggregate.capacity),
-          pending: subtractCapacity(capacity.pending, aggregate.capacity)
-        };
-      }
-      capacityMutations.push({
-        kind: 'put' as const,
-        key,
-        bytes: encodeJson(capacity)
-      });
-    }
-    const published = await this.provider.write(
-      {
-        conditions: [
-          { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-          versionCondition(targetDescriptorKey, descriptorRead),
-          leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
-          ...[...capacityReads.entries()].map(([value, read]) => ({
-            kind: 'version' as const,
-            key: capacityKeys.get(value)!,
-            expected: read.value.version
-          }))
-        ],
-        mutations: [
-          {
-            kind: 'put',
-            key: rowKey,
-            bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
-          },
-          ...capacityMutations
-        ]
-      },
-      signal
-    );
-    if (published.kind === 'conflict') {
-      aggregateRead = await this.provider.read(rowKey, signal);
-      if (aggregateRead.kind === 'missing') return { kind: 'stale' };
-      aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-      if (
-        aggregate.state === 'prepared' &&
-        retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES &&
-        performance.now() < retryDeadlineAtMs
-      ) {
-        // The commit CAS also fences the target's live owner lease, descriptor,
-        // and capacity rows. Re-read the whole prepared fence after an
-        // auxiliary-row race; a changed aggregate or participant fence exits
-        // through the normal stale checks on the next attempt.
-        await waitForAggregateCommitRetry(retryAttempt, retryDeadlineAtMs, signal);
-        return await this.commitAggregateCore(fence, retryAttempt + 1, retryDeadlineAtMs, signal);
-      }
-      if (aggregate.state !== 'committed') return { kind: 'stale' };
-    } else {
-      aggregate = { ...aggregate, state: 'committed' };
-    }
-    await this.normalizeCommittedAggregate(fence, aggregate, signal);
-    return { kind: 'committed' };
   }
 
   override async abortAggregate(
@@ -3221,36 +3211,6 @@ async function parallelForEach<T>(
       }
     })
   );
-}
-
-async function waitForAggregateCommitRetry(
-  retryAttempt: number,
-  deadlineAtMs: number,
-  signal?: AbortSignal
-): Promise<void> {
-  signal?.throwIfAborted();
-  const remainingMs = deadlineAtMs - performance.now();
-  if (remainingMs <= 0) return;
-  const exponentialMs = Math.min(
-    MAX_REPOSITORY_RETRY_DELAY_MS,
-    INITIAL_REPOSITORY_RETRY_DELAY_MS << Math.min(retryAttempt, MAX_REPOSITORY_RETRY_SHIFT)
-  );
-  const delayMs = Math.min(
-    remainingMs,
-    exponentialMs + Math.floor(Math.random() * (exponentialMs + 1))
-  );
-  await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const aborted = () => {
-      if (timer !== undefined) clearTimeout(timer);
-      reject(signal?.reason ?? new Error('Aggregate commit was aborted.'));
-    };
-    signal?.addEventListener('abort', aborted, { once: true });
-    timer = setTimeout(() => {
-      signal?.removeEventListener('abort', aborted);
-      resolve();
-    }, delayMs);
-  });
 }
 
 function sha256Hex(bytes: Uint8Array): string {

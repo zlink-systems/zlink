@@ -10,6 +10,33 @@ const {
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+
+test('target rollback reports the original location release failure after one submission', async () => {
+  const failure = new Error('location release provider failure');
+  let releases = 0;
+  let rollbacks = 0;
+  const state = {
+    actorType: 'player', ownsLocation: true,
+    markLocationReleased() { throw new Error('failed release must retain ownership'); }
+  };
+  const lifecycle = {
+    async releaseActor() { releases++; throw failure; },
+    async releaseActorEventually() { releases++; }
+  };
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => state,
+      async rollbackTransferredActor() { rollbacks++; }
+    }),
+    locationLifecycle: () => lifecycle
+  });
+  await assert.rejects(
+    runtime.rollbackRoutedActor({ context: { actorId: 'rollback-release' } }),
+    (error) => error === failure
+  );
+  assert.equal(releases, 1);
+  assert.equal(rollbacks, 1);
+});
 const {
   ZLinkEntryActorRuntimeService
 } = require('../../packages/framework/dist/runtime/host/entry-actor-runtime');
@@ -3216,8 +3243,7 @@ test('one-way command 44 shutdown failure preserves the committed target without
       assert.equal(ownerNodeGeneration, 4n);
       return { status: 'claimed', generation: 17n, claimed: { leaseGeneration: 23n } };
     },
-    async releaseActor() { released++; },
-    async releaseActorEventually() { throw new Error('not used'); }
+    async releaseActor() { released++; }
   };
   const targetAuthority = {
     kind: 'snapshot',

@@ -1331,23 +1331,22 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
   assert.equal(row.ownerId, 'owner-b');
 });
 
-test('location lifecycle retries source actor cleanup without losing the tracked generation', async () => {
+test('location lifecycle reports source actor cleanup failure without resubmitting release', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
   await node.lifecycle.claimActor('player', 'actor-retry', rid('node-a'));
-  const removeActor = node.runtime.removeActor.bind(node.runtime);
+  const failure = new Error('store release failure');
   let attempts = 0;
-  node.runtime.removeActor = async (...args) => {
+  node.runtime.removeActor = async () => {
     attempts += 1;
-    if (attempts === 1) throw new Error('temporary store failure');
-    return await removeActor(...args);
+    throw failure;
   };
 
-  await node.lifecycle.releaseActorEventually('player', 'actor-retry');
+  await assert.rejects(node.lifecycle.releaseActor('player', 'actor-retry'), (error) => error === failure);
 
-  assert.equal(attempts, 2);
-  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), false);
-  assert.equal(await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' }), undefined);
+  assert.equal(attempts, 1);
+  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), true);
+  assert.equal((await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' })).ownerId, 'owner-a');
 });
 
 test('location lifecycle releases placement Actor authority for the exact native ref', async () => {

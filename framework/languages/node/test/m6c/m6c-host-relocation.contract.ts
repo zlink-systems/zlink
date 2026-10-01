@@ -38,6 +38,7 @@ import {
   ServiceRelocationAuthorityPayloadCodec
 } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
+import { ServiceRelocationPostCommitError } from '../../packages/framework/src/runtime/foundation/service-relocation-coordinator';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
 import { ZLinkBoundSessionService } from '../../packages/framework/src/runtime/streams/bound-session-service';
@@ -2041,7 +2042,60 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
   }
 });
 
+test('post-commit route cleanup failure is reported without resubmitting cleanup', async () => {
+  const failure = new Error('route cleanup failed after target commit');
+  let attempts = 0;
+  const harness = createActorJoinHostHarness({
+    reconcileStatefulAuthorityRoutes: async () => {
+      attempts++;
+      throw failure;
+    }
+  });
+  try {
+    await assert.rejects(harness.relocate, (error: unknown) => {
+      assert.ok(error instanceof ServiceRelocationPostCommitError);
+      assert.equal(error.cause, failure);
+      return true;
+    });
+    assert.equal(attempts, 1);
+    const authority = await harness.location.readAuthority();
+    assert.equal(authority.kind, 'snapshot');
+    if (authority.kind === 'snapshot') assert.equal(authority.ownerId, 'target-owner');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('post-commit source cleanup failure is reported without resubmitting cleanup', async () => {
+  const failure = new Error('source cleanup failed after target commit');
+  let attempts = 0;
+  let routeAttempts = 0;
+  const harness = createActorJoinHostHarness({
+    commitSource: async () => {
+      attempts++;
+      throw failure;
+    },
+    reconcileStatefulAuthorityRoutes: async () => {
+      routeAttempts++;
+    }
+  });
+  try {
+    await assert.rejects(harness.relocate, (error: unknown) => {
+      assert.ok(error instanceof ServiceRelocationPostCommitError);
+      assert.equal(error.cause, failure);
+      assert.equal(error.authority.ownerId, 'target-owner');
+      return true;
+    });
+    assert.equal(attempts, 1);
+    assert.equal(routeAttempts, 0);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 interface ActorJoinHarnessOptions {
+  readonly commitSource?: () => Promise<void>;
+  readonly reconcileStatefulAuthorityRoutes?: () => Promise<void>;
   readonly holdAccepted?: boolean;
   readonly holdSourceLeave?: boolean;
   readonly readyResult?: number;
@@ -2171,6 +2225,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setReplayResults() {},
         async commit() {
           events.push('source:committed');
+          await options.commitSource?.();
         },
         async rollback() {
           events.push('source:rolled-back');
@@ -2619,6 +2674,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
     meshNode: () => sourceNode,
