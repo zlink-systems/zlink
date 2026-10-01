@@ -682,19 +682,10 @@ internal abstract partial class ZLinkSpotActivation
             )
             .ConfigureAwait(false);
         if (previousActivation is null)
-            await RetryCommittedMembershipCallbackAsync(
-                    ct => _runtime.NotifyEntrySpotActorLeftAsync(actor, NodeRid, ct),
-                    cancellationToken,
-                    absoluteDeadline
-                )
-                .ConfigureAwait(false);
-        else if (!ReferenceEquals(previousActivation, this) && !previousActivation.IsDisposed)
-            await RetryCommittedMembershipCallbackAsync(
-                    ct =>
-                        previousActivation.NotifyActorLeftAfterCommittedMembershipAsync(actor, ct),
-                    cancellationToken,
-                    absoluteDeadline
-                )
+            _runtime.GetSpotNodeRuntime(SpotNodeName).EntrySpotActivation?.SubmitActorLeft(actor);
+        else if (!previousActivation.IsDisposed)
+            await previousActivation
+                .NotifyActorLeftAfterCommittedMembershipAsync(actor, cancellationToken)
                 .ConfigureAwait(false);
     }
 
@@ -856,14 +847,20 @@ internal abstract partial class ZLinkSpotActivation
             _perActorMembersDrained.TrySetResult();
     }
 
-    private async ValueTask NotifyActorLeftAfterCommittedMembershipCoreAsync(
+    private ValueTask NotifyActorLeftAfterCommittedMembershipCoreAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken
     )
     {
         _actors.RemoveIfCurrent(actor);
-        await CompleteActorLeftAfterCommittedMembershipCoreAsync(actor, cancellationToken)
-            .ConfigureAwait(false);
+        var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
+        actorState.LeaveSpotIfCurrent(this);
+        _serial.QueueLifecycle(
+            (activation, ct) =>
+                activation.CompleteActorLeftAfterCommittedMembershipCoreAsync(actor, ct)
+        );
+        SignalPerActorMembersDrainedIfNeeded();
+        return ValueTask.CompletedTask;
     }
 
     private async ValueTask TryNotifyActorLeftAfterCommittedMembershipCoreAsync(
@@ -893,10 +890,6 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
-        actorState.LeaveSpotIfCurrent(this);
-        SignalPerActorMembersDrainedIfNeeded();
-
         if (
             _actorHandlers is not null
             && _actorHandlers.TryResolveLeft(actor.GetType(), out var descriptor)

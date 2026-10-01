@@ -30,7 +30,7 @@ internal sealed class ZlinkStreamHeaderCodec
 
     internal ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header, ReadOnlySpan<char> correlationId)
     {
-        ValidateOutboundPacketName(header.Kind, header.Name);
+        ValidatePacketName(header.Kind, header.Name, ZlinkStreamErrorCode.ValidationFailed);
         ValidateEnum(header.Kind, header.Codec, header.Flags);
 
         var nameLength = Encoding.UTF8.GetByteCount(header.Name);
@@ -333,12 +333,7 @@ internal sealed class ZlinkStreamHeaderCodec
                 "Helper header contains trailing bytes."
             );
 
-        if (kind is not (ZlinkStreamMessageKind.Response or ZlinkStreamMessageKind.Error))
-            ZlinkStreamConnector.ValidateName(
-                name,
-                kind == ZlinkStreamMessageKind.Control,
-                ZlinkStreamErrorCode.FrameDecodeFailed
-            );
+        ValidatePacketName(kind, name, ZlinkStreamErrorCode.FrameDecodeFailed);
         ValidateHeaderSemantics(
             kind,
             codec,
@@ -392,20 +387,24 @@ internal sealed class ZlinkStreamHeaderCodec
             _ => null,
         };
 
-    private static void ValidateOutboundPacketName(ZlinkStreamMessageKind kind, string name)
+    private static void ValidatePacketName(
+        ZlinkStreamMessageKind kind,
+        string name,
+        ZlinkStreamErrorCode errorCode
+    )
     {
         var isReply = kind is ZlinkStreamMessageKind.Response or ZlinkStreamMessageKind.Error;
         if (isReply)
         {
             if (name.Length != 0)
                 throw ZlinkStreamConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed,
+                    errorCode,
                     "Response and error packets must not contain a packet name."
                 );
             return;
         }
 
-        ZlinkStreamConnector.ValidateName(name, kind == ZlinkStreamMessageKind.Control);
+        ZlinkStreamConnector.ValidateName(name, kind == ZlinkStreamMessageKind.Control, errorCode);
     }
 
     private static void ValidateEnum(

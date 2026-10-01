@@ -866,23 +866,24 @@ bool sample_runners_need_no_other_runtime (const std::filesystem::path &root)
     return ok;
 }
 
-/* The tutorial and samples archives are packed from their own directories, so
- * each carries its own copy of bootstrap.cmake, the script that installs the
- * published framework beside the archive (#655). One text, two paths: the
- * copies must stay byte-identical, and both must exist with their two READMEs. */
+/* The exported quickstart, tutorial and samples directories each install the
+ * published framework with their own bootstrap.cmake. The bootstrap text must
+ * match across the distribution directories, which also carry their READMEs. */
 bool downloadable_archives_carry_identical_bootstrap (const std::filesystem::path &root)
 {
     bool ok = true;
-    layout_file_contents_t tutorial;
-    layout_file_contents_t samples;
-    read_layout_file (root / "tutorial/bootstrap.cmake", tutorial);
-    read_layout_file (root / "samples/bootstrap.cmake", samples);
-    if (tutorial.text.empty () || tutorial.text != samples.text) {
-        std::cerr << "tutorial/bootstrap.cmake and samples/bootstrap.cmake must be identical\n";
-        ok = false;
+    const auto &tutorial = layout_file_contents (root / "tutorial/bootstrap.cmake").text;
+    for (const auto *section : {"quickstart", "samples"}) {
+        if (tutorial.empty ()
+            || tutorial != layout_file_contents (root / section / "bootstrap.cmake").text) {
+            std::cerr << "tutorial/bootstrap.cmake and " << section
+                      << "/bootstrap.cmake must be identical\n";
+            ok = false;
+        }
     }
     for (const auto *required :
-         {"tutorial/README.ko.md", "tutorial/README.md", "samples/README.ko.md",
+         {"quickstart/README.ko.md", "quickstart/README.md", "quickstart/CMakeLists.txt",
+          "tutorial/README.ko.md", "tutorial/README.md", "samples/README.ko.md",
           "samples/README.md", "samples/CMakeLists.txt"}) {
         if (!std::filesystem::exists (root / required)) {
             std::cerr << "downloadable archive entry point is missing: " << required << '\n';

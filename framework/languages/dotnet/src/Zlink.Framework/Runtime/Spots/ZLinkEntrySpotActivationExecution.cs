@@ -147,11 +147,11 @@ internal sealed partial class ZLinkEntrySpotActivation
         }
     }
 
-    private void QueueSerialized(
+    private ZLinkSerialPostAdmission QueueSerialized(
         Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation
     )
     {
-        _ = _serial.TryPostApplicationWithAdmission(ct => RunOnLineAsync(operation, ct), out _);
+        return _serial.TryPostApplicationWithAdmission(ct => RunOnLineAsync(operation, ct), out _);
     }
 
     private async ValueTask RunOnLineAsync(

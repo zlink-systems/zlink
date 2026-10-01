@@ -189,6 +189,10 @@ public final class ZLinkChannelRuntime
         sockets.clearListenerRecords();
     }
 
+    ZLinkChannelSocketRegistry channelSocketRegistry() {
+        return sockets;
+    }
+
     public void setHostStateSupplier(Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.hostState = Objects.requireNonNull(hostState, "hostState");
     }

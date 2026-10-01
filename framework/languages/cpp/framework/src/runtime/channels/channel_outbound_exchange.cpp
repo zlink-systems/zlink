@@ -1008,7 +1008,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                   resolve_channel_wait_timeout (state, channel_name, timeout);
                 auto reply =
                   co_await (*requester) (call_packet_name, std::move (serialized.content_type),
-                                         std::move (payload), effective_timeout);
+                                         std::move (payload), effective_timeout, metadata);
                 auto completion = runtime.complete_outbound_reply (reservation.value ());
                 if (!completion) {
                     co_return completion.error () != nullptr
@@ -1210,7 +1210,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                 }
                 co_await (*sender) (call_packet_name, std::move (serialized.content_type),
                                     std::move (payload),
-                                    channel_send_timeout (client->send_timeout));
+                                    channel_send_timeout (client->send_timeout), metadata);
                 detail::message_flow_tracer_t (state->dispatch)
                   .trace (message_flow_outcome_t::sent, [&] {
                       return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
@@ -1350,9 +1350,6 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             runtime::messaging::client_call_codec_t codec;
             auto header = codec.create_envelope (runtime::messaging::message_kind_t::publish,
                                                  channel_name, call_packet_name, timeout, topic);
-            /* Shared channel-envelope dialect: a Publish record must not
-             * carry a correlation id (node/java reject one). */
-            header.correlation_id.clear ();
             header.metadata = metadata;
             auto parts = encode_channel_payload_parts (header, event_type, encode_payload,
                                                        *state->serializers);

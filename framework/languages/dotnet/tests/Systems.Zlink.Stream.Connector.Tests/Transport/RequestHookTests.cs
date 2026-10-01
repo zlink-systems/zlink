@@ -20,7 +20,8 @@ public sealed partial class StreamConnectorTests
         var runner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             runner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var received = new TaskCompletionSource<ZlinkStreamError>(
             TaskCreationOptions.RunContinuationsAsynchronously

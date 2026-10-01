@@ -166,10 +166,17 @@ class channel_runtime_state_t
     using mesh_channel_request_t =
       std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
         runtime::messaging::message_parts_t, std::chrono::milliseconds)>;
-    using client_server_send_t = std::function<task_t<void> (
-      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
-    using client_server_request_t = std::function<task_t<zlink::message_t> (
-      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
+    using client_server_send_t = std::function<task_t<void> (std::string,
+                                                             std::string,
+                                                             zlink::message_t,
+                                                             std::chrono::milliseconds,
+                                                             std::map<std::string, std::string>)>;
+    using client_server_request_t =
+      std::function<task_t<zlink::message_t> (std::string,
+                                              std::string,
+                                              zlink::message_t,
+                                              std::chrono::milliseconds,
+                                              std::map<std::string, std::string>)>;
     using fanout_publish_t = std::function<task_t<void> (
       std::string, std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
     using spot_mesh_send_t =

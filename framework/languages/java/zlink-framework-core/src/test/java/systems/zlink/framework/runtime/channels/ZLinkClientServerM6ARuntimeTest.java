@@ -719,7 +719,6 @@ final class ZLinkClientServerM6ARuntimeTest {
                                     "orders",
                                     null,
                                     Duration.ofSeconds(1),
-                                    false,
                                     (target, remaining) ->
                                             CompletableFuture.completedFuture(target),
                                     (node, remaining) -> {

@@ -14,6 +14,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -210,12 +211,94 @@ public final class ZLinkChannelEnvelope {
                 request == null ? null : request.flowOrigin());
     }
 
+    private static String metadataJson(Map<String, String> metadata) {
+        if (metadata.isEmpty()) return "{}";
+        StringBuilder json = new StringBuilder();
+        writeMetadata(metadata, json);
+        return json.toString();
+    }
+
+    private static void writeMetadata(Map<String, String> metadata, StringBuilder json) {
+        if (metadata.isEmpty()) return;
+        long size = 2;
+        if (json != null) json.append('{');
+        for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isEmpty() || entry.getValue() == null) {
+                throw protocolError(
+                        "ZLink envelope metadata requires nonempty keys and string values", null);
+            }
+            if (size > 2) {
+                size++;
+                if (json != null) json.append(',');
+            }
+            size += appendMetadataString(json, entry.getKey()) + 1;
+            if (json != null) json.append(':');
+            size += appendMetadataString(json, entry.getValue());
+        }
+        if (json != null) json.append('}');
+        if (size > ServiceWireConstants.METADATA_BYTES) {
+            throw protocolError(
+                    "ZLink envelope metadata exceeds "
+                            + ServiceWireConstants.METADATA_BYTES
+                            + " UTF-8 bytes",
+                    null);
+        }
+    }
+
+    private static long appendMetadataString(StringBuilder json, String value) {
+        long size = 2;
+        if (json != null) json.append('"');
+        for (int index = 0; index < value.length(); index++) {
+            char c = value.charAt(index);
+            String escape =
+                    switch (c) {
+                        case 0 ->
+                                throw protocolError(
+                                        "ZLink envelope metadata must not contain NUL", null);
+                        case '"' -> "\\\"";
+                        case '\\' -> "\\\\";
+                        case '\b' -> "\\b";
+                        case '\f' -> "\\f";
+                        case '\n' -> "\\n";
+                        case '\r' -> "\\r";
+                        case '\t' -> "\\t";
+                        default -> null;
+                    };
+            if (escape != null) {
+                size += escape.length();
+                if (json != null) json.append(escape);
+            } else if (c < 0x20) {
+                size += 6;
+                if (json != null) {
+                    json.append("\\u00")
+                            .append(Character.forDigit(c >>> 4, 16))
+                            .append(Character.forDigit(c & 15, 16));
+                }
+            } else if (Character.isSurrogate(c)) {
+                if (!Character.isHighSurrogate(c)
+                        || index + 1 == value.length()
+                        || !Character.isLowSurrogate(value.charAt(index + 1))) {
+                    throw protocolError("ZLink envelope metadata must be valid UTF-8", null);
+                }
+                size += 4;
+                char low = value.charAt(++index);
+                if (json != null) json.append(c).append(low);
+            } else {
+                size += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+                if (json != null) json.append(c);
+            }
+        }
+        if (json != null) json.append('"');
+        return size;
+    }
+
     public static Message encodeHeader(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
+        String metadata = metadataJson(header.metadata());
         HeaderWriter writer = borrowWriter();
         boolean complete = false;
         try {
-            Message encoded = writer.encode(header);
+            Message encoded = writer.encode(header, metadata);
             complete = true;
             return encoded;
         } catch (IOException ex) {
@@ -536,6 +619,7 @@ public final class ZLinkChannelEnvelope {
                             }
                         }
                     } else {
+                        metadataIsValid = false;
                         json.skipChildren();
                     }
                 }
@@ -586,6 +670,7 @@ public final class ZLinkChannelEnvelope {
         if (!metadataIsValid) {
             throw protocolError("ZLink envelope metadata values must be strings", null);
         }
+        writeMetadata(metadata, null);
 
         ZLinkFlowOrigin flowOrigin = null;
         if (captureFlow) {
@@ -683,7 +768,7 @@ public final class ZLinkChannelEnvelope {
             json.setRootValueSeparator(null);
         }
 
-        Message encode(Header header) throws IOException {
+        Message encode(Header header, String metadata) throws IOException {
             cacheStableValues(header);
             bytes.reset();
             json.writeStartObject();
@@ -711,11 +796,7 @@ public final class ZLinkChannelEnvelope {
             writeNullableString(json, ERROR_MESSAGE_FIELD, header.errorMessage());
             writeNullableString(json, SOURCE_FIELD, header.source());
             json.writeFieldName(METADATA_FIELD);
-            json.writeStartObject();
-            for (Map.Entry<String, String> entry : header.metadata().entrySet()) {
-                json.writeStringField(entry.getKey(), entry.getValue());
-            }
-            json.writeEndObject();
+            json.writeRawValue(metadata);
             json.writeEndObject();
             json.flush();
             return Message.from(bytes.buffer(), 0, bytes.size());

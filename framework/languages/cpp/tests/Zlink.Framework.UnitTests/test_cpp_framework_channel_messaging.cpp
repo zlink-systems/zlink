@@ -1216,11 +1216,12 @@ int main ()
     bool protobuf_strict_decode_succeeded = false;
     protobuf_client_runtime.bind_client_server_transport (
       "protobuf-client",
-      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds) {
+      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+          std::map<std::string, std::string>) {
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
       },
       [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
-           std::chrono::milliseconds) {
+           std::chrono::milliseconds, std::map<std::string, std::string>) {
           observed_protobuf_packet_name = std::move (packet_name);
           observed_protobuf_content_type = content_type;
           observed_protobuf_payload = payload.to_string ();
@@ -1382,7 +1383,7 @@ int main ()
                                                 {.packet_name = event_t::packet_name});
     handlers.on_send<local_handler_t, event_t> ("hosted", "send", &local_handler_t::handle_send,
                                                 {.packet_name = "event"});
-    handlers.on_event<local_handler_t, event_t> ("local", "publish", &local_handler_t::handle_send,
+    handlers.on_event<local_handler_t, event_t> ("local", &local_handler_t::handle_send,
                                                  {.packet_name = "event"});
 
     auto local_runtime =
@@ -1397,6 +1398,28 @@ int main ()
                .value
              != 123) {
         return 9;
+    }
+
+    const auto async_local_reply =
+      local_runtime
+        .dispatch_request_async ("local", "request", "request", provider, serializers, handlers,
+                                 zlink::message_t::from (std::string ("23")))
+        .result ();
+    if (!async_local_reply || !async_local_reply.value ()
+        || serializers.get<reply_t> ()
+               .deserialize (zlink::framework::detail::encoded_payload_from_raw (
+                 async_local_reply.value ().value ()))
+               .value
+             != 123) {
+        return 113;
+    }
+    const auto async_local_send =
+      local_runtime
+        .dispatch_send_async ("local", "send", "event", provider, serializers, handlers,
+                              zlink::message_t::from (std::string ("31")), {})
+        .result ();
+    if (!async_local_send || provider.get_required<local_handler_t> ().last_event != 31) {
+        return 114;
     }
 
     zlink::framework::runtime::messaging::envelope_codec_t envelope_codec;

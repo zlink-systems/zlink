@@ -49,14 +49,14 @@ internal static class ZlinkStreamTransportFactory
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var tcp = new TcpClient();
         try
         {
             tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            using (cancellationToken.Register(tcp.Dispose))
-                await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port)
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
+            await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
             System.IO.Stream stream = tcp.GetStream();
             if (transport == ZlinkStreamTransport.Tls)
             {
