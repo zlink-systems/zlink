@@ -10,6 +10,7 @@ int main (int argc, char **argv)
     if (config.scenario != "cs-local-session-actor-echo" || config.role != "session-actor-local")
         throw std::invalid_argument ("SessionActorLocalServer runs the cs-local-session-actor-echo role.");
     auto role = std::make_unique<perf::role_t> (std::move (config), true);
+    role->objects->set (true, "", perf::json::array ());
     const auto &settings = role->config;
     return perf::run_role (std::move (role), [&] (fw::zlink_framework_options_t &options, fw::app_t &) {
         auto mesh = options.add_route_mesh (*settings.mesh_name);

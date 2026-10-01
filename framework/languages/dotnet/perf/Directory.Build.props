@@ -3,8 +3,9 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- Perf measures what users receive: published packages, unless ZLinkSampleUseLocalSource=true forces source. -->
-    <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
+    <ZLinkSampleFrameworkVersion>$(ZLINK_PERF_FRAMEWORK_VERSION)</ZLinkSampleFrameworkVersion>
+    <ZLinkSampleUseLocalSource Condition="'$(ZLINK_PERF_PACKAGE_SOURCE)' == 'local'">true</ZLinkSampleUseLocalSource>
+    <ZLinkSampleUseLocalSource Condition="'$(ZLINK_PERF_PACKAGE_SOURCE)' != 'local'">false</ZLinkSampleUseLocalSource>
     <ZLinkPropsDir>$(MSBuildThisFileDirectory)../props/</ZLinkPropsDir>
     <!-- The repository's local package feed must not satisfy a published-package restore. -->
     <RestoreAdditionalProjectSources Condition="'$(ZLinkSampleUseLocalSource)' != 'true'"></RestoreAdditionalProjectSources>
@@ -22,4 +23,10 @@
     <ZLinkFrameworkReference Include="Zlink.Stream.Connector" Condition="$(_ZLinkPerfConnectorProjects.Contains(';$(MSBuildProjectName);'))" />
   </ItemGroup>
   <Import Project="$(ZLinkPropsDir)ZLink.FrameworkReference.props" />
+  <Target Name="ValidateZLinkPerfBuildInputs" BeforeTargets="Restore;CollectPackageReferences;PrepareForBuild">
+    <Error Condition="'$(ZLINK_PERF_FRAMEWORK_VERSION)' == ''"
+           Text="ZLINK_PERF_FRAMEWORK_VERSION is required for .NET perf builds." />
+    <Error Condition="'$(ZLINK_PERF_PACKAGE_SOURCE)' != '' and '$(ZLINK_PERF_PACKAGE_SOURCE)' != 'published' and '$(ZLINK_PERF_PACKAGE_SOURCE)' != 'local'"
+           Text="ZLINK_PERF_PACKAGE_SOURCE must be 'published' or 'local'." />
+  </Target>
 </Project>

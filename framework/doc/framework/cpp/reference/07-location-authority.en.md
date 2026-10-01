@@ -67,7 +67,7 @@ locations.message_follow_duration = std::chrono::seconds{30};
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `owner_lease_renew_interval` / `owner_lease_ttl` / `owner_lease_fencing_margin` / `owner_lease_renew_timeout` | 5s / 15s / 5s / 3s | The owner lease's renewal interval and TTL. Must satisfy `renew_interval + renew_timeout < ttl - fencing_margin` |
+| `owner_lease_renew_interval` / `owner_lease_ttl` / `owner_lease_fencing_margin` / `owner_lease_renew_timeout` | 5s / 15s / 5s / 3s | The owner lease's renewal interval and TTL. Must satisfy `max(renew_interval, renew_timeout) + renew_timeout < ttl - fencing_margin` |
 | `polling_interval` | 1 second | The Store status-check interval |
 | `store_failure_grace` | 30 seconds | The grace period tolerating a Store failure |
 | `route_cache_max_age` / `message_follow_duration` | 15s / 30s | `0` disables the feature. If both are positive, cache age must be at least 5 seconds smaller than message follow duration |

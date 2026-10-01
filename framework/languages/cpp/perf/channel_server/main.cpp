@@ -6,46 +6,11 @@
 #include "channel_echo_only_scenario.hpp"
 #include "s2s_channel_to_spot_request_echo_scenario.hpp"
 #include "s2s_channel_to_spot_send_send_echo_scenario.hpp"
+#include "s2s_return_to_spot_handler.hpp"
 
 namespace
 {
 using namespace perf;
-
-// The Channel target of §10.6 (Object Client): the Channel send handler receives the Spot send and answers with a second
-// one-way send to the SpotId that the DTO names in returnSpotId. The measured operation lives in the Spot process; this side
-// does not assume the Channel context carries the source SpotId.
-class s2s_return_to_spot_handler_t
-{
-  public:
-    using message_type = echo_request_t;
-    s2s_return_to_spot_handler_t (role_t &role, fw::route_client_t &route) : _role (role), _route (route) {}
-
-    fw::task_t<void> handle (const echo_request_t &message)
-    {
-        const auto received = now_ticks ();
-        auto &measurement = _role.measurement;
-        const handler_scope_t scope (measurement);
-        try {
-            if (!message.return_spot_id || message.return_spot_id->empty ())
-                throw validation_error_t ("IdentityMismatch", "No return SpotId in the request.");
-            measurement.validate_request (message, std::nullopt, message.return_spot_id);
-            const auto reply = payload_pattern_t::reply (message, received);
-            measurement.record_application_call (message, "send");
-            co_await _route.send_to_spot (*message.return_spot_id, reply).async ();
-            if (measurement.phase () == "setup")
-                measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeReply"}, {"source", "Channel send handler -> route_client_t.send_to_spot"},
-                                                               {"observedValue", message.correlation_id}}}));
-        }
-        catch (...) {
-            measurement.record_diagnostic (std::current_exception ());
-            throw;
-        }
-    }
-
-  private:
-    role_t &_role;
-    fw::route_client_t &_route;
-};
 
 // The automatic RouteMesh node of an s2s Channel role (§10.3-§10.6); the caller adds object role and Channel membership.
 fw::mesh_node_builder_t add_s2s_mesh (fw::zlink_framework_options_t &options, const role_config_t &config)
@@ -110,8 +75,10 @@ int main (int argc, char **argv)
         throw std::invalid_argument ("ChannelServer runs the channel role.");
     const auto scenario = config.scenario;
     const bool source = config.source;
-    // Only a source Object Client reports objectsReady (the Spots it found); every other role has no objects of its own.
-    auto role = std::make_unique<perf::role_t> (std::move (config), source && scenario != "channel-echo-only");
+    // Sources report objectsReady after preparation; targets have no applicable objects readiness.
+    auto role = std::make_unique<perf::role_t> (std::move (config), source);
+    if (source && scenario == "channel-echo-only")
+        role->objects->set (false, "The Channel target probe has not completed.", nlohmann::json::array ());
 
     if (scenario == "channel-echo-only")
         return source ? run_source<channel_echo_only_scenario_t> (std::move (role), configure_channel_echo_only)

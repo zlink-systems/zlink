@@ -67,7 +67,7 @@ zlinkFramework().configureLocations()
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| `.ownerLeaseRenewIntervalMs(value)` / `.ownerLeaseTtlMs(value)` / `.ownerLeaseFencingMarginMs(value)` / `.ownerLeaseRenewTimeoutMs(value)` | 5000 / 15000 / 5000 / 3000 | The owner lease's renewal interval and TTL (ms). Must satisfy `renewInterval + renewTimeout < ttl - fencingMargin` |
+| `.ownerLeaseRenewIntervalMs(value)` / `.ownerLeaseTtlMs(value)` / `.ownerLeaseFencingMarginMs(value)` / `.ownerLeaseRenewTimeoutMs(value)` | 5000 / 15000 / 5000 / 3000 | The owner lease's renewal interval and TTL (ms). Must satisfy `max(renewInterval, renewTimeout) + renewTimeout < ttl - fencingMargin` |
 | `.pollingIntervalMs(value)` | 1000 | The Store status-check interval |
 | `.storeFailureGraceMs(value)` | 30000 | The grace period tolerating a Store failure |
 | `.routeCacheMaxAgeMs(value)` / `.messageFollowDurationMs(value)` | 15000 / 30000 | `0` disables the feature. If both are positive, cache age must be at least 5 seconds smaller than message follow duration |

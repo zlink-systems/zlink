@@ -261,7 +261,8 @@ doesn't secretly move or destroy an Actor.
 target Spot and owner node to use. If the Actor's and target Spot's owner
 node differ, Actor relocation is also performed within the same Join
 operation. The framework handles same-node Actor Join directly through a
-single local Join path and does not submit Mesh Join records.
+single local Join path and submits neither a Mesh `actorJoin` request nor a
+local control record that stands in for one.
 
 The application doesn't directly specify relocation stage, target node,
 state adapter, or owner token. The framework decides these values based on
@@ -497,14 +498,11 @@ The single source for the complete owner transition, ordered relay, target
 queue merge, and Location Store CAS is
 [Complete Actor And Spot Relocation Flow](../05-location-relocation/04-relocation-flow.en.md). This
 section defines only target admission, membership, and lifecycle callbacks
-specific to Actor Join within that common flow. The complete protocol by
-which, when a moving Actor is bound to a Session, the target runtime
-updates the Session owner's binding route via command 44
-`sessionRelocationRoute`, is also owned by this section — step 8 of the
-8-step flow below and its sequence diagram are the only place this is
-described, and
-[Actor Model §6.1](04-actor-model.en.md#61-registering-factory-and-relocation-policy)
-and every other section of this document only point here.
+specific to Actor Join within that common flow. When a moving Actor is
+bound to a Session, step 8 of the 8-step flow below defines when the target
+runtime submits command 44 `sessionRelocationRoute`. The composition of
+command 44 and the Session owner's handling are owned by
+[Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
 
 In an Actor Join to another node, the target's admission wire reply reports the target's
 acceptance and its temporary queue and factory preparation; it doesn't confirm the owner or
@@ -571,15 +569,11 @@ the following order after the handler ends normally.
 5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval or the Restore request.
 6. After cutover verification, the target's owner, membership, capacity, and generation CAS follows [common relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This CAS includes the Join membership change.
 7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch.
-8. For a bound Actor, after CAS and queue opening target runtime sends
-   Session owner a one-way target-route update. On that update, within
-   the default 3,000ms `SessionRelocationSealTimeout`, Session owner
-   changes route, submits held messages, and releases the seal. On
-   timeout it closes the physical STREAM connection and cleans Session
-   state. The message the target sends in this step is command 44
-   `sessionRelocationRoute`.
-   [Session–Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
-   defines the values carried by the commit and the Session owner's handling.
+8. For a bound Actor, after CAS and queue opening the target runtime submits a
+   command 44 `sessionRelocationRoute` commit to the Session owner one-way.
+   [Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)
+   defines the command's composition and the Session owner's validation, route
+   application, held messages, seal, and timeout handling.
 
 Even after an `Accepted` approval, the move may not start due to the later
 relocation policy check (`DisableRelocation`), a capacity conflict, or a
@@ -658,9 +652,8 @@ sequenceDiagram
         TargetRuntime->>TargetQueue: [local] open application dispatch
         TargetQueue->>TargetActor: [local] process messages in queue order
         opt if a bound session exists
-            TargetRuntime->>SessionOwner: [send] apply that binding route, submit held, release seal
-            SessionOwner->>SessionOwner: [local] swap the binding route and current ActorRef snapshot
-            Note over TargetRuntime,SessionOwner: timeout closes Session · late update records Warning
+            TargetRuntime-)SessionOwner: [send] command 44 sessionRelocationRoute
+            Note over TargetRuntime,SessionOwner: Session owner handling follows Session–Actor binding §8
         end
     else Rejected
         TargetSpot-->>SourceRuntime: [reply] Actor admission Rejected with optional application reply

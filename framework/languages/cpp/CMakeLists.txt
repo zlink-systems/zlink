@@ -1459,6 +1459,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;async"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_task_completion_source
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_task_completion_source.cpp)
+  target_link_libraries(test_cpp_framework_task_completion_source PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_task_completion_source
+    COMMAND test_cpp_framework_task_completion_source
+    LABELS "framework-contract;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE
@@ -1760,6 +1770,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp
     "framework-unit;framework-regression;execution;messaging")
   target_link_libraries(test_cpp_framework_sync_submit PRIVATE GTest::gtest_main)
+  add_zlink_framework_test(
+    test_cpp_framework_host_context_hooks
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_host_context_hooks.cpp
+    "framework-unit;framework-regression;execution")
+  target_link_libraries(test_cpp_framework_host_context_hooks PRIVATE GTest::gtest_main)
   target_include_directories(test_cpp_framework_sync_submit PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(

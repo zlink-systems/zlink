@@ -166,7 +166,7 @@ which state it was in again.
 |---|---|---|
 | `ReadyRoute` | Route and authority/owner-lease fences | Stored in the positive route cache and delivered to route admission. |
 | `Missing` | The fact that no authority record exists | Delivered to the creation coordinator. |
-| `Unavailable` | The fact that authority remains without a Ready route, and that authority's state (`Creating`, `Closing`, and so on) | Calls without Instance intent go to the terminal mapper of [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability). Instance-intent activation follows the `Creating` wait and idle-cleanup route refresh in [Object lifecycle §§3, 5](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). |
+| `Unavailable` | The fact that authority remains without a Ready route, and that authority's state (`Creating`, `Closing`, and so on) | Calls without Instance intent go to the terminal mapper of [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability). Instance-intent activation follows the `Creating` wait and idle-cleanup route refresh in [Object lifecycle §§3, 5](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). An Instance intent that observes authority under explicit Close keeps the owner route and fence and is forwarded to that owner node; handling at the owner follows [Spot address messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | `StoreFailure` | The fact that authority presence couldn't be determined | Delivered to Store retry/reconciliation. |
 
 Only `ReadyRoute` is stored in the positive route cache, and only `Missing` is

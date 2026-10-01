@@ -39,6 +39,17 @@ job이 남아 있는지 먼저 본다.
 **`/tmp`는 8 GB tmpfs다.** 테스트가 남긴 `/tmp/zlink-native-*`가 쌓여 차면 도구 출력이
 ENOSPC로 깨진다. 긴 세션에서는 한 번씩 정리한다.
 
+**`~/.local/bin/unzip`은 python 대체 스크립트다.** 이 머신에는 시스템 unzip이 없다. vcpkg는
+`unzip -DD -qq <zip> -d<dir>`처럼 `-d`와 경로를 붙여 부른다. 스크립트가 이 형식을 무시하면
+binary cache 패키지가 현재 디렉터리(vcpkg 루트)에 풀리고 `vcpkg install`이 `No such file or
+directory`로 끝난다. 2026-10-01에 `-d<dir>` 형식을 받도록 고쳤다. 같은 오류가 다시 나면
+`~/.cache/zlink/vcpkg`에서 `git status`로 풀려 나온 파일이 있는지 본다.
+
+**WSL은 붙어 있는 `wsl.exe`가 없으면 유휴 상태로 내려간다.** ssh 접속과 `setsid nohup`으로 띄운
+프로세스는 VM을 붙잡지 않는다. VM이 내려가면 그 안에서 돌던 빌드·smoke가 함께 죽고 sshd도
+멈춘다. 오래 걸리는 작업 전에는 Windows에서 숨김 창으로 `wsl.exe -d Ubuntu-24.04 -- sleep infinity`를
+하나 띄워 둔다.
+
 ## 3. 릴리스 툴체인
 
 릴리스 아카이브를 만드는 러너와 그 버전은 `.github/workflows/build.yml`이 소유한다.

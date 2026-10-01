@@ -5,7 +5,8 @@
   "description": "ZLink Framework perf (Node.js): the role processes and the CS client of perf/README.ko.md",
   "scripts": {
     "prebuild": "node scripts/prepare-dependencies.mjs",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
     "@nestjs/common": "10.4.22",
@@ -19,7 +20,6 @@
     "@zlink-systems/framework-locations-redis": "0.26.0",
     "@zlink-systems/nestjs": "0.26.0",
     "@zlink-systems/stream-connector": "0.26.0",
-    "@zlink-systems/zlink": "1.10.0",
     "reflect-metadata": "0.2.2"
   },
   "devDependencies": {
