@@ -107,12 +107,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         return true;
     }
 
-    void post_owner (std::function<void ()> work) override
-    {
-        std::lock_guard lock (mutex);
-        owner_jobs.push (std::move (work));
-    }
-
     void run_worker_job ()
     {
         std::function<void (std::stop_token)> job;
@@ -124,27 +118,10 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         job (cancellation.get_token ());
     }
 
-    void run_owner_job ()
-    {
-        std::function<void ()> job;
-        {
-            std::lock_guard lock (mutex);
-            job = std::move (owner_jobs.front ());
-            owner_jobs.pop ();
-        }
-        job ();
-    }
-
     std::size_t worker_job_count () const
     {
         std::lock_guard lock (mutex);
         return worker_jobs.size ();
-    }
-
-    std::size_t owner_job_count () const
-    {
-        std::lock_guard lock (mutex);
-        return owner_jobs.size ();
     }
 
     std::stop_token stop_token () const noexcept override { return cancellation.get_token (); }
@@ -154,7 +131,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
     bool queue_full = false;
     mutable std::mutex mutex;
     std::queue<std::function<void (std::stop_token)>> worker_jobs;
-    std::queue<std::function<void ()>> owner_jobs;
     std::stop_source cancellation;
 };
 
@@ -1002,6 +978,48 @@ class serial_test_signal_t
     std::condition_variable _changed;
     bool _set = false;
 };
+
+bool verify_cpu_worker_completes_in_ordinary_turn ()
+{
+    using namespace zlink::framework;
+    runtime::offload_executor_t executor (1);
+    runtime::serial_execution_queue_t queue (executor, {}, {},
+                                             runtime::serial_lane_policy_t::spot_wide ());
+    auto scheduler = std::make_shared<controlled_worker_scheduler_t> ();
+    auto context = context_with_scheduler (scheduler);
+    serial_test_signal_t submitted;
+    std::atomic_bool follower_ran = false;
+    std::atomic_bool succeeded = false;
+    auto handler = [&] () -> task_t<void> {
+        const auto turn = detail::capture_current_serial_turn ();
+        auto call = context.run_cpu_worker ([] { return 42; });
+        auto pending = call.timeout (std::chrono::seconds (1)).async ();
+        submitted.set ();
+        const auto result = co_await pending;
+        succeeded = result == 42 && !follower_ran.load ()
+                    && detail::capture_current_serial_turn () == turn && !turn->released ();
+        co_return;
+    };
+    if (!queue.try_post_async ("ordinary-worker-handler",
+                               [&] (auto complete) {
+                                   auto task = handler ();
+                                   detail::observe_task_completion (
+                                     task, [complete] (const result_t<void> &) mutable {
+                                         complete ([] {});
+                                     });
+                               })
+        || !submitted.wait_for ()) {
+        queue.cancel_pending ();
+        return false;
+    }
+    if (!queue.try_post ("ordinary-worker-follower", [&] { follower_ran = true; })) {
+        queue.cancel_pending ();
+        return false;
+    }
+    scheduler->run_worker_job ();
+    queue.drain ();
+    return succeeded.load () && follower_ran.load ();
+}
 
 class serial_test_blocker_t
 {
@@ -6878,6 +6896,10 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main ()
 {
+    if (!verify_cpu_worker_completes_in_ordinary_turn ()) {
+        std::cerr << "CPU worker did not complete while the ordinary handler retained its turn\n";
+        return 141;
+    }
     if (!verify_idle_timer_closes_before_executor_releases_last_node_reference ()) {
         return 138;
     }
@@ -7128,10 +7150,10 @@ int main ()
     std::atomic_bool abandoned_deadline_fired = false;
     const auto deadline_owner_start = std::chrono::steady_clock::now ();
     {
-        auto control =
-          std::make_shared<zlink::framework::detail::worker_control_t> (std::stop_token{});
+        auto control = std::make_shared<zlink::framework::detail::worker_control_t> (
+          std::stop_token{}, std::chrono::hours (1));
         control->arm_deadline (std::chrono::hours (1),
-                               [&] { abandoned_deadline_fired.store (true); });
+                               [&] { return [&] { abandoned_deadline_fired.store (true); }; });
     }
     const auto deadline_owner_elapsed = std::chrono::steady_clock::now () - deadline_owner_start;
     if (abandoned_deadline_fired.load ()
@@ -7460,14 +7482,13 @@ int main ()
         return 42;
     });
     auto submit_task = submit_call.async ();
-    if (scheduler->worker_job_count () != 1 || scheduler->owner_job_count () != 0) {
+    if (scheduler->worker_job_count () != 1 || submit_task.await_ready ()) {
         return 10;
     }
     scheduler->run_worker_job ();
-    if (scheduler->owner_job_count () != 1) {
+    if (!submit_task.await_ready ()) {
         return 11;
     }
-    scheduler->run_owner_job ();
     const auto submit_result = submit_task.result ();
     if (worker_thread == std::thread::id{} || !submit_result || submit_result.value () != 42) {
         return 12;
@@ -7478,7 +7499,6 @@ int main ()
     auto worker_call = async_context.run_cpu_worker ([] { return 7; });
     auto worker_task = worker_call.async ();
     async_scheduler->run_worker_job ();
-    async_scheduler->run_owner_job ();
     const auto worker_result = worker_task.result ();
     if (!worker_result || worker_result.value () != 7) {
         return 13;
@@ -7489,14 +7509,25 @@ int main ()
     auto full_context = context_with_scheduler (full_scheduler);
     auto full_call = full_context.run_cpu_worker ([] { return 3; });
     auto full_task = full_call.async ();
-    if (full_scheduler->worker_job_count () != 0 || full_scheduler->owner_job_count () != 1) {
+    if (full_scheduler->worker_job_count () != 0 || !full_task.await_ready ()) {
         return 14;
     }
-    full_scheduler->run_owner_job ();
     const auto full_result = full_task.result ();
     if (full_result
         || full_result.error_kind () != zlink::framework::framework_error_kind_t::shutting_down) {
         return 15;
+    }
+    auto full_io_call = full_context.run_io_worker (
+      [] { return zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (3)); });
+    auto full_io_task = full_io_call.async ();
+    if (full_scheduler->worker_job_count () != 0 || !full_io_task.await_ready ()) {
+        return 16;
+    }
+    const auto full_io_result = full_io_task.result ();
+    if (full_io_result
+        || full_io_result.error_kind ()
+             != zlink::framework::framework_error_kind_t::shutting_down) {
+        return 17;
     }
 
     auto timeout_scheduler = std::make_shared<controlled_worker_scheduler_t> ();
@@ -7520,7 +7551,9 @@ int main ()
         return 19;
     }
     timeout_scheduler->run_worker_job ();
-    if (timeout_scheduler->owner_job_count () != 0 || !timeout_saw_cancellation.load ()) {
+    if (!timeout_saw_cancellation.load ()
+        || timeout_task.result ().error_kind ()
+             != zlink::framework::framework_error_kind_t::deadline_exceeded) {
         return 20;
     }
 
@@ -7543,7 +7576,9 @@ int main ()
         return 22;
     }
     shutdown_scheduler->run_worker_job ();
-    if (!shutdown_saw_cancellation.load () || shutdown_scheduler->owner_job_count () != 0) {
+    if (!shutdown_saw_cancellation.load ()
+        || shutdown_task.result ().error_kind ()
+             != zlink::framework::framework_error_kind_t::shutting_down) {
         return 23;
     }
 
@@ -7557,7 +7592,7 @@ int main ()
         io_tasks.push_back (call.async ());
         io_sources.push_back (std::move (source));
     }
-    if (io_scheduler->worker_job_count () != 8 || io_scheduler->owner_job_count () != 0) {
+    if (io_scheduler->worker_job_count () != 8) {
         return 27;
     }
     for (int value = 0; value < 8; ++value) {

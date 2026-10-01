@@ -156,7 +156,6 @@ class worker_scheduler_t
     virtual ~worker_scheduler_t () = default;
 
     virtual bool try_schedule (std::function<void (std::stop_token)> work) = 0;
-    virtual void post_owner (std::function<void ()> work) = 0;
     virtual std::stop_token stop_token () const noexcept { return {}; }
 };
 
@@ -192,7 +191,14 @@ result_t<TResult> run_worker_body (TWork &work, std::stop_token cancellation)
 
 struct worker_control_t
 {
-    explicit worker_control_t (std::stop_token host_cancellation) : host (host_cancellation) {}
+    worker_control_t (std::stop_token host_cancellation,
+                      std::optional<std::chrono::milliseconds> timeout) :
+        host (host_cancellation),
+        _deadline (timeout && *timeout > std::chrono::milliseconds::zero ()
+                     ? std::make_shared<deadline_state_t> ()
+                     : nullptr)
+    {
+    }
 
     ~worker_control_t () { cancel_deadline (); }
 
@@ -200,19 +206,19 @@ struct worker_control_t
     std::optional<std::stop_callback<std::function<void ()>>> host_callback;
     std::stop_token host;
 
-    void arm_deadline (std::chrono::milliseconds timeout, std::function<void ()> callback)
+    template <typename TCallbackFactory>
+    void arm_deadline (std::chrono::milliseconds timeout, TCallbackFactory &&make_callback)
     {
-        _deadline =
-          worker_deadline_scheduler_t::instance ().schedule (timeout, std::move (callback));
+        if (_deadline) {
+            worker_deadline_scheduler_t::instance ().schedule (
+              timeout, _deadline, std::forward<TCallbackFactory> (make_callback) ());
+        }
     }
 
     void cancel_deadline () noexcept
     {
-        auto state = _deadline;
-        if (!state)
+        if (!_deadline || _deadline->cancelled.exchange (true, std::memory_order_acq_rel))
             return;
-        _deadline.reset ();
-        state->cancelled.store (true, std::memory_order_release);
         worker_deadline_scheduler_t::instance ().wake ();
     }
 
@@ -238,17 +244,17 @@ struct worker_control_t
             return scheduler;
         }
 
-        std::shared_ptr<deadline_state_t> schedule (std::chrono::milliseconds timeout,
-                                                    std::function<void ()> callback)
+        void schedule (std::chrono::milliseconds timeout,
+                       std::shared_ptr<deadline_state_t> state,
+                       std::function<void ()> callback)
         {
-            auto state = std::make_shared<deadline_state_t> ();
             {
                 std::lock_guard lock (_mutex);
                 _deadlines.push (deadline_t{std::chrono::steady_clock::now () + timeout,
-                                            _next_sequence++, state, std::move (callback)});
+                                            _next_sequence++, std::move (state),
+                                            std::move (callback)});
             }
             _changed.notify_one ();
-            return state;
         }
 
         void wake () noexcept { _changed.notify_one (); }
@@ -313,7 +319,7 @@ struct worker_control_t
         std::jthread _worker;
     };
 
-    std::shared_ptr<deadline_state_t> _deadline;
+    const std::shared_ptr<deadline_state_t> _deadline;
 };
 
 template <typename TResult>
@@ -351,15 +357,16 @@ task_t<TResult> apply_worker_deadline (task_t<TResult> task,
                                          static_cast<void> (control);
                                          finish (result);
                                      });
-    if (timeout && *timeout > std::chrono::milliseconds::zero ()) {
-        control->arm_deadline (*timeout, [weak_control, finish] () mutable {
-            if (const auto control = weak_control.lock ()) {
-                control->cancellation.request_stop ();
-            }
-            finish (result_t<TResult>::failure (framework_error_kind_t::deadline_exceeded,
-                                                "worker task timed out"));
-        });
-    }
+    control->arm_deadline (
+      timeout.value_or (std::chrono::milliseconds::zero ()), [&weak_control, &finish] {
+          return [weak_control, finish] () mutable {
+              if (const auto control = weak_control.lock ()) {
+                  control->cancellation.request_stop ();
+              }
+              finish (result_t<TResult>::failure (framework_error_kind_t::deadline_exceeded,
+                                                  "worker task timed out"));
+          };
+      });
     return output;
 }
 
@@ -397,7 +404,7 @@ template <typename TResult> class worker_call_t
             return task_t<TResult> (result_t<TResult>::failure (
               framework_error_kind_t::internal_failure, "worker runtime is not configured"));
         }
-        auto control = std::make_shared<detail::worker_control_t> (_host_cancellation);
+        auto control = std::make_shared<detail::worker_control_t> (_host_cancellation, _timeout);
         auto turn_plan = detail::prepare_serial_turn_await (release_turn);
         std::optional<task_t<TResult>> task;
         try {
