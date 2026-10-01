@@ -42,6 +42,7 @@
 | 심볼 지역화가 먹혔나 | 내 머신에서 통과 | **내 binutils에서** 먹히나 — 2.42는 되고 릴리스를 만드는 2.38은 안 됐다 | #418 |
 | ld64가 이 심볼을 강등하나 | 컴파일 시점 hidden visibility | 그 TU의 보통 심볼을 숨기나 — 템플릿·인라인 static은 vague linkage라 안 닿는다 | #418 |
 | .NET source 전체의 format이 맞나 | `format.sh --check dotnet`의 종료 코드 0 | 존재하는 source root에서 찾은 파일만 맞는다. WSL 사본에 `engines/Server`가 없어도 `find` 오류 뒤에 통과했다. 검사 root의 존재와 파일 수를 함께 확인한다 | #1082 |
+| Node Store의 owner lease 교체가 삭제를 막나 | repository contract test 통과 | generic write wrapper가 fixture의 존재하지 않는 API 호출에서 발생한 `TypeError`까지 `Conflict`로 바꾸면 lease 교체 없이도 통과한다. fixture는 domain repository로 lease를 교체하고 provider 오류 보존을 별도로 검사한다 | #1083 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.locationprovider.*;
 
@@ -240,6 +242,44 @@ final class ZLinkInMemoryProviderLocationStoreTest {
         assertInstanceOf(
                 ZLinkStoreScanPageResult.class,
                 store.scan(new ZLinkStoreScanRequest("scan/", null, 1), ACTIVE)
+                        .toCompletableFuture()
+                        .get());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"not-a-number", "2147483648", "1:extra"})
+    void malformedOffsetsOfActiveScanReturnExpired(String offset) throws Exception {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        store.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey("cursor/1"),
+                                                new byte[] {1},
+                                                null),
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey("cursor/2"),
+                                                new byte[] {2},
+                                                null))),
+                        ACTIVE)
+                .toCompletableFuture()
+                .get();
+        var first =
+                assertInstanceOf(
+                                ZLinkStoreScanPageResult.class,
+                                store.scan(new ZLinkStoreScanRequest("cursor/", null, 1), ACTIVE)
+                                        .toCompletableFuture()
+                                        .get())
+                        .value();
+        String cursor = first.nextCursor().value();
+        String snapshot = cursor.substring(0, cursor.lastIndexOf(':') + 1);
+        assertInstanceOf(
+                ZLinkStoreScanExpired.class,
+                store.scan(
+                                new ZLinkStoreScanRequest(
+                                        "cursor/", new ZLinkStoreScanCursor(snapshot + offset), 1),
+                                ACTIVE)
                         .toCompletableFuture()
                         .get());
     }

@@ -141,14 +141,19 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                                 snapshotId, new ScanSnapshot(items, now.plus(SCAN_RETENTION)));
                     } else {
                         String[] cursor = request.cursor().value().split(":", 2);
-                        if (cursor.length != 2 || !snapshots.containsKey(cursor[0])) {
-                            return completed(new ZLinkStoreScanExpired());
-                        }
                         snapshotId = cursor[0];
-                        offset = Integer.parseInt(cursor[1]);
-                        items = snapshots.get(snapshotId).items();
+                        offset = -1;
+                        if (cursor.length == 2) {
+                            try {
+                                offset = Integer.parseInt(cursor[1]);
+                            } catch (NumberFormatException invalidOffset) {
+                                // Invalid offsets retain the initial value for the expiry check.
+                            }
+                        }
+                        ScanSnapshot snapshot = snapshots.get(snapshotId);
+                        items = snapshot == null ? null : snapshot.items();
                     }
-                    if (offset < 0 || offset > items.size()) {
+                    if (items == null || offset < 0 || offset > items.size()) {
                         snapshots.remove(snapshotId);
                         return completed(new ZLinkStoreScanExpired());
                     }
