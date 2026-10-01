@@ -54,7 +54,7 @@ internal static class ZlinkStreamFrameCodec
                 "Header exceeds u16 header_size."
             );
 
-        _ = checked(2 + 4 + headerLength + payloadLength);
+        _ = checked(PrefixSize + headerLength + payloadLength);
     }
 
     public static void WritePrefix(Span<byte> destination, int headerLength, int payloadLength)
@@ -89,7 +89,7 @@ internal static class ZlinkStreamFrameCodec
                 nameof(destination)
             );
 
-        WritePrefix(destination[..6], header.Length, payload.Length);
+        WritePrefix(destination[..PrefixSize], header.Length, payload.Length);
         header.Span.CopyTo(destination[PrefixSize..]);
         payload.Span.CopyTo(destination[(PrefixSize + header.Length)..]);
     }
@@ -109,7 +109,7 @@ internal static class ZlinkStreamFrameCodec
         CancellationToken cancellationToken
     )
     {
-        var prefix = new byte[6];
+        var prefix = new byte[PrefixSize];
         await ReadExactAsync(connection, prefix, cancellationToken).ConfigureAwait(false);
         var headerSize = BinaryPrimitives.ReadUInt16BigEndian(prefix.AsSpan(0, 2));
         var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(prefix.AsSpan(2, 4));

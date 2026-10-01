@@ -9,6 +9,123 @@ using Xunit;
 public sealed partial class StreamConnectorTests
 {
     [Fact]
+    public async Task TaskRunnerPreservesInfrastructureFault()
+    {
+        var runner = new ZlinkStreamTaskRunner(CancellationToken.None);
+        var failure = new InvalidOperationException("infrastructure failure");
+        var task = runner.Run(_ => ValueTask.FromException(failure));
+
+        var observed = await Assert.ThrowsAsync<InvalidOperationException>(() => task);
+        Assert.Same(failure, observed);
+        Assert.True(task.IsFaulted);
+    }
+
+    [Fact]
+    public async Task TaskRunnerPreservesCancellationOutsideShutdown()
+    {
+        var runner = new ZlinkStreamTaskRunner(CancellationToken.None);
+        var task = runner.Run(_ => ValueTask.FromException(new OperationCanceledException()));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        Assert.True(task.IsCanceled);
+    }
+
+    [Fact]
+    public async Task TaskRunnerCompletesNormalWorkAndShutdownCancellation()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var runner = new ZlinkStreamTaskRunner(shutdown.Token);
+        await runner.Run(_ => ValueTask.CompletedTask);
+        shutdown.Cancel();
+        await runner.Run(token => ValueTask.FromCanceled(token));
+    }
+
+    [Theory]
+    [InlineData(ZlinkStreamErrorCode.ConnectTimeout)]
+    [InlineData(ZlinkStreamErrorCode.TlsValidationFailed)]
+    [InlineData(ZlinkStreamErrorCode.Disconnected)]
+    public async Task InitialTransportConnectFailureStartsReconnectPolicy(
+        ZlinkStreamErrorCode errorCode
+    )
+    {
+        var attempts = 0;
+        var connected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(5),
+                    MaxDelay = TimeSpan.FromMilliseconds(5),
+                    MaxAttempts = 1,
+                },
+            },
+            _ =>
+                Interlocked.Increment(ref attempts) == 1
+                    ? ValueTask.FromException<IZlinkStreamConnection>(
+                        ZlinkStreamConnector.Error(errorCode, "initial connect failure")
+                    )
+                    : ValueTask.FromResult<IZlinkStreamConnection>(new RecordingCloseConnection())
+        );
+        _ = connector.OnConnectionStateChanged(
+            (change, _) =>
+            {
+                if (change.Current == ZlinkStreamConnectionState.Connected)
+                    connected.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+        );
+
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector.Connect.Async()
+        );
+        Assert.Equal(errorCode, failure.Error.Code);
+        await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        Assert.Equal(ZlinkStreamCloseReason.TransportError, connector.CloseReason);
+    }
+
+    [Theory]
+    [InlineData(ZlinkStreamErrorCode.ConnectTimeout, false)]
+    [InlineData(ZlinkStreamErrorCode.ConfigurationError, true)]
+    [InlineData(ZlinkStreamErrorCode.ValidationFailed, true)]
+    public async Task InitialNonReconnectFailureRemainsDisconnected(
+        ZlinkStreamErrorCode errorCode,
+        bool reconnectEnabled
+    )
+    {
+        var attempts = 0;
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = reconnectEnabled },
+            },
+            _ =>
+            {
+                Interlocked.Increment(ref attempts);
+                return ValueTask.FromException<IZlinkStreamConnection>(
+                    ZlinkStreamConnector.Error(errorCode, "connect failure without reconnect")
+                );
+            }
+        );
+
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5))
+        );
+
+        Assert.Equal(errorCode, failure.Error.Code);
+        Assert.Equal(ZlinkStreamConnectionState.Disconnected, connector.State);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+    }
+
+    [Fact]
     public void ReconnectDefaultMaxAttemptsIsThree()
     {
         var options = new ZlinkStreamReconnectOptions();
@@ -1322,7 +1439,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var firstEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1376,7 +1494,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var firstEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1556,7 +1675,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var writeEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1614,7 +1734,8 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1713,7 +1834,8 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1803,7 +1925,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1891,7 +2014,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         ZlinkStreamConnectorLifecycle? lifecycle = null;
         lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -2786,7 +2910,8 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions

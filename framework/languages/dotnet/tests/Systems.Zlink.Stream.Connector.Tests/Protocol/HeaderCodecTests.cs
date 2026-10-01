@@ -6,6 +6,45 @@ using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Theory]
+    [InlineData(ZlinkStreamMessageKind.Response, false)]
+    [InlineData(ZlinkStreamMessageKind.Response, true)]
+    [InlineData(ZlinkStreamMessageKind.Error, false)]
+    [InlineData(ZlinkStreamMessageKind.Error, true)]
+    public void ReplyHeaderNameValidationIsSharedByEncodeAndDecode(
+        ZlinkStreamMessageKind kind,
+        bool named
+    )
+    {
+        var codec = new ZlinkStreamHeaderCodec();
+        var source = new ZlinkStreamHeader(
+            kind,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(1),
+            string.Empty,
+            ZlinkStreamMetadata.Empty
+        );
+        var encoded = codec.Encode(source);
+        if (!named)
+        {
+            Assert.Empty(codec.Decode(encoded).Name);
+            return;
+        }
+
+        var outboundFailure = Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(source with { Name = "x" })
+        );
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, outboundFailure.Error.Code);
+
+        var wire = new byte[encoded.Length + 1];
+        encoded.Span.CopyTo(wire);
+        wire[^2] = 1;
+        wire[^1] = (byte)'x';
+        var inboundFailure = Assert.Throws<ZlinkStreamException>(() => codec.Decode(wire));
+        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, inboundFailure.Error.Code);
+    }
+
     [Fact]
     public void HeaderProtocolRoundTripsMetadataAndRequestSeq()
     {
