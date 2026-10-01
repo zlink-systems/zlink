@@ -44,7 +44,7 @@ result_t<std::vector<std::uint8_t>> frame_codec_t::encode_prefix (std::size_t he
                                                              "Payload exceeds u32 payload_size.");
     }
     std::vector<std::uint8_t> prefix;
-    prefix.reserve (6);
+    prefix.reserve (prefix_size);
     write_prefix (prefix, header_size, payload_size);
     return result_t<std::vector<std::uint8_t>>::success (std::move (prefix));
 }
@@ -66,7 +66,7 @@ result_t<std::vector<std::uint8_t>> frame_codec_t::encode (const std::vector<std
         return prefix;
     }
     std::vector<std::uint8_t> frame = std::move (prefix.value ());
-    frame.reserve (6 + header.size () + payload.size ());
+    frame.reserve (prefix_size + header.size () + payload.size ());
     frame.insert (frame.end (), header.begin (), header.end ());
     frame.insert (frame.end (), payload.begin (), payload.end ());
     return result_t<std::vector<std::uint8_t>>::success (std::move (frame));

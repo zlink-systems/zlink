@@ -17,6 +17,7 @@
  */
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include <zlink/framework/detail/crc32c.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -40,26 +41,7 @@ struct relocation_payload_manifest_t
  * protocol::relocation_checksum_crc32c.  Used for the cutover boundary
  * checksum, which covers the concatenated canonical bytes of the
  * pre-boundary relay batch as the records stream in. */
-class relocation_crc32c_accumulator_t
-{
-  public:
-    void update (std::span<const std::uint8_t> bytes) noexcept
-    {
-        for (const auto byte : bytes) {
-            _state ^= byte;
-            for (int bit = 0; bit < 8; ++bit) {
-                const auto mask =
-                  static_cast<std::uint32_t> (-static_cast<std::int32_t> (_state & 1u));
-                _state = (_state >> 1u) ^ (0x82f63b78u & mask);
-            }
-        }
-    }
-
-    std::uint32_t value () const noexcept { return ~_state; }
-
-  private:
-    std::uint32_t _state = 0xffffffffu;
-};
+using relocation_crc32c_accumulator_t = zlink::framework::detail::crc32c_accumulator_t;
 
 /* The number of chunks one payload occupies under the effective chunk
  * limit.  An empty payload still occupies zero chunks; the manifest then

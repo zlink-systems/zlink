@@ -28,6 +28,9 @@ namespace zlink::framework
 // Framework-private domain repository contracts. Store providers implement
 // only the opaque location_store_t and relocation_store_t public SPI.
 
+inline constexpr std::size_t location_page_item_limit = 1000;
+inline constexpr auto creation_terminal_retention = std::chrono::minutes (5);
+
 struct authority_key_t
 {
     std::string value;
@@ -114,13 +117,14 @@ class authority_scan_cursor_t final
   public:
     explicit authority_scan_cursor_t (std::string encoded) : _encoded (std::move (encoded))
     {
-        if (_encoded.empty () || _encoded.size () > 4096)
+        if (_encoded.empty () || _encoded.size () > maximum_encoded_bytes)
             throw std::invalid_argument ("authority scan cursor must contain 1..4096 bytes");
     }
 
     std::string_view encoded () const noexcept { return _encoded; }
 
   private:
+    static constexpr std::size_t maximum_encoded_bytes = 4096;
     std::string _encoded;
 };
 

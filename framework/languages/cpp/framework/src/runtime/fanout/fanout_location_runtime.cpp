@@ -23,7 +23,6 @@ namespace zlink::framework::runtime::fanout
 namespace
 {
 
-constexpr std::string_view default_security_identity = "default";
 
 framework_runtime_state_t current_state (const location_runtime_t &locations)
 {
@@ -217,7 +216,7 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
       .descriptor_revision = 1,
       .endpoint = transport::advertised_tcp_endpoint (raw->endpoint (), advertise_host, "Fanout"),
       .state = framework_runtime_state_t::serving,
-      .security_identity = std::string (default_security_identity),
+      .security_identity = std::string (transport::default_security_identity),
       .owner_id = owner ? owner->owner_id : std::string{},
       .lease_generation = owner ? owner->lease_generation : 0};
     if (owner) {

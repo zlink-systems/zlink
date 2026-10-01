@@ -53,6 +53,11 @@ class framework_execution_turn_t final : public execution_turn_t
 
 namespace detail
 {
+inline constexpr char content_type_header_name[] = "content-type";
+inline constexpr char authorization_header_name[] = "authorization";
+inline constexpr std::chrono::milliseconds default_timeout{3000};
+inline constexpr std::size_t default_max_response_body_size = 16 * 1024 * 1024;
+
 class http_client_runtime_t;
 struct http_request_t;
 }
@@ -124,8 +129,8 @@ class client_builder_t
 
   private:
     std::string _base_url;
-    std::chrono::milliseconds _timeout{3000};
-    std::size_t _max_response_body_size = 16 * 1024 * 1024;
+    std::chrono::milliseconds _timeout{detail::default_timeout};
+    std::size_t _max_response_body_size = detail::default_max_response_body_size;
     std::map<std::string, std::string> _headers;
     std::optional<std::string> _trust_certificate_file;
     std::optional<std::pair<std::string, std::string>> _client_certificate;
@@ -153,7 +158,8 @@ class request_builder_t
     template <typename T> request_builder_t &body (const T &value)
     {
         _body = zlink::message_t::from_json (value).to_string ();
-        _headers.try_emplace ("content-type", "application/json");
+        _headers.try_emplace (detail::content_type_header_name,
+                              zlink::detail::json_profile::content_type);
         return *this;
     }
 

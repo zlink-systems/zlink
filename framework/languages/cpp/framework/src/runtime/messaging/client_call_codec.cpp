@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/messaging/client_call_codec.hpp"
 
 #include <atomic>
@@ -21,7 +23,7 @@ std::string next_correlation_id ()
     int index = static_cast<int> (sizeof (buffer));
     buffer[--index] = '\0';
     do {
-        buffer[--index] = "0123456789abcdef"[value & 0xfu];
+        buffer[--index] = zlink::framework::detail::lowercase_hex_digits[value & 0xfu];
         value >>= 4u;
     } while (value != 0);
     return std::string (buffer + index);

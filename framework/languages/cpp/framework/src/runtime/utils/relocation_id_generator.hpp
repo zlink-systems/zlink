@@ -49,7 +49,7 @@ class relocation_id_generator_t final
             _issued.erase (key (_retained.front ().second));
             _retained.pop_front ();
         }
-        for (std::size_t attempt = 0; attempt != 64; ++attempt) {
+        for (std::size_t attempt = 0; attempt != collision_attempt_limit; ++attempt) {
             const auto candidate = _source ();
             if ((candidate.high == 0 && candidate.low == 0)
                 || !_issued.emplace (key (candidate)).second) {
@@ -64,6 +64,7 @@ class relocation_id_generator_t final
   private:
     using id_key_t = std::pair<std::uint64_t, std::uint64_t>;
 
+    static constexpr std::size_t collision_attempt_limit = 64;
     static constexpr auto retention = std::chrono::hours (24);
 
     static id_key_t key (const protocol::relocation_id_t &value) noexcept

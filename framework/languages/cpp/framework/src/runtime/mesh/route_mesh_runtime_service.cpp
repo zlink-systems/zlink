@@ -28,6 +28,9 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
 namespace
 {
 
+constexpr std::chrono::milliseconds topology_refresh_interval{100};
+constexpr std::chrono::milliseconds snapshot_wait_poll_interval{10};
+
 mesh_node_state_t map_state (mesh::service_node_state_t state)
 {
     switch (state) {
@@ -123,7 +126,7 @@ struct route_mesh_runtime_service_t::state_t
         std::optional<mesh_node_snapshot_t> last_snapshot;
         bool application_claim_active = false;
         std::uint64_t pending_application_callbacks = 0;
-        std::string location_state = "not_configured";
+        std::optional<bool> location_store_healthy;
         std::optional<std::chrono::system_clock::time_point> location_last_success;
         std::optional<std::chrono::system_clock::time_point> location_last_failure;
         std::chrono::steady_clock::time_point next_location_poll{};
@@ -236,9 +239,9 @@ struct route_mesh_runtime_service_t::state_t
             std::lock_guard lock (hub.mutex);
             if (now < hub.next_location_poll)
                 return;
-            hub.next_location_poll = now + std::chrono::milliseconds (100);
+            hub.next_location_poll = now + topology_refresh_interval;
         }
-        std::string state = "degraded";
+        bool store_healthy = false;
         std::optional<std::chrono::system_clock::time_point> last_success;
         std::optional<location_runtime_status_t> status_for_log;
         bool failed = true;
@@ -247,7 +250,7 @@ struct route_mesh_runtime_service_t::state_t
             const auto &result = query.result ();
             if (result) {
                 status_for_log = result.value ();
-                state = status_for_log->store_healthy ? "ready" : "degraded";
+                store_healthy = status_for_log->store_healthy;
                 last_success = status_for_log->last_refresh_at;
                 failed = status_for_log->last_error.has_value ();
             }
@@ -257,8 +260,8 @@ struct route_mesh_runtime_service_t::state_t
         bool changed;
         {
             std::lock_guard lock (hub.mutex);
-            changed = hub.location_state != state;
-            hub.location_state = state;
+            changed = hub.location_store_healthy != store_healthy;
+            hub.location_store_healthy = store_healthy;
             if (last_success)
                 hub.location_last_success = last_success;
             if (failed)
@@ -282,7 +285,7 @@ struct route_mesh_runtime_service_t::state_t
             std::lock_guard lock (hub.mutex);
             if (now < hub.next_descriptor_poll)
                 return;
-            hub.next_descriptor_poll = now + std::chrono::milliseconds (100);
+            hub.next_descriptor_poll = now + topology_refresh_interval;
         }
 
         std::vector<mesh_node_descriptor_t> descriptors;
@@ -358,7 +361,7 @@ bool route_peer_is_ready (const std::shared_ptr<route_mesh_runtime_service_t::st
     std::lock_guard lock (hub->mutex);
     if (state->location_runtime == nullptr)
         return true;
-    if (hub->location_state != "ready")
+    if (hub->location_store_healthy != true)
         return false;
     const auto found = std::find_if (
       hub->location_descriptors.begin (), hub->location_descriptors.end (),
@@ -452,7 +455,7 @@ void route_mesh_runtime_service_t::start ()
                 state->publish_application_claim_change (*hub);
                 state->poll_location (*hub);
                 state->poll_location_descriptors (*hub);
-                zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
+                zlink::framework::runtime::wait_poll_interval (snapshot_wait_poll_interval);
             }
         });
     }
@@ -557,7 +560,8 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
         // query service is wired, the caller supplied location descriptors are
         // the complete source and must not be downgraded to degraded merely
         // because the optional health cache has no entry.
-        location_is_healthy = state->location_runtime == nullptr || hub->location_state == "ready";
+        location_is_healthy =
+          state->location_runtime == nullptr || hub->location_store_healthy == true;
     }
     peer_snapshots.reserve (peers.size () + not_required_peers.size ()
                             + location_descriptors.size ());

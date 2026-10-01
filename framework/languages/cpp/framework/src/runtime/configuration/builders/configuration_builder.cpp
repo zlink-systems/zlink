@@ -16,6 +16,14 @@ extern char **environ;
 namespace
 {
 
+constexpr char json_path_key[] = "config.json.path";
+constexpr char env_prefix_key[] = "config.env.prefix";
+constexpr char environment_name_key[] = "environment.name";
+constexpr char default_environment[] = "production";
+constexpr char environment_key_prefix[] = "env.";
+constexpr char command_line_key_prefix[] = "cli.";
+
+
 void flatten_json (zlink::framework::configuration_model_t &model,
                    const std::string &prefix,
                    const nlohmann::json &value)
@@ -108,7 +116,7 @@ config_builder_t &config_builder_t::load_json (std::string path)
 
 config_builder_t &config_builder_t::load_json (std::string path, optional_t optional)
 {
-    _model.set ("config.json.path", path);
+    _model.set (json_path_key, path);
     std::ifstream input (path);
     if (!input) {
         if (optional == optional_t::no) {
@@ -126,7 +134,7 @@ config_builder_t &config_builder_t::load_json (std::string path, optional_t opti
 
 config_builder_t &config_builder_t::load_env (std::string prefix)
 {
-    _model.set ("config.env.prefix", prefix);
+    _model.set (env_prefix_key, prefix);
     if (environ == nullptr) {
         return *this;
     }
@@ -150,7 +158,7 @@ config_builder_t &config_builder_t::load_env (std::string prefix)
             ++pos;
         }
         auto value = entry.substr (separator + 1);
-        _model.set ("env." + key, value);
+        _model.set (environment_key_prefix + key, value);
         _model.set (std::move (canonical_key), std::move (value));
     }
     return *this;
@@ -167,14 +175,14 @@ config_builder_t &config_builder_t::load_cli (int argc, char **argv)
         arg.erase (0, 2);
         const auto separator = arg.find ('=');
         if (separator == std::string::npos) {
-            _model.set ("cli." + arg, "true");
+            _model.set (command_line_key_prefix + arg, "true");
             _model.set (std::move (arg), "true");
             continue;
         }
 
         auto key = arg.substr (0, separator);
         auto value = arg.substr (separator + 1);
-        _model.set ("cli." + key, value);
+        _model.set (command_line_key_prefix + key, value);
         _model.set (std::move (key), std::move (value));
     }
     return *this;
@@ -182,13 +190,13 @@ config_builder_t &config_builder_t::load_cli (int argc, char **argv)
 
 config_builder_t &config_builder_t::use_environment (std::string name)
 {
-    _model.set ("environment.name", std::move (name));
+    _model.set (environment_name_key, std::move (name));
     return *this;
 }
 
 std::string config_builder_t::environment () const
 {
-    return _model.get ("environment.name").value_or ("production");
+    return _model.get (environment_name_key).value_or (default_environment);
 }
 
 bool config_builder_t::is_environment (std::string_view name) const

@@ -54,12 +54,12 @@ raw_http_response_t to_raw_response (const http::response<http::string_body> &re
 
 bool is_authorization_header (const std::string &name)
 {
-    return iequals (name, "authorization");
+    return http::string_to_field (name) == http::field::authorization;
 }
 
 bool is_content_type_header (const std::string &name)
 {
-    return iequals (name, "content-type");
+    return http::string_to_field (name) == http::field::content_type;
 }
 
 bool can_retry_reused_connection (http_method_t method)
@@ -123,8 +123,10 @@ class request_performer_t
                     throw request_protocol_error ("HTTP request exceeded the redirect limit");
                 }
                 --redirects_left;
-                if (status == 303
-                    || ((status == 301 || status == 302) && method == http_method_t::post)) {
+                if (response.result () == http::status::see_other
+                    || ((response.result () == http::status::moved_permanently
+                         || response.result () == http::status::found)
+                        && method == http_method_t::post)) {
                     method = http_method_t::get;
                     body.reset ();
                 }
@@ -135,15 +137,15 @@ class request_performer_t
 
             auto raw = to_raw_response (response);
             if (_options.compression && !_request.sink) {
-                const auto encoding = find_header (raw.headers, "content-encoding");
-                if (encoding && iequals (*encoding, "gzip")) {
+                const auto encoding = find_header (raw.headers, content_encoding_header_name);
+                if (encoding && iequals (*encoding, gzip_content_encoding)) {
                     raw.body = gunzip (raw.body, _options.max_response_body_size);
-                    erase_header (raw.headers, "content-encoding");
-                    erase_header (raw.headers, "content-length");
-                } else if (encoding && iequals (*encoding, "deflate")) {
+                    erase_header (raw.headers, content_encoding_header_name);
+                    erase_header (raw.headers, content_length_header_name);
+                } else if (encoding && iequals (*encoding, deflate_content_encoding)) {
                     raw.body = inflate_deflate (raw.body, _options.max_response_body_size);
-                    erase_header (raw.headers, "content-encoding");
-                    erase_header (raw.headers, "content-length");
+                    erase_header (raw.headers, content_encoding_header_name);
+                    erase_header (raw.headers, content_length_header_name);
                 }
             }
             return finish_response (std::move (raw), started_at, effective_timeout ());
@@ -164,18 +166,20 @@ class request_performer_t
                                              bool absolute_form) const
     {
         const auto wire_target =
-          absolute_form ? "http://" + hop.host + ":" + hop.port + hop.target : hop.target;
-        http::request<TBody> wire{to_beast_method (method), wire_target, 11};
+          absolute_form ? std::string (http_url_prefix) + hop.host + ":" + hop.port + hop.target
+                        : hop.target;
+        http::request<TBody> wire{to_beast_method (method), wire_target, http_11_version};
 
-        const bool default_port = (hop.scheme == "http" && hop.port == "80")
-                                  || (hop.scheme == "https" && hop.port == "443");
+        const bool default_port =
+          (hop.scheme == http_scheme_t::plain && hop.port == http_default_port)
+          || (hop.scheme == http_scheme_t::secure && hop.port == https_default_port);
         wire.set (http::field::host, default_port ? hop.host : hop.host + ":" + hop.port);
         // Version identity: derived from contracts/types.hpp version constants (single source).
         static const std::string user_agent =
           "zlink-http-client/" + std::to_string (zlink::http_client::version_major) + "."
           + std::to_string (zlink::http_client::version_minor);
         wire.set (http::field::user_agent, user_agent);
-        wire.set (http::field::accept, "application/json");
+        wire.set (http::field::accept, zlink::detail::json_profile::content_type);
         if (_options.compression) {
             wire.set (http::field::accept_encoding, "gzip, deflate");
         }
@@ -204,7 +208,7 @@ class request_performer_t
         if (_options.cookies) {
             const auto path = hop.target.substr (0, hop.target.find ('?'));
             const auto cookie_header =
-              _cookie_jar.header_for (hop.host, path, hop.scheme == "https");
+              _cookie_jar.header_for (hop.host, path, hop.scheme == http_scheme_t::secure);
             if (!cookie_header.empty ()) {
                 wire.set (http::field::cookie, cookie_header);
             }
@@ -214,7 +218,8 @@ class request_performer_t
 
     std::string pool_key (const hop_target_t &hop) const
     {
-        auto key = hop.scheme + "|" + hop.host + ":" + hop.port;
+        auto key = std::string (hop.scheme == http_scheme_t::secure ? "https|" : "http|") + hop.host
+                   + ":" + hop.port;
         if (_options.proxy) {
             key += "|proxy=" + *_options.proxy;
         }
@@ -230,7 +235,8 @@ class request_performer_t
         const auto key = pool_key (hop);
         const bool can_reuse = !body_provider;
 
-        for (int attempt = 0; attempt < 2; ++attempt) {
+        constexpr int maximum_connection_attempts = 2;
+        for (int attempt = 0; attempt < maximum_connection_attempts; ++attempt) {
             std::unique_ptr<pooled_connection_t> connection;
             bool reused = false;
             if (can_reuse && attempt == 0) {
@@ -288,7 +294,8 @@ class request_performer_t
                                         const std::optional<std::string> &body,
                                         const body_provider_t &body_provider)
     {
-        const bool absolute_form = _options.proxy.has_value () && hop.scheme == "http";
+        const bool absolute_form =
+          _options.proxy.has_value () && hop.scheme == http_scheme_t::plain;
         const bool has_body = body.has_value () || static_cast<bool> (body_provider);
 
         if (body_provider) {
@@ -367,7 +374,8 @@ class request_performer_t
                               && is_redirect_status (static_cast<int> (parser.get ().result_int ()))
                               && parser.get ().count (http::field::location) > 0;
 
-        char chunk[16384];
+        constexpr std::size_t read_chunk_size = 16384;
+        char chunk[read_chunk_size];
         while (!parser.is_done ()) {
             parser.get ().body ().data = chunk;
             parser.get ().body ().size = sizeof chunk;

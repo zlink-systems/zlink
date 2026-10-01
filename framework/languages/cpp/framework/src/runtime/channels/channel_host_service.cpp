@@ -43,6 +43,14 @@
 namespace zlink::framework::runtime
 {
 
+namespace
+{
+constexpr std::uint64_t monitor_poll_slot = 2;
+constexpr std::size_t channel_handler_worker_limit = 8;
+constexpr std::chrono::milliseconds channel_poll_interval{50};
+constexpr std::chrono::milliseconds channel_worker_idle_timeout{100};
+} // namespace
+
 class channel_host_service_t::server_loop_t
 {
   public:
@@ -84,12 +92,12 @@ class channel_host_service_t::server_loop_t
         _router->bind (endpoint);
         const auto hardware_workers =
           static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
-        const auto max_handler_workers =
-          std::max<std::size_t> (1, std::min<std::size_t> (hardware_workers, 8));
+        const auto max_handler_workers = std::max<std::size_t> (
+          1, std::min<std::size_t> (hardware_workers, channel_handler_worker_limit));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers, std::chrono::milliseconds (100), "zlink-channel-server");
+          0, max_handler_workers, channel_worker_idle_timeout, "zlink-channel-server");
         _poller.add (*_router, zlink::poll_event_flag_t::pollin, 1);
-        _poller.add (_monitor, zlink::poll_event_flag_t::pollin, 2);
+        _poller.add (_monitor, zlink::poll_event_flag_t::pollin, monitor_poll_slot);
         if (_listener_statuses)
             _listener_statuses->update (
               listener_kind_t::client_server, _channel_name,
@@ -107,7 +115,7 @@ class channel_host_service_t::server_loop_t
             zlink::poll_event_t readiness;
             std::size_t ready_count = 0;
             try {
-                ready_count = _poller.wait (&readiness, 1, std::chrono::milliseconds (50));
+                ready_count = _poller.wait (&readiness, 1, channel_poll_interval);
             }
             catch (...) {
                 break;
@@ -120,7 +128,7 @@ class channel_host_service_t::server_loop_t
             }
             const short revents = static_cast<short> (readiness.revents);
             const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
-            if (readiness.slot == 2) {
+            if (readiness.slot == monitor_poll_slot) {
                 if ((revents & pollin) != 0) {
                     drain_monitor_events ();
                 }
@@ -132,7 +140,7 @@ class channel_host_service_t::server_loop_t
             /* Permit before receive (Application job queue §3). While the
              * supply is pending the loop keeps its management work: monitor
              * events and replies (messaging hot path I1). */
-            auto permit = _supply.take (*_application_jobs, std::chrono::milliseconds (50));
+            auto permit = _supply.take (*_application_jobs, channel_poll_interval);
             if (!permit) {
                 drain_monitor_events ();
                 continue;
@@ -317,7 +325,7 @@ class channel_host_service_t::server_loop_t
             zlink::poll_event_t readiness;
             try {
                 if (_poller.wait (&readiness, 1, std::chrono::milliseconds::zero ()) != 1
-                    || readiness.slot != 2
+                    || readiness.slot != monitor_poll_slot
                     || (static_cast<short> (readiness.revents)
                         & static_cast<short> (zlink::poll_event_flag_t::pollin))
                          == 0) {
@@ -411,10 +419,10 @@ class channel_host_service_t::subscriber_loop_t
         apply_runtime_connections ();
         const auto hardware_workers =
           static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
-        const auto max_handler_workers =
-          std::max<std::size_t> (1, std::min<std::size_t> (hardware_workers, 8));
+        const auto max_handler_workers = std::max<std::size_t> (
+          1, std::min<std::size_t> (hardware_workers, channel_handler_worker_limit));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers, std::chrono::milliseconds (100), "zlink-channel-subscriber");
+          0, max_handler_workers, channel_worker_idle_timeout, "zlink-channel-subscriber");
         _poller.add (*_subscriber, zlink::poll_event_flag_t::pollin, 1);
     }
 
@@ -427,7 +435,7 @@ class channel_host_service_t::subscriber_loop_t
             zlink::poll_event_t readiness;
             std::size_t ready_count = 0;
             try {
-                ready_count = _poller.wait (&readiness, 1, std::chrono::milliseconds (50));
+                ready_count = _poller.wait (&readiness, 1, channel_poll_interval);
             }
             catch (...) {
                 break;
@@ -440,7 +448,7 @@ class channel_host_service_t::subscriber_loop_t
             }
             // Permit before receive (Application job queue §3); runtime connection
             // changes keep applying while the supply is pending (hot path I1).
-            auto permit = _supply.take (*_application_jobs, std::chrono::milliseconds (50));
+            auto permit = _supply.take (*_application_jobs, channel_poll_interval);
             if (!permit)
                 continue;
             if (!*permit)

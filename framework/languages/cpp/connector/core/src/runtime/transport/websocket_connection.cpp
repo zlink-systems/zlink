@@ -2,6 +2,8 @@
 
 #include "runtime/transport/websocket_connection.hpp"
 
+#include "runtime/protocol/framing/frame_codec.hpp"
+
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -18,6 +20,7 @@
 #include <boost/beast/websocket.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -156,7 +159,9 @@ template <typename TStream> class websocket_stream_connection_t final : public s
 #endif
     websocket::stream<TStream> _stream;
     asio::strand<asio::io_context::executor_type> _strand;
-    std::size_t _read_message_limit = 64u * 1024u + 65535u + 6u;
+    std::size_t _read_message_limit = default_max_receive_payload_size
+                                      + std::numeric_limits<std::uint16_t>::max ()
+                                      + frame_codec_t::prefix_size;
 };
 
 std::optional<websocket_endpoint_parts_t>

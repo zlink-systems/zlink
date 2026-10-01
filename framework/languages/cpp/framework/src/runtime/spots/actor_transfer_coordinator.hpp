@@ -143,6 +143,8 @@ struct handoff_packet_t
 /* These framework-owned metadata keys preserve the routing context needed by
  * a late handoff relay. They never enter application metadata because the
  * public context projection filters the __zlink namespace. */
+inline constexpr char actor_request_id_key[] = "__zlink.actorRequestId";
+
 inline constexpr std::string_view actor_handoff_source_node_key = "__zlink.actorHandoffSourceNode";
 /* The node that parked the request and holds its pending handoff entry (the
  * original reply token). The handoff terminal must return HERE — the source

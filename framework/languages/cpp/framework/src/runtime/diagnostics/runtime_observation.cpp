@@ -16,10 +16,13 @@ namespace
 
 runtime::offload_executor_t &runtime_observation_dispatcher ()
 {
-    const auto hardware = std::max (2u, std::thread::hardware_concurrency ());
-    const auto maximum = std::min<std::size_t> (8, hardware);
-    static runtime::offload_executor_t dispatcher (2, maximum, std::chrono::seconds (30),
-                                                   "zlink-observation");
+    constexpr unsigned minimum_worker_count = 2;
+    constexpr std::size_t maximum_worker_count = 8;
+    constexpr auto worker_idle_timeout = std::chrono::seconds (30);
+    const auto hardware = std::max (minimum_worker_count, std::thread::hardware_concurrency ());
+    const auto maximum = std::min<std::size_t> (maximum_worker_count, hardware);
+    static runtime::offload_executor_t dispatcher (minimum_worker_count, maximum,
+                                                   worker_idle_timeout, "zlink-observation");
     return dispatcher;
 }
 
