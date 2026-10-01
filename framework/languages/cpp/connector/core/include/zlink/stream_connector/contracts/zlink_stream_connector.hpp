@@ -280,10 +280,8 @@ class connector_t
 
     packet_t make_packet (std::string packet_name) const;
     subscription_t on_packet_erased (std::string packet_name,
-                                     std::function<void (const packet_t &)> handler);
-    subscription_t on_actor_packet_erased (std::string packet_name,
-                                           std::uint16_t actor_slot,
-                                           std::function<void (const packet_t &)> handler);
+                                     std::function<void (const packet_t &)> handler,
+                                     std::optional<std::uint16_t> actor_slot = std::nullopt);
 
     std::shared_ptr<void> _state;
     std::shared_ptr<void> _external_owner;
@@ -315,9 +313,9 @@ class actor_t
     {
         const auto actor_slot = _actor_slot;
         std::weak_ptr<void> weak_state = _connector._state;
-        return _connector.on_actor_packet_erased (
-          std::move (packet_name), actor_slot,
-          detail::typed_delivery<TMessage> (weak_state, std::move (callback)));
+        return _connector.on_packet_erased (
+          std::move (packet_name),
+          detail::typed_delivery<TMessage> (weak_state, std::move (callback)), actor_slot);
     }
 
     template <typename TMessage>

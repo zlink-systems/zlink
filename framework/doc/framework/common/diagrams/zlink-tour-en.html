@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZLink Tour</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+/* When opened as an iframe inside the site (Material), the page follows the light or dark theme of the site. When opened standalone, it follows the OS setting. */
+(function () {
+  try {
+    if (window.parent === window) return;
+    var pd = window.parent.document;
+    var apply = function () {
+      var scheme = pd.body && pd.body.getAttribute('data-md-color-scheme');
+      if (scheme) document.documentElement.setAttribute('data-theme', scheme === 'slate' ? 'dark' : 'light');
+    };
+    apply();
+    new MutationObserver(apply).observe(pd.body, {attributes: true, attributeFilter: ['data-md-color-scheme']});
+  } catch (e) { /* when opened from another origin, follow the OS setting */ }
+})();
+</script>
+<style>
+:root{
+  --bg:#F2F5F4; --panel:#FFFFFF; --ink:#14211F; --ink-2:#34423F; --muted:#5B6B68; --line:#C9D4D1;
+  --accent:#0E8175; --accent-ink:#0A5F56; --accent-soft:#D6EDE9; --on-accent:#FFFFFF;
+  --hold:#C4761A; --hold-soft:#F6E5CB; --look:#6C7C95;
+  --node-fill:#FAFCFB; --spot-fill:#E8F3F1; --store-fill:#EEF0F5;
+  --select:#ECEAF3; --select-line:#C6C0D8; --village:#E7EFDF; --village-line:#B9CCA8; --dungeon:#2A2530; --dungeon-line:#4A4052; --dungeon-ink:#EDE6F2;
+  --sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0C1413; --panel:#121D1C; --ink:#E3ECEA; --ink-2:#C2CFCC; --muted:#92A5A1; --line:#2B3B39;
+    --accent:#35C2AF; --accent-ink:#7FDCCF; --accent-soft:#16332F; --on-accent:#06201D;
+    --hold:#E9A23F; --hold-soft:#3A2A12; --look:#9AA8C2;
+    --node-fill:#101A19; --spot-fill:#14302C; --store-fill:#161C27;
+    --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0C1413; --panel:#121D1C; --ink:#E3ECEA; --ink-2:#C2CFCC; --muted:#92A5A1; --line:#2B3B39;
+  --accent:#35C2AF; --accent-ink:#7FDCCF; --accent-soft:#16332F; --on-accent:#06201D;
+  --hold:#E9A23F; --hold-soft:#3A2A12; --look:#9AA8C2;
+  --node-fill:#101A19; --spot-fill:#14302C; --store-fill:#161C27;
+  --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 20px}
+header h1{margin:0;font-size:clamp(21px,2.8vw,28px);letter-spacing:-.01em}
+header .eyebrow{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);display:block}
+nav.groups{display:flex;flex-wrap:wrap;gap:6px}
+nav.groups button{font:500 13.5px var(--sans);padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--ink-2);cursor:pointer}
+nav.groups button[aria-current="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+nav.groups button:disabled{cursor:default;opacity:.5}
+nav.groups button small{font-size:11px;margin-left:4px}
+.main{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
+.side{display:flex;flex-direction:column;gap:12px;position:sticky;top:12px}
+@media (max-width:900px){.side{position:static}}
+ol.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+@media (max-width:900px){ol.steps{flex-direction:row;overflow-x:auto;padding-bottom:4px}}
+ol.steps li{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:10px;color:var(--muted);font-size:14px;white-space:nowrap}
+ol.steps .n{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font:600 12px var(--mono);border:1.5px solid var(--line);background:var(--panel)}
+ol.steps li.done{color:var(--ink-2)}
+ol.steps li.done .n{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+ol.steps li.cur{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--accent)}
+ol.steps li.cur .n{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.speed{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);margin-top:4px}
+.speed b{font:600 12.5px var(--mono);color:var(--ink)}
+#speedRange{width:100%;accent-color:var(--accent)}
+@media (max-width:900px){#speedRange{max-width:320px}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{font:500 12.5px var(--sans);color:var(--ink-2);background:transparent;border:0;padding:5px 10px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.view{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.view svg{display:block;width:100%;min-width:680px;height:auto}
+.vlabel{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 -4px 2px}
+.bar{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bar .t{font:600 12px var(--mono);color:var(--accent);letter-spacing:.06em}
+.bar .line{margin:0;font-size:16.5px;font-weight:500;line-height:1.5;text-wrap:pretty}
+.bar .res{margin:0;font-size:14px;color:var(--accent-ink);min-height:21px}
+.acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.act{font:600 14.5px var(--sans);border-radius:9px;padding:10px 16px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.act.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.act.next{margin-left:auto}
+.act:disabled{opacity:.4;cursor:default}
+.act:focus-visible,nav.groups button:focus-visible,summary:focus-visible,.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details{font-size:13.5px;color:var(--ink-2)}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
+details ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+details code{font:12.5px var(--mono);color:var(--accent-ink)}
+.foot{font-size:12.5px;color:var(--muted)}
+/* svg */
+svg text{font-family:var(--sans)}
+.zone-sel{fill:var(--select);stroke:var(--select-line)}
+.village{fill:var(--village);stroke:var(--village-line)}
+.house{fill:var(--panel);stroke:var(--village-line)}
+.dungeon{fill:var(--dungeon);stroke:var(--dungeon-line)}
+.dng{transition:opacity .6s}
+.dng.locked{opacity:.28}
+.g-title{font-weight:700;font-size:14px;fill:var(--ink)}
+.g-title.d{fill:var(--dungeon-ink)}
+.g-sub{font-size:11.5px;fill:var(--muted)}
+.g-sub.d{fill:#A99BB6}
+.boss>circle{fill:#6B2E3A;stroke:#C7667A;stroke-width:3}
+.boss.hit>circle{animation:hit .25s ease}
+@keyframes hit{50%{fill:#A8404F}}
+.hp-bg{fill:#3B3342}
+.hp{fill:#E0576B}
+.hp.party{fill:#4FB985}
+.hp-t{font:600 11.5px var(--mono);fill:var(--dungeon-ink)}
+.ch>circle.body{stroke:#fff;stroke-width:2}
+.ch>text{font:700 11px var(--mono);fill:#fff;text-anchor:middle;dominant-baseline:central}
+.ch.off{opacity:.3}
+.ch.act>circle.body{stroke:#F7D774;stroke-width:3.5}
+.ch .seen{fill:none;stroke:var(--accent);stroke-width:2;opacity:0}
+.ch.seen .seen{animation:seen .9s ease}
+@keyframes seen{0%{opacity:1;r:16}100%{opacity:0;r:30}}
+.dmg{font:700 15px var(--mono);fill:#FFD66B;text-anchor:middle}
+.dmg.boss{fill:#FF8A7A}
+.beam{stroke:#FF8A7A;stroke-width:2.5}
+.box>rect{fill:var(--node-fill);stroke:var(--line);stroke-width:1.2}
+.box.store>rect{fill:var(--store-fill);stroke:var(--look)}
+.grp-field{fill:var(--village);stroke:var(--village-line);stroke-dasharray:5 4}
+.grp-dng{fill:var(--hold-soft);fill-opacity:.45;stroke:var(--dungeon-line);stroke-dasharray:5 4}
+.box.gw>rect{fill:var(--panel);stroke:var(--ink-2)}
+.box.pulse>rect{animation:pulse .7s ease}
+@keyframes pulse{0%{stroke:var(--accent);stroke-width:3.5}100%{stroke-width:1.2}}
+.t-title{font-weight:600;font-size:13.5px;fill:var(--ink)}
+.t-sub{font-size:11.5px;fill:var(--muted)}
+.t-mono{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+.t-store{font-family:var(--mono);font-size:12px;fill:var(--ink-2)}
+.spot>rect.bg{fill:var(--spot-fill);stroke:var(--accent);stroke-width:1.5}
+.spot.holding>rect.bg{stroke:var(--hold);stroke-dasharray:6 4;fill:var(--hold-soft)}
+.spot.gone{opacity:0;transition:opacity .6s}
+.spot.pulse>rect.bg{animation:pulse .7s ease}
+.t-spot{font-family:var(--mono);font-weight:600;font-size:12px;fill:var(--accent-ink)}
+.gate>rect{fill:var(--hold-soft);stroke:var(--hold)}
+.gate>text{font-family:var(--mono);font-size:10.5px;fill:var(--hold)}
+.gate.on>rect{fill:var(--hold)}
+.gate.on>text{fill:var(--on-accent)}
+.lane{fill:var(--bg);stroke:var(--line)}
+.lane-l{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+.chip>rect{fill:var(--accent)}
+.chip>text{font-family:var(--mono);font-size:10.5px;font-weight:600;fill:var(--on-accent);text-anchor:middle}
+.chip.tick>rect{fill:var(--hold)}
+.exec>rect{fill:var(--panel);stroke:var(--hold);stroke-dasharray:4 3}
+.exec.on>rect{fill:var(--hold-soft);stroke:var(--hold);stroke-width:2;stroke-dasharray:none}
+.exec-g{font-family:var(--mono);font-size:10.5px;font-weight:600;fill:var(--hold)}
+.exec-t{font-family:var(--mono);font-size:11.5px;font-weight:600;fill:var(--ink)}
+.actor>circle{fill:var(--panel);stroke:var(--ink-2);stroke-width:1.5}
+.actor>text{font:600 10.5px var(--mono);fill:var(--ink);text-anchor:middle;dominant-baseline:central}
+.actor.run>circle{fill:var(--accent-soft);stroke:var(--accent);stroke-width:3}
+.actor.disc>circle{stroke:var(--hold);stroke-dasharray:3 3}
+.actor.hidden{opacity:0}
+.sess>rect{fill:var(--accent-soft);stroke:var(--accent)}
+.sess.dead>rect{fill:none;stroke:var(--line);stroke-dasharray:4 4}
+.sess>text{font-family:var(--mono);font-size:11px;fill:var(--accent-ink)}
+.sess.dead>text{fill:var(--muted)}
+.sess.hidden{opacity:0}
+.cl>rect{fill:var(--panel);stroke:var(--ink-2)}
+.cl>text{font-family:var(--mono);font-size:11px;fill:var(--ink-2);text-anchor:middle}
+.cl>text.tag{font-weight:700;font-size:12px;fill:var(--ink)}
+.cl.off>rect{stroke:var(--hold);stroke-dasharray:3 3}
+.cl.hidden{opacity:.3}
+.link{stroke:var(--line);stroke-width:1.3;fill:none}
+.link.conn{stroke:var(--ink-2);stroke-width:1.8}
+.link.bind{stroke:var(--accent);stroke-dasharray:6 5;stroke-width:1.5}
+.lbl{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+.pkt{fill:var(--accent)}
+.pkt-push{fill:var(--panel);stroke:var(--accent);stroke-width:2}
+.pkt-look{fill:var(--look)}
+.badge{font:600 10.5px var(--mono);fill:var(--hold)}
+@media (prefers-reduced-motion: reduce){.box.pulse>rect,.spot.pulse>rect.bg,.boss.hit>circle,.ch.seen .seen{animation:none}}
+</style>
+<style>
+.panelz{fill:var(--panel);stroke:var(--line)}
+.note-t{font-size:12.5px;fill:var(--ink)}
+.note-t.hi{font-weight:700;fill:var(--accent-ink)}
+.note-t.warn{fill:var(--hold);font-weight:600}
+.banner>rect{fill:var(--hold);opacity:.92}
+.banner>text{font-weight:700;font-size:13px;fill:#fff;text-anchor:middle}
+.box.drained>rect{stroke:var(--hold);stroke-dasharray:6 4}
+.box.ghost>rect{fill:none;stroke-dasharray:5 5}
+.box.faded{opacity:.35;transition:opacity .6s}
+.box.hot>rect{stroke:var(--accent);stroke-width:2}
+.box.bad>rect{animation:badp .9s ease}
+@keyframes badp{0%{stroke:#C0392B;stroke-width:3.5}100%{stroke-width:1.2}}
+.chipc>rect{fill:var(--accent-soft)}
+.chipc>text{font-family:var(--mono);font-size:10.5px;font-weight:500;fill:var(--accent-ink)}
+.chipc.pub>rect{fill:none;stroke:#2F6DB5}
+.chipc.pub>text{fill:#2F6DB5}
+.t-count{font-family:var(--mono);font-weight:600;font-size:11.5px;fill:var(--accent-ink)}
+.link.broken{stroke:var(--hold);stroke-dasharray:3 5;stroke-width:1.6}
+.link.reply{stroke:#2F6DB5;stroke-dasharray:2 4;stroke-width:1.8}
+.link.reply.hi{stroke-width:3.5}
+.pkt-pub{fill:#2F6DB5}
+.pkt-state{fill:var(--hold);stroke:var(--ink);stroke-width:1}
+.pkt-reply{fill:#2F6DB5}
+.spot.holding .chip>rect{fill:var(--hold)}
+.gauge-bg{fill:var(--bg);stroke:var(--line)}
+.gauge-fill{fill:var(--accent)}
+.gauge-fill.hi{fill:var(--hold)}
+.slot{fill:var(--bg);stroke:var(--line)}
+.slot.on{fill:var(--hold)}
+.slot.run{fill:var(--accent)}
+.xp-bg{fill:var(--bg);stroke:var(--line)}
+.xp{fill:var(--accent)}
+.party-p{fill:var(--dungeon);stroke:var(--dungeon-line)}
+.player-dot{stroke:#fff;stroke-width:1.5}
+.atk{stroke:#FFD66B;stroke-width:1.5}
+.chan-frame{fill:none;stroke-width:2.2;stroke-dasharray:10 6}
+.chan-frame.cs{stroke:#0E8175;fill:#0E8175;fill-opacity:.05}
+.chan-frame.fanout{stroke:#2F6DB5;fill:#2F6DB5;fill-opacity:.04}
+.chan-frame.mesh{stroke:#7A4FC0;fill:#7A4FC0;fill-opacity:.03}
+.chan-tag>rect{fill:#0E8175}
+.chan-tag.fanout>rect{fill:#2F6DB5}
+.chan-tag.mesh>rect{fill:#7A4FC0}
+.chan-tag>text{font-family:var(--mono);font-size:12px;font-weight:700;fill:#fff}
+.box.legend>rect{fill:var(--panel);stroke:var(--line)}
+.legend-t{font-size:12.5px;fill:var(--ink-2)}
+.box.dim{opacity:.3;transition:opacity .3s}
+.grp-cs{fill:var(--accent-soft);fill-opacity:.35;stroke:var(--accent);stroke-dasharray:6 4}
+.grp-cs-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--accent-ink)}
+.w-badge{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink-2)}
+.w-badge.heavy{fill:var(--accent);font-size:13px;font-weight:800}
+.w-badge.zero{fill:var(--hold);font-weight:800}
+.got{fill:var(--accent)}
+.got.heavy{fill:#0A5F56}
+.link.mesh{stroke:var(--line);stroke-width:3}
+.link.mesh.on{stroke:var(--accent);stroke-width:4}
+.mesh-t{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--accent-ink)}
+.bp-cell{fill:var(--bg);stroke:var(--line)}
+.bp-cell.on{fill:var(--accent)}
+.bp-cell.hi{fill:var(--hold)}
+.bp-mark{stroke:var(--ink-2);stroke-width:2;stroke-dasharray:4 3}
+.bp-mark.bad{stroke:#C0392B}
+.bp-mark-t{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink-2)}
+.bp-mark-t.bad{fill:#C0392B}
+.bp-pill>rect{fill:var(--accent)}
+.bp-pill>text{font-weight:700;font-size:13px;fill:var(--on-accent);text-anchor:middle}
+.bp-pill.stop>rect{fill:#C0392B}
+.bp-pill.stop>text{fill:#fff}
+.bp-pill.dead>rect{fill:var(--line)}
+.bp-pill.dead>text{fill:var(--muted)}
+.bp-world{font-size:13px;font-weight:600;fill:#CFE9E3}
+.bp-world.warn{fill:#F4B764}
+.bp-world.bad{fill:#FF8A7A}
+.t-count.bad{fill:#C0392B}
+.box.dead>rect{fill:#3A1F1F;stroke:#C0392B;stroke-width:2}
+.boom{fill:none;stroke:#FF7A3D;stroke-width:6}
+.boom.b1{stroke:#FFD66B;stroke-width:4}
+.boom.b2{stroke:#C0392B;stroke-width:8}
+.spark{fill:#FFB347}
+.boom-t{font-weight:800;font-size:30px;fill:#FF5A3D;paint-order:stroke;stroke:#fff;stroke-width:3px}
+.boom-t.big{font-size:34px}
+.boom-s{font-weight:700;font-size:13px;fill:#FF8A7A}
+svg.shake{animation:shake .5s ease}
+@keyframes shake{0%,100%{transform:translate(0,0)}20%{transform:translate(-6px,3px)}40%{transform:translate(6px,-3px)}60%{transform:translate(-4px,2px)}80%{transform:translate(4px,-1px)}}
+
+.link.relay{stroke:var(--hold);stroke-width:3;stroke-dasharray:9 5}
+.relay-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--hold)}
+.flylabel{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><span class="eyebrow">ZLink Framework · Viewed as an MORPG</span><h1 id="gtitle"></h1></div>
+    <nav class="groups" id="groups" aria-label="Feature groups"></nav>
+  </header>
+
+  <div class="main">
+    <div class="side">
+      <ol class="steps" id="steps" aria-label="Steps"></ol>
+      <label class="speed" for="speedRange">Message speed <b id="speedVal">1.0×</b></label>
+      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1" aria-label="Message speed">
+    </div>
+    <div class="col">
+      <div class="bar">
+        <span class="t" id="stepNo"></span>
+        <p class="line" id="line"></p>
+        <div class="acts" id="acts"></div>
+        <p class="res" id="res" aria-live="polite"></p>
+        <details><summary>Details</summary><ul id="more"></ul></details>
+      </div>
+      <p class="vlabel">Game view</p>
+      <div class="view"><svg id="game" viewBox="0 0 900 236" role="img" aria-label="Game view"></svg></div>
+      <p class="vlabel">Inside the servers</p>
+      <div class="view"><svg id="srv" viewBox="0 0 900 342" role="img" aria-label="Server layout"></svg></div>
+      <p class="foot" id="foot"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+let K = 3.5;                       /* message speed: larger is slower */
+let gen = 0;                       /* bumps when the group changes; stale loops stop */
+class Cancel extends Error {}
+const sleep = ms => { const g = gen; return new Promise((res, rej) => setTimeout(() => g === gen ? res() : rej(new Cancel()), ms)); };
+function ease(t){ return t < .5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; }
+function tween(d, fn){ const g = gen; return new Promise((res, rej) => { const t0 = performance.now(); (function s(n){ if (g !== gen) { rej(new Cancel()); return; } const t = Math.min(1, Math.max(0, (n - t0) / d)); fn(ease(t)); t < 1 ? requestAnimationFrame(s) : res(); })(t0); }); }
+function spawn(fn){ Promise.resolve().then(fn).catch(e => { if (!(e instanceof Cancel)) console.error(e); }); }
+function mk(p, tag, a = {}){ const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) { if (k === 'text') e.textContent = v; else e.setAttribute(k, v); } p.append(e); return e; }
+function pulse(el, cls = 'pulse'){ el.classList.remove(cls); requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add(cls))); }
+const game = $('game'), srv = $('srv');
+let gG, gF, sL, sB, sF;
+function resetViews(gv, sv){
+  game.replaceChildren(); srv.replaceChildren();
+  game.setAttribute('viewBox', gv); srv.setAttribute('viewBox', sv);
+  gG = mk(game, 'g'); gF = mk(game, 'g'); sL = mk(srv, 'g'); sB = mk(srv, 'g'); sF = mk(srv, 'g');
+}
+const res = t => { $('res').innerHTML = t; };
+
+/* ---------- server-view kit ---------- */
+function box(x, y, w, h, cls, title, sub, p = sB){ const g = mk(p, 'g', {class: 'box ' + cls}); mk(g, 'rect', {x, y, width: w, height: h, rx: 9}); let st = null; if (title) mk(g, 'text', {x: x + 10, y: y + 20, class: 't-title', text: title}); if (sub) st = mk(g, 'text', {x: x + 10, y: y + 36, class: 't-sub', text: sub}); return {g, x, y, w, h, st, L(){ return {x: this.x, y: this.y + this.h / 2}; }, R(){ return {x: this.x + this.w, y: this.y + this.h / 2}; }, T(){ return {x: this.x + this.w / 2, y: this.y}; }, B(){ return {x: this.x + this.w / 2, y: this.y + this.h}; }}; }
+function curve(a, b, bend = 0){ const mx = (a.x + b.x) / 2 - (b.y - a.y) * bend, my = (a.y + b.y) / 2 + (b.x - a.x) * bend; return `M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`; }
+function path(d, cls = ''){ return mk(sL, 'path', {d, class: 'link ' + cls}); }
+function link(a, b, cls = '', bend = 0){ return path(curve(a, b, bend), cls); }
+/* left-to-right over a top corridor, entering b from above */
+function topRoute(a, b, lane){ const k = a.x + 14; return `M${a.x},${a.y} L${k - 6},${a.y} Q${k},${a.y} ${k},${a.y - 6} L${k},${lane + 6} Q${k},${lane} ${k + 6},${lane} L${b.x - 6},${lane} Q${b.x},${lane} ${b.x},${lane + 6} L${b.x},${b.y}`; }
+/* from a box top to another box top through a lane above them */
+function overRoute(a, b, lane){ const dir = b.x > a.x ? 1 : -1; return `M${a.x},${a.y} L${a.x},${lane + 6} Q${a.x},${lane} ${a.x + 6 * dir},${lane} L${b.x - 6 * dir},${lane} Q${b.x},${lane} ${b.x},${lane + 6} L${b.x},${b.y}`; }
+function fly(a, b, {cls = 'pkt', dur = 420, r = 5, bend = .06, label} = {}){ return flyPath(curve(a, b, bend), {cls, dur, r, label}); }
+function flyPath(d, {cls = 'pkt', dur = 420, r = 5, back = false, label} = {}){
+  const p = mk(sF, 'path', {d, fill: 'none', stroke: 'none'}); const len = p.getTotalLength(); const c = mk(sF, 'circle', {r, class: cls}); const t = label ? mk(sF, 'text', {class: 'flylabel', text: label}) : null;
+  return tween(dur * K * Math.max(1, len / 260), e => { const pt = p.getPointAtLength((back ? 1 - e : e) * len); c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); if (t) { t.setAttribute('x', pt.x + r + 3); t.setAttribute('y', pt.y - r - 2); } }).finally(() => { c.remove(); p.remove(); if (t) t.remove(); });
+}
+function chipc(x, y, label, cls = ''){ const g = mk(sB, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+function chanTag(x, y, text, cls){ const g = mk(sB, 'g', {class: 'chan-tag ' + cls}); const w = 16 + [...text].reduce((t, ch) => t + (/[ㄱ-힝]/.test(ch) ? 11.5 : 7.2), 0); mk(g, 'rect', {x, y: y - 11, width: w, height: 22, rx: 6}); mk(g, 'text', {x: x + 8, y: y + 4, text}); return g; }
+function chipcIn(p, x, y, label, cls = ''){ const g = mk(p, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+function storeBox(x, y, w){ const b = box(x, y, w, 48, 'store', 'Location Store'); const t1 = mk(sB, 'text', {x: x + 150, y: y + 20, class: 't-store'}), t2 = mk(sB, 'text', {x: x + 150, y: y + 38, class: 't-store'}); b.set = (a, c) => { if (a != null) t1.textContent = a; if (c != null) t2.textContent = c; pulse(b.g); }; b.pt = {x: x + w / 2, y: y + 48}; return b; }
+function actorDot(label, x, y, p = sB){ const g = mk(p, 'g', {class: 'actor'}); const c = mk(g, 'circle', {r: 13}); const t = mk(g, 'text', {text: label}); const o = {g, x, y, set(nx, ny){ this.x = nx; this.y = ny; c.setAttribute('cx', nx); c.setAttribute('cy', ny); t.setAttribute('x', nx); t.setAttribute('y', ny); }}; o.set(x, y); return o; }
+/* a Spot box with a visible queue and a single "running" slot (the gate) */
+function qspot(x, y, w, h, label, sub, lay){
+  const g = mk(sB, 'g', {class: 'spot', transform: `translate(${x},${y})`});
+  mk(g, 'rect', {x: 0, y: 0, width: w, height: h, rx: 8, class: 'bg'}); mk(g, 'text', {x: 10, y: 17, class: 't-spot', text: label}); if (sub) mk(g, 'text', {x: 10, y: 31, class: 't-sub', text: sub});
+  const o = {g, x, y, w, h, q: [], running: false, phase: 'open', order: [], lay, inner: mk(g, 'g')};
+  if (lay) {
+    const lw = w - 16;
+    mk(g, 'rect', {x: 8, y: lay.lane, width: lw, height: 26, rx: 6, class: 'lane'}); mk(g, 'text', {x: 14, y: lay.lane + 17, class: 'lane-l', text: 'queue'});
+    o.ex = mk(g, 'g', {class: 'exec'}); mk(o.ex, 'rect', {x: 8, y: lay.exec, width: lw, height: 28, rx: 6}); mk(o.ex, 'text', {x: 16, y: lay.exec + 18, class: 'exec-g', text: 'gate'});
+    o.exT = mk(o.ex, 'text', {x: 52, y: lay.exec + 18, class: 'exec-t', text: 'Idle'});
+    if (lay.order) { o.ordT = mk(g, 'text', {x: 8, y: lay.order, class: 't-mono', text: ''}); mk(g, 'text', {x: 8, y: lay.order + 18, class: 't-mono', text: 'one gate = one at a time'}); }
+    o.chips = mk(g, 'g');
+    o.slotX = k => Math.min(w - 34, 58 + Math.min(k, 3) * 30 + Math.max(0, k - 3) * 4); o.laneY = lay.lane + 4; o.execX = 14; o.execY = lay.exec + 5;
+  }
+  o.abs = (lx, ly) => ({x: o.x + lx, y: o.y + ly});
+  o.moveTo = async (nx, ny, d, onMove) => { const ox = o.x, oy = o.y; await tween(d, e => { o.x = ox + (nx - ox) * e; o.y = oy + (ny - oy) * e; g.setAttribute('transform', `translate(${o.x},${o.y})`); onMove && onMove(); }); };
+  o.setHold = on => { o.phase = on ? 'hold' : 'open'; g.classList.toggle('holding', on); };
+  return o;
+}
+function place(el, x, y, instant){ el.style.transition = instant ? 'none' : `transform ${.25 * K}s ease`; el.style.transform = `translate(${x}px,${y}px)`; }
+function layoutQ(sp){ sp.q.forEach((j, k) => place(j.chip, sp.slotX(k), sp.laneY)); }
+/* job: {label, tick, what, who, actor, fn, from} */
+async function enqueue(sp, job){
+  if (job.from) await fly(job.from, sp.abs(sp.slotX(sp.q.length) + 13, sp.laneY + 9), {dur: 300, bend: 0, r: 4, cls: job.pktCls || 'pkt'});
+  return new Promise(res => {
+    const c = mk(sp.chips, 'g', {class: 'chip' + (job.tick ? ' tick' : '')}); mk(c, 'rect', {x: 0, y: 0, width: 26, height: 18, rx: 4}); mk(c, 'text', {x: 13, y: 13, text: job.label});
+    place(c, job.tick ? sp.w - 36 : sp.slotX(sp.q.length), sp.laneY, true);
+    sp.q.push({...job, res, chip: c}); if (job.onQueued) job.onQueued(); requestAnimationFrame(() => requestAnimationFrame(() => layoutQ(sp)));
+  });
+}
+function startProc(sp){ spawn(async () => { for (;;) {
+  if (sp.phase === 'open' && !sp.running && sp.q.length) {
+    const j = sp.q.shift(); sp.running = true;
+    place(j.chip, sp.execX, sp.execY); layoutQ(sp); await sleep(260 * K);
+    j.chip.remove(); sp.ex.classList.add('on'); sp.exT.textContent = j.what;
+    if (j.actor) j.actor.g.classList.add('run');
+    await sleep((j.dur || 230) * K);
+    let out; try { out = j.fn ? j.fn() : undefined; } catch (e) { console.error(e); }
+    if (j.actor) j.actor.g.classList.remove('run');
+    sp.ex.classList.remove('on'); sp.exT.textContent = 'Idle';
+    sp.order.push(j.label); if (sp.ordT) sp.ordT.textContent = 'Run order  ' + sp.order.slice(-Math.max(2, Math.floor((sp.w - 80) / 34))).join(' → ');
+    sp.running = false; j.res(out);
+  } else await sleep(30);
+} }); }
+/* clients + session server column */
+function sessionKit(n, top = 40){
+  const CL = [], SE = [];
+  mk(sB, 'text', {x: 8, y: 26, class: 'lbl', text: 'Game app'}); mk(sB, 'text', {x: 114, y: 26, class: 'lbl', 'text-anchor': 'middle', text: 'TCP'});
+  const gw = box(150, 14, 152, 318, 'gw', 'Session server', 'STREAM');
+  for (let i = 0; i < n; i++) {
+    const y = top + i * 70; const g = mk(sB, 'g', {class: 'cl hidden'}); mk(g, 'rect', {x: 8, y, width: 70, height: 52, rx: 8}); mk(g, 'text', {x: 43, y: y + 21, text: 'client'}); mk(g, 'text', {x: 43, y: y + 40, class: 'tag', text: 'P' + (i + 1)});
+    CL.push({g, pt: {x: 78, y: y + 26}});
+    const sy = 54 + i * 70; const sg = mk(sB, 'g', {class: 'sess hidden'}); mk(sg, 'rect', {x: 160, y: sy, width: 132, height: 44, rx: 6}); const a = mk(sg, 'text', {x: 170, y: sy + 18}); const b = mk(sg, 'text', {x: 170, y: sy + 35});
+    SE.push({g: sg, a, b, L: {x: 150, y: sy + 22}, R: {x: 292, y: sy + 22}, conn: false, id: 0});
+  }
+  let n0 = 0;
+  const kit = {CL, SE, gw, conns: [], binds: [],
+    open(i){ SE[i].id = ++n0; SE[i].conn = true; kit.render(i); },
+    close(i){ SE[i].conn = false; kit.render(i); },
+    render(i){ const s = SE[i]; s.g.setAttribute('class', 'sess' + (s.id ? (s.conn ? '' : ' dead') : ' hidden')); s.a.textContent = s.conn ? `session #${s.id}` : 'Disconnected'; s.b.textContent = s.conn ? `→ P${i + 1}` : `P${i + 1} stays on server`; CL[i].g.setAttribute('class', 'cl' + (s.id ? (s.conn ? '' : ' off') : ' hidden')); },
+    routeTo(i, ac){ const a = SE[i].R; if (ac.x < 495) return curve(a, {x: ac.x - 13, y: ac.y}, .03); return topRoute(a, {x: ac.x, y: ac.y - 13}, 62 + i * 5); },
+    draw(actors){ kit.conns.forEach(l => l.remove()); kit.binds.forEach(l => l.remove()); kit.conns = []; kit.binds = []; for (let i = 0; i < n; i++) { if (!SE[i].conn) continue; kit.conns.push(link(CL[i].pt, SE[i].L, 'conn')); kit.binds.push(path(kit.routeTo(i, actors[i]), 'bind')); } },
+    async up(i, ac){ await fly(CL[i].pt, SE[i].L, {dur: 300, bend: 0}); await flyPath(kit.routeTo(i, ac), {dur: 420}); },
+    async push(i, ac){ await flyPath(kit.routeTo(i, ac), {cls: 'pkt-push', dur: 380, r: 4, back: true}); await fly(SE[i].L, CL[i].pt, {cls: 'pkt-push', dur: 260, r: 4, bend: 0}); },
+  };
+  return kit;
+}
+function serverGroups(){ mk(sB, 'rect', {x: 316, y: 86, width: 208, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 531, y: 86, width: 363, height: 252, rx: 12, class: 'grp-dng'}); }
+function gauge(x, y, w, h, label){
+  mk(sB, 'rect', {x, y, width: w, height: h, rx: 4, class: 'gauge-bg'});
+  const f = mk(sB, 'rect', {x: x + 2, y: y + h - 2, width: w - 4, height: 0, rx: 3, class: 'gauge-fill'});
+  mk(sB, 'text', {x: x + w / 2, y: y + h + 15, class: 't-mono', text: label, 'text-anchor': 'middle'});
+  const v = mk(sB, 'text', {x: x + w / 2, y: y - 6, class: 't-count', text: '0%', 'text-anchor': 'middle'});
+  return r => { r = Math.max(0, Math.min(1, r)); const hh = (h - 4) * r; f.setAttribute('y', y + h - 2 - hh); f.setAttribute('height', hh); f.setAttribute('class', 'gauge-fill' + (r >= .9 ? ' hi' : '')); v.textContent = Math.round(r * 100) + '%'; };
+}
+
+/* ---------- game-view kit ---------- */
+const COLORS = ['#2F8FD8', '#D8662F', '#8A5CD6', '#2FA86B'];
+function zone(x, y, w, h, cls, title, sub, dark){ mk(gG, 'rect', {x, y, width: w, height: h, rx: 14, class: cls}); if (title) mk(gG, 'text', {x: x + 14, y: y + 24, class: 'g-title' + (dark ? ' d' : ''), text: title}); return sub ? mk(gG, 'text', {x: x + 14, y: y + 41, class: 'g-sub' + (dark ? ' d' : ''), text: sub}) : null; }
+function gchar(i, x, y, p = gG){
+  const g = mk(p, 'g', {class: 'ch'}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 14, fill: COLORS[i % 4], class: 'body'}); mk(g, 'text', {text: 'P' + (i + 1)});
+  mk(g, 'rect', {x: -16, y: 18, width: 32, height: 4, rx: 2, class: 'hp-bg'}); const hp = mk(g, 'rect', {x: -16, y: 18, width: 32, height: 4, rx: 2, class: 'hp party'});
+  const o = {g, hp, x, y, life: 500, set(nx, ny){ this.x = nx; this.y = ny; g.setAttribute('transform', `translate(${nx},${ny})`); }, async walk(nx, ny, d = 900){ const ox = this.x, oy = this.y; await tween(d, e => this.set(ox + (nx - ox) * e, oy + (ny - oy) * e)); }, hurt(d){ this.life = Math.max(40, this.life - d); hp.setAttribute('width', 32 * this.life / 500); }};
+  o.set(x, y); return o;
+}
+function seen(c){ c.g.classList.remove('seen'); requestAnimationFrame(() => requestAnimationFrame(() => c.g.classList.add('seen'))); }
+function popup(x, y, text, cls = 'dmg'){ const t = mk(gF, 'text', {x, y, class: cls, text}); tween(900, e => { t.setAttribute('y', y - 26 * e); t.setAttribute('opacity', 1 - e * .9); }).catch(() => {}).finally(() => t.remove()); }
+function makeBoss(cx, cy, r, hpX, hpY, hpW, max){
+  const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: 'Boss'});
+  mk(gG, 'rect', {x: hpX, y: hpY, width: hpW, height: 10, rx: 5, class: 'hp-bg'}); const bar = mk(gG, 'rect', {x: hpX, y: hpY, width: hpW, height: 10, rx: 5, class: 'hp'});
+  const t = mk(gG, 'text', {x: hpX + hpW, y: hpY - 6, class: 'hp-t', 'text-anchor': 'end', text: `HP ${max}`});
+  const o = {g, hp: max, max, hit(d){ o.hp = Math.max(0, o.hp - d); bar.setAttribute('width', hpW * o.hp / max); t.textContent = `HP ${o.hp}`; g.classList.remove('hit'); void g.getBBox(); g.classList.add('hit'); popup(cx + (Math.random() * 50 - 25), cy - r - 4, '-' + d); }};
+  return o;
+}
+function notes(x, y, w, h, title){
+  mk(gG, 'rect', {x, y, width: w, height: h, rx: 14, class: 'panelz'}); mk(gG, 'text', {x: x + 14, y: y + 24, class: 'g-title', text: title});
+  const g = mk(gG, 'g'); const items = [];
+  return (text, cls = '') => { items.unshift({text, cls}); items.length = Math.min(items.length, 6); g.replaceChildren(); items.forEach((it, k) => mk(g, 'text', {x: x + 14, y: y + 50 + k * 24, class: 'note-t ' + (k === 0 ? (it.cls || 'hi') : it.cls), text: it.text})); };
+}
+
+/* =========================================================
+   Group 1. ClientServer channel
+   (out-game: client → HTTP → API server → feature servers)
+   ========================================================= */
+function gClientServer(){
+  resetViews('0 0 900 236', '0 0 900 462');
+  const note = notes(14, 14, 872, 208, 'App screen · out-of-game menus (inventory, shop)');
+
+  /* clients and the API server */
+  mk(sB, 'text', {x: 8, y: 26, class: 'lbl', text: 'Game app'}); mk(sB, 'text', {x: 94, y: 26, class: 'lbl', 'text-anchor': 'middle', text: 'HTTP'});
+  const CL = [0, 1, 2, 3].map(i => { const y = 60 + i * 96; const g = mk(sB, 'g', {class: 'cl'}); mk(g, 'rect', {x: 8, y, width: 66, height: 52, rx: 8}); mk(g, 'text', {x: 41, y: y + 21, text: 'client'}); mk(g, 'text', {x: 41, y: y + 40, class: 'tag', text: 'P' + (i + 1)}); return {x: 74, y: y + 26}; });
+  box(116, 14, 150, 440, 'gw', 'API server', 'Receives HTTP,');
+  mk(sB, 'text', {x: 126, y: 66, class: 't-sub', text: 'forwards to servers'});
+  mk(sB, 'text', {x: 126, y: 92, class: 't-mono', text: 'ClientServer client'});
+  CL.forEach(p => link(p, {x: 116, y: p.y}, 'conn'));
+  const store = storeBox(280, 4, 610);
+
+  /* ClientServer channel groups */
+  function group(y, h, name){ mk(sB, 'rect', {x: 284, y, width: 364, height: h, rx: 12, class: 'chan-frame cs'}); chanTag(292, y, `ClientServer channel · ${name}`, 'cs'); }
+  group(62, 226, 'inventory'); group(298, 158, 'payment');
+  function server(title, y, ghost, chan){
+    const b = box(296, y, 340, 60, ghost ? 'ghost faded' : '', title);
+    Object.assign(b, {w: 100, cur: 0, n: 0, batch: 0, ready: !ghost, chan});
+    b.wT = mk(sB, 'text', {x: 306, y: y + 46, class: 'w-badge', text: ghost ? 'Not yet running' : 'weight 100'});
+    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L());
+    return b;
+  }
+  function drawCells(b){ b.cells.replaceChildren(); for (let k = 0; k < Math.min(b.batch, 14); k++) mk(b.cells, 'rect', {x: 420 + k * 15, y: b.y + 36, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 420 + Math.min(b.batch, 14) * 15 + 4, y: b.y + 48, class: 't-count', text: `${b.batch} req`}); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
+  const I = [server('Item server 1', 88, false, 'inventory'), server('Item server 2', 154, false, 'inventory'), server('Item server 3', 220, true, 'inventory')];
+  const P = [server('Payment server 1', 324, false, 'payment'), server('Payment server 2', 390, false, 'payment')];
+  I.slice(0, 2).concat(P).forEach(upd);
+  /* what a ClientServer channel is */
+  const lg = box(666, 62, 224, 392, 'legend', 'ClientServer layout');
+  ['client → server, one way', 'server opens a port', 'client (API server) connects', 'request gets a reply', 'if there are several servers,', '  client picks by weight', 'server never calls', '  the client first', '', '■ = requests received this time'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
+  store.set('ClientServer inventory → Item server 1, 2', 'ClientServer payment → Payment server 1, 2');
+
+  function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
+  async function call(i, list, label){
+    await fly(CL[i], {x: 116, y: CL[i].y}, {dur: 280, bend: 0, label: 'HTTP'});
+    const b = pick(list); if (!b) { note('No target error', 'warn'); return; }
+    /* down the corridor right of the API server, then straight into the chosen server */
+    const cy = CL[i].y, by = b.y + 30, r = Math.sign(by - cy) * Math.min(6, Math.abs(by - cy) / 2);
+    const route = `M266,${cy} L270,${cy} Q276,${cy} 276,${cy + r} L276,${by - r} Q276,${by} 282,${by} L296,${by}`;
+    await flyPath(route, {dur: 300, label}); pulse(b.g);
+    b.n++; b.batch++; upd(b); await sleep(240 * K);
+    await flyPath(route, {cls: 'pkt-push', dur: 300, back: true});
+    await fly({x: 116, y: CL[i].y}, CL[i], {cls: 'pkt-push', dur: 280, bend: 0});
+    return b;
+  }
+  async function burst(n, list, label, what){
+    list.forEach(b => { b.batch = 0; upd(b); });
+    await Promise.all(Array.from({length: n}, async (_, k) => { await sleep(k * 260 * K / 3.5); const b = await call(k % 4, list, label); if (b) note(`P${k % 4 + 1} ${what} ← ${b.title || ''}`); }));
+    return list.filter(b => b.ready).map(b => `${b.name}: ${b.batch} req`).join(' · ');
+  }
+  I.forEach((b, k) => { b.name = `Item server ${k + 1}`; b.title = b.name; }); P.forEach((b, k) => { b.name = `Payment server ${k + 1}`; b.title = b.name; });
+  const STEPS = [
+    {title: 'Calling by name', line: 'A player opens the inventory in the app. The HTTP request goes to the API server, and the API server calls an item server by the channel name inventory.',
+     act: 'Send 4 requests to item servers', repeat: true, more: ['ClientServer channel: the feature server opens a port, and the API server connects as the client. Calls go one way, client → server.', 'The API server does not know the address of the item servers. It knows only the name inventory.', 'When there are several servers, the API server picks one of them. With equal weight, it picks them in turn (round-robin).', 'The calling code contains only <code>request_to_channel("inventory", …)</code>.'],
+     async run(){ const r = await burst(4, I, 'inventory', 'inventory'); res(`${r}. The weights are equal, so requests are split evenly.`); }},
+    {title: 'Adding a server', line: 'Start item server 3. Once it is registered in the Location Store, the API server connects to it by itself and adds it as a candidate. No configuration is changed.',
+     act: 'Start item server 3', extra: ['Send 6 requests to item servers', async () => { const r = await burst(6, I, 'inventory', 'inventory'); res(`${r}. The new server receives requests the same way.`); }],
+     more: ['When a server starts, it writes its address and the channel names it serves to the Store.', 'The API server reads the Store record and connects, then verifies the identity on the actual connection before sending.', 'The calling code is the same however many servers are started.'],
+     async run(){ const s3 = I[2]; s3.g.classList.remove('ghost', 'faded');
+       await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set('ClientServer inventory → Item server 1, 2, 3', null);
+       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L()); s3.ready = true; upd(s3); pulse(s3.g);
+       res('Item server 3 is now a candidate. Check it with "Send 6 requests to item servers".'); }},
+    {title: 'Splitting by weight', line: 'Give item server 3 a weight of 300. New requests are split 100 : 100 : 300, so the cells of server 3 pile up three times as high as those of the other servers.',
+     act: 'Set server 3 weight to 300', extra: ['Send 10 requests to item servers', async () => { const r = await burst(10, I, 'inventory', 'inventory'); res(`${r}. Server 3 received about three times as many as the other servers.`); }],
+     more: ['weight ranges from 0 to 10000, and the default is 100. When all are 100, servers are picked in turn.', 'The ratio holds over the long run. It does not decide the order of each individual call.', 'Use it when machines with different specifications are mixed, or when one machine should receive less.'],
+     async run(){ I[2].w = 300; I.forEach(b => b.cur = 0); upd(I[2]); pulse(I[2].g); res('The weight of server 3 is now 300. Press "Send 10 requests to item servers" and compare how far the cells pile up.'); }},
+    {title: 'Weight 0', line: 'Change the weight of item server 1 to 0. New requests no longer go to server 1.',
+     act: 'Set server 1 weight to 0', extra: ['Send 10 requests to item servers', async () => { const r = await burst(10, I, 'inventory', 'inventory'); res(`${r}. None went to server 1.`); }],
+     more: ['weight is the only value that can be changed at run time. 0 removes the server only from the candidates for new requests.', 'Requests already received are processed to the end. The connection and the Store record also remain.', 'Set it to 0 before maintenance and return it to 100 afterward.'],
+     async run(){ I[0].w = 0; I.forEach(b => b.cur = 0); upd(I[0]); res('The weight of server 1 is now 0 (orange dashed line). Check it with "Send 10 requests to item servers".'); }},
+    {title: 'Calling another channel', line: 'When a player buys an item in the shop, the API server calls a payment server through the payment channel. Only the name differs. The way of calling is the same.',
+     act: 'Send 4 requests to payment servers', repeat: true, more: ['Each channel name has its own group of servers. inventory and payment are different channels.', 'One API server holds two client registrations. Only the registration differs. The calling code is the same.'],
+     async run(){ const r = await burst(4, P, 'payment', 'payment approval'); res(`${r}. Requests are split within the payment group. They are not mixed with the inventory group.`); }},
+  ];
+  return {title: 'ClientServer channel', steps: STEPS, foot: 'chapter 1 (overall topology), chapter 20 §4 (ClientServer channel), chapter 30 (how channels work)'};
+}
+
+/* =========================================================
+   Group 2. Fanout channel: broadcast filtered by topic
+   ========================================================= */
+function gFanout(){
+  resetViews('0 0 900 236', '0 0 900 462');
+  /* game view: where each kind of server shows the notice */
+  const panels = {
+    field: {x: 14, w: 286, title: 'Town (field server)', cls: 'village'},
+    dungeon: {x: 312, w: 286, title: 'Dungeon (dungeon server)', cls: 'dungeon', dark: true},
+    item: {x: 610, w: 276, title: 'Shop (item server)', cls: 'panelz'},
+  };
+  Object.entries(panels).forEach(([k, p]) => {
+    zone(p.x, 14, p.w, 208, p.cls, p.title, null, p.dark);
+    p.cx = p.x + p.w / 2;
+    if (k !== 'item') [0, 1, 2, 3].forEach(i => gchar(i, p.x + 50 + i * 58, 130 + (i % 2) * 30));
+    else { p.priceT = mk(gG, 'text', {x: p.x + 16, y: 120, class: 'note-t', text: 'Potion 100 gold · Sword 900 gold'}); }
+    p.bg = mk(gF, 'g');
+  });
+  async function show(kind, text){ const p = panels[kind]; p.bg.replaceChildren(); const b = mk(p.bg, 'g', {class: 'banner'}); mk(b, 'rect', {x: p.x + 10, y: 186, width: p.w - 20, height: 26, rx: 6}); mk(b, 'text', {x: p.cx, y: 204, text}); await sleep(900 * K); b.remove(); }
+
+  const store = storeBox(280, 4, 610);
+  /* the whole Fanout channel */
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 396, rx: 14, class: 'chan-frame fanout'});
+  chanTag(16, 60, 'Fanout channel · notice', 'fanout');
+  const pub = box(24, 170, 200, 150, '', 'Ops tool', 'PUB · publisher');
+  mk(sB, 'text', {x: 34, y: 236, class: 'legend-t', text: 'Does not know the'}); mk(sB, 'text', {x: 34, y: 256, class: 'legend-t', text: 'list of receivers'});
+  const topicT = mk(sB, 'text', {x: 34, y: 296, class: 'w-badge heavy', text: ''});
+  const SUBS = [];
+  function sub(kind, label, k, ghost){
+    const y = 76 + SUBS.length * 52;
+    const b = box(400, y, 480, 46, ghost ? 'ghost faded' : '', label);
+    Object.assign(b, {kind, topics: [kind, 'all'], n: 0, ready: !ghost, label});
+    b.chips = mk(sB, 'g');
+    if (!ghost) { let x = 560; ['SUB', ...b.topics].forEach(t => { x += chipcIn(b.chips, x, y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; }); }
+    b.cT = mk(sB, 'text', {x: 840, y: y + 28, class: 't-count', 'text-anchor': 'end', text: ghost ? 'Not yet running' : ''});
+    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, '', 0);
+    SUBS.push(b); return b;
+  }
+  sub('field', 'Field server 1'); sub('field', 'Field server 2'); sub('dungeon', 'Dungeon server 1'); sub('dungeon', 'Dungeon server 2'); sub('item', 'Item server 1'); sub('item', 'Item server 2');
+  const F3 = sub('field', 'Field server 3', null, true);
+  store.set('fanout notice publisher → Ops tool', '');
+  const MSG = {all: 'Maintenance notice: 4 AM today', field: 'The town festival has started', dungeon: 'Double dungeon rewards event', item: 'Shop sale started'};
+  async function publish(topic){
+    topicT.textContent = `topic: ${topic}`; pulse(pub.g);
+    const targets = SUBS.filter(b => b.ready && b.topics.includes(topic));
+    SUBS.filter(b => b.ready && !b.topics.includes(topic)).forEach(b => b.g.classList.add('dim'));
+    await Promise.all(targets.map(b => fly({x: 224, y: 245}, {x: 400, y: b.y + 23}, {cls: 'pkt-pub', dur: 380, bend: 0, label: b === targets[0] ? topic : undefined}).then(() => { b.n++; b.cT.textContent = `Got ${b.n}`; pulse(b.g); })));
+    const kinds = [...new Set(targets.map(b => b.kind))];
+    kinds.forEach(k => spawn(() => show(k, MSG[topic])));
+    if (topic === 'item') { panels.item.priceT.textContent = 'Sale: Potion 70 gold · Sword 630 gold'; }
+    await sleep(300 * K); SUBS.forEach(b => b.g.classList.remove('dim'));
+    return targets.map(b => b.label);
+  }
+  const STEPS = [
+    {title: 'Sending to all', line: 'The ops tool publishes a notice with topic all. Every server subscribed to all receives it. There is no reply.',
+     act: 'Publish topic all', repeat: true, more: ['Fanout channel: when the publisher (PUB) sends one message, each connected subscriber (SUB) receives it.', 'The publisher does not know the list of subscribers. The publishing code stays the same when subscribers are added or removed.', 'Because there is no reply, there is only <code>publish</code>. If you need a processing result, use <code>request</code> of ClientServer or RouteMesh.'],
+     async run(){ const r = await publish('all'); res(`${r.length} servers all received it:${r.join(', ')}.`); }},
+    {title: 'Field servers only', line: 'When you publish with topic field, only the field servers subscribed to field receive it. It does not go to other servers.',
+     act: 'Publish topic field', repeat: true, more: ['A subscription is registered by topic. Only subscribers that match the published topic receive the message.', 'One server can subscribe to several topics. Here, each server subscribes to its own kind plus all.', 'If the topic is omitted, the packet name of the message becomes the topic.'],
+     async run(){ const r = await publish('field'); res(`Servers that received it:${r.join(', ')}. The others are dimmed.`); }},
+    {title: 'Dungeon servers only', line: 'When you publish with topic dungeon, only the dungeon servers receive it.',
+     act: 'Publish topic dungeon', repeat: true, more: ['Within the same channel, changing only the topic selects who receives the message.'],
+     async run(){ const r = await publish('dungeon'); res(`Servers that received it:${r.join(', ')}.`); }},
+    {title: 'Item servers only', line: 'When you publish with topic item, only the item servers receive it. Servers outside the game are notified the same way.',
+     act: 'Publish topic item', repeat: true, more: ['Any game server or feature server can receive it by subscribing to the notice channel.'],
+     async run(){ const r = await publish('item'); res(`Servers that received it:${r.join(', ')}. The shop price list changed.`); }},
+    {title: 'Adding a subscriber', line: 'Start field server 3. It finds the address of the ops tool in the Location Store, then connects and subscribes by itself. Nothing changes in the ops tool.',
+     act: 'Start field server 3', extra: ['Publish topic field', async () => { const r = await publish('field'); res(`Servers that received it:${r.join(', ')}. The new server receives it too.`); }],
+     more: ['The subscriber finds the address of the publisher (PUB) in the Store and connects to it.', 'A notice published before the connection and subscription are complete cannot be received later. There is no storing or resending.', 'The share of a slow subscriber is dropped, and the publish still succeeds. If messages must not be dropped, turn on NoDrop. Then the publish can wait and end with an error.'],
+     async run(){ F3.g.classList.remove('ghost', 'faded'); await fly(F3.T(), store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, F3.T(), {cls: 'pkt-look', dur: 400});
+       let x = 560; ['SUB', 'field', 'all'].forEach(t => { x += chipcIn(F3.chips, x, F3.y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; });
+       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}); F3.ready = true; F3.cT.textContent = 'Got 0'; pulse(F3.g);
+       res('Field server 3 connected to the ops tool and subscribed to field and all. Check it with "Publish topic field".'); }},
+  ];
+  return {title: 'Fanout channel', steps: STEPS, foot: 'chapter 20 §5 (Fanout channel), chapter 30 §5 (shape of pub/sub)'};
+}
+
+/* =========================================================
+   Group 3. Lobby and dungeon (Session · Actor · Spot)
+   ========================================================= */
+function gLobby(){
+  resetViews('0 0 900 236', '0 0 900 392');
+  zone(14, 14, 122, 208, 'zone-sel', 'Char. select', 'Entry Spot');
+  zone(148, 14, 252, 208, 'village', 'Town', 'town-1 · players see each other');
+  [[300, 26], [350, 26]].forEach(([x, y]) => mk(gG, 'rect', {x, y, width: 36, height: 26, rx: 4, class: 'house'}));
+  const dngG = mk(gG, 'g', {class: 'dng locked'}); const saveG = gG; gG = dngG;
+  const dngSub = zone(412, 14, 474, 208, 'dungeon', 'Dungeon', 'None yet · party members only', true);
+  const boss = makeBoss(800, 132, 44, 706, 62, 170, 600); gG = saveG;
+  const SEL = [[75, 82], [75, 118], [75, 154], [75, 190]], TOWN = [[200, 100], [270, 92], [220, 160], [320, 150]], DNG = [[500, 92], [500, 172], [590, 80], [590, 180]];
+  const ch = SEL.map(([x, y], i) => { const c = gchar(i, x, y); c.g.classList.add('off'); return c; });
+  const others = [[180, 130], [250, 186], [370, 110]].map(([x, y]) => { const g = mk(gG, 'g', {class: 'ch'}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 10, fill: '#8C9A96', class: 'body'}); g.setAttribute('transform', `translate(${x},${y})`); return {g}; });
+  mk(gG, 'text', {x: 162, y: 214, class: 'g-sub', text: 'Gray: other players in the town'});
+  const bannerG = mk(gF, 'g');
+  async function banner(text){ bannerG.replaceChildren(); const b = mk(bannerG, 'g', {class: 'banner'}); mk(b, 'rect', {x: 156, y: 62, width: 236, height: 22, rx: 6}); mk(b, 'text', {x: 274, y: 77, text}); await sleep(3200); b.remove(); }
+
+  const store = storeBox(320, 4, 570);
+  mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,382 L142,382 Z', class: 'chan-frame mesh'}); chanTag(150, 382, 'RouteMesh channel · game', 'mesh');
+  const ss = sessionKit(4);
+  serverGroups();
+  box(320, 90, 200, 244, '', 'Field server', 'node A'); box(535, 90, 200, 244, '', 'Dungeon server', 'node B'); box(750, 90, 140, 244, '', 'Dungeon server', 'node C');
+  mk(sB, 'text', {x: 760, y: 150, class: 't-mono', text: 'Other dungeons'});
+  const meshL = path('M420,334 L420,354 L820,354 L820,334 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 440, y: 368, class: 'mesh-t', text: 'RouteMesh · servers call each other over one connection'});
+  const meshD = (a, b) => `M${a},334 L${a},354 L${b},354 L${b},334`;
+  const entry = qspot(330, 132, 180, 58, 'Entry Spot · Select');
+  const town = qspot(330, 196, 180, 134, 'town-1', 'User Spot · Town', {lane: 72, exec: 102});
+  const dsp = qspot(545, 132, 180, 198, 'dungeon-7', 'User Spot · Dungeon', {lane: 76, exec: 112, order: 160}); dsp.g.classList.add('gone');
+  startProc(town); startProc(dsp);
+  const SLOT_E = [[350, 174], [390, 174], [430, 174], [470, 174]], SLOT_T = [[352, 248], [392, 248], [432, 248], [472, 248]], SLOT_D = [[567, 182], [607, 182], [647, 182], [687, 182]];
+  const AC = SLOT_E.map(([x, y], i) => { const a = actorDot('P' + (i + 1), x, y); a.g.classList.add('hidden'); return a; });
+  const redraw = () => ss.draw(AC);
+  async function moveActors(slots, gameTo, stagger = 220){
+    await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * stagger);
+      const ox = AC[i].x, oy = AC[i].y, [nx, ny] = slots[i];
+      ch[i].walk(gameTo[i][0], gameTo[i][1], 1100);
+      await tween(900, e => { AC[i].set(ox + (nx - ox) * e, oy + (ny - oy) * e - Math.sin(e * Math.PI) * 30); redraw(); }); }));
+  }
+  async function join(sp, i){ const bd = mk(sB, 'text', {x: AC[i].x + 10, y: AC[i].y - 15, class: 'badge', text: 'Reserved'}); await fly({x: AC[i].x + 13, y: AC[i].y}, sp.abs(4, 50), {dur: 400}); pulse(sp.g); await sleep(200); bd.remove(); }
+  let finish = false, left = 0, timer = false;
+  async function attackAll(){
+    const before = boss.hp; let sum = 0, n = 0;
+    await Promise.all([0, 1, 2, 3].map(async i => {
+      if (!ss.SE[i].conn || boss.hp <= 0) return;
+      ch[i].g.classList.add('act'); await ss.up(i, AC[i]); ch[i].g.classList.remove('act');
+      await enqueue(dsp, {label: 'P' + (i + 1), what: `P${i + 1} attacking`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}, fn: () => { let d = 55 + Math.floor(Math.random() * 40); if (finish) { d = Math.max(d, Math.ceil(boss.hp / Math.max(1, left))); left--; } boss.hit(d); sum += d; n++; }});
+      [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k])));
+    }));
+    return {before, sum, n};
+  }
+  function startTimer(){ if (timer) return; timer = true;
+    spawn(async () => { while (timer) { await sleep(1100 * K); if (!timer) break;
+      await enqueue(dsp, {tick: true, label: 'T', what: 'Boss tick', fn: () => { const i = Math.floor(Math.random() * 4), d = 20 + Math.floor(Math.random() * 30); ch[i].hurt(d);
+        const l = mk(gF, 'line', {x1: 770, y1: 132, x2: ch[i].x, y2: ch[i].y, class: 'beam'}); sleep(240).then(() => l.remove(), () => l.remove()); popup(ch[i].x, ch[i].y - 20, '-' + d, 'dmg boss'); }});
+      [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k]))); } }); }
+  const STEPS = [
+    {title: 'Linking the servers', line: 'The field server and the dungeon servers are linked by one RouteMesh. They call each other by channel name, Spot id, or Actor id, and the connections are made automatically from Location Store records.',
+     act: 'Start servers', more: ['RouteMesh: servers that join the same mesh call each other in both directions over one connection.', 'Messages addressed to Spots and Actors, Actor moves between servers, and news between rooms (Logical Multicast) all travel over this connection.', 'A server that is added registers in the Store, and the other servers read the record and connect. No configuration is changed.', 'When several servers serve the same name, the Framework picks one. The calling server itself is not a candidate.'],
+     async run(){ for (const x of [420, 635, 820]) { await fly({x, y: 90}, store.pt, {cls: 'pkt-look', dur: 300}); }
+       store.set('mesh game → node A, B, C', '');
+       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5})]);
+       meshL.classList.add('on'); res('The three servers are linked by RouteMesh. The thick line below is the connection between the servers.'); }},
+    {title: 'Connecting', line: 'Four players connect. A session is created for each connection, and each player Actor is created in the Entry Spot and bound to the session.',
+     act: '4 players connect', more: ['One session is created for each client connection (STREAM).', 'Actor creation is approved by <code>on_create_actor</code> of the Entry Spot.', 'When a session is bound to an Actor, packets that the session does not handle go to that Actor.', 'The Entry Spot is where Actors that have not yet entered a town or room are. It holds no state shared between Actors.'],
+     async run(){
+       await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 300);
+         ss.open(i); await fly(ss.CL[i].pt, ss.SE[i].L, {dur: 320, bend: 0});
+         await flyPath(ss.routeTo(i, AC[i]), {dur: 460}); AC[i].g.classList.remove('hidden'); pulse(entry.g); redraw(); ch[i].g.classList.remove('off'); }));
+       store.set('P1 ~ P4 → node A · Entry Spot', ''); res('4 sessions, 4 Actors. The dashed lines are the bindings that connect each session to an Actor.'); }},
+    {title: 'Getting ready', line: 'All four players change equipment at the same time. In the Entry Spot, each Actor runs separately, so the four requests are processed at the same time.',
+     act: 'All 4 change equipment', repeat: true, more: ['The Entry Spot keeps order separately for each Actor. Different Actors run at the same time.', 'Each request changes only its own state, so there is no reason to wait for each other.'],
+     async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await ss.up(i, AC[i]); AC[i].g.classList.add('run'); await sleep(200 * K); AC[i].g.classList.remove('run'); })); res('The four Actors ran <b>at the same time</b> (the green outlines lit up together).'); }},
+    {title: 'Enter the town', line: 'The four players enter the town town-1. A town is shared by many players, so it is a User Spot, and players see each other once inside.',
+     act: 'Enter the town', more: ['Entering is done with <code>join</code>. It is scheduled to run after the current handler ends (<code>defer</code>).', 'When <code>on_actor_join</code> of the town approves, the location record and the membership change at once.', 'This is a move within the same node, so the Actor does not move to another server.'],
+     async run(){ [0, 1, 2, 3].forEach(i => spawn(() => join(town, i))); await sleep(200 * K); await moveActors(SLOT_T, TOWN); store.set('P1 ~ P4 → node A · town-1', null); res('The four players entered town-1. Now whatever happens in the town is delivered to everyone in the town.'); }},
+    {title: 'Moving in the town', line: 'When one player moves, the town sends that position to everyone. That is why other users appear on the screen.',
+     act: 'All 4 move', repeat: true, more: ['The town (SpotWide) processes move requests one after another through a single gate.', 'It pushes the result to everyone in the town. Each client draws the other users from that push.', 'If hundreds of players are in a town, split it into several towns (channels). Each town is one Spot.'],
+     async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 150); await ss.up(i, AC[i]);
+       await enqueue(town, {label: 'P' + (i + 1), what: `P${i + 1} moving`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}});
+       ch[i].walk(165 + Math.random() * 215, 80 + Math.random() * 110, 700);
+       await Promise.all([0, 1, 2, 3].map(k => ss.SE[k].conn ? ss.push(k, AC[k]).then(() => { if (k !== i) seen(ch[k]); }) : null)); }));
+       res('The 4 moves were processed one after another in the town, and each was delivered to <b>all clients</b> (green ring = visible on another player screen).'); }},
+    {title: 'Creating a dungeon', line: 'P1 creates a dungeon. The Framework picks the server on which to create it, and the returned id dungeon-7 becomes the address from then on.',
+     act: 'P1: create a dungeon', more: ['The Location Store coordinates the right to create, so the same id is not created in two places.', 'If <code>on_create</code> of the dungeon rejects the request, the call fails and no dungeon remains.'],
+     async run(){ await ss.up(0, AC[0]); AC[0].g.classList.add('run');
+       await fly({x: AC[0].x, y: AC[0].y - 13}, store.pt, {cls: 'pkt-look'}); store.set(null, 'dungeon-7 → creation reserved');
+       await fly(store.pt, {x: 635, y: 132}, {cls: 'pkt-look'});
+       dsp.g.classList.remove('gone'); dsp.g.classList.add('holding'); res('node B: asking <code>on_create</code> whether to accept'); await sleep(260 * K);
+       dsp.g.classList.remove('holding'); pulse(dsp.g); AC[0].g.classList.remove('run');
+       store.set(null, 'dungeon-7 → node B'); dngG.classList.remove('locked'); dngSub.textContent = 'dungeon-7 · party members only';
+       res('dungeon-7 was created on node B. The Framework picked the server.'); }},
+    {title: 'Party enters', line: 'The four players enter dungeon-7. The dungeon is on another server, so each Actor moves to that server together with its state.',
+     act: 'Party enters', more: ['When <code>on_actor_join</code> of the receiving dungeon approves, the Actor moves to node B with its state and its pending work.', 'Messages that arrive during the move wait and are executed in order.', 'The Framework changes the session route to the new location. The client does not reconnect.'],
+     async run(){ await flyPath(meshD(420, 635), {dur: 500, r: 7, label: 'join request · RouteMesh'}); pulse(dsp.g); await flyPath(meshD(635, 420), {cls: 'pkt-push', dur: 500, r: 6, label: 'approved'});
+       await flyPath(meshD(420, 635), {cls: 'pkt-state', dur: 600, r: 9, label: 'state of 4 Actors'});
+       await moveActors(SLOT_D, DNG, 260); store.set('P1 ~ P4 → node B · dungeon-7', null); res('The Actor state went to node B over the RouteMesh connection. The client connections stay as they are, and only the dashed lines (bindings) point to the new location.'); }},
+    {title: 'Simultaneous boss attack', line: 'The four players attack the boss at the same time. The requests are processed in one line in dungeon-7, so the boss HP drops by exactly the sum of the attacks without any lock.',
+     act: 'All 4 attack at once', repeat: true, more: ['The dungeon (SpotWide) runs the whole room one task at a time through a single gate.', 'So the boss HP and the party state are updated with ordinary code and no lock.', 'Messages addressed to an Actor enter a queue per Actor, but there is only one execution right (the gate).'],
+     async run(){ const r = await attackAll(); res(`${r.n} requests were processed in one line. Attack total${r.sum} → boss HP ${r.before} → <b>${boss.hp}</b>. Locks used: 0.`); }},
+    {title: 'Boss counterattack (timer)', line: 'The boss counterattacks periodically. The timer tick enters the same line, so it runs in turn without mixing with player attacks.',
+     act: 'Start boss timer', more: ['A timer is registered on the dungeon (Spot). The tick runs from the queue of that Spot (orange T).', 'If ticks fall behind, the overrun policy chooses whether to drop them or catch up.', 'Heavy computation is handed to a worker so it does not block the line.'],
+     extra: ['Attack and watch', async () => { const r = await attackAll(); res(`Attacks: ${r.n}. The attacks and the boss tick are mixed in one line and run in turn. Boss HP${boss.hp}.`); }],
+     async run(){ startTimer(); res('The boss timer has started. The orange T in the queue is the tick. Press "Attack and watch".'); }},
+    {title: 'Disconnect and reconnect', line: 'The connection of P3 is lost. The Actor of P3 stays in the dungeon and the battle continues, and when the player reconnects, the session is bound to the same P3.',
+     act: 'Disconnect P3', toggle: true, more: ['When the connection is lost, the bound Actor is notified of the disconnect (<code>on_disconnect_actor</code>).', 'A disconnect does not delete the Actor or remove it from the dungeon.', 'An Actor is bound to only one session. If the player connects from another device, the previous binding becomes invalid.'],
+     async run(btn){ const i = 2;
+       if (ss.SE[i].conn) { ss.close(i); redraw(); AC[i].g.classList.add('disc'); ch[i].g.classList.add('off');
+         await flyPath(ss.routeTo(i, AC[i]), {cls: 'pkt-look', dur: 460}); pulse(dsp.g); btn.textContent = 'Reconnect P3';
+         res('The session of P3 ended. Actor P3 remains in the dungeon, and the boss battle continues (P3 is dimmed in the game view).'); return false; }
+       ss.open(i); await fly(ss.SE[i].R, store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, ss.SE[i].R, {cls: 'pkt-look', dur: 400});
+       redraw(); AC[i].g.classList.remove('disc'); ch[i].g.classList.remove('off'); pulse(dsp.g); btn.textContent = 'Disconnect P3';
+       res(`New session #${ss.SE[i].id} was bound to P3 on node B. Health and position are unchanged.`); return true; }},
+    {title: 'Room news (Logical Multicast)', line: 'When the boss is defeated, dungeon-7 sends news with raid-news. It sends it once per server over RouteMesh, and the receiving server hands it to the Spots subscribed to that topic (town-1).',
+     act: 'Final blow → publish news', more: ['Logical Multicast: publish and subscribe between Spots that reuse the RouteMesh connection as is. No separate socket is opened.', 'Receivers are limited to Spots that subscribe to the same topic. The town (town-1) subscribes to raid-news.', 'When several subscribing Spots are on the same server, they share one message.'],
+     async run(){ if (boss.hp > 0) { finish = true; left = ss.SE.filter(s => s.conn).length; await attackAll(); finish = false; }
+       timer = false; res('The boss was defeated. dungeon-7 sends the news.'); pulse(dsp.g);
+       await flyPath(meshD(635, 420), {cls: 'pkt-pub', dur: 600, r: 7, label: 'raid-news · RouteMesh'}); pulse(town.g);
+       await Promise.all(others.map(o => { seen(o); return null; })); spawn(() => banner('News: dungeon-7 boss defeated'));
+       res('node A received it once and passed it to town-1. The other players in the town see the news (gray rings).'); }},
+    {title: 'Return to the town', line: 'The party returns to the town and the dungeon is closed. The town is on another server, so the Actors move again over RouteMesh.',
+     act: 'Return', more: ['Returning to the town is also a <code>join</code>.', 'When the dungeon is closed, the Location Store record disappears after <code>on_closing</code>.'],
+     async run(){ await flyPath(meshD(635, 420), {cls: 'pkt-state', dur: 600, r: 9, label: 'state of 4 Actors'});
+       await moveActors(SLOT_T, TOWN, 220); store.set('P1 ~ P4 → node A · town-1', null);
+       dsp.g.classList.add('holding'); res('Closing dungeon-7: <code>on_closing</code>'); await sleep(260 * K);
+       dsp.g.classList.add('gone'); store.set(null, 'dungeon-7 → none'); dngG.classList.add('locked'); dngSub.textContent = 'Closed';
+       res('The dungeon was closed and the Store record was removed. The party sees each other again in the town.'); }},
+  ];
+  return {title: 'Lobby and dungeon · RouteMesh', steps: STEPS, foot: 'chapters 21, 22, 24, 32, 34, 35, 36'};
+}
+
+/* =========================================================
+   Group 3. Instance Spot (guild)
+   ========================================================= */
+function gInstance(){
+  resetViews('0 0 900 236', '0 0 900 372');
+  const parties = [0, 1, 2].map(k => { const y = 14 + k * 70; mk(gG, 'rect', {x: 14, y, width: 330, height: 62, rx: 12, class: 'party-p'}); mk(gG, 'text', {x: 28, y: y + 24, class: 'g-title d', text: `dungeon-${7 + k} · Party ${k + 1}`});
+    const st = mk(gG, 'text', {x: 28, y: y + 44, class: 'g-sub d', text: 'In battle'}); [0, 1, 2, 3].forEach(i => mk(gG, 'circle', {cx: 220 + i * 28, cy: y + 31, r: 10, fill: COLORS[i], class: 'player-dot'})); return {y, st}; });
+  mk(gG, 'rect', {x: 360, y: 14, width: 526, height: 208, rx: 14, class: 'village'});
+  mk(gG, 'text', {x: 376, y: 38, class: 'g-title', text: 'Guild hall · guild-7'}); const gSub = mk(gG, 'text', {x: 376, y: 56, class: 'g-sub', text: 'Nobody has called it yet'});
+  mk(gG, 'rect', {x: 376, y: 70, width: 494, height: 16, rx: 8, class: 'xp-bg'}); const xpBar = mk(gG, 'rect', {x: 376, y: 70, width: 0, height: 16, rx: 8, class: 'xp'});
+  const xpT = mk(gG, 'text', {x: 870, y: 64, class: 't-count', 'text-anchor': 'end', text: 'Guild experience 0'});
+  const gl = mk(gG, 'g'); const glog = []; function glogAdd(t){ glog.unshift(t); glog.length = Math.min(glog.length, 5); gl.replaceChildren(); glog.forEach((s, k) => mk(gl, 'text', {x: 376, y: 112 + k * 22, class: 'note-t' + (k === 0 ? ' hi' : ''), text: s})); }
+  let xp = 0; const XPMAX = 3000; function addXp(d){ xp += d; xpBar.setAttribute('width', 494 * Math.min(1, xp / XPMAX)); xpT.textContent = `Guild experience ${xp}`; }
+
+  const store = storeBox(240, 4, 650);
+  mk(sB, 'path', {d: 'M8,60 L896,60 L896,244 L694,244 L694,362 L8,362 Z', class: 'chan-frame mesh'}); chanTag(16, 362, 'RouteMesh channel · game', 'mesh');
+  const DS = [0, 1, 2].map(k => box(16, 70 + k * 90, 210, 80, '', `Dungeon server ${'BCD'[k]}`, `dungeon-${7 + k} · Party ${k + 1}`));
+  const G1 = box(500, 70, 190, 262, '', 'Guild server', 'node G1'); const G2 = box(700, 70, 190, 170, '', 'Guild server', 'node G2');
+  const DB = box(700, 250, 190, 82, '', 'Ranking DB', 'External storage');
+  let guild = null, gen7 = 0, where = null; const cache = [false, false, false];
+  function makeGuild(node){ const x = node === 'G1' ? 510 : 710; const sp = qspot(x, 112, 170, node === 'G1' ? 210 : 120, 'guild-7', 'Instance Spot', node === 'G1' ? {lane: 80, exec: 116, order: 164} : {lane: 40, exec: 76}); startProc(sp); return sp; }
+  function from(k){ return {x: 226, y: 110 + k * 90}; }
+  async function contribute(k, amount, opts = {}){
+    if (!cache[k] || !guild) {
+      await fly(DS[k].T(), store.pt, {cls: 'pkt-look', dur: 380});
+      if (!guild) { res('guild-7 is not in the Store. The right to create is reserved, and a server is picked to create it (cold activation).'); store.set('guild-7 → preparing', null);
+        where = gen7 === 0 ? 'G1' : 'G2'; await fly(store.pt, (where === 'G1' ? G1 : G2).T(), {cls: 'pkt-look', dur: 380});
+        guild = makeGuild(where); guild.g.classList.add('holding'); res(`${where === 'G1' ? 'node G1' : 'node G2'}: <code>configure</code> → <code>on_initialize</code>. An Instance Spot does not receive <code>on_create</code>.`); await sleep(260 * K);
+        guild.g.classList.remove('holding'); gen7++; store.set(`guild-7 → node ${where} · gen ${gen7}`, null); gSub.textContent = `Running on node ${where}`; }
+      await fly(store.pt, DS[k].T(), {cls: 'pkt-look', dur: 380}); cache[k] = true;
+    }
+    parties[k].st.textContent = 'Boss defeated, guild contribution'; pulse(DS[k].g);
+    return enqueue(guild, {label: 'D' + 'BCD'[k], what: opts.what || `Server ${'BCD'[k]} +${amount}`, from: from(k), dur: opts.dur, fn: () => { addXp(amount); glogAdd(`Party ${k + 1} contribution +${amount}`); if (opts.fn) opts.fn(); }});
+  }
+  const STEPS = [
+    {title: 'Waking on the first request', line: 'Party 1 defeats a boss and contributes to the guild. guild-7 does not exist yet, but when the first request arrives, the Framework creates it and processes that request right away.',
+     act: 'Party 1 contributes', more: ['An Instance Spot has no separate call to create it. It is enough to write the instance type in the first message.', 'The Framework picks the server to create it on, and the Store prevents the same id from being created in two places.', 'The caller does not separate "create" from "send".'],
+     async run(){ await contribute(0, 120); res('guild-7 was created and processed <b>that same request</b>. Guild experience +120.'); }},
+    {title: 'Several servers at once', line: 'Three dungeon servers contribute to the same guild at the same time. guild-7 processes them in one line, so the total is exact without a distributed lock.',
+     act: '3 servers contribute at once', repeat: true, more: ['Requests that arrive with the same guild id always go to that one guild.', 'The location is looked up in the Store only the first time. After that, requests go straight to the remembered location.', 'With the conventional approach, every server must take a Redis lock, read, write, and release it.'],
+     async run(){ const before = xp; const am = [0, 1, 2].map(() => 80 + Math.floor(Math.random() * 80)); await Promise.all(am.map((a, k) => contribute(k, a))); res(`3 requests were processed in one line. ${am.join(' + ')} = ${am.reduce((s, v) => s + v, 0)} → experience ${before} → <b>${xp}</b>. Locks: 0.`); }},
+    {title: 'Yielding while waiting', line: 'The guild saves the ranking to an external DB. When it waits with Yield, other contributions run in the meantime, and when the save finishes, execution continues as a new turn.',
+     act: 'Save ranking + concurrent contributions', more: ['<code>Yield</code> gives up the execution right while waiting. When the result arrives, it enters the end of the queue as a new turn.', 'Waiting with <code>Async</code> keeps the execution right while waiting, so all other requests stop.', 'After resuming, check again the state that changed in the meantime.'],
+     async run(){
+       let resumed; const resumeDone = new Promise(r => { resumed = r; });
+       const p = contribute(0, 60, {what: 'Save · Yield', dur: 150, fn: () => { spawn(async () => {
+         await fly(guild.abs(guild.w, 130), DB.L(), {cls: 'pkt-look', dur: 500}); pulse(DB.g); await sleep(400 * K); await fly(DB.L(), guild.abs(guild.w, 130), {cls: 'pkt-push', dur: 500});
+         await enqueue(guild, {label: 'R', what: 'Resumed turn', fn: () => glogAdd('Ranking saved (resumed turn)')}); res('The save result arrived and execution continued as a <b>new turn (R) at the end of the queue</b>. Other contributions finished first in the meantime.'); resumed(); }); }});
+       await sleep(500 * K); await Promise.all([contribute(1, 90), contribute(2, 110)]); await p; await resumeDone; }},
+    {title: 'Closing when idle, waking again', line: 'When there are no requests for a while, the guild closes by itself. When the next request arrives, it wakes up again, possibly on a different server this time.',
+     act: 'Close the guild', extra: ['Party 2 contributes', async () => { await contribute(1, 150); res(`guild-7 woke up again and processed the request (gen${gen7}). The caller changed nothing.`); }],
+     more: ['An Instance Spot closes itself from its own handler or timer (<code>on_closing</code>).', 'When it closes, the Store record disappears. If the next request arrives with the same id, a new incarnation is created.', 'Durable state belongs to the storage. The Spot holds only the in-memory state and the processing order.'],
+     async run(){ guild.g.classList.add('holding'); res('guild-7: <code>on_closing</code>'); await sleep(260 * K); guild.g.remove(); guild = null; cache.fill(false); store.set('guild-7 → none', null); gSub.textContent = 'Closed · wakes up again on the next request'; res('guild-7 was closed. Press "Party 2 contributes" to wake it up again.'); }},
+  ];
+  return {title: 'Instance Spot', steps: STEPS, foot: 'chapter 21 (Spot), chapter 32 (execution model), chapter 34 (activation and lifetime)'};
+}
+
+/* =========================================================
+   Group 4. Host relocation
+   ========================================================= */
+function gRelocate(){
+  resetViews('0 0 900 236', '0 0 900 372');
+  zone(14, 14, 160, 208, 'village', 'Town', 'town-1');
+  mk(gG, 'rect', {x: 186, y: 14, width: 700, height: 208, rx: 14, class: 'dungeon'});
+  mk(gG, 'text', {x: 202, y: 38, class: 'g-title d', text: 'Dungeon dungeon-7'}); const where = mk(gG, 'text', {x: 202, y: 55, class: 'g-sub d', text: 'Running on dungeon server B'});
+  const boss = makeBoss(760, 132, 44, 676, 62, 190, 3000);
+  const DNG = [[320, 92], [320, 172], [420, 80], [420, 180]];
+  const ch = DNG.map(([x, y], i) => gchar(i, x, y));
+  const bannerG = mk(gF, 'g');
+  function banner(text){ bannerG.replaceChildren(); if (!text) return; const b = mk(bannerG, 'g', {class: 'banner'}); mk(b, 'rect', {x: 360, y: 196, width: 360, height: 22, rx: 6}); mk(b, 'text', {x: 540, y: 211, text}); }
+
+  const store = storeBox(320, 4, 570);
+  mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,362 L142,362 Z', class: 'chan-frame mesh'}); chanTag(150, 362, 'RouteMesh channel · game', 'mesh');
+  const ss = sessionKit(4);
+  mk(sB, 'rect', {x: 316, y: 86, width: 173, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 496, y: 86, width: 398, height: 252, rx: 12, class: 'grp-dng'});
+  const A = box(320, 90, 165, 244, '', 'Field server', 'node A'); const B = box(500, 90, 190, 244, '', 'Dungeon server', 'node B'); const C = box(700, 90, 190, 244, '', 'Dungeon server', 'node C');
+  mk(sB, 'text', {x: 330, y: 150, class: 't-mono', text: 'town-1'}); const cFree = mk(sB, 'text', {x: 710, y: 150, class: 't-mono', text: 'Has capacity'});
+  const dsp = qspot(505, 132, 180, 198, 'dungeon-7', 'User Spot · Dungeon', {lane: 76, exec: 112, order: 160});
+  startProc(dsp);
+  const LS = [[22, 50], [62, 50], [102, 50], [142, 50]];
+  const AC = LS.map(([x, y], i) => actorDot('P' + (i + 1), dsp.x + x, dsp.y + y));
+  const sync = () => { AC.forEach((a, i) => a.set(dsp.x + LS[i][0], dsp.y + LS[i][1])); ss.draw(AC); };
+  [0, 1, 2, 3].forEach(i => ss.open(i)); sync();
+  store.set('dungeon-7 → node B', 'P1 ~ P4 → node B · dungeon-7');
+  let fighting = false, sent = 0, done = 0;
+  const cnt = mk(sB, 'text', {x: 330, y: 318, class: 't-count', text: ''});
+  const relayD = () => curve({x: 595, y: 250}, {x: AC[1].x, y: AC[1].y + 13}, -.2);
+  const relayLine = mk(sB, 'path', {d: relayD(), class: 'link relay', opacity: 0});
+  const oldT = mk(sB, 'g', {opacity: 0}); mk(oldT, 'text', {x: 510, y: 212, class: 'relay-t', text: 'Old location → relay to C'}); const relayT = mk(oldT, 'text', {x: 510, y: 300, class: 'relay-t', text: ''});
+  let relayN = 0;
+  const upd = () => { const lost = sent - done - dsp.q.length - (dsp.running ? 1 : 0) - inflight; cnt.textContent = `Sent ${sent} · Processed ${done} · Lost ${Math.max(0, lost)}`; };
+  let inflight = 0;
+  async function attack(i){ sent++; inflight++; upd(); ch[i].g.classList.add('act'); await ss.up(i, AC[i]); ch[i].g.classList.remove('act');
+    await enqueue(dsp, {label: 'P' + (i + 1), what: `P${i + 1} attacking`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}, onQueued: () => { inflight--; upd(); }, fn: () => { boss.hit(40 + Math.floor(Math.random() * 30)); done++; upd(); }});
+    [0, 1, 2, 3].forEach(k => spawn(() => ss.push(k, AC[k]))); }
+  function fight(){ if (fighting) return; fighting = true; spawn(async () => { let i = 0; while (fighting) { spawn(() => attack(i % 4)); i++; await sleep(620 * K); } }); }
+  let target = 'C';
+  const STEPS = [
+    {title: 'In battle', line: 'On dungeon server B, the party is fighting the boss. Attack requests keep arriving at dungeon-7.',
+     act: 'Start the battle', more: ['The Actors of the four party members and dungeon-7 are all on node B.', 'The Location Store records "dungeon-7 is on node B".'],
+     async run(){ fight(); res('Attacks keep arriving. The numbers below show the attacks sent and processed.'); }},
+    {title: 'Starting maintenance', line: 'An operator runs Host Relocate to take node B down for maintenance. The Framework confirms node C as the target.',
+     act: 'Start node B maintenance', more: ['If the target server is not ready, the relocation does not start. In that case, B keeps running as before.', 'For a SpotWide dungeon, the dungeon and all Actors in it move at once.', 'This is a planned (graceful) move. It is not a feature that automatically takes over when a server suddenly dies.'],
+     async run(){ C.g.classList.add('hot'); cFree.textContent = 'Ready to receive'; banner('Moving dungeon-7 · battle continues'); res('Target: node C.'); }},
+    {title: 'Stop and hold', line: 'B finishes only what is running now and stops new execution. It keeps receiving messages and holds them in the queue (orange).',
+     act: 'Stop execution', more: ['Receiving does not stop. So attacks sent in the meantime are not discarded either.', 'Held messages keep the order in which they arrived.'],
+     async run(){ dsp.setHold(true); while (dsp.running) await sleep(30); res('dungeon-7 stopped executing. Newly arriving attacks pile up in the orange cells.'); }},
+    {title: 'Direct transfer', line: 'The dungeon state, the four party members, the held messages, and the timer are sent directly to C. The Location Store is not involved.',
+     act: 'Send the state', more: ['The state goes directly from the memory of B to C over the mesh connection.', 'The Store records only "who owns it now".'],
+     async run(){ await fly(dsp.abs(dsp.w, 60), {x: 760, y: 200}, {cls: 'pkt-state', r: 12, dur: 600, bend: -.25, label: `state + ${dsp.q.length} held + timer`}); pulse(C.g); res('C received the state and prepared the same dungeon. C also takes over the held messages in the same order.'); }},
+    {title: 'Switch and continue', line: 'C changes the location in the Store from B to C and continues from the held messages. The client connections stay as they are.',
+     act: 'Switch', more: ['The location changes only if the expected value is still current (CAS).', 'The Framework changes the session route to C. Players do not reconnect.', 'The caller keeps using the same id, dungeon-7.'],
+     async run(){ await fly({x: 820, y: 90}, store.pt, {cls: 'pkt-look', dur: 400}); store.set('dungeon-7 → node C', 'P1 ~ P4 → node C · dungeon-7');
+       await dsp.moveTo(705, 132, 900 * K / 3.5 + 500, sync); dsp.setHold(false); C.g.classList.remove('hot'); cFree.textContent = ''; where.textContent = 'Running on dungeon server C'; banner('');
+       res('C continues from the attacks that were held. The battle on screen did not stop.'); }},
+    {title: 'Relaying a late message', line: 'A field server still remembers the old location (B) and sends a whisper to P2. B is already empty, but it passes the received message to the new location C (relay).',
+     act: 'Field server → whisper to P2', repeat: true, more: ['Message Follow: the old owner forwards the message it received to the new owner. It does not ask the sender to send it again.', 'A relay is kept only for a fixed time. After that, the sender looks up the new location in the Store again.', 'So no message is lost even if the sender remembers the old location for a while.'],
+     async run(){
+       relayLine.setAttribute('d', relayD()); relayLine.setAttribute('opacity', 1); oldT.setAttribute('opacity', 1);
+       await fly({x: 420, y: 250}, {x: 595, y: 250}, {dur: 450, bend: -.25, r: 7, label: 'whisper → B (old location)'}); pulse(B.g, 'bad');
+       res('The old location B received the whisper. B does not ask for a resend and passes it to C.'); await sleep(150 * K);
+       await flyPath(relayD(), {cls: 'pkt-state', dur: 600, r: 7, label: 'relay → C'}); pulse(AC[1].g); popup(ch[1].x, ch[1].y - 22, 'whisper', 'dmg');
+       relayN++; relayT.textContent = `relay ${relayN} msg`; res(`P2 received the whisper. B → C relay${relayN}, lost messages: 0.`); }},
+    {title: 'Emptying B', line: 'node B is empty. It can now be shut down and serviced. No attacks were lost in the meantime.',
+     act: 'Shut down node B', more: ['After maintenance, B can be started again and relocated back with the next Relocate.', 'A zero-downtime deployment follows the same procedure. Empty the servers one by one and replace them with the new version.'],
+     async run(){ B.g.classList.add('faded'); fighting = false; res('Processing the remaining attacks…'); while (inflight > 0 || dsp.q.length || dsp.running) await sleep(100); upd(); res(`node B was shut down. ${cnt.textContent}.`); }},
+  ];
+  return {title: 'Host Relocation', steps: STEPS, foot: 'chapter 37 (Relocation), chapter 12 (operations)'};
+}
+
+/* =========================================================
+   Group 5. Backpressure: the same burst, without vs with
+   ========================================================= */
+function gBack(){
+  resetViews('0 0 900 236', '0 0 900 360');
+  /* game view: two worlds */
+  function world(x, title){
+    mk(gG, 'rect', {x, y: 14, width: 428, height: 208, rx: 14, class: 'dungeon'});
+    mk(gG, 'text', {x: x + 16, y: 38, class: 'g-title d', text: title});
+    const st = mk(gG, 'text', {x: x + 16, y: 58, class: 'bp-world', text: 'Idle'});
+    const cx = x + 214, cy = 136; const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r: 34}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: 'World boss'});
+    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2; mk(gG, 'circle', {cx: cx + Math.cos(a) * 150, cy: cy + Math.sin(a) * 60, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); }
+    return {x, cx, cy, st};
+  }
+  const W1 = world(14, 'No backpressure'), W2 = world(458, 'ZLink backpressure');
+
+  /* server view: two lanes */
+  function lane(y0, bounded){
+    mk(sB, 'text', {x: 16, y: y0 + 14, class: 't-title', text: bounded ? 'ZLink: stops sending when full, resumes when half empty' : 'No backpressure: the receiver keeps accepting and piling up'});
+    const snd = box(16, y0 + 26, 150, 112, '', 'Field servers', 'Sender');
+    const pill = mk(sB, 'g', {class: 'bp-pill go'}); mk(pill, 'rect', {x: 26, y: y0 + 78, width: 130, height: 30, rx: 15}); const pillT = mk(pill, 'text', {x: 91, y: y0 + 98, text: '▶ Sending'});
+    const sentT = mk(sB, 'text', {x: 26, y: y0 + 128, class: 't-mono', text: 'Sent 0'});
+    const rcv = box(746, y0 + 26, 144, 112, '', 'World boss server', 'Receiver · processing');
+    const doneT = mk(sB, 'text', {x: 756, y: y0 + 96, class: 't-count', text: 'Processed 0'});
+    const lostT = mk(sB, 'text', {x: 756, y: y0 + 120, class: 't-count', text: 'Lost 0'});
+    /* the receiver's queue as a row of cells */
+    const cap = bounded ? 20 : 30, qx = 196, qw = 530, cw = qw / cap, qy = y0 + 66, qh = 36;
+    mk(sB, 'text', {x: qx, y: qy - 8, class: 't-mono', text: bounded ? 'Receiver queue (limit: HWM)' : 'Receiver memory'});
+    mk(sB, 'rect', {x: qx - 2, y: qy - 2, width: qw + 4, height: qh + 4, rx: 6, class: 'gauge-bg'});
+    const cells = []; for (let k = 0; k < cap; k++) cells.push(mk(sB, 'rect', {x: qx + k * cw + 1, y: qy, width: cw - 2, height: qh, rx: 2, class: 'bp-cell'}));
+    if (bounded) {
+      mk(sB, 'line', {x1: qx + qw / 2, x2: qx + qw / 2, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark'}); mk(sB, 'text', {x: qx + qw / 2, y: qy + qh + 20, class: 'bp-mark-t', 'text-anchor': 'middle', text: 'half → resume'});
+      mk(sB, 'line', {x1: qx + qw, x2: qx + qw, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark'}); mk(sB, 'text', {x: qx + qw, y: qy + qh + 20, class: 'bp-mark-t', 'text-anchor': 'end', text: 'full → stop'});
+    } else { mk(sB, 'line', {x1: qx + qw, x2: qx + qw, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark bad'}); mk(sB, 'text', {x: qx + qw, y: qy + qh + 20, class: 'bp-mark-t bad', 'text-anchor': 'end', text: 'memory limit'}); }
+    const L = {doneT, lostT, bounded, cap, q: 0, inflight: 0, sent: 0, done: 0, lost: 0, paused: false, dead: false, stops: 0, y0, snd, rcv, pill, pillT, qx, cw, qy, qh,
+      render(){ cells.forEach((c, k) => c.setAttribute('class', 'bp-cell' + (k < L.q ? (L.q >= cap * .9 ? ' hi' : ' on') : ''))); sentT.textContent = `Sent ${L.sent}`; doneT.textContent = L.downed ? 'Server down' : `Processed ${L.done}`; if (L.onRender) L.onRender(); lostT.textContent = `Lost ${L.lost}`; lostT.setAttribute('class', 't-count' + (L.lost ? ' bad' : '')); },
+      setPill(kind, text){ pill.setAttribute('class', 'bp-pill ' + kind); pillT.textContent = text; }};
+    return L;
+  }
+  const L1 = lane(6, false), L2 = lane(186, true);
+  let SEND = 70, PROC = 160;   /* ms × K: sending is about 2.3× faster than processing */
+  function boom(L, W){
+    L.dead = true; L.lost += L.q + L.inflight; L.q = 0; L.render();
+    L.rcv.g.classList.add('dead'); L.setPill('dead', 'No receiver');
+    const cx = L.rcv.x + 72, cy = L.y0 + 82;
+    for (let k = 0; k < 3; k++) { const c = mk(sF, 'circle', {cx, cy, r: 4, class: 'boom' + (k ? ' b' + k : '')}); tween(700 + k * 250, e => { c.setAttribute('r', 6 + e * (120 + k * 40)); c.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => c.remove()); }
+    for (let k = 0; k < 14; k++) { const a = Math.random() * Math.PI * 2, d = 60 + Math.random() * 90; const p = mk(sF, 'circle', {cx, cy, r: 4, class: 'spark'}); tween(800, e => { p.setAttribute('cx', cx + Math.cos(a) * d * e); p.setAttribute('cy', cy + Math.sin(a) * d * e); p.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => p.remove()); }
+    mk(sB, 'text', {x: L.rcv.x - 34, y: L.y0 + 64, class: 'boom-t', 'text-anchor': 'middle', text: 'Boom!'});
+    L.doneT.setAttribute('class', 'boom-s'); L.downed = true;
+    srv.classList.remove('shake'); void srv.getBBox(); srv.classList.add('shake');
+    const gx = W.cx, gy = W.cy; const ov = mk(gG, 'rect', {x: W.x, y: 14, width: 428, height: 208, rx: 14, fill: '#000', opacity: 0}); tween(500, e => ov.setAttribute('opacity', .55 * e)).catch(() => {});
+    for (let k = 0; k < 3; k++) { const c = mk(gF, 'circle', {cx: gx, cy: gy, r: 4, class: 'boom' + (k ? ' b' + k : '')}); tween(800 + k * 250, e => { c.setAttribute('r', 6 + e * (110 + k * 30)); c.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => c.remove()); }
+    mk(gG, 'text', {x: gx, y: gy + 8, class: 'boom-t big', 'text-anchor': 'middle', text: 'Server down'});
+    L.onRender = () => { W.st.textContent = `Out of memory: the server died · lost${L.lost}`; }; L.render(); W.st.setAttribute('class', 'bp-world bad');
+    game.classList.remove('shake'); void game.getBBox(); game.classList.add('shake');
+  }
+  function run(L, W){
+    /* sender */
+    spawn(async () => { for (;;) {
+      await sleep(SEND * K);
+      if (L.dead) return;
+      if (L.bounded && L.paused) continue;
+      if (L.bounded && L.q + L.inflight >= L.cap) {
+        L.paused = true; L.stops++; L.setPill('stop', '⏸ Paused'); pulse(L.snd.g, 'bad');
+        W.st.textContent = `queue is full → sender stopped (stops: ${L.stops})`; W.st.setAttribute('class', 'bp-world warn'); continue;
+      }
+      L.sent++; L.inflight++; L.render();
+      const k = Math.min(L.cap - 1, L.q + L.inflight - 1);
+      spawn(async () => { await fly({x: 166, y: L.y0 + 93}, {x: L.qx + k * L.cw + L.cw / 2, y: L.qy + L.qh / 2}, {r: 5, dur: 140, bend: 0});
+        L.inflight--; if (L.dead) { L.lost++; L.render(); return; } L.q++; L.render();
+        if (!L.bounded && L.q >= L.cap) boom(L, W);
+        else if (!L.bounded) { W.st.textContent = `Piling up as received · memory${Math.round(L.q / L.cap * 100)}%`; W.st.setAttribute('class', 'bp-world' + (L.q > L.cap * .6 ? ' warn' : '')); } });
+    } });
+    /* receiver */
+    spawn(async () => { for (;;) {
+      await sleep(PROC * K);
+      if (L.dead) return;
+      if (L.q > 0) { L.q--; L.done++; L.render(); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
+        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ Resumed'); W.st.textContent = 'queue is below half → sending again'; W.st.setAttribute('class', 'bp-world'); } }
+    } });
+  }
+  const STEPS = [
+    {title: 'Sending the same burst', line: 'The same attack burst is sent to the top and bottom lanes. The sending rate is more than twice the processing rate. The top lane piles up whatever it receives. The bottom lane stops the sender when the queue is full.',
+     act: 'Start the burst', more: [
+       'The receiver queue has a limit (HWM). When it is full, the Core stops sending to that peer. In the meantime, <code>send</code> waits until space is available.',
+       'Sending resumes when the queue drains below half. Resuming each time a single slot frees would make the sender stop and resume continuously (Core low watermark = half of the HWM).',
+       'If the sender <code>send</code> waits past the timeout (default 1 second), it ends with <code>DeadlineExceeded</code>. The sender can learn of the failure.',
+       'The Framework does not drop a message it has accepted. Whether to send again is decided by the application with its business rules.',
+       'Without backpressure, the receiver memory grows without limit until the server dies, and all the queued messages are lost.'],
+     async run(){ run(L1, W1); run(L2, W2); W1.st.textContent = 'Piling up as received'; W2.st.textContent = 'Sending'; res('The top lane piles up until the server dies. The bottom lane repeats "stop ↔ resume". The bottom queue never exceeds the limit.'); }},
+  ];
+  return {title: 'Backpressure', steps: STEPS, foot: 'chapter 33 (Backpressure) · HWM and low watermark of the Core pipe'};
+}
+
+/* ---------- groups and steps ---------- */
+const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['lobby', 'Lobby and dungeon · RouteMesh', gLobby], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
+let STEPS = [], cur = 0, done = new Set(), curKey = 'clientserver';
+function renderSteps(){
+  $('steps').replaceChildren();
+  STEPS.forEach((s, k) => { const li = document.createElement('li'); li.className = (k === cur ? 'cur' : '') + (done.has(k) && k !== cur ? ' done' : ''); if (k === cur) li.setAttribute('aria-current', 'step');
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = done.has(k) && k !== cur ? '✓' : k + 1; li.append(n, document.createTextNode(s.title)); $('steps').append(li); });
+}
+function show(k){
+  cur = k; const s = STEPS[k]; renderSteps();
+  $('stepNo').textContent = `Step ${k + 1} / ${STEPS.length}`; $('line').textContent = s.line; res('');
+  $('more').innerHTML = s.more.map(m => `<li>${m}</li>`).join('');
+  const acts = $('acts'); acts.replaceChildren();
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'act primary'; b.textContent = s.act; acts.append(b);
+  /* "next" opens once the main action ran (toggle steps: ended in the restored state) and, when there is an extra action, after it ran once */
+  let mainOk = false, extraOk = !s.extra;
+  const nx = document.createElement('button'); nx.type = 'button'; nx.className = 'act next'; nx.textContent = k === STEPS.length - 1 ? 'Start over ↺' : 'Next step →'; nx.disabled = true;
+  const syncNext = () => { nx.disabled = !(mainOk && extraOk); };
+  let ex = null; if (s.extra) { ex = document.createElement('button'); ex.type = 'button'; ex.className = 'act'; ex.textContent = s.extra[0]; ex.disabled = true; acts.append(ex); ex.addEventListener('click', () => { ex.disabled = true; nx.disabled = true; spawn(async () => { await s.extra[1](); ex.disabled = false; extraOk = true; syncNext(); }); }); }
+  acts.append(nx);
+  nx.addEventListener('click', () => { if (k === STEPS.length - 1) openGroup(curKey); else show(k + 1); });
+  b.addEventListener('click', () => { b.disabled = true; nx.disabled = true; spawn(async () => { const r = await s.run(b); done.add(k); if (s.repeat || s.toggle) b.disabled = false; if (ex) ex.disabled = false; mainOk = s.toggle ? r === true : true; syncNext(); renderSteps(); }); });
+}
+function openGroup(key){
+  gen++; curKey = key; const g = GROUPS.find(x => x[0] === key) || GROUPS[1];
+  const r = g[2](); STEPS = r.steps; done = new Set();
+  $('gtitle').textContent = r.title; $('foot').textContent = `This is a simulation that runs in the browser. Timings and numbers are for demonstration only. The behavior follows the ZLink C++ server guide at zlink.systems (${r.foot}).`;
+  document.querySelectorAll('#groups button').forEach(b => b.setAttribute('aria-current', String(b.dataset.key === key)));
+  try { history.replaceState(null, '', '#' + key); } catch (_) {}
+  show(0);
+}
+GROUPS.forEach(([key, name]) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.key = key; b.textContent = name; b.addEventListener('click', () => openGroup(key)); $('groups').append(b); });
+$('speedRange').addEventListener('input', e => { const v = +e.target.value; K = 3.5 / v; $('speedVal').textContent = v.toFixed(2).replace(/0$/, '') + '×'; });
+let start = 'clientserver'; try { const h = (location.hash || '').slice(1); if (GROUPS.some(g => g[0] === h)) start = h; } catch (_) {}
+openGroup(start);
+})();
+</script>
+
+</body>
+</html>

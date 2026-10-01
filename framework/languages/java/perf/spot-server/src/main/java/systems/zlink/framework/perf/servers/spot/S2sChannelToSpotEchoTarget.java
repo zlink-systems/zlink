@@ -60,7 +60,7 @@ public final class S2sChannelToSpotEchoTarget {
             long received = PerfClock.now();
             measurement.handlerEnter();
             try {
-                measurement.validateRequest(message, message.returnChannel(), null);
+                measurement.validateRequest(message, measurement.config().channelName(), null);
                 if (message.returnChannel() == null || message.returnChannel().isEmpty()) {
                     throw new PerfValidationException("IdentityMismatch", "No return Channel in the request.");
                 }

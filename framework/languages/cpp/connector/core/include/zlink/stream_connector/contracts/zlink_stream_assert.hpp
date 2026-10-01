@@ -55,8 +55,7 @@ error_t expect_failure (TAction &&action, std::optional<error_code_t> expected_k
     if (result) {
         throw std::runtime_error ("expected action to fail");
     }
-    auto error = result.error ().value_or (
-      error_t{error_code_t::disconnected, "action failed without an error message"});
+    auto error = *result.error ();
     if (expected_kind && error.code != *expected_kind) {
         throw std::runtime_error ("action failed with an unexpected error kind");
     }
@@ -71,19 +70,13 @@ template <typename TAction> error_t expect_timeout (TAction &&action)
         if (result) {
             throw std::runtime_error ("expected action to time out");
         }
-        auto error = result.error ().value_or (
-          error_t{error_code_t::disconnected, "action failed without an error message"});
-        if (error.code == error_code_t::request_timeout
-            || error.code == error_code_t::connect_timeout) {
-            return error;
-        }
-        throw failure_t (std::move (error));
+        throw failure_t (*result.error ());
     }
     catch (const failure_t &failure) {
-        if (failure.error ().code == error_code_t::request_timeout
-            || failure.error ().code == error_code_t::connect_timeout) {
-            return failure.error ();
-        }
+        const auto &error = failure.error ();
+        if (error.code == error_code_t::request_timeout
+            || error.code == error_code_t::connect_timeout)
+            return error;
         throw;
     }
 }

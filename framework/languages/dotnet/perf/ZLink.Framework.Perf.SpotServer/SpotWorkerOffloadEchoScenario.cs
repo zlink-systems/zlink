@@ -42,8 +42,7 @@ public sealed class SpotWorkerOffloadEchoScenario(IZLinkSpotClient spots, IZLink
             .Provenance("workerOptions", new
             {
                 algorithm = worker.algorithm, taskMillis = worker.taskMillis, applied = new { worker.minThreads, worker.maxThreads, worker.idleTimeoutMs },
-                callTimeoutMs = worker.workerTimeoutMs, maxQueueLength = (int?)null,
-                maxQueueLengthReason = "The .NET public IZLinkWorkerOptions has no queue length; the requested " + worker.maxQueueLength + " is not applied."
+                callTimeoutMs = worker.workerTimeoutMs
             }));
         builder.Services.AddSingleton<SpotWorkerOffloadEchoScenario>();
         var app = builder.Build();

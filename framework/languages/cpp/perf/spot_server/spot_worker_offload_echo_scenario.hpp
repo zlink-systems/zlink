@@ -3,8 +3,8 @@
 
 // §10.8 spot-worker-offload-echo. Question: what a public CPU worker call adds to a local Spot echo (submission, the
 // callback, and the result delivered back to the caller). Roles: HTTP Client x1, Spot (Object Server + local driver + Framework
-// worker, this file) x1; no remote echo process. One operation: the local `route_client_t.request_to_spot` until the echo built
-// after the worker result is validated; the worker call interval is the primary latency of §14 worker.*. The Spot handler runs
+// worker, this file) x1; no remote echo process. One operation: the local `route_client_t.request_to_spot` through caller-side
+// echo identity and payload validation; the worker call interval is recorded separately in §14 worker.*. The Spot handler runs
 // one `run_cpu_worker` call per request: Yield (default) hands the turn back while the worker runs, ordinary keeps it. The worker
 // callback is the self-contained xorshift32-v1 task of worker-task-millis (no sleep); it checks time and cancellation every 1024
 // iterations. Public worker options carry min/max threads and idle timeout; the call timeout is the workerTimeoutMs.
@@ -127,9 +127,7 @@ class spot_worker_offload_echo_scenario_t
           .provenance ("workerOptions",
                        {{"algorithm", worker.algorithm}, {"taskMillis", worker.task_millis},
                         {"applied", {{"minThreads", worker.min_threads}, {"maxThreads", worker.max_threads}, {"idleTimeoutMs", worker.idle_timeout_ms}}},
-                        {"callTimeoutMs", worker.worker_timeout_ms}, {"maxQueueLength", nullptr},
-                        {"maxQueueLengthReason", "The C++ public worker_options_t has no queue length; the requested "
-                                                   + std::to_string (worker.max_queue_length) + " is not applied."}});
+                       {"callTimeoutMs", worker.worker_timeout_ms}});
     }
 
     void prepare (const std::atomic<bool> &stopping)

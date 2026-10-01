@@ -280,7 +280,7 @@ class stream_session_dispatcher_t
         task_completion_source_t<void> completion;
         auto task = completion.task ();
         auto shared_completion =
-          std::make_shared<detail::task_completion_source_t<void>> (std::move (completion));
+          std::make_shared<task_completion_source_t<void>> (std::move (completion));
         const auto submitted =
           dispatch_async (kind, std::move (operation), std::move (callback),
                           [shared_completion] (const result_t<void> &result) mutable {

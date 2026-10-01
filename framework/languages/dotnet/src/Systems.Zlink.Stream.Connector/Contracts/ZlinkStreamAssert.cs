@@ -95,16 +95,6 @@ public static class ZlinkStreamAssert
             return true;
         }
 
-        if (exception is TimeoutException)
-        {
-            error = new ZlinkStreamError(
-                ZlinkStreamErrorCode.RequestTimeout,
-                exception.Message,
-                exception
-            );
-            return true;
-        }
-
         error = null!;
         return false;
     }

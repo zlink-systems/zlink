@@ -16,7 +16,7 @@ var builder = ServerApplication.Builder(config, options =>
 });
 if (config.scenario == "cs-remote-session-actor-echo")
 {
-    builder.Services.AddSingleton(new ObjectsReadiness(false, "No Actor is bound to a session yet."));
+    builder.Services.AddSingleton(new ObjectsReadiness(true, ""));
     builder.Services.AddSingleton<SessionActorSetup>();
 }
 var app = builder.Build();

@@ -313,7 +313,7 @@ final class ZLinkStreamWireProtocol {
     }
 
     static byte[] validatePacketName(String packetName) {
-        if (packetName == null || packetName.isBlank()) {
+        if (packetName == null || isWhiteSpaceOnly(packetName)) {
             throw new IllegalArgumentException("packetName is required");
         }
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
@@ -321,6 +321,43 @@ final class ZLinkStreamWireProtocol {
             throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
         }
         return name;
+    }
+
+    // Spec 32 §4: Unicode White_Space defines the packet-name rejection set.
+    private static boolean isWhiteSpaceOnly(String name) {
+        for (int index = 0; index < name.length(); index++) {
+            switch (name.charAt(index)) {
+                case '\u0009',
+                '\n',
+                '\u000B',
+                '\u000C',
+                '\r',
+                '\u0020',
+                '\u0085',
+                '\u00A0',
+                '\u1680',
+                '\u2000',
+                '\u2001',
+                '\u2002',
+                '\u2003',
+                '\u2004',
+                '\u2005',
+                '\u2006',
+                '\u2007',
+                '\u2008',
+                '\u2009',
+                '\u200A',
+                '\u2028',
+                '\u2029',
+                '\u202F',
+                '\u205F',
+                '\u3000':
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return true;
     }
 
     private static byte[] validateHeader(Header header, String packetName) {

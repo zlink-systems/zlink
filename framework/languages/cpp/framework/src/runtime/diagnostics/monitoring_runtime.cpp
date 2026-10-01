@@ -265,20 +265,25 @@ void monitoring_runtime_t::publish_location_changes (
   std::optional<std::vector<location_topology_entry_t>> topology,
   std::optional<std::vector<location_service_summary_t>> summary) const
 {
-    if (status_changed) {
-        log (
-          status.store_healthy ? log_level_t::info : log_level_t::warn,
-          "zlink.runtime.location.store_changed",
-          {{"source_name", source_name}, {"state", status.store_healthy ? "ready" : "degraded"}});
+    const auto level = status.store_healthy ? log_level_t::info : log_level_t::warn;
+    if (status_changed && _state && _state->diagnostics_logger.is_enabled (level)) {
+        std::vector<log_field_t> fields{{"source_name", source_name},
+                                        {"state", status.store_healthy ? "ready" : "degraded"}};
+        if (status.last_error)
+            fields.push_back ({"reason", *status.last_error});
+        log (level, "zlink.runtime.location.store_changed", std::move (fields));
     }
-    if (topology) {
-        log (log_level_t::debug, "zlink.runtime.mesh_node.peer_changed",
-             {{"source_name", source_name}, {"entry_count", std::to_string (topology->size ())}});
-    }
-    if (summary) {
-        log (log_level_t::debug, "zlink.runtime.mesh_node.state_changed",
-             {{"source_name", std::move (source_name)},
-              {"summary_count", std::to_string (summary->size ())}});
+    if (_state && _state->diagnostics_logger.is_enabled (log_level_t::debug)) {
+        if (topology) {
+            log (
+              log_level_t::debug, "zlink.runtime.mesh_node.peer_changed",
+              {{"source_name", source_name}, {"entry_count", std::to_string (topology->size ())}});
+        }
+        if (summary) {
+            log (log_level_t::debug, "zlink.runtime.mesh_node.state_changed",
+                 {{"source_name", std::move (source_name)},
+                  {"summary_count", std::to_string (summary->size ())}});
+        }
     }
 }
 

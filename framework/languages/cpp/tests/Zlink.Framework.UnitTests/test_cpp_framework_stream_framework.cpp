@@ -249,17 +249,7 @@ class throwing_packet_session_t final : public zlink::framework::packet_stream_s
 class delayed_reply_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
-    delayed_reply_session_t () :
-        _entered_future (_entered.get_future ()),
-        _resume ([this] (std::function<void ()> continuation) {
-            {
-                std::lock_guard lock (_mutex);
-                _continuations.push_back (std::move (continuation));
-            }
-            _continuation_ready.notify_one ();
-        })
-    {
-    }
+    delayed_reply_session_t () : _entered_future (_entered.get_future ()) {}
 
     zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
     {
@@ -282,7 +272,14 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
                                               const zlink::message_t &payload) override
     {
         _entered.set_value ();
-        co_await _resume.task ();
+        co_await zlink::framework::detail::with_task_resume_scheduler (
+          _resume.task (), [this] (std::function<void ()> continuation) {
+              {
+                  std::lock_guard lock (_mutex);
+                  _continuations.push_back (std::move (continuation));
+              }
+              _continuation_ready.notify_one ();
+          });
         try {
             (void) co_await stream.reply_packet (payload).async ();
             reply_result = zlink::framework::result_t<void>::success ();
@@ -315,24 +312,23 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
     std::mutex _mutex;
     std::condition_variable _continuation_ready;
     std::deque<std::function<void ()>> _continuations;
-    zlink::framework::detail::task_completion_source_t<void> _resume;
+    zlink::framework::task_completion_source_t<void> _resume;
 };
 
 class shutdown_session_control_t final
 {
   public:
-    shutdown_session_control_t () :
-        _resume ([this] (std::function<void ()> continuation) {
-            {
-                const std::lock_guard lock (_mutex);
-                _continuations.push_back (std::move (continuation));
-            }
-            _changed.notify_all ();
-        })
+    zlink::framework::task_t<void> wait_for_release ()
     {
+        return zlink::framework::detail::with_task_resume_scheduler (
+          _resume.task (), [this] (std::function<void ()> continuation) {
+              {
+                  const std::lock_guard lock (_mutex);
+                  _continuations.push_back (std::move (continuation));
+              }
+              _changed.notify_all ();
+          });
     }
-
-    zlink::framework::task_t<void> wait_for_release () { return _resume.task (); }
 
     void release ()
     {
@@ -403,7 +399,7 @@ class shutdown_session_control_t final
     std::condition_variable _changed;
     std::deque<std::function<void ()>> _continuations;
     std::vector<std::string> _lifecycle;
-    zlink::framework::detail::task_completion_source_t<void> _resume;
+    zlink::framework::task_completion_source_t<void> _resume;
     std::atomic_size_t _connected{0};
     std::atomic_size_t _packet_entered{0};
     std::atomic_size_t _packet_terminal{0};

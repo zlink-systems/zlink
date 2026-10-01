@@ -8,16 +8,13 @@ if (index < 0 || index >= manifest.workload.clientCount) throw new ArgumentOutOf
 var cs = manifest.roles.Any(r => r.streamEndpoint is not null);
 var config = new RoleConfig(manifest.runId, manifest.cellId, manifest.configHash, "client", index,
     manifest.cellId.Split('/')[0], null, null, null, [], null, "", "", false,
-    "None", null, [], [], "Immediate", manifest.workload, manifest.provenance);
+    "None", null, [], [], "Immediate", manifest.workload, manifest.provenance, language: manifest.language);
 using var measurement = new Measurement(config, cs);
 // Every CS cell shares the connector loop of the baseline; the cell id names which standard scenario runs.
 await using var scenario = !cs ? null : manifest.cellId.Split('/')[0] switch
 {
-    "cs-local-session-actor-echo" => new CsLocalSessionActorEchoScenario(manifest, measurement, index),
-    "cs-remote-session-actor-echo" => new CsRemoteSessionActorEchoScenario(manifest, measurement, index),
     _ => new SessionEchoOnlyScenario(manifest, measurement, index)
 };
-using var admin = new MetricsClient(manifest);
 if (scenario is not null) await scenario.PrepareAsync();
 Console.WriteLine(PerfJson.Write(new { type = "prepared", ok = !measurement.HasErrors,
     snapshot = measurement.Snapshot(null) }));
@@ -34,12 +31,6 @@ while (await Console.In.ReadLineAsync() is { } line)
             case "start":
                 response = measurement.Start(PerfJson.Read<PerfTriggerRequest>(root.GetProperty("request").GetRawText()),
                     scenario is null ? null : scenario.RunAsync);
-                break;
-            case "triggerRoles":
-                response = await admin.TriggerRolesAsync(PerfJson.Read<PerfTriggerRequest>(root.GetProperty("request").GetRawText()));
-                break;
-            case "resetRoles":
-                response = await admin.ResetRolesAsync(PerfJson.Read<ResetRequest>(root.GetProperty("request").GetRawText()));
                 break;
             case "reset":
                 response = measurement.Reset(PerfJson.Read<ResetRequest>(root.GetProperty("request").GetRawText()), null);

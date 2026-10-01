@@ -86,7 +86,7 @@ class scenario_metrics_t
     // window_ticks: when the operation this interval belongs to finished (a worker interval ends before its operation does).
     void record (const std::string &histogram_key, std::int64_t started, std::int64_t ended, std::int64_t window_ticks)
     {
-        if (window_ticks >= _measurement.end_ticks ())
+        if (window_ticks < _measurement.start_ticks () || window_ticks >= _measurement.end_ticks ())
             return;
         std::lock_guard lock (_gate);
         _histograms.at (histogram_key).histogram.record (ended - started);

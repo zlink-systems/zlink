@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZLink 둘러보기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+/* 사이트(Material) 안의 iframe으로 열리면 사이트의 밝은/어두운 테마를 따른다. 단독으로 열면 OS 설정을 따른다. */
+(function () {
+  try {
+    if (window.parent === window) return;
+    var pd = window.parent.document;
+    var apply = function () {
+      var scheme = pd.body && pd.body.getAttribute('data-md-color-scheme');
+      if (scheme) document.documentElement.setAttribute('data-theme', scheme === 'slate' ? 'dark' : 'light');
+    };
+    apply();
+    new MutationObserver(apply).observe(pd.body, {attributes: true, attributeFilter: ['data-md-color-scheme']});
+  } catch (e) { /* 다른 출처에서 열리면 OS 설정을 따른다 */ }
+})();
+</script>
+<style>
+:root{
+  --bg:#F2F5F4; --panel:#FFFFFF; --ink:#14211F; --ink-2:#34423F; --muted:#5B6B68; --line:#C9D4D1;
+  --accent:#0E8175; --accent-ink:#0A5F56; --accent-soft:#D6EDE9; --on-accent:#FFFFFF;
+  --hold:#C4761A; --hold-soft:#F6E5CB; --look:#6C7C95;
+  --node-fill:#FAFCFB; --spot-fill:#E8F3F1; --store-fill:#EEF0F5;
+  --select:#ECEAF3; --select-line:#C6C0D8; --village:#E7EFDF; --village-line:#B9CCA8; --dungeon:#2A2530; --dungeon-line:#4A4052; --dungeon-ink:#EDE6F2;
+  --sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0C1413; --panel:#121D1C; --ink:#E3ECEA; --ink-2:#C2CFCC; --muted:#92A5A1; --line:#2B3B39;
+    --accent:#35C2AF; --accent-ink:#7FDCCF; --accent-soft:#16332F; --on-accent:#06201D;
+    --hold:#E9A23F; --hold-soft:#3A2A12; --look:#9AA8C2;
+    --node-fill:#101A19; --spot-fill:#14302C; --store-fill:#161C27;
+    --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0C1413; --panel:#121D1C; --ink:#E3ECEA; --ink-2:#C2CFCC; --muted:#92A5A1; --line:#2B3B39;
+  --accent:#35C2AF; --accent-ink:#7FDCCF; --accent-soft:#16332F; --on-accent:#06201D;
+  --hold:#E9A23F; --hold-soft:#3A2A12; --look:#9AA8C2;
+  --node-fill:#101A19; --spot-fill:#14302C; --store-fill:#161C27;
+  --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 20px}
+header h1{margin:0;font-size:clamp(21px,2.8vw,28px);letter-spacing:-.01em}
+header .eyebrow{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);display:block}
+nav.groups{display:flex;flex-wrap:wrap;gap:6px}
+nav.groups button{font:500 13.5px var(--sans);padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--ink-2);cursor:pointer}
+nav.groups button[aria-current="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+nav.groups button:disabled{cursor:default;opacity:.5}
+nav.groups button small{font-size:11px;margin-left:4px}
+.main{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
+.side{display:flex;flex-direction:column;gap:12px;position:sticky;top:12px}
+@media (max-width:900px){.side{position:static}}
+ol.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+@media (max-width:900px){ol.steps{flex-direction:row;overflow-x:auto;padding-bottom:4px}}
+ol.steps li{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:10px;color:var(--muted);font-size:14px;white-space:nowrap}
+ol.steps .n{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font:600 12px var(--mono);border:1.5px solid var(--line);background:var(--panel)}
+ol.steps li.done{color:var(--ink-2)}
+ol.steps li.done .n{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+ol.steps li.cur{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--accent)}
+ol.steps li.cur .n{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.speed{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);margin-top:4px}
+.speed b{font:600 12.5px var(--mono);color:var(--ink)}
+#speedRange{width:100%;accent-color:var(--accent)}
+@media (max-width:900px){#speedRange{max-width:320px}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{font:500 12.5px var(--sans);color:var(--ink-2);background:transparent;border:0;padding:5px 10px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.view{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.view svg{display:block;width:100%;min-width:680px;height:auto}
+.vlabel{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 -4px 2px}
+.bar{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bar .t{font:600 12px var(--mono);color:var(--accent);letter-spacing:.06em}
+.bar .line{margin:0;font-size:16.5px;font-weight:500;line-height:1.5;text-wrap:pretty}
+.bar .res{margin:0;font-size:14px;color:var(--accent-ink);min-height:21px}
+.acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.act{font:600 14.5px var(--sans);border-radius:9px;padding:10px 16px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.act.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.act.next{margin-left:auto}
+.act:disabled{opacity:.4;cursor:default}
+.act:focus-visible,nav.groups button:focus-visible,summary:focus-visible,.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details{font-size:13.5px;color:var(--ink-2)}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
+details ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+details code{font:12.5px var(--mono);color:var(--accent-ink)}
+.foot{font-size:12.5px;color:var(--muted)}
+/* svg */
+svg text{font-family:var(--sans)}
+.zone-sel{fill:var(--select);stroke:var(--select-line)}
+.village{fill:var(--village);stroke:var(--village-line)}
+.house{fill:var(--panel);stroke:var(--village-line)}
+.dungeon{fill:var(--dungeon);stroke:var(--dungeon-line)}
+.dng{transition:opacity .6s}
+.dng.locked{opacity:.28}
+.g-title{font-weight:700;font-size:14px;fill:var(--ink)}
+.g-title.d{fill:var(--dungeon-ink)}
+.g-sub{font-size:11.5px;fill:var(--muted)}
+.g-sub.d{fill:#A99BB6}
+.boss>circle{fill:#6B2E3A;stroke:#C7667A;stroke-width:3}
+.boss.hit>circle{animation:hit .25s ease}
+@keyframes hit{50%{fill:#A8404F}}
+.hp-bg{fill:#3B3342}
+.hp{fill:#E0576B}
+.hp.party{fill:#4FB985}
+.hp-t{font:600 11.5px var(--mono);fill:var(--dungeon-ink)}
+.ch>circle.body{stroke:#fff;stroke-width:2}
+.ch>text{font:700 11px var(--mono);fill:#fff;text-anchor:middle;dominant-baseline:central}
+.ch.off{opacity:.3}
+.ch.act>circle.body{stroke:#F7D774;stroke-width:3.5}
+.ch .seen{fill:none;stroke:var(--accent);stroke-width:2;opacity:0}
+.ch.seen .seen{animation:seen .9s ease}
+@keyframes seen{0%{opacity:1;r:16}100%{opacity:0;r:30}}
+.dmg{font:700 15px var(--mono);fill:#FFD66B;text-anchor:middle}
+.dmg.boss{fill:#FF8A7A}
+.beam{stroke:#FF8A7A;stroke-width:2.5}
+.box>rect{fill:var(--node-fill);stroke:var(--line);stroke-width:1.2}
+.box.store>rect{fill:var(--store-fill);stroke:var(--look)}
+.grp-field{fill:var(--village);stroke:var(--village-line);stroke-dasharray:5 4}
+.grp-dng{fill:var(--hold-soft);fill-opacity:.45;stroke:var(--dungeon-line);stroke-dasharray:5 4}
+.box.gw>rect{fill:var(--panel);stroke:var(--ink-2)}
+.box.pulse>rect{animation:pulse .7s ease}
+@keyframes pulse{0%{stroke:var(--accent);stroke-width:3.5}100%{stroke-width:1.2}}
+.t-title{font-weight:600;font-size:13.5px;fill:var(--ink)}
+.t-sub{font-size:11.5px;fill:var(--muted)}
+.t-mono{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+.t-store{font-family:var(--mono);font-size:12px;fill:var(--ink-2)}
+.spot>rect.bg{fill:var(--spot-fill);stroke:var(--accent);stroke-width:1.5}
+.spot.holding>rect.bg{stroke:var(--hold);stroke-dasharray:6 4;fill:var(--hold-soft)}
+.spot.gone{opacity:0;transition:opacity .6s}
+.spot.pulse>rect.bg{animation:pulse .7s ease}
+.t-spot{font-family:var(--mono);font-weight:600;font-size:12px;fill:var(--accent-ink)}
+.gate>rect{fill:var(--hold-soft);stroke:var(--hold)}
+.gate>text{font-family:var(--mono);font-size:10.5px;fill:var(--hold)}
+.gate.on>rect{fill:var(--hold)}
+.gate.on>text{fill:var(--on-accent)}
+.lane{fill:var(--bg);stroke:var(--line)}
+.lane-l{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+.chip>rect{fill:var(--accent)}
+.chip>text{font-family:var(--mono);font-size:10.5px;font-weight:600;fill:var(--on-accent);text-anchor:middle}
+.chip.tick>rect{fill:var(--hold)}
+.exec>rect{fill:var(--panel);stroke:var(--hold);stroke-dasharray:4 3}
+.exec.on>rect{fill:var(--hold-soft);stroke:var(--hold);stroke-width:2;stroke-dasharray:none}
+.exec-g{font-family:var(--mono);font-size:10.5px;font-weight:600;fill:var(--hold)}
+.exec-t{font-family:var(--mono);font-size:11.5px;font-weight:600;fill:var(--ink)}
+.actor>circle{fill:var(--panel);stroke:var(--ink-2);stroke-width:1.5}
+.actor>text{font:600 10.5px var(--mono);fill:var(--ink);text-anchor:middle;dominant-baseline:central}
+.actor.run>circle{fill:var(--accent-soft);stroke:var(--accent);stroke-width:3}
+.actor.disc>circle{stroke:var(--hold);stroke-dasharray:3 3}
+.actor.hidden{opacity:0}
+.sess>rect{fill:var(--accent-soft);stroke:var(--accent)}
+.sess.dead>rect{fill:none;stroke:var(--line);stroke-dasharray:4 4}
+.sess>text{font-family:var(--mono);font-size:11px;fill:var(--accent-ink)}
+.sess.dead>text{fill:var(--muted)}
+.sess.hidden{opacity:0}
+.cl>rect{fill:var(--panel);stroke:var(--ink-2)}
+.cl>text{font-family:var(--mono);font-size:11px;fill:var(--ink-2);text-anchor:middle}
+.cl>text.tag{font-weight:700;font-size:12px;fill:var(--ink)}
+.cl.off>rect{stroke:var(--hold);stroke-dasharray:3 3}
+.cl.hidden{opacity:.3}
+.link{stroke:var(--line);stroke-width:1.3;fill:none}
+.link.conn{stroke:var(--ink-2);stroke-width:1.8}
+.link.bind{stroke:var(--accent);stroke-dasharray:6 5;stroke-width:1.5}
+.lbl{font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+.pkt{fill:var(--accent)}
+.pkt-push{fill:var(--panel);stroke:var(--accent);stroke-width:2}
+.pkt-look{fill:var(--look)}
+.badge{font:600 10.5px var(--mono);fill:var(--hold)}
+@media (prefers-reduced-motion: reduce){.box.pulse>rect,.spot.pulse>rect.bg,.boss.hit>circle,.ch.seen .seen{animation:none}}
+</style>
+<style>
+.panelz{fill:var(--panel);stroke:var(--line)}
+.note-t{font-size:12.5px;fill:var(--ink)}
+.note-t.hi{font-weight:700;fill:var(--accent-ink)}
+.note-t.warn{fill:var(--hold);font-weight:600}
+.banner>rect{fill:var(--hold);opacity:.92}
+.banner>text{font-weight:700;font-size:13px;fill:#fff;text-anchor:middle}
+.box.drained>rect{stroke:var(--hold);stroke-dasharray:6 4}
+.box.ghost>rect{fill:none;stroke-dasharray:5 5}
+.box.faded{opacity:.35;transition:opacity .6s}
+.box.hot>rect{stroke:var(--accent);stroke-width:2}
+.box.bad>rect{animation:badp .9s ease}
+@keyframes badp{0%{stroke:#C0392B;stroke-width:3.5}100%{stroke-width:1.2}}
+.chipc>rect{fill:var(--accent-soft)}
+.chipc>text{font-family:var(--mono);font-size:10.5px;font-weight:500;fill:var(--accent-ink)}
+.chipc.pub>rect{fill:none;stroke:#2F6DB5}
+.chipc.pub>text{fill:#2F6DB5}
+.t-count{font-family:var(--mono);font-weight:600;font-size:11.5px;fill:var(--accent-ink)}
+.link.broken{stroke:var(--hold);stroke-dasharray:3 5;stroke-width:1.6}
+.link.reply{stroke:#2F6DB5;stroke-dasharray:2 4;stroke-width:1.8}
+.link.reply.hi{stroke-width:3.5}
+.pkt-pub{fill:#2F6DB5}
+.pkt-state{fill:var(--hold);stroke:var(--ink);stroke-width:1}
+.pkt-reply{fill:#2F6DB5}
+.spot.holding .chip>rect{fill:var(--hold)}
+.gauge-bg{fill:var(--bg);stroke:var(--line)}
+.gauge-fill{fill:var(--accent)}
+.gauge-fill.hi{fill:var(--hold)}
+.slot{fill:var(--bg);stroke:var(--line)}
+.slot.on{fill:var(--hold)}
+.slot.run{fill:var(--accent)}
+.xp-bg{fill:var(--bg);stroke:var(--line)}
+.xp{fill:var(--accent)}
+.party-p{fill:var(--dungeon);stroke:var(--dungeon-line)}
+.player-dot{stroke:#fff;stroke-width:1.5}
+.atk{stroke:#FFD66B;stroke-width:1.5}
+.chan-frame{fill:none;stroke-width:2.2;stroke-dasharray:10 6}
+.chan-frame.cs{stroke:#0E8175;fill:#0E8175;fill-opacity:.05}
+.chan-frame.fanout{stroke:#2F6DB5;fill:#2F6DB5;fill-opacity:.04}
+.chan-frame.mesh{stroke:#7A4FC0;fill:#7A4FC0;fill-opacity:.03}
+.chan-tag>rect{fill:#0E8175}
+.chan-tag.fanout>rect{fill:#2F6DB5}
+.chan-tag.mesh>rect{fill:#7A4FC0}
+.chan-tag>text{font-family:var(--mono);font-size:12px;font-weight:700;fill:#fff}
+.box.legend>rect{fill:var(--panel);stroke:var(--line)}
+.legend-t{font-size:12.5px;fill:var(--ink-2)}
+.box.dim{opacity:.3;transition:opacity .3s}
+.grp-cs{fill:var(--accent-soft);fill-opacity:.35;stroke:var(--accent);stroke-dasharray:6 4}
+.grp-cs-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--accent-ink)}
+.w-badge{font-family:var(--mono);font-size:12px;font-weight:600;fill:var(--ink-2)}
+.w-badge.heavy{fill:var(--accent);font-size:13px;font-weight:800}
+.w-badge.zero{fill:var(--hold);font-weight:800}
+.got{fill:var(--accent)}
+.got.heavy{fill:#0A5F56}
+.link.mesh{stroke:var(--line);stroke-width:3}
+.link.mesh.on{stroke:var(--accent);stroke-width:4}
+.mesh-t{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--accent-ink)}
+.bp-cell{fill:var(--bg);stroke:var(--line)}
+.bp-cell.on{fill:var(--accent)}
+.bp-cell.hi{fill:var(--hold)}
+.bp-mark{stroke:var(--ink-2);stroke-width:2;stroke-dasharray:4 3}
+.bp-mark.bad{stroke:#C0392B}
+.bp-mark-t{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink-2)}
+.bp-mark-t.bad{fill:#C0392B}
+.bp-pill>rect{fill:var(--accent)}
+.bp-pill>text{font-weight:700;font-size:13px;fill:var(--on-accent);text-anchor:middle}
+.bp-pill.stop>rect{fill:#C0392B}
+.bp-pill.stop>text{fill:#fff}
+.bp-pill.dead>rect{fill:var(--line)}
+.bp-pill.dead>text{fill:var(--muted)}
+.bp-world{font-size:13px;font-weight:600;fill:#CFE9E3}
+.bp-world.warn{fill:#F4B764}
+.bp-world.bad{fill:#FF8A7A}
+.t-count.bad{fill:#C0392B}
+.box.dead>rect{fill:#3A1F1F;stroke:#C0392B;stroke-width:2}
+.boom{fill:none;stroke:#FF7A3D;stroke-width:6}
+.boom.b1{stroke:#FFD66B;stroke-width:4}
+.boom.b2{stroke:#C0392B;stroke-width:8}
+.spark{fill:#FFB347}
+.boom-t{font-weight:800;font-size:30px;fill:#FF5A3D;paint-order:stroke;stroke:#fff;stroke-width:3px}
+.boom-t.big{font-size:34px}
+.boom-s{font-weight:700;font-size:13px;fill:#FF8A7A}
+svg.shake{animation:shake .5s ease}
+@keyframes shake{0%,100%{transform:translate(0,0)}20%{transform:translate(-6px,3px)}40%{transform:translate(6px,-3px)}60%{transform:translate(-4px,2px)}80%{transform:translate(4px,-1px)}}
+
+.link.relay{stroke:var(--hold);stroke-width:3;stroke-dasharray:9 5}
+.relay-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--hold)}
+.flylabel{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><span class="eyebrow">ZLink Framework · MORPG로 보기</span><h1 id="gtitle"></h1></div>
+    <nav class="groups" id="groups" aria-label="기능 그룹"></nav>
+  </header>
+
+  <div class="main">
+    <div class="side">
+      <ol class="steps" id="steps" aria-label="단계"></ol>
+      <label class="speed" for="speedRange">메시지 속도 <b id="speedVal">1.0×</b></label>
+      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1" aria-label="메시지 속도">
+    </div>
+    <div class="col">
+      <div class="bar">
+        <span class="t" id="stepNo"></span>
+        <p class="line" id="line"></p>
+        <div class="acts" id="acts"></div>
+        <p class="res" id="res" aria-live="polite"></p>
+        <details><summary>자세히</summary><ul id="more"></ul></details>
+      </div>
+      <p class="vlabel">게임 화면</p>
+      <div class="view"><svg id="game" viewBox="0 0 900 236" role="img" aria-label="게임 화면"></svg></div>
+      <p class="vlabel">서버 안에서</p>
+      <div class="view"><svg id="srv" viewBox="0 0 900 342" role="img" aria-label="서버 구성"></svg></div>
+      <p class="foot" id="foot"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+let K = 3.5;                       /* message speed: larger is slower */
+let gen = 0;                       /* bumps when the group changes; stale loops stop */
+class Cancel extends Error {}
+const sleep = ms => { const g = gen; return new Promise((res, rej) => setTimeout(() => g === gen ? res() : rej(new Cancel()), ms)); };
+function ease(t){ return t < .5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; }
+function tween(d, fn){ const g = gen; return new Promise((res, rej) => { const t0 = performance.now(); (function s(n){ if (g !== gen) { rej(new Cancel()); return; } const t = Math.min(1, Math.max(0, (n - t0) / d)); fn(ease(t)); t < 1 ? requestAnimationFrame(s) : res(); })(t0); }); }
+function spawn(fn){ Promise.resolve().then(fn).catch(e => { if (!(e instanceof Cancel)) console.error(e); }); }
+function mk(p, tag, a = {}){ const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) { if (k === 'text') e.textContent = v; else e.setAttribute(k, v); } p.append(e); return e; }
+function pulse(el, cls = 'pulse'){ el.classList.remove(cls); requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add(cls))); }
+const game = $('game'), srv = $('srv');
+let gG, gF, sL, sB, sF;
+function resetViews(gv, sv){
+  game.replaceChildren(); srv.replaceChildren();
+  game.setAttribute('viewBox', gv); srv.setAttribute('viewBox', sv);
+  gG = mk(game, 'g'); gF = mk(game, 'g'); sL = mk(srv, 'g'); sB = mk(srv, 'g'); sF = mk(srv, 'g');
+}
+const res = t => { $('res').innerHTML = t; };
+
+/* ---------- server-view kit ---------- */
+function box(x, y, w, h, cls, title, sub, p = sB){ const g = mk(p, 'g', {class: 'box ' + cls}); mk(g, 'rect', {x, y, width: w, height: h, rx: 9}); let st = null; if (title) mk(g, 'text', {x: x + 10, y: y + 20, class: 't-title', text: title}); if (sub) st = mk(g, 'text', {x: x + 10, y: y + 36, class: 't-sub', text: sub}); return {g, x, y, w, h, st, L(){ return {x: this.x, y: this.y + this.h / 2}; }, R(){ return {x: this.x + this.w, y: this.y + this.h / 2}; }, T(){ return {x: this.x + this.w / 2, y: this.y}; }, B(){ return {x: this.x + this.w / 2, y: this.y + this.h}; }}; }
+function curve(a, b, bend = 0){ const mx = (a.x + b.x) / 2 - (b.y - a.y) * bend, my = (a.y + b.y) / 2 + (b.x - a.x) * bend; return `M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`; }
+function path(d, cls = ''){ return mk(sL, 'path', {d, class: 'link ' + cls}); }
+function link(a, b, cls = '', bend = 0){ return path(curve(a, b, bend), cls); }
+/* left-to-right over a top corridor, entering b from above */
+function topRoute(a, b, lane){ const k = a.x + 14; return `M${a.x},${a.y} L${k - 6},${a.y} Q${k},${a.y} ${k},${a.y - 6} L${k},${lane + 6} Q${k},${lane} ${k + 6},${lane} L${b.x - 6},${lane} Q${b.x},${lane} ${b.x},${lane + 6} L${b.x},${b.y}`; }
+/* from a box top to another box top through a lane above them */
+function overRoute(a, b, lane){ const dir = b.x > a.x ? 1 : -1; return `M${a.x},${a.y} L${a.x},${lane + 6} Q${a.x},${lane} ${a.x + 6 * dir},${lane} L${b.x - 6 * dir},${lane} Q${b.x},${lane} ${b.x},${lane + 6} L${b.x},${b.y}`; }
+function fly(a, b, {cls = 'pkt', dur = 420, r = 5, bend = .06, label} = {}){ return flyPath(curve(a, b, bend), {cls, dur, r, label}); }
+function flyPath(d, {cls = 'pkt', dur = 420, r = 5, back = false, label} = {}){
+  const p = mk(sF, 'path', {d, fill: 'none', stroke: 'none'}); const len = p.getTotalLength(); const c = mk(sF, 'circle', {r, class: cls}); const t = label ? mk(sF, 'text', {class: 'flylabel', text: label}) : null;
+  return tween(dur * K * Math.max(1, len / 260), e => { const pt = p.getPointAtLength((back ? 1 - e : e) * len); c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); if (t) { t.setAttribute('x', pt.x + r + 3); t.setAttribute('y', pt.y - r - 2); } }).finally(() => { c.remove(); p.remove(); if (t) t.remove(); });
+}
+function chipc(x, y, label, cls = ''){ const g = mk(sB, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+function chanTag(x, y, text, cls){ const g = mk(sB, 'g', {class: 'chan-tag ' + cls}); const w = 16 + [...text].reduce((t, ch) => t + (/[ㄱ-힝]/.test(ch) ? 11.5 : 7.2), 0); mk(g, 'rect', {x, y: y - 11, width: w, height: 22, rx: 6}); mk(g, 'text', {x: x + 8, y: y + 4, text}); return g; }
+function chipcIn(p, x, y, label, cls = ''){ const g = mk(p, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+function storeBox(x, y, w){ const b = box(x, y, w, 48, 'store', 'Location Store'); const t1 = mk(sB, 'text', {x: x + 150, y: y + 20, class: 't-store'}), t2 = mk(sB, 'text', {x: x + 150, y: y + 38, class: 't-store'}); b.set = (a, c) => { if (a != null) t1.textContent = a; if (c != null) t2.textContent = c; pulse(b.g); }; b.pt = {x: x + w / 2, y: y + 48}; return b; }
+function actorDot(label, x, y, p = sB){ const g = mk(p, 'g', {class: 'actor'}); const c = mk(g, 'circle', {r: 13}); const t = mk(g, 'text', {text: label}); const o = {g, x, y, set(nx, ny){ this.x = nx; this.y = ny; c.setAttribute('cx', nx); c.setAttribute('cy', ny); t.setAttribute('x', nx); t.setAttribute('y', ny); }}; o.set(x, y); return o; }
+/* a Spot box with a visible queue and a single "running" slot (the gate) */
+function qspot(x, y, w, h, label, sub, lay){
+  const g = mk(sB, 'g', {class: 'spot', transform: `translate(${x},${y})`});
+  mk(g, 'rect', {x: 0, y: 0, width: w, height: h, rx: 8, class: 'bg'}); mk(g, 'text', {x: 10, y: 17, class: 't-spot', text: label}); if (sub) mk(g, 'text', {x: 10, y: 31, class: 't-sub', text: sub});
+  const o = {g, x, y, w, h, q: [], running: false, phase: 'open', order: [], lay, inner: mk(g, 'g')};
+  if (lay) {
+    const lw = w - 16;
+    mk(g, 'rect', {x: 8, y: lay.lane, width: lw, height: 26, rx: 6, class: 'lane'}); mk(g, 'text', {x: 14, y: lay.lane + 17, class: 'lane-l', text: 'queue'});
+    o.ex = mk(g, 'g', {class: 'exec'}); mk(o.ex, 'rect', {x: 8, y: lay.exec, width: lw, height: 28, rx: 6}); mk(o.ex, 'text', {x: 16, y: lay.exec + 18, class: 'exec-g', text: 'gate'});
+    o.exT = mk(o.ex, 'text', {x: 52, y: lay.exec + 18, class: 'exec-t', text: '대기 중'});
+    if (lay.order) { o.ordT = mk(g, 'text', {x: 8, y: lay.order, class: 't-mono', text: ''}); mk(g, 'text', {x: 8, y: lay.order + 18, class: 't-mono', text: 'gate 하나 = 한 번에 하나씩'}); }
+    o.chips = mk(g, 'g');
+    o.slotX = k => Math.min(w - 34, 58 + Math.min(k, 3) * 30 + Math.max(0, k - 3) * 4); o.laneY = lay.lane + 4; o.execX = 14; o.execY = lay.exec + 5;
+  }
+  o.abs = (lx, ly) => ({x: o.x + lx, y: o.y + ly});
+  o.moveTo = async (nx, ny, d, onMove) => { const ox = o.x, oy = o.y; await tween(d, e => { o.x = ox + (nx - ox) * e; o.y = oy + (ny - oy) * e; g.setAttribute('transform', `translate(${o.x},${o.y})`); onMove && onMove(); }); };
+  o.setHold = on => { o.phase = on ? 'hold' : 'open'; g.classList.toggle('holding', on); };
+  return o;
+}
+function place(el, x, y, instant){ el.style.transition = instant ? 'none' : `transform ${.25 * K}s ease`; el.style.transform = `translate(${x}px,${y}px)`; }
+function layoutQ(sp){ sp.q.forEach((j, k) => place(j.chip, sp.slotX(k), sp.laneY)); }
+/* job: {label, tick, what, who, actor, fn, from} */
+async function enqueue(sp, job){
+  if (job.from) await fly(job.from, sp.abs(sp.slotX(sp.q.length) + 13, sp.laneY + 9), {dur: 300, bend: 0, r: 4, cls: job.pktCls || 'pkt'});
+  return new Promise(res => {
+    const c = mk(sp.chips, 'g', {class: 'chip' + (job.tick ? ' tick' : '')}); mk(c, 'rect', {x: 0, y: 0, width: 26, height: 18, rx: 4}); mk(c, 'text', {x: 13, y: 13, text: job.label});
+    place(c, job.tick ? sp.w - 36 : sp.slotX(sp.q.length), sp.laneY, true);
+    sp.q.push({...job, res, chip: c}); if (job.onQueued) job.onQueued(); requestAnimationFrame(() => requestAnimationFrame(() => layoutQ(sp)));
+  });
+}
+function startProc(sp){ spawn(async () => { for (;;) {
+  if (sp.phase === 'open' && !sp.running && sp.q.length) {
+    const j = sp.q.shift(); sp.running = true;
+    place(j.chip, sp.execX, sp.execY); layoutQ(sp); await sleep(260 * K);
+    j.chip.remove(); sp.ex.classList.add('on'); sp.exT.textContent = j.what;
+    if (j.actor) j.actor.g.classList.add('run');
+    await sleep((j.dur || 230) * K);
+    let out; try { out = j.fn ? j.fn() : undefined; } catch (e) { console.error(e); }
+    if (j.actor) j.actor.g.classList.remove('run');
+    sp.ex.classList.remove('on'); sp.exT.textContent = '대기 중';
+    sp.order.push(j.label); if (sp.ordT) sp.ordT.textContent = '처리 순서  ' + sp.order.slice(-Math.max(2, Math.floor((sp.w - 80) / 34))).join(' → ');
+    sp.running = false; j.res(out);
+  } else await sleep(30);
+} }); }
+/* clients + session server column */
+function sessionKit(n, top = 40){
+  const CL = [], SE = [];
+  mk(sB, 'text', {x: 8, y: 26, class: 'lbl', text: '게임 앱'}); mk(sB, 'text', {x: 114, y: 26, class: 'lbl', 'text-anchor': 'middle', text: 'TCP'});
+  const gw = box(150, 14, 152, 318, 'gw', '세션 서버', 'STREAM');
+  for (let i = 0; i < n; i++) {
+    const y = top + i * 70; const g = mk(sB, 'g', {class: 'cl hidden'}); mk(g, 'rect', {x: 8, y, width: 70, height: 52, rx: 8}); mk(g, 'text', {x: 43, y: y + 21, text: 'client'}); mk(g, 'text', {x: 43, y: y + 40, class: 'tag', text: 'P' + (i + 1)});
+    CL.push({g, pt: {x: 78, y: y + 26}});
+    const sy = 54 + i * 70; const sg = mk(sB, 'g', {class: 'sess hidden'}); mk(sg, 'rect', {x: 160, y: sy, width: 132, height: 44, rx: 6}); const a = mk(sg, 'text', {x: 170, y: sy + 18}); const b = mk(sg, 'text', {x: 170, y: sy + 35});
+    SE.push({g: sg, a, b, L: {x: 150, y: sy + 22}, R: {x: 292, y: sy + 22}, conn: false, id: 0});
+  }
+  let n0 = 0;
+  const kit = {CL, SE, gw, conns: [], binds: [],
+    open(i){ SE[i].id = ++n0; SE[i].conn = true; kit.render(i); },
+    close(i){ SE[i].conn = false; kit.render(i); },
+    render(i){ const s = SE[i]; s.g.setAttribute('class', 'sess' + (s.id ? (s.conn ? '' : ' dead') : ' hidden')); s.a.textContent = s.conn ? `session #${s.id}` : '연결 없음'; s.b.textContent = s.conn ? `→ P${i + 1}` : `P${i + 1}는 서버에 남음`; CL[i].g.setAttribute('class', 'cl' + (s.id ? (s.conn ? '' : ' off') : ' hidden')); },
+    routeTo(i, ac){ const a = SE[i].R; if (ac.x < 495) return curve(a, {x: ac.x - 13, y: ac.y}, .03); return topRoute(a, {x: ac.x, y: ac.y - 13}, 62 + i * 5); },
+    draw(actors){ kit.conns.forEach(l => l.remove()); kit.binds.forEach(l => l.remove()); kit.conns = []; kit.binds = []; for (let i = 0; i < n; i++) { if (!SE[i].conn) continue; kit.conns.push(link(CL[i].pt, SE[i].L, 'conn')); kit.binds.push(path(kit.routeTo(i, actors[i]), 'bind')); } },
+    async up(i, ac){ await fly(CL[i].pt, SE[i].L, {dur: 300, bend: 0}); await flyPath(kit.routeTo(i, ac), {dur: 420}); },
+    async push(i, ac){ await flyPath(kit.routeTo(i, ac), {cls: 'pkt-push', dur: 380, r: 4, back: true}); await fly(SE[i].L, CL[i].pt, {cls: 'pkt-push', dur: 260, r: 4, bend: 0}); },
+  };
+  return kit;
+}
+function serverGroups(){ mk(sB, 'rect', {x: 316, y: 86, width: 208, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 531, y: 86, width: 363, height: 252, rx: 12, class: 'grp-dng'}); }
+function gauge(x, y, w, h, label){
+  mk(sB, 'rect', {x, y, width: w, height: h, rx: 4, class: 'gauge-bg'});
+  const f = mk(sB, 'rect', {x: x + 2, y: y + h - 2, width: w - 4, height: 0, rx: 3, class: 'gauge-fill'});
+  mk(sB, 'text', {x: x + w / 2, y: y + h + 15, class: 't-mono', text: label, 'text-anchor': 'middle'});
+  const v = mk(sB, 'text', {x: x + w / 2, y: y - 6, class: 't-count', text: '0%', 'text-anchor': 'middle'});
+  return r => { r = Math.max(0, Math.min(1, r)); const hh = (h - 4) * r; f.setAttribute('y', y + h - 2 - hh); f.setAttribute('height', hh); f.setAttribute('class', 'gauge-fill' + (r >= .9 ? ' hi' : '')); v.textContent = Math.round(r * 100) + '%'; };
+}
+
+/* ---------- game-view kit ---------- */
+const COLORS = ['#2F8FD8', '#D8662F', '#8A5CD6', '#2FA86B'];
+function zone(x, y, w, h, cls, title, sub, dark){ mk(gG, 'rect', {x, y, width: w, height: h, rx: 14, class: cls}); if (title) mk(gG, 'text', {x: x + 14, y: y + 24, class: 'g-title' + (dark ? ' d' : ''), text: title}); return sub ? mk(gG, 'text', {x: x + 14, y: y + 41, class: 'g-sub' + (dark ? ' d' : ''), text: sub}) : null; }
+function gchar(i, x, y, p = gG){
+  const g = mk(p, 'g', {class: 'ch'}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 14, fill: COLORS[i % 4], class: 'body'}); mk(g, 'text', {text: 'P' + (i + 1)});
+  mk(g, 'rect', {x: -16, y: 18, width: 32, height: 4, rx: 2, class: 'hp-bg'}); const hp = mk(g, 'rect', {x: -16, y: 18, width: 32, height: 4, rx: 2, class: 'hp party'});
+  const o = {g, hp, x, y, life: 500, set(nx, ny){ this.x = nx; this.y = ny; g.setAttribute('transform', `translate(${nx},${ny})`); }, async walk(nx, ny, d = 900){ const ox = this.x, oy = this.y; await tween(d, e => this.set(ox + (nx - ox) * e, oy + (ny - oy) * e)); }, hurt(d){ this.life = Math.max(40, this.life - d); hp.setAttribute('width', 32 * this.life / 500); }};
+  o.set(x, y); return o;
+}
+function seen(c){ c.g.classList.remove('seen'); requestAnimationFrame(() => requestAnimationFrame(() => c.g.classList.add('seen'))); }
+function popup(x, y, text, cls = 'dmg'){ const t = mk(gF, 'text', {x, y, class: cls, text}); tween(900, e => { t.setAttribute('y', y - 26 * e); t.setAttribute('opacity', 1 - e * .9); }).catch(() => {}).finally(() => t.remove()); }
+function makeBoss(cx, cy, r, hpX, hpY, hpW, max){
+  const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: '보스'});
+  mk(gG, 'rect', {x: hpX, y: hpY, width: hpW, height: 10, rx: 5, class: 'hp-bg'}); const bar = mk(gG, 'rect', {x: hpX, y: hpY, width: hpW, height: 10, rx: 5, class: 'hp'});
+  const t = mk(gG, 'text', {x: hpX + hpW, y: hpY - 6, class: 'hp-t', 'text-anchor': 'end', text: `HP ${max}`});
+  const o = {g, hp: max, max, hit(d){ o.hp = Math.max(0, o.hp - d); bar.setAttribute('width', hpW * o.hp / max); t.textContent = `HP ${o.hp}`; g.classList.remove('hit'); void g.getBBox(); g.classList.add('hit'); popup(cx + (Math.random() * 50 - 25), cy - r - 4, '-' + d); }};
+  return o;
+}
+function notes(x, y, w, h, title){
+  mk(gG, 'rect', {x, y, width: w, height: h, rx: 14, class: 'panelz'}); mk(gG, 'text', {x: x + 14, y: y + 24, class: 'g-title', text: title});
+  const g = mk(gG, 'g'); const items = [];
+  return (text, cls = '') => { items.unshift({text, cls}); items.length = Math.min(items.length, 6); g.replaceChildren(); items.forEach((it, k) => mk(g, 'text', {x: x + 14, y: y + 50 + k * 24, class: 'note-t ' + (k === 0 ? (it.cls || 'hi') : it.cls), text: it.text})); };
+}
+
+/* =========================================================
+   Group 1. ClientServer channel
+   (out-game: client → HTTP → API server → feature servers)
+   ========================================================= */
+function gClientServer(){
+  resetViews('0 0 900 236', '0 0 900 462');
+  const note = notes(14, 14, 872, 208, '앱 화면 · 게임 밖 메뉴(인벤토리·상점)');
+
+  /* clients and the API server */
+  mk(sB, 'text', {x: 8, y: 26, class: 'lbl', text: '게임 앱'}); mk(sB, 'text', {x: 94, y: 26, class: 'lbl', 'text-anchor': 'middle', text: 'HTTP'});
+  const CL = [0, 1, 2, 3].map(i => { const y = 60 + i * 96; const g = mk(sB, 'g', {class: 'cl'}); mk(g, 'rect', {x: 8, y, width: 66, height: 52, rx: 8}); mk(g, 'text', {x: 41, y: y + 21, text: 'client'}); mk(g, 'text', {x: 41, y: y + 40, class: 'tag', text: 'P' + (i + 1)}); return {x: 74, y: y + 26}; });
+  box(116, 14, 150, 440, 'gw', 'API 서버', 'HTTP를 받아');
+  mk(sB, 'text', {x: 126, y: 66, class: 't-sub', text: '기능 서버로 넘긴다'});
+  mk(sB, 'text', {x: 126, y: 92, class: 't-mono', text: 'ClientServer client'});
+  CL.forEach(p => link(p, {x: 116, y: p.y}, 'conn'));
+  const store = storeBox(280, 4, 610);
+
+  /* ClientServer channel groups */
+  function group(y, h, name){ mk(sB, 'rect', {x: 284, y, width: 364, height: h, rx: 12, class: 'chan-frame cs'}); chanTag(292, y, `ClientServer channel · ${name}`, 'cs'); }
+  group(62, 226, 'inventory'); group(298, 158, 'payment');
+  function server(title, y, ghost, chan){
+    const b = box(296, y, 340, 60, ghost ? 'ghost faded' : '', title);
+    Object.assign(b, {w: 100, cur: 0, n: 0, batch: 0, ready: !ghost, chan});
+    b.wT = mk(sB, 'text', {x: 306, y: y + 46, class: 'w-badge', text: ghost ? '아직 없다' : 'weight 100'});
+    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L());
+    return b;
+  }
+  function drawCells(b){ b.cells.replaceChildren(); for (let k = 0; k < Math.min(b.batch, 14); k++) mk(b.cells, 'rect', {x: 420 + k * 15, y: b.y + 36, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 420 + Math.min(b.batch, 14) * 15 + 4, y: b.y + 48, class: 't-count', text: `${b.batch}건`}); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
+  const I = [server('아이템 서버 1', 88, false, 'inventory'), server('아이템 서버 2', 154, false, 'inventory'), server('아이템 서버 3', 220, true, 'inventory')];
+  const P = [server('결제 서버 1', 324, false, 'payment'), server('결제 서버 2', 390, false, 'payment')];
+  I.slice(0, 2).concat(P).forEach(upd);
+  /* what a ClientServer channel is */
+  const lg = box(666, 62, 224, 392, 'legend', 'ClientServer 구성');
+  ['client → server 한 방향', 'server가 포트를 연다', 'client(API 서버)가 연결한다', 'request는 응답을 받는다', 'server가 여럿이면', '  client가 weight로 고른다', 'server는 client를', '  먼저 부르지 않는다', '', '■ = 이번에 받은 요청'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
+  store.set('ClientServer inventory → 아이템 서버 1, 2', 'ClientServer payment → 결제 서버 1, 2');
+
+  function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
+  async function call(i, list, label){
+    await fly(CL[i], {x: 116, y: CL[i].y}, {dur: 280, bend: 0, label: 'HTTP'});
+    const b = pick(list); if (!b) { note('대상 없음 오류', 'warn'); return; }
+    /* down the corridor right of the API server, then straight into the chosen server */
+    const cy = CL[i].y, by = b.y + 30, r = Math.sign(by - cy) * Math.min(6, Math.abs(by - cy) / 2);
+    const route = `M266,${cy} L270,${cy} Q276,${cy} 276,${cy + r} L276,${by - r} Q276,${by} 282,${by} L296,${by}`;
+    await flyPath(route, {dur: 300, label}); pulse(b.g);
+    b.n++; b.batch++; upd(b); await sleep(240 * K);
+    await flyPath(route, {cls: 'pkt-push', dur: 300, back: true});
+    await fly({x: 116, y: CL[i].y}, CL[i], {cls: 'pkt-push', dur: 280, bend: 0});
+    return b;
+  }
+  async function burst(n, list, label, what){
+    list.forEach(b => { b.batch = 0; upd(b); });
+    await Promise.all(Array.from({length: n}, async (_, k) => { await sleep(k * 260 * K / 3.5); const b = await call(k % 4, list, label); if (b) note(`P${k % 4 + 1} ${what} ← ${b.title || ''}`); }));
+    return list.filter(b => b.ready).map(b => `${b.name}: ${b.batch}건`).join(' · ');
+  }
+  I.forEach((b, k) => { b.name = `아이템 서버 ${k + 1}`; b.title = b.name; }); P.forEach((b, k) => { b.name = `결제 서버 ${k + 1}`; b.title = b.name; });
+  const STEPS = [
+    {title: '이름으로 부르기', line: '플레이어가 앱에서 인벤토리를 연다. HTTP 요청은 API 서버로 가고, API 서버는 inventory라는 channel 이름으로 아이템 서버를 부른다.',
+     act: '아이템 서버로 4번 요청', repeat: true, more: ['ClientServer channel: 기능 서버가 포트를 열고, API 서버가 client로 연결한다. 호출은 client → server 한 방향이다.', 'API 서버는 아이템 서버의 주소를 모른다. inventory라는 이름만 안다.', 'server가 여럿이면 API 서버가 그중 하나를 고른다. weight가 같으면 돌아가며 하나씩(round-robin)이다.', '호출 코드에는 <code>request_to_channel("inventory", …)</code>만 남는다.'],
+     async run(){ const r = await burst(4, I, 'inventory', '인벤토리'); res(`${r}. weight가 같으니 고르게 나뉜다.`); }},
+    {title: '서버 늘리기', line: '아이템 서버 3을 띄운다. Location Store에 등록되면 API 서버가 알아서 연결해 후보에 넣는다. 설정을 고치지 않는다.',
+     act: '아이템 서버 3 시작', extra: ['아이템 서버로 6번 요청', async () => { const r = await burst(6, I, 'inventory', '인벤토리'); res(`${r}. 새 서버도 똑같이 받는다.`); }],
+     more: ['서버는 시작할 때 자기 주소와 맡은 channel 이름을 Store에 적는다.', 'API 서버는 Store 기록을 보고 연결한 뒤, 실제 연결에서 신원을 확인하고 나서 보낸다.', '서버를 몇 대 띄우든 호출 코드는 같다.'],
+     async run(){ const s3 = I[2]; s3.g.classList.remove('ghost', 'faded');
+       await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set('ClientServer inventory → 아이템 서버 1, 2, 3', null);
+       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L()); s3.ready = true; upd(s3); pulse(s3.g);
+       res('아이템 서버 3이 후보가 됐다. "아이템 서버로 6번 요청"로 확인해 보라.'); }},
+    {title: '가중치로 나누기', line: '아이템 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3의 칸이 다른 서버의 세 배로 쌓인다.',
+     act: '서버 3 weight 300', extra: ['아이템 서버로 10번 요청', async () => { const r = await burst(10, I, 'inventory', '인벤토리'); res(`${r}. 서버 3이 다른 서버의 약 3배를 받았다.`); }],
+     more: ['weight는 0~10000이고 기본은 100이다. 모두 100이면 돌아가며 하나씩이다.', '비율은 길게 보았을 때의 비율이다. 호출 하나하나의 순서를 정하지는 않는다.', '사양이 다른 장비를 섞거나, 한 대에 덜 보내야 할 때 쓴다.'],
+     async run(){ I[2].w = 300; I.forEach(b => b.cur = 0); upd(I[2]); pulse(I[2].g); res('서버 3의 weight가 300이 됐다. "아이템 서버로 10번 요청"를 눌러 칸이 쌓이는 길이를 비교해 보라.'); }},
+    {title: '가중치 0', line: '아이템 서버 1의 weight를 0으로 바꾼다. 서버 1로는 새 요청이 가지 않는다.',
+     act: '서버 1 weight 0', extra: ['아이템 서버로 10번 요청', async () => { const r = await burst(10, I, 'inventory', '인벤토리'); res(`${r}. 서버 1로는 하나도 가지 않았다.`); }],
+     more: ['weight는 실행 중에 바꿀 수 있는 유일한 값이다. 0은 새 요청 후보에서만 뺀다.', '이미 받은 요청은 끝까지 처리한다. 연결과 Store 기록도 그대로 남는다.', '점검 전에 0으로 두고, 끝나면 100으로 돌린다.'],
+     async run(){ I[0].w = 0; I.forEach(b => b.cur = 0); upd(I[0]); res('서버 1의 weight가 0이 됐다(주황 점선). "아이템 서버로 10번 요청"로 확인해 보라.'); }},
+    {title: '다른 channel 부르기', line: '상점에서 아이템을 사면 API 서버가 payment channel로 결제 서버를 부른다. 이름만 다를 뿐 부르는 방법은 같다.',
+     act: '결제 서버로 4번 요청', repeat: true, more: ['channel 이름마다 담당 server 묶음이 따로 있다. inventory와 payment는 서로 다른 channel이다.', 'API 서버 한 곳에 client 등록을 둘 둔다. 등록만 다르고 호출 코드는 같다.'],
+     async run(){ const r = await burst(4, P, 'payment', '결제 승인'); res(`${r}. payment 묶음 안에서 나뉜다. inventory 묶음과는 섞이지 않는다.`); }},
+  ];
+  return {title: 'ClientServer channel', steps: STEPS, foot: '가이드 01장(전체 topology)·20장 §4(ClientServer channel)·30장(Channel 동작 원리)'};
+}
+
+/* =========================================================
+   Group 2. Fanout channel: broadcast filtered by topic
+   ========================================================= */
+function gFanout(){
+  resetViews('0 0 900 236', '0 0 900 462');
+  /* game view: where each kind of server shows the notice */
+  const panels = {
+    field: {x: 14, w: 286, title: '마을 (필드 서버)', cls: 'village'},
+    dungeon: {x: 312, w: 286, title: '던전 (던전 서버)', cls: 'dungeon', dark: true},
+    item: {x: 610, w: 276, title: '상점 (아이템 서버)', cls: 'panelz'},
+  };
+  Object.entries(panels).forEach(([k, p]) => {
+    zone(p.x, 14, p.w, 208, p.cls, p.title, null, p.dark);
+    p.cx = p.x + p.w / 2;
+    if (k !== 'item') [0, 1, 2, 3].forEach(i => gchar(i, p.x + 50 + i * 58, 130 + (i % 2) * 30));
+    else { p.priceT = mk(gG, 'text', {x: p.x + 16, y: 120, class: 'note-t', text: '물약 100골드 · 검 900골드'}); }
+    p.bg = mk(gF, 'g');
+  });
+  async function show(kind, text){ const p = panels[kind]; p.bg.replaceChildren(); const b = mk(p.bg, 'g', {class: 'banner'}); mk(b, 'rect', {x: p.x + 10, y: 186, width: p.w - 20, height: 26, rx: 6}); mk(b, 'text', {x: p.cx, y: 204, text}); await sleep(900 * K); b.remove(); }
+
+  const store = storeBox(280, 4, 610);
+  /* the whole Fanout channel */
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 396, rx: 14, class: 'chan-frame fanout'});
+  chanTag(16, 60, 'Fanout channel · notice', 'fanout');
+  const pub = box(24, 170, 200, 150, '', '운영 툴', 'PUB · 발행하는 쪽');
+  mk(sB, 'text', {x: 34, y: 236, class: 'legend-t', text: '받을 서버 목록을'}); mk(sB, 'text', {x: 34, y: 256, class: 'legend-t', text: '알지 않는다'});
+  const topicT = mk(sB, 'text', {x: 34, y: 296, class: 'w-badge heavy', text: ''});
+  const SUBS = [];
+  function sub(kind, label, k, ghost){
+    const y = 76 + SUBS.length * 52;
+    const b = box(400, y, 480, 46, ghost ? 'ghost faded' : '', label);
+    Object.assign(b, {kind, topics: [kind, 'all'], n: 0, ready: !ghost, label});
+    b.chips = mk(sB, 'g');
+    if (!ghost) { let x = 560; ['SUB', ...b.topics].forEach(t => { x += chipcIn(b.chips, x, y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; }); }
+    b.cT = mk(sB, 'text', {x: 840, y: y + 28, class: 't-count', 'text-anchor': 'end', text: ghost ? '아직 없다' : ''});
+    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, '', 0);
+    SUBS.push(b); return b;
+  }
+  sub('field', '필드 서버 1'); sub('field', '필드 서버 2'); sub('dungeon', '던전 서버 1'); sub('dungeon', '던전 서버 2'); sub('item', '아이템 서버 1'); sub('item', '아이템 서버 2');
+  const F3 = sub('field', '필드 서버 3', null, true);
+  store.set('fanout notice publisher → 운영 툴', '');
+  const MSG = {all: '점검 안내: 오늘 새벽 4시', field: '마을 축제가 시작됐다', dungeon: '던전 보상 2배 이벤트', item: '상점 할인 시작'};
+  async function publish(topic){
+    topicT.textContent = `topic: ${topic}`; pulse(pub.g);
+    const targets = SUBS.filter(b => b.ready && b.topics.includes(topic));
+    SUBS.filter(b => b.ready && !b.topics.includes(topic)).forEach(b => b.g.classList.add('dim'));
+    await Promise.all(targets.map(b => fly({x: 224, y: 245}, {x: 400, y: b.y + 23}, {cls: 'pkt-pub', dur: 380, bend: 0, label: b === targets[0] ? topic : undefined}).then(() => { b.n++; b.cT.textContent = `받음 ${b.n}`; pulse(b.g); })));
+    const kinds = [...new Set(targets.map(b => b.kind))];
+    kinds.forEach(k => spawn(() => show(k, MSG[topic])));
+    if (topic === 'item') { panels.item.priceT.textContent = '할인 중: 물약 70골드 · 검 630골드'; }
+    await sleep(300 * K); SUBS.forEach(b => b.g.classList.remove('dim'));
+    return targets.map(b => b.label);
+  }
+  const STEPS = [
+    {title: '전체에 보내기', line: '운영 툴이 topic all로 공지를 발행한다. all을 구독한 서버 전부가 받는다. 응답은 없다.',
+     act: 'topic all 발행', repeat: true, more: ['Fanout channel: 발행하는 쪽(PUB)이 하나 보내면, 연결된 구독자(SUB)가 각자 받는다.', '발행하는 쪽은 구독자 목록을 모른다. 구독 서버가 늘거나 줄어도 발행 코드는 같다.', '응답이 없으므로 <code>publish</code>만 있다. 처리 결과가 필요하면 ClientServer나 RouteMesh의 <code>request</code>를 쓴다.'],
+     async run(){ const r = await publish('all'); res(`${r.length}대가 모두 받았다: ${r.join(', ')}.`); }},
+    {title: '필드 서버에만', line: 'topic field로 발행하면 field를 구독한 필드 서버만 받는다. 다른 서버로는 가지 않는다.',
+     act: 'topic field 발행', repeat: true, more: ['구독은 topic으로 등록한다. 발행한 topic과 맞는 구독자만 받는다.', '서버 하나가 topic 여럿을 구독할 수 있다. 여기서는 각자 자기 종류 + all을 구독한다.', 'topic을 생략하면 메시지의 packet 이름이 topic이 된다.'],
+     async run(){ const r = await publish('field'); res(`받은 서버: ${r.join(', ')}. 나머지는 흐리게 표시했다.`); }},
+    {title: '던전 서버에만', line: 'topic dungeon으로 발행하면 던전 서버만 받는다.',
+     act: 'topic dungeon 발행', repeat: true, more: ['같은 channel 안에서 topic만 바꿔 받는 대상을 고른다.'],
+     async run(){ const r = await publish('dungeon'); res(`받은 서버: ${r.join(', ')}.`); }},
+    {title: '아이템 서버에만', line: 'topic item으로 발행하면 아이템 서버만 받는다. 게임 밖 서버에도 같은 방법으로 알린다.',
+     act: 'topic item 발행', repeat: true, more: ['게임 서버든 기능 서버든 notice channel을 구독하면 받을 수 있다.'],
+     async run(){ const r = await publish('item'); res(`받은 서버: ${r.join(', ')}. 상점 가격표가 바뀌었다.`); }},
+    {title: '구독 서버 늘리기', line: '필드 서버 3을 띄운다. Location Store에서 운영 툴의 주소를 찾아 스스로 연결하고 구독한다. 운영 툴은 바꿀 것이 없다.',
+     act: '필드 서버 3 시작', extra: ['topic field 발행', async () => { const r = await publish('field'); res(`받은 서버: ${r.join(', ')}. 새 서버도 받는다.`); }],
+     more: ['구독하는 쪽이 Store에서 발행하는 쪽(PUB)의 주소를 찾아 연결한다.', '연결과 구독이 끝나기 전에 발행된 공지는 나중에 받지 못한다. 저장·재전송은 하지 않는다.', '느린 구독자의 몫은 버리고 발행은 성공한다. 버리면 안 되면 NoDrop을 켠다. 그러면 발행이 기다리다 오류로 끝날 수 있다.'],
+     async run(){ F3.g.classList.remove('ghost', 'faded'); await fly(F3.T(), store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, F3.T(), {cls: 'pkt-look', dur: 400});
+       let x = 560; ['SUB', 'field', 'all'].forEach(t => { x += chipcIn(F3.chips, x, F3.y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; });
+       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}); F3.ready = true; F3.cT.textContent = '받음 0'; pulse(F3.g);
+       res('필드 서버 3이 운영 툴에 연결하고 field, all을 구독했다. "topic field 발행"으로 확인해 보라.'); }},
+  ];
+  return {title: 'Fanout channel', steps: STEPS, foot: '가이드 20장 §5(Fanout channel)·30장 §5(pub/sub의 형태)'};
+}
+
+/* =========================================================
+   Group 3. Lobby and dungeon (Session · Actor · Spot)
+   ========================================================= */
+function gLobby(){
+  resetViews('0 0 900 236', '0 0 900 392');
+  zone(14, 14, 122, 208, 'zone-sel', '캐릭터 선택', 'Entry Spot');
+  zone(148, 14, 252, 208, 'village', '마을', 'town-1 · 서로 보인다');
+  [[300, 26], [350, 26]].forEach(([x, y]) => mk(gG, 'rect', {x, y, width: 36, height: 26, rx: 4, class: 'house'}));
+  const dngG = mk(gG, 'g', {class: 'dng locked'}); const saveG = gG; gG = dngG;
+  const dngSub = zone(412, 14, 474, 208, 'dungeon', '던전', '아직 없다 · 파티원만 들어간다', true);
+  const boss = makeBoss(800, 132, 44, 706, 62, 170, 600); gG = saveG;
+  const SEL = [[75, 82], [75, 118], [75, 154], [75, 190]], TOWN = [[200, 100], [270, 92], [220, 160], [320, 150]], DNG = [[500, 92], [500, 172], [590, 80], [590, 180]];
+  const ch = SEL.map(([x, y], i) => { const c = gchar(i, x, y); c.g.classList.add('off'); return c; });
+  const others = [[180, 130], [250, 186], [370, 110]].map(([x, y]) => { const g = mk(gG, 'g', {class: 'ch'}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 10, fill: '#8C9A96', class: 'body'}); g.setAttribute('transform', `translate(${x},${y})`); return {g}; });
+  mk(gG, 'text', {x: 162, y: 214, class: 'g-sub', text: '회색: 마을의 다른 플레이어'});
+  const bannerG = mk(gF, 'g');
+  async function banner(text){ bannerG.replaceChildren(); const b = mk(bannerG, 'g', {class: 'banner'}); mk(b, 'rect', {x: 156, y: 62, width: 236, height: 22, rx: 6}); mk(b, 'text', {x: 274, y: 77, text}); await sleep(3200); b.remove(); }
+
+  const store = storeBox(320, 4, 570);
+  mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,382 L142,382 Z', class: 'chan-frame mesh'}); chanTag(150, 382, 'RouteMesh channel · game', 'mesh');
+  const ss = sessionKit(4);
+  serverGroups();
+  box(320, 90, 200, 244, '', '필드 서버', 'node A'); box(535, 90, 200, 244, '', '던전 서버', 'node B'); box(750, 90, 140, 244, '', '던전 서버', 'node C');
+  mk(sB, 'text', {x: 760, y: 150, class: 't-mono', text: '다른 던전들'});
+  const meshL = path('M420,334 L420,354 L820,354 L820,334 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 440, y: 368, class: 'mesh-t', text: 'RouteMesh · 서버끼리 연결 하나로 서로 부른다'});
+  const meshD = (a, b) => `M${a},334 L${a},354 L${b},354 L${b},334`;
+  const entry = qspot(330, 132, 180, 58, 'Entry Spot · 캐릭터 선택');
+  const town = qspot(330, 196, 180, 134, 'town-1', 'User Spot · 마을', {lane: 72, exec: 102});
+  const dsp = qspot(545, 132, 180, 198, 'dungeon-7', 'User Spot · 던전', {lane: 76, exec: 112, order: 160}); dsp.g.classList.add('gone');
+  startProc(town); startProc(dsp);
+  const SLOT_E = [[350, 174], [390, 174], [430, 174], [470, 174]], SLOT_T = [[352, 248], [392, 248], [432, 248], [472, 248]], SLOT_D = [[567, 182], [607, 182], [647, 182], [687, 182]];
+  const AC = SLOT_E.map(([x, y], i) => { const a = actorDot('P' + (i + 1), x, y); a.g.classList.add('hidden'); return a; });
+  const redraw = () => ss.draw(AC);
+  async function moveActors(slots, gameTo, stagger = 220){
+    await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * stagger);
+      const ox = AC[i].x, oy = AC[i].y, [nx, ny] = slots[i];
+      ch[i].walk(gameTo[i][0], gameTo[i][1], 1100);
+      await tween(900, e => { AC[i].set(ox + (nx - ox) * e, oy + (ny - oy) * e - Math.sin(e * Math.PI) * 30); redraw(); }); }));
+  }
+  async function join(sp, i){ const bd = mk(sB, 'text', {x: AC[i].x + 10, y: AC[i].y - 15, class: 'badge', text: '예약'}); await fly({x: AC[i].x + 13, y: AC[i].y}, sp.abs(4, 50), {dur: 400}); pulse(sp.g); await sleep(200); bd.remove(); }
+  let finish = false, left = 0, timer = false;
+  async function attackAll(){
+    const before = boss.hp; let sum = 0, n = 0;
+    await Promise.all([0, 1, 2, 3].map(async i => {
+      if (!ss.SE[i].conn || boss.hp <= 0) return;
+      ch[i].g.classList.add('act'); await ss.up(i, AC[i]); ch[i].g.classList.remove('act');
+      await enqueue(dsp, {label: 'P' + (i + 1), what: `P${i + 1} 공격 실행 중`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}, fn: () => { let d = 55 + Math.floor(Math.random() * 40); if (finish) { d = Math.max(d, Math.ceil(boss.hp / Math.max(1, left))); left--; } boss.hit(d); sum += d; n++; }});
+      [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k])));
+    }));
+    return {before, sum, n};
+  }
+  function startTimer(){ if (timer) return; timer = true;
+    spawn(async () => { while (timer) { await sleep(1100 * K); if (!timer) break;
+      await enqueue(dsp, {tick: true, label: 'T', what: '보스 tick 실행 중', fn: () => { const i = Math.floor(Math.random() * 4), d = 20 + Math.floor(Math.random() * 30); ch[i].hurt(d);
+        const l = mk(gF, 'line', {x1: 770, y1: 132, x2: ch[i].x, y2: ch[i].y, class: 'beam'}); sleep(240).then(() => l.remove(), () => l.remove()); popup(ch[i].x, ch[i].y - 20, '-' + d, 'dmg boss'); }});
+      [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k]))); } }); }
+  const STEPS = [
+    {title: '서버끼리 연결', line: '필드 서버와 던전 서버들은 RouteMesh 하나로 이어져 있다. 서로를 channel 이름, Spot id, Actor id로 부르고, 연결은 Location Store 기록으로 자동으로 맺는다.',
+     act: '서버 시작', more: ['RouteMesh: 같은 mesh에 참여한 서버끼리 연결 하나로 양쪽 모두 서로를 부른다.', 'Spot·Actor 앞 메시지, Actor의 서버 이동, 방끼리의 소식(Logical Multicast)이 모두 이 연결로 오간다.', '서버를 늘리면 Store에 등록되고, 다른 서버가 기록을 보고 연결한다. 설정을 고치지 않는다.', '같은 이름을 맡은 서버가 여럿이면 Framework가 하나를 고른다. 자기 자신은 후보가 아니다.'],
+     async run(){ for (const x of [420, 635, 820]) { await fly({x, y: 90}, store.pt, {cls: 'pkt-look', dur: 300}); }
+       store.set('mesh game → node A, B, C', '');
+       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5})]);
+       meshL.classList.add('on'); res('세 서버가 RouteMesh로 이어졌다. 아래 굵은 선이 서버끼리의 연결이다.'); }},
+    {title: '접속', line: '플레이어 4명이 접속한다. 연결마다 session이 생기고, 각자의 Actor가 Entry Spot에 만들어져 session에 묶인다.',
+     act: '4명 접속', more: ['client 연결 하나에 session 하나가 생긴다(STREAM).', 'Actor 생성은 Entry Spot의 <code>on_create_actor</code>가 승인한다.', 'session을 Actor에 묶으면, session이 처리하지 않는 packet은 그 Actor로 간다.', 'Entry Spot은 아직 마을이나 방에 들어가지 않은 Actor가 있는 곳이다. Actor끼리 공유하는 상태를 두지 않는다.'],
+     async run(){
+       await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 300);
+         ss.open(i); await fly(ss.CL[i].pt, ss.SE[i].L, {dur: 320, bend: 0});
+         await flyPath(ss.routeTo(i, AC[i]), {dur: 460}); AC[i].g.classList.remove('hidden'); pulse(entry.g); redraw(); ch[i].g.classList.remove('off'); }));
+       store.set('P1 ~ P4 → node A · Entry Spot', ''); res('session 4개, Actor 4개. 점선이 session과 Actor를 잇는 묶음이다.'); }},
+    {title: '각자 준비', line: '4명이 동시에 장비를 바꾼다. Entry Spot에서는 Actor마다 따로 실행되므로 네 요청이 동시에 처리된다.',
+     act: '4명 동시에 장비 변경', repeat: true, more: ['Entry Spot은 Actor마다 따로 순서를 지킨다. 서로 다른 Actor는 동시에 실행된다.', '각자 자기 상태만 바꾸는 일이라 서로 기다릴 이유가 없다.'],
+     async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await ss.up(i, AC[i]); AC[i].g.classList.add('run'); await sleep(200 * K); AC[i].g.classList.remove('run'); })); res('네 Actor가 <b>동시에</b> 실행됐다(초록 테두리가 한꺼번에 켜졌다).'); }},
+    {title: '마을 입장', line: '4명이 마을 town-1에 들어간다. 마을은 여럿이 함께 쓰는 자리라 User Spot이고, 들어가면 서로가 보인다.',
+     act: '마을 입장', more: ['입장은 <code>join</code>으로 한다. 지금 handler가 끝난 뒤 실행되도록 예약한다(<code>defer</code>).', '마을의 <code>on_actor_join</code>이 승인하면 위치 기록과 소속이 한 번에 바뀐다.', '같은 node 안의 이동이라 Actor가 서버를 옮기지 않는다.'],
+     async run(){ [0, 1, 2, 3].forEach(i => spawn(() => join(town, i))); await sleep(200 * K); await moveActors(SLOT_T, TOWN); store.set('P1 ~ P4 → node A · town-1', null); res('4명이 town-1에 들어갔다. 이제 마을에서 일어난 일은 마을의 모든 사람에게 전달된다.'); }},
+    {title: '마을에서 이동', line: '한 명이 움직이면 마을이 그 위치를 모든 사람에게 보낸다. 그래서 다른 유저가 화면에 보인다.',
+     act: '4명 이동', repeat: true, more: ['마을(SpotWide)은 gate 하나로 이동 요청을 차례로 처리한다.', '처리한 결과를 마을의 모든 사람에게 push한다. 각 client는 그 push로 다른 유저를 그린다.', '마을 사람이 수백 명이면 여러 마을(채널)로 나눈다. 마을마다 Spot 하나다.'],
+     async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 150); await ss.up(i, AC[i]);
+       await enqueue(town, {label: 'P' + (i + 1), what: `P${i + 1} 이동 실행 중`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}});
+       ch[i].walk(165 + Math.random() * 215, 80 + Math.random() * 110, 700);
+       await Promise.all([0, 1, 2, 3].map(k => ss.SE[k].conn ? ss.push(k, AC[k]).then(() => { if (k !== i) seen(ch[k]); }) : null)); }));
+       res('이동 4건이 마을에서 차례로 처리되고, 매번 <b>모든 client</b>에 전달됐다(초록 고리 = 다른 사람의 화면에 보임).'); }},
+    {title: '던전 만들기', line: 'P1이 던전을 만든다. 어느 서버에 만들지는 Framework가 고르고, 돌려받은 id dungeon-7이 이후의 주소가 된다.',
+     act: 'P1: 던전 만들기', more: ['같은 id가 두 곳에 생기지 않도록 Location Store가 생성 권한을 조정한다.', '던전의 <code>on_create</code>가 거절하면 호출은 실패하고 던전은 남지 않는다.'],
+     async run(){ await ss.up(0, AC[0]); AC[0].g.classList.add('run');
+       await fly({x: AC[0].x, y: AC[0].y - 13}, store.pt, {cls: 'pkt-look'}); store.set(null, 'dungeon-7 → 생성 예약');
+       await fly(store.pt, {x: 635, y: 132}, {cls: 'pkt-look'});
+       dsp.g.classList.remove('gone'); dsp.g.classList.add('holding'); res('node B: <code>on_create</code>로 받아들일지 묻는 중'); await sleep(260 * K);
+       dsp.g.classList.remove('holding'); pulse(dsp.g); AC[0].g.classList.remove('run');
+       store.set(null, 'dungeon-7 → node B'); dngG.classList.remove('locked'); dngSub.textContent = 'dungeon-7 · 파티원만 들어간다';
+       res('dungeon-7이 node B에 생겼다. 만들 서버는 Framework가 골랐다.'); }},
+    {title: '파티 입장', line: '4명이 dungeon-7에 들어간다. 던전이 다른 서버에 있으므로, 각 Actor가 상태를 가진 채 그 서버로 옮겨 간다.',
+     act: '파티 입장', more: ['받는 던전의 <code>on_actor_join</code>이 승인하면, Actor가 상태와 대기 중인 작업을 가지고 node B로 옮겨 간다.', '옮겨 가는 동안 온 message는 기다렸다가 순서대로 실행된다.', 'session 경로는 Framework가 새 위치로 바꾼다. client는 다시 접속하지 않는다.'],
+     async run(){ await flyPath(meshD(420, 635), {dur: 500, r: 7, label: 'join 요청 · RouteMesh'}); pulse(dsp.g); await flyPath(meshD(635, 420), {cls: 'pkt-push', dur: 500, r: 6, label: '승인'});
+       await flyPath(meshD(420, 635), {cls: 'pkt-state', dur: 600, r: 9, label: 'Actor 4명의 상태'});
+       await moveActors(SLOT_D, DNG, 260); store.set('P1 ~ P4 → node B · dungeon-7', null); res('Actor 상태가 RouteMesh 연결로 node B에 갔다. client 연결은 그대로이고, 점선(묶음)만 새 위치를 가리킨다.'); }},
+    {title: '보스 동시 공격', line: '4명이 동시에 보스를 공격한다. 요청은 dungeon-7에서 한 줄로 처리되므로, lock 없이 보스 HP가 정확히 공격 합계만큼 준다.',
+     act: '4명 동시 공격', repeat: true, more: ['던전(SpotWide)은 gate 하나로 방 전체를 한 번에 하나씩 실행한다.', '그래서 보스 HP와 파티 상태를 lock 없이 평범한 코드로 고친다.', 'Actor 앞 message는 Actor마다 queue에 들어가지만, 실행 권한(gate)은 하나다.'],
+     async run(){ const r = await attackAll(); res(`${r.n}건이 한 줄로 처리됐다. 공격 합계 ${r.sum} → 보스 HP ${r.before} → <b>${boss.hp}</b>. 사용한 lock 0.`); }},
+    {title: '보스 반격 (timer)', line: '보스가 주기적으로 반격한다. timer tick도 같은 줄에 들어가서, 플레이어 공격과 섞이지 않고 차례로 실행된다.',
+     act: '보스 timer 시작', more: ['timer는 던전(Spot)에 등록한다. tick은 그 Spot의 queue에서 실행된다(주황 T).', 'tick이 밀리면 버릴지·따라잡을지를 overrun 정책으로 고른다.', '무거운 계산은 worker로 넘겨 줄을 막지 않는다.'],
+     extra: ['공격하며 지켜보기', async () => { const r = await attackAll(); res(`공격 ${r.n}건과 보스 tick이 한 줄에 섞여 차례로 실행된다. 보스 HP ${boss.hp}.`); }],
+     async run(){ startTimer(); res('보스 timer가 돌기 시작했다. queue의 주황 T가 tick이다. "공격하며 지켜보기"를 눌러 보라.'); }},
+    {title: '연결 끊김·재접속', line: 'P3의 연결이 끊긴다. P3의 Actor는 던전에 남아 전투가 계속되고, 다시 접속하면 같은 P3에 묶인다.',
+     act: 'P3 연결 끊기', toggle: true, more: ['연결이 끊기면 묶여 있던 Actor에 끊김이 통지된다(<code>on_disconnect_actor</code>).', '끊김은 Actor를 지우거나 던전에서 빼지 않는다.', 'Actor는 session 하나에만 묶인다. 다른 기기로 접속하면 이전 묶음은 무효가 된다.'],
+     async run(btn){ const i = 2;
+       if (ss.SE[i].conn) { ss.close(i); redraw(); AC[i].g.classList.add('disc'); ch[i].g.classList.add('off');
+         await flyPath(ss.routeTo(i, AC[i]), {cls: 'pkt-look', dur: 460}); pulse(dsp.g); btn.textContent = 'P3 다시 접속';
+         res('P3의 session이 끝났다. Actor P3는 던전에 남아 있고, 보스전은 계속된다(게임 화면의 P3는 흐리게 표시).'); return false; }
+       ss.open(i); await fly(ss.SE[i].R, store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, ss.SE[i].R, {cls: 'pkt-look', dur: 400});
+       redraw(); AC[i].g.classList.remove('disc'); ch[i].g.classList.remove('off'); pulse(dsp.g); btn.textContent = 'P3 연결 끊기';
+       res(`새 session #${ss.SE[i].id}이 node B의 P3에 묶였다. 체력과 위치가 그대로다.`); return true; }},
+    {title: '방끼리 소식 (Logical Multicast)', line: '보스를 쓰러뜨리면 dungeon-7이 raid-news로 소식을 보낸다. 서버마다 RouteMesh로 한 번만 보내고, 받은 서버가 그 topic을 구독한 Spot(town-1)에 나눠 준다.',
+     act: '마무리 공격 → 소식 발행', more: ['Logical Multicast: RouteMesh 연결을 그대로 쓰는 Spot 사이의 발행·구독이다. 별도 소켓을 열지 않는다.', '받는 쪽은 같은 topic을 구독한 Spot으로 한정된다. 마을(town-1)이 raid-news를 구독하고 있다.', '같은 서버에 구독 Spot이 여럿이면 메시지 하나를 함께 쓴다.'],
+     async run(){ if (boss.hp > 0) { finish = true; left = ss.SE.filter(s => s.conn).length; await attackAll(); finish = false; }
+       timer = false; res('보스를 쓰러뜨렸다. dungeon-7이 소식을 보낸다.'); pulse(dsp.g);
+       await flyPath(meshD(635, 420), {cls: 'pkt-pub', dur: 600, r: 7, label: 'raid-news · RouteMesh'}); pulse(town.g);
+       await Promise.all(others.map(o => { seen(o); return null; })); spawn(() => banner('소식: dungeon-7 보스 처치!'));
+       res('node A가 한 번 받아 town-1에 넘겼다. 마을의 다른 플레이어들이 소식을 본다(회색 고리).'); }},
+    {title: '마을로 귀환', line: '파티는 마을로 돌아가고 던전을 닫는다. 마을이 다른 서버에 있으므로 Actor가 RouteMesh로 다시 옮겨 간다.',
+     act: '귀환', more: ['마을로 돌아가는 것도 <code>join</code>이다.', '던전을 닫으면 <code>on_closing</code> 뒤 Location Store 기록이 사라진다.'],
+     async run(){ await flyPath(meshD(635, 420), {cls: 'pkt-state', dur: 600, r: 9, label: 'Actor 4명의 상태'});
+       await moveActors(SLOT_T, TOWN, 220); store.set('P1 ~ P4 → node A · town-1', null);
+       dsp.g.classList.add('holding'); res('dungeon-7을 닫는다: <code>on_closing</code>'); await sleep(260 * K);
+       dsp.g.classList.add('gone'); store.set(null, 'dungeon-7 → 없음'); dngG.classList.add('locked'); dngSub.textContent = '닫힘';
+       res('던전이 닫히고 Store 기록도 지워졌다. 파티는 마을에서 다시 서로를 본다.'); }},
+  ];
+  return {title: '로비와 던전 · RouteMesh', steps: STEPS, foot: '가이드 21·22·24·32·34·35·36장'};
+}
+
+/* =========================================================
+   Group 3. Instance Spot (guild)
+   ========================================================= */
+function gInstance(){
+  resetViews('0 0 900 236', '0 0 900 372');
+  const parties = [0, 1, 2].map(k => { const y = 14 + k * 70; mk(gG, 'rect', {x: 14, y, width: 330, height: 62, rx: 12, class: 'party-p'}); mk(gG, 'text', {x: 28, y: y + 24, class: 'g-title d', text: `dungeon-${7 + k} · 파티 ${k + 1}`});
+    const st = mk(gG, 'text', {x: 28, y: y + 44, class: 'g-sub d', text: '전투 중'}); [0, 1, 2, 3].forEach(i => mk(gG, 'circle', {cx: 220 + i * 28, cy: y + 31, r: 10, fill: COLORS[i], class: 'player-dot'})); return {y, st}; });
+  mk(gG, 'rect', {x: 360, y: 14, width: 526, height: 208, rx: 14, class: 'village'});
+  mk(gG, 'text', {x: 376, y: 38, class: 'g-title', text: '길드 홀 · guild-7'}); const gSub = mk(gG, 'text', {x: 376, y: 56, class: 'g-sub', text: '아직 아무도 부르지 않았다'});
+  mk(gG, 'rect', {x: 376, y: 70, width: 494, height: 16, rx: 8, class: 'xp-bg'}); const xpBar = mk(gG, 'rect', {x: 376, y: 70, width: 0, height: 16, rx: 8, class: 'xp'});
+  const xpT = mk(gG, 'text', {x: 870, y: 64, class: 't-count', 'text-anchor': 'end', text: '길드 경험치 0'});
+  const gl = mk(gG, 'g'); const glog = []; function glogAdd(t){ glog.unshift(t); glog.length = Math.min(glog.length, 5); gl.replaceChildren(); glog.forEach((s, k) => mk(gl, 'text', {x: 376, y: 112 + k * 22, class: 'note-t' + (k === 0 ? ' hi' : ''), text: s})); }
+  let xp = 0; const XPMAX = 3000; function addXp(d){ xp += d; xpBar.setAttribute('width', 494 * Math.min(1, xp / XPMAX)); xpT.textContent = `길드 경험치 ${xp}`; }
+
+  const store = storeBox(240, 4, 650);
+  mk(sB, 'path', {d: 'M8,60 L896,60 L896,244 L694,244 L694,362 L8,362 Z', class: 'chan-frame mesh'}); chanTag(16, 362, 'RouteMesh channel · game', 'mesh');
+  const DS = [0, 1, 2].map(k => box(16, 70 + k * 90, 210, 80, '', `던전 서버 ${'BCD'[k]}`, `dungeon-${7 + k} · 파티 ${k + 1}`));
+  const G1 = box(500, 70, 190, 262, '', '길드 서버', 'node G1'); const G2 = box(700, 70, 190, 170, '', '길드 서버', 'node G2');
+  const DB = box(700, 250, 190, 82, '', '랭킹 DB', '외부 저장소');
+  let guild = null, gen7 = 0, where = null; const cache = [false, false, false];
+  function makeGuild(node){ const x = node === 'G1' ? 510 : 710; const sp = qspot(x, 112, 170, node === 'G1' ? 210 : 120, 'guild-7', 'Instance Spot', node === 'G1' ? {lane: 80, exec: 116, order: 164} : {lane: 40, exec: 76}); startProc(sp); return sp; }
+  function from(k){ return {x: 226, y: 110 + k * 90}; }
+  async function contribute(k, amount, opts = {}){
+    if (!cache[k] || !guild) {
+      await fly(DS[k].T(), store.pt, {cls: 'pkt-look', dur: 380});
+      if (!guild) { res('Store에 guild-7이 없다. 생성 권한을 예약하고, 만들 서버를 고른다(cold activation).'); store.set('guild-7 → 준비 중', null);
+        where = gen7 === 0 ? 'G1' : 'G2'; await fly(store.pt, (where === 'G1' ? G1 : G2).T(), {cls: 'pkt-look', dur: 380});
+        guild = makeGuild(where); guild.g.classList.add('holding'); res(`${where === 'G1' ? 'node G1' : 'node G2'}: <code>configure</code> → <code>on_initialize</code>. Instance Spot은 <code>on_create</code>를 받지 않는다.`); await sleep(260 * K);
+        guild.g.classList.remove('holding'); gen7++; store.set(`guild-7 → node ${where} · gen ${gen7}`, null); gSub.textContent = `node ${where}에서 실행 중`; }
+      await fly(store.pt, DS[k].T(), {cls: 'pkt-look', dur: 380}); cache[k] = true;
+    }
+    parties[k].st.textContent = '보스 처치! 길드에 기여'; pulse(DS[k].g);
+    return enqueue(guild, {label: 'D' + 'BCD'[k], what: opts.what || `던전 서버 ${'BCD'[k]} 기여 +${amount}`, from: from(k), dur: opts.dur, fn: () => { addXp(amount); glogAdd(`파티 ${k + 1} 기여 +${amount}`); if (opts.fn) opts.fn(); }});
+  }
+  const STEPS = [
+    {title: '첫 요청으로 깨우기', line: '파티 1이 보스를 잡고 길드에 기여한다. guild-7은 아직 없지만, 첫 요청이 오면 Framework가 만들고 그 요청을 바로 처리한다.',
+     act: '파티 1 기여', more: ['Instance Spot에는 만드는 호출이 따로 없다. 첫 메시지에 instance type을 적으면 된다.', '만들 서버는 Framework가 고르고, Store가 같은 id를 두 곳에 만들지 않게 막는다.', '호출하는 쪽은 "만들기"와 "보내기"를 나누지 않는다.'],
+     async run(){ await contribute(0, 120); res('guild-7이 만들어지고 <b>그 같은 요청</b>을 처리했다. 길드 경험치 +120.'); }},
+    {title: '여러 서버가 동시에', line: '세 던전 서버가 동시에 같은 길드에 기여한다. guild-7이 한 줄로 처리하므로 분산 락 없이 합계가 정확하다.',
+     act: '3개 서버가 동시에 기여', repeat: true, more: ['같은 길드 id로 온 요청은 언제나 그 길드 하나로 간다.', '처음 한 번만 Store에서 위치를 찾고, 그 뒤에는 기억해 둔 위치로 바로 보낸다.', '기존 방식이라면 서버마다 Redis 락을 잡고, 읽고, 쓰고, 풀어야 한다.'],
+     async run(){ const before = xp; const am = [0, 1, 2].map(() => 80 + Math.floor(Math.random() * 80)); await Promise.all(am.map((a, k) => contribute(k, a))); res(`3건이 한 줄로 처리됐다. ${am.join(' + ')} = ${am.reduce((s, v) => s + v, 0)} → 경험치 ${before} → <b>${xp}</b>. 락 0.`); }},
+    {title: '기다리는 동안 양보', line: '길드가 랭킹을 외부 DB에 저장한다. Yield로 기다리면 그동안 다른 기여가 먼저 실행되고, 저장이 끝나면 새 차례로 이어서 실행된다.',
+     act: '랭킹 저장 + 동시 기여', more: ['<code>Yield</code>는 기다리는 동안 실행 권한을 반납한다. 결과가 오면 queue 끝에 새 차례로 들어간다.', '<code>Async</code>로 기다리면 실행 권한을 쥔 채 기다려서 다른 요청이 모두 멈춘다.', '재개한 뒤에는 그사이 바뀐 상태를 다시 확인한다.'],
+     async run(){
+       let resumed; const resumeDone = new Promise(r => { resumed = r; });
+       const p = contribute(0, 60, {what: '랭킹 저장 요청 보냄 · Yield로 양보', dur: 150, fn: () => { spawn(async () => {
+         await fly(guild.abs(guild.w, 130), DB.L(), {cls: 'pkt-look', dur: 500}); pulse(DB.g); await sleep(400 * K); await fly(DB.L(), guild.abs(guild.w, 130), {cls: 'pkt-push', dur: 500});
+         await enqueue(guild, {label: 'R', what: '저장 결과로 재개 · 새 차례', fn: () => glogAdd('랭킹 저장 완료 (재개한 차례)')}); res('저장 결과가 와서 <b>queue 끝의 새 차례(R)</b>로 이어서 실행됐다. 그사이 다른 기여가 먼저 끝났다.'); resumed(); }); }});
+       await sleep(500 * K); await Promise.all([contribute(1, 90), contribute(2, 110)]); await p; await resumeDone; }},
+    {title: '쉬면 닫고 다시 깨우기', line: '한동안 요청이 없으면 길드가 스스로 닫는다. 다음 요청이 오면 새로 깨어나고, 이번에는 다른 서버에서 깨어날 수도 있다.',
+     act: '길드 닫기', extra: ['파티 2 기여', async () => { await contribute(1, 150); res(`guild-7이 다시 깨어나 요청을 처리했다(gen ${gen7}). 호출하는 쪽은 아무것도 바꾸지 않았다.`); }],
+     more: ['Instance Spot은 자기 handler나 timer에서 닫는다(<code>on_closing</code>).', '닫히면 Store 기록이 사라진다. 다음 요청이 같은 id로 오면 새 incarnation으로 만들어진다.', '실제 상태 보존은 저장소에 맡기고, Spot은 메모리 상태와 처리 순서만 갖는다.'],
+     async run(){ guild.g.classList.add('holding'); res('guild-7: <code>on_closing</code>'); await sleep(260 * K); guild.g.remove(); guild = null; cache.fill(false); store.set('guild-7 → 없음', null); gSub.textContent = '닫힘 · 다음 요청에 다시 깨어난다'; res('guild-7이 닫혔다. "파티 2 기여"를 눌러 다시 깨워 보라.'); }},
+  ];
+  return {title: 'Instance Spot', steps: STEPS, foot: '가이드 21장(Spot)·32장(실행 모델)·34장(활성화와 수명)'};
+}
+
+/* =========================================================
+   Group 4. Host relocation
+   ========================================================= */
+function gRelocate(){
+  resetViews('0 0 900 236', '0 0 900 372');
+  zone(14, 14, 160, 208, 'village', '마을', 'town-1');
+  mk(gG, 'rect', {x: 186, y: 14, width: 700, height: 208, rx: 14, class: 'dungeon'});
+  mk(gG, 'text', {x: 202, y: 38, class: 'g-title d', text: '던전 dungeon-7'}); const where = mk(gG, 'text', {x: 202, y: 55, class: 'g-sub d', text: '던전 서버 B에서 실행 중'});
+  const boss = makeBoss(760, 132, 44, 676, 62, 190, 3000);
+  const DNG = [[320, 92], [320, 172], [420, 80], [420, 180]];
+  const ch = DNG.map(([x, y], i) => gchar(i, x, y));
+  const bannerG = mk(gF, 'g');
+  function banner(text){ bannerG.replaceChildren(); if (!text) return; const b = mk(bannerG, 'g', {class: 'banner'}); mk(b, 'rect', {x: 360, y: 196, width: 360, height: 22, rx: 6}); mk(b, 'text', {x: 540, y: 211, text}); }
+
+  const store = storeBox(320, 4, 570);
+  mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,362 L142,362 Z', class: 'chan-frame mesh'}); chanTag(150, 362, 'RouteMesh channel · game', 'mesh');
+  const ss = sessionKit(4);
+  mk(sB, 'rect', {x: 316, y: 86, width: 173, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 496, y: 86, width: 398, height: 252, rx: 12, class: 'grp-dng'});
+  const A = box(320, 90, 165, 244, '', '필드 서버', 'node A'); const B = box(500, 90, 190, 244, '', '던전 서버', 'node B'); const C = box(700, 90, 190, 244, '', '던전 서버', 'node C');
+  mk(sB, 'text', {x: 330, y: 150, class: 't-mono', text: 'town-1'}); const cFree = mk(sB, 'text', {x: 710, y: 150, class: 't-mono', text: '여유 있음'});
+  const dsp = qspot(505, 132, 180, 198, 'dungeon-7', 'User Spot · 던전', {lane: 76, exec: 112, order: 160});
+  startProc(dsp);
+  const LS = [[22, 50], [62, 50], [102, 50], [142, 50]];
+  const AC = LS.map(([x, y], i) => actorDot('P' + (i + 1), dsp.x + x, dsp.y + y));
+  const sync = () => { AC.forEach((a, i) => a.set(dsp.x + LS[i][0], dsp.y + LS[i][1])); ss.draw(AC); };
+  [0, 1, 2, 3].forEach(i => ss.open(i)); sync();
+  store.set('dungeon-7 → node B', 'P1 ~ P4 → node B · dungeon-7');
+  let fighting = false, sent = 0, done = 0;
+  const cnt = mk(sB, 'text', {x: 330, y: 318, class: 't-count', text: ''});
+  const relayD = () => curve({x: 595, y: 250}, {x: AC[1].x, y: AC[1].y + 13}, -.2);
+  const relayLine = mk(sB, 'path', {d: relayD(), class: 'link relay', opacity: 0});
+  const oldT = mk(sB, 'g', {opacity: 0}); mk(oldT, 'text', {x: 510, y: 212, class: 'relay-t', text: '옛 위치 → C로 relay'}); const relayT = mk(oldT, 'text', {x: 510, y: 300, class: 'relay-t', text: ''});
+  let relayN = 0;
+  const upd = () => { const lost = sent - done - dsp.q.length - (dsp.running ? 1 : 0) - inflight; cnt.textContent = `보냄 ${sent} · 처리 ${done} · 유실 ${Math.max(0, lost)}`; };
+  let inflight = 0;
+  async function attack(i){ sent++; inflight++; upd(); ch[i].g.classList.add('act'); await ss.up(i, AC[i]); ch[i].g.classList.remove('act');
+    await enqueue(dsp, {label: 'P' + (i + 1), what: `P${i + 1} 공격 실행 중`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}, onQueued: () => { inflight--; upd(); }, fn: () => { boss.hit(40 + Math.floor(Math.random() * 30)); done++; upd(); }});
+    [0, 1, 2, 3].forEach(k => spawn(() => ss.push(k, AC[k]))); }
+  function fight(){ if (fighting) return; fighting = true; spawn(async () => { let i = 0; while (fighting) { spawn(() => attack(i % 4)); i++; await sleep(620 * K); } }); }
+  let target = 'C';
+  const STEPS = [
+    {title: '전투 중', line: '던전 서버 B에서 파티가 보스와 싸우고 있다. 공격 요청이 계속 dungeon-7로 들어온다.',
+     act: '전투 시작', more: ['파티 4명의 Actor와 dungeon-7은 모두 node B에 있다.', 'Location Store가 "dungeon-7은 node B"를 기록하고 있다.'],
+     async run(){ fight(); res('공격이 계속 들어온다. 아래 숫자에서 보낸 공격과 처리한 공격을 볼 수 있다.'); }},
+    {title: '점검 시작', line: '운영자가 node B를 점검하려고 Host Relocate를 실행한다. Framework가 옮길 곳으로 node C를 확인한다.',
+     act: 'node B 점검 시작', more: ['옮길 서버가 준비되지 않았으면 시작하지 않는다. 그 경우 B는 그대로 계속 실행한다.', 'SpotWide 던전은 던전과 그 안의 Actor 전체가 한 번에 옮겨 간다.', '계획된 이전(graceful)이다. 서버가 갑자기 죽은 경우를 자동으로 이어받는 기능이 아니다.'],
+     async run(){ C.g.classList.add('hot'); cFree.textContent = '받을 준비'; banner('점검: dungeon-7을 옮기는 중 · 전투는 계속'); res('옮길 곳: node C.'); }},
+    {title: '멈추고 보류', line: 'B는 지금 실행 중인 것만 끝내고 새 실행을 멈춘다. 메시지는 계속 받아 queue에 보류한다(주황).',
+     act: '실행 멈추기', more: ['받기는 멈추지 않는다. 그래서 그동안 보낸 공격도 버려지지 않는다.', '보류한 메시지는 도착한 순서를 그대로 지킨다.'],
+     async run(){ dsp.setHold(true); while (dsp.running) await sleep(30); res('dungeon-7이 실행을 멈췄다. 새로 들어온 공격이 주황 칸으로 쌓인다.'); }},
+    {title: '직접 옮기기', line: '던전 상태, 파티원 4명, 보류한 메시지, timer를 C로 직접 보낸다. Location Store를 거치지 않는다.',
+     act: '상태 보내기', more: ['상태는 B의 메모리에서 C로 mesh 연결을 통해 직접 간다.', 'Store에는 "지금 누가 맡고 있는가"만 적는다.'],
+     async run(){ await fly(dsp.abs(dsp.w, 60), {x: 760, y: 200}, {cls: 'pkt-state', r: 12, dur: 600, bend: -.25, label: `상태 + 보류 ${dsp.q.length}건 + timer`}); pulse(C.g); res('C가 상태를 받아 같은 던전을 준비했다. 보류한 메시지도 순서 그대로 C가 이어받는다.'); }},
+    {title: '위치 바꾸고 이어서', line: 'C가 Store의 위치를 B에서 C로 바꾸고, 보류했던 메시지부터 이어서 처리한다. client 연결은 그대로다.',
+     act: '전환', more: ['위치 변경은 예상한 값이 그대로일 때만 바뀐다(CAS).', 'session 경로는 Framework가 C로 바꾼다. 플레이어는 다시 접속하지 않는다.', '호출하는 쪽은 계속 같은 id dungeon-7을 쓴다.'],
+     async run(){ await fly({x: 820, y: 90}, store.pt, {cls: 'pkt-look', dur: 400}); store.set('dungeon-7 → node C', 'P1 ~ P4 → node C · dungeon-7');
+       await dsp.moveTo(705, 132, 900 * K / 3.5 + 500, sync); dsp.setHold(false); C.g.classList.remove('hot'); cFree.textContent = ''; where.textContent = '던전 서버 C에서 실행 중'; banner('');
+       res('C에서 보류했던 공격부터 이어서 처리한다. 화면의 전투는 멈추지 않았다.'); }},
+    {title: '늦게 온 메시지 relay', line: '필드 서버가 옛 위치(B)를 기억한 채 P2에게 귓속말을 보낸다. B는 이미 비었지만, 받은 메시지를 새 위치 C로 넘겨준다(relay).',
+     act: '필드 서버 → P2 귓속말', repeat: true, more: ['Message Follow: 옛 owner가 받은 message를 새 owner에게 대신 전달한다. 보낸 쪽에 다시 보내라고 하지 않는다.', 'relay는 정해진 시간 동안만 유지된다. 그 뒤에는 보내는 쪽이 Store에서 새 위치를 다시 찾는다.', '그래서 보내는 쪽이 옛 위치를 잠시 기억하고 있어도 메시지를 잃지 않는다.'],
+     async run(){
+       relayLine.setAttribute('d', relayD()); relayLine.setAttribute('opacity', 1); oldT.setAttribute('opacity', 1);
+       await fly({x: 420, y: 250}, {x: 595, y: 250}, {dur: 450, bend: -.25, r: 7, label: '귓속말 → B(옛 위치)'}); pulse(B.g, 'bad');
+       res('옛 위치 B가 귓속말을 받았다. B는 다시 보내라고 하지 않고 C로 넘긴다.'); await sleep(150 * K);
+       await flyPath(relayD(), {cls: 'pkt-state', dur: 600, r: 7, label: 'relay → C'}); pulse(AC[1].g); popup(ch[1].x, ch[1].y - 22, '귓속말', 'dmg');
+       relayN++; relayT.textContent = `relay ${relayN}건`; res(`P2가 귓속말을 받았다. B → C relay ${relayN}건, 잃어버린 메시지 0.`); }},
+    {title: 'B 비우기', line: 'node B가 비었다. 이제 종료하고 점검할 수 있다. 그동안 잃어버린 공격은 0이다.',
+     act: 'node B 종료', more: ['점검이 끝나면 B를 다시 띄우고, 다음 Relocate로 되돌릴 수 있다.', '무중단 배포도 같은 절차다. 서버를 하나씩 비우고 새 버전으로 교체한다.'],
+     async run(){ B.g.classList.add('faded'); fighting = false; res('남은 공격을 마저 처리하는 중…'); while (inflight > 0 || dsp.q.length || dsp.running) await sleep(100); upd(); res(`node B를 종료했다. ${cnt.textContent}.`); }},
+  ];
+  return {title: 'Host Relocation', steps: STEPS, foot: '가이드 37장(Relocation)·12장(운영)'};
+}
+
+/* =========================================================
+   Group 5. Backpressure: the same burst, without vs with
+   ========================================================= */
+function gBack(){
+  resetViews('0 0 900 236', '0 0 900 360');
+  /* game view: two worlds */
+  function world(x, title){
+    mk(gG, 'rect', {x, y: 14, width: 428, height: 208, rx: 14, class: 'dungeon'});
+    mk(gG, 'text', {x: x + 16, y: 38, class: 'g-title d', text: title});
+    const st = mk(gG, 'text', {x: x + 16, y: 58, class: 'bp-world', text: '대기 중'});
+    const cx = x + 214, cy = 136; const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r: 34}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: '월드 보스'});
+    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2; mk(gG, 'circle', {cx: cx + Math.cos(a) * 150, cy: cy + Math.sin(a) * 60, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); }
+    return {x, cx, cy, st};
+  }
+  const W1 = world(14, '백프레셔 없음'), W2 = world(458, 'ZLink 백프레셔');
+
+  /* server view: two lanes */
+  function lane(y0, bounded){
+    mk(sB, 'text', {x: 16, y: y0 + 14, class: 't-title', text: bounded ? 'ZLink — 가득 차면 보내기를 멈추고, 절반이 비면 다시 보낸다' : '백프레셔 없음 — 받는 쪽이 끝없이 받아 쌓는다'});
+    const snd = box(16, y0 + 26, 150, 112, '', '필드 서버들', '보내는 쪽');
+    const pill = mk(sB, 'g', {class: 'bp-pill go'}); mk(pill, 'rect', {x: 26, y: y0 + 78, width: 130, height: 30, rx: 15}); const pillT = mk(pill, 'text', {x: 91, y: y0 + 98, text: '▶ 전송 중'});
+    const sentT = mk(sB, 'text', {x: 26, y: y0 + 128, class: 't-mono', text: '보냄 0'});
+    const rcv = box(746, y0 + 26, 144, 112, '', '월드 보스 서버', '받는 쪽 · 처리');
+    const doneT = mk(sB, 'text', {x: 756, y: y0 + 96, class: 't-count', text: '처리 0'});
+    const lostT = mk(sB, 'text', {x: 756, y: y0 + 120, class: 't-count', text: '유실 0'});
+    /* the receiver's queue as a row of cells */
+    const cap = bounded ? 20 : 30, qx = 196, qw = 530, cw = qw / cap, qy = y0 + 66, qh = 36;
+    mk(sB, 'text', {x: qx, y: qy - 8, class: 't-mono', text: bounded ? '받는 쪽 queue (상한 HWM)' : '받는 쪽 메모리'});
+    mk(sB, 'rect', {x: qx - 2, y: qy - 2, width: qw + 4, height: qh + 4, rx: 6, class: 'gauge-bg'});
+    const cells = []; for (let k = 0; k < cap; k++) cells.push(mk(sB, 'rect', {x: qx + k * cw + 1, y: qy, width: cw - 2, height: qh, rx: 2, class: 'bp-cell'}));
+    if (bounded) {
+      mk(sB, 'line', {x1: qx + qw / 2, x2: qx + qw / 2, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark'}); mk(sB, 'text', {x: qx + qw / 2, y: qy + qh + 20, class: 'bp-mark-t', 'text-anchor': 'middle', text: '절반 → 다시 보낸다'});
+      mk(sB, 'line', {x1: qx + qw, x2: qx + qw, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark'}); mk(sB, 'text', {x: qx + qw, y: qy + qh + 20, class: 'bp-mark-t', 'text-anchor': 'end', text: '가득 → 멈춘다'});
+    } else { mk(sB, 'line', {x1: qx + qw, x2: qx + qw, y1: qy - 6, y2: qy + qh + 6, class: 'bp-mark bad'}); mk(sB, 'text', {x: qx + qw, y: qy + qh + 20, class: 'bp-mark-t bad', 'text-anchor': 'end', text: '메모리 한계'}); }
+    const L = {doneT, lostT, bounded, cap, q: 0, inflight: 0, sent: 0, done: 0, lost: 0, paused: false, dead: false, stops: 0, y0, snd, rcv, pill, pillT, qx, cw, qy, qh,
+      render(){ cells.forEach((c, k) => c.setAttribute('class', 'bp-cell' + (k < L.q ? (L.q >= cap * .9 ? ' hi' : ' on') : ''))); sentT.textContent = `보냄 ${L.sent}`; doneT.textContent = L.downed ? '서버 다운' : `처리 ${L.done}`; if (L.onRender) L.onRender(); lostT.textContent = `유실 ${L.lost}`; lostT.setAttribute('class', 't-count' + (L.lost ? ' bad' : '')); },
+      setPill(kind, text){ pill.setAttribute('class', 'bp-pill ' + kind); pillT.textContent = text; }};
+    return L;
+  }
+  const L1 = lane(6, false), L2 = lane(186, true);
+  let SEND = 70, PROC = 160;   /* ms × K: sending is about 2.3× faster than processing */
+  function boom(L, W){
+    L.dead = true; L.lost += L.q + L.inflight; L.q = 0; L.render();
+    L.rcv.g.classList.add('dead'); L.setPill('dead', '보낼 곳 없음');
+    const cx = L.rcv.x + 72, cy = L.y0 + 82;
+    for (let k = 0; k < 3; k++) { const c = mk(sF, 'circle', {cx, cy, r: 4, class: 'boom' + (k ? ' b' + k : '')}); tween(700 + k * 250, e => { c.setAttribute('r', 6 + e * (120 + k * 40)); c.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => c.remove()); }
+    for (let k = 0; k < 14; k++) { const a = Math.random() * Math.PI * 2, d = 60 + Math.random() * 90; const p = mk(sF, 'circle', {cx, cy, r: 4, class: 'spark'}); tween(800, e => { p.setAttribute('cx', cx + Math.cos(a) * d * e); p.setAttribute('cy', cy + Math.sin(a) * d * e); p.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => p.remove()); }
+    mk(sB, 'text', {x: L.rcv.x - 34, y: L.y0 + 64, class: 'boom-t', 'text-anchor': 'middle', text: '펑!'});
+    L.doneT.setAttribute('class', 'boom-s'); L.downed = true;
+    srv.classList.remove('shake'); void srv.getBBox(); srv.classList.add('shake');
+    const gx = W.cx, gy = W.cy; const ov = mk(gG, 'rect', {x: W.x, y: 14, width: 428, height: 208, rx: 14, fill: '#000', opacity: 0}); tween(500, e => ov.setAttribute('opacity', .55 * e)).catch(() => {});
+    for (let k = 0; k < 3; k++) { const c = mk(gF, 'circle', {cx: gx, cy: gy, r: 4, class: 'boom' + (k ? ' b' + k : '')}); tween(800 + k * 250, e => { c.setAttribute('r', 6 + e * (110 + k * 30)); c.setAttribute('opacity', 1 - e); }).catch(() => {}).finally(() => c.remove()); }
+    mk(gG, 'text', {x: gx, y: gy + 8, class: 'boom-t big', 'text-anchor': 'middle', text: '서버 다운'});
+    L.onRender = () => { W.st.textContent = `메모리 초과로 서버가 죽었다 · 유실 ${L.lost}`; }; L.render(); W.st.setAttribute('class', 'bp-world bad');
+    game.classList.remove('shake'); void game.getBBox(); game.classList.add('shake');
+  }
+  function run(L, W){
+    /* sender */
+    spawn(async () => { for (;;) {
+      await sleep(SEND * K);
+      if (L.dead) return;
+      if (L.bounded && L.paused) continue;
+      if (L.bounded && L.q + L.inflight >= L.cap) {
+        L.paused = true; L.stops++; L.setPill('stop', '⏸ 전송 멈춤'); pulse(L.snd.g, 'bad');
+        W.st.textContent = `queue가 가득 찼다 → 보내는 쪽이 멈췄다 (멈춤 ${L.stops}회)`; W.st.setAttribute('class', 'bp-world warn'); continue;
+      }
+      L.sent++; L.inflight++; L.render();
+      const k = Math.min(L.cap - 1, L.q + L.inflight - 1);
+      spawn(async () => { await fly({x: 166, y: L.y0 + 93}, {x: L.qx + k * L.cw + L.cw / 2, y: L.qy + L.qh / 2}, {r: 5, dur: 140, bend: 0});
+        L.inflight--; if (L.dead) { L.lost++; L.render(); return; } L.q++; L.render();
+        if (!L.bounded && L.q >= L.cap) boom(L, W);
+        else if (!L.bounded) { W.st.textContent = `받는 대로 쌓는 중 · 메모리 ${Math.round(L.q / L.cap * 100)}%`; W.st.setAttribute('class', 'bp-world' + (L.q > L.cap * .6 ? ' warn' : '')); } });
+    } });
+    /* receiver */
+    spawn(async () => { for (;;) {
+      await sleep(PROC * K);
+      if (L.dead) return;
+      if (L.q > 0) { L.q--; L.done++; L.render(); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
+        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ 전송 재개'); W.st.textContent = 'queue가 절반 아래로 비었다 → 다시 보낸다'; W.st.setAttribute('class', 'bp-world'); } }
+    } });
+  }
+  const STEPS = [
+    {title: '같은 버스트 보내기', line: '위아래에 똑같은 공격 버스트를 보낸다. 보내는 속도가 처리 속도의 두 배가 넘는다. 위는 받는 대로 쌓고, 아래는 queue가 가득 차면 보내는 쪽을 멈추게 한다.',
+     act: '버스트 시작', more: [
+       '받는 쪽 queue에는 상한(HWM)이 있다. 가득 차면 Core가 그 상대로 보내기를 멈춘다. 그동안 <code>send</code>는 자리가 날 때까지 기다린다.',
+       'queue가 절반 아래로 비면 다시 보낸다. 하나 빌 때마다 다시 보내면 멈춤과 재개가 쉴 새 없이 반복되기 때문이다(Core의 low watermark = HWM의 절반).',
+       '보내는 쪽 <code>send</code>가 기다리다 timeout(기본 1초)을 넘기면 <code>DeadlineExceeded</code>로 끝난다. 보낸 쪽이 실패를 알 수 있다.',
+       'Framework는 받아들인 message를 버리지 않는다. 다시 보낼지는 application이 업무 규칙으로 정한다.',
+       '백프레셔가 없으면 받는 쪽 메모리가 끝없이 늘어나다 서버가 죽고, 쌓아 둔 message를 모두 잃는다.'],
+     async run(){ run(L1, W1); run(L2, W2); W1.st.textContent = '받는 대로 쌓는 중'; W2.st.textContent = '전송 중'; res('위는 쌓이다가 터지고, 아래는 "멈춤 ↔ 재개"를 반복한다. 아래 queue는 상한을 넘지 않는다.'); }},
+  ];
+  return {title: 'Backpressure', steps: STEPS, foot: '가이드 33장(Backpressure) · Core pipe의 HWM/low watermark'};
+}
+
+/* ---------- groups and steps ---------- */
+const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['lobby', '로비와 던전 · RouteMesh', gLobby], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
+let STEPS = [], cur = 0, done = new Set(), curKey = 'clientserver';
+function renderSteps(){
+  $('steps').replaceChildren();
+  STEPS.forEach((s, k) => { const li = document.createElement('li'); li.className = (k === cur ? 'cur' : '') + (done.has(k) && k !== cur ? ' done' : ''); if (k === cur) li.setAttribute('aria-current', 'step');
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = done.has(k) && k !== cur ? '✓' : k + 1; li.append(n, document.createTextNode(s.title)); $('steps').append(li); });
+}
+function show(k){
+  cur = k; const s = STEPS[k]; renderSteps();
+  $('stepNo').textContent = `단계 ${k + 1} / ${STEPS.length}`; $('line').textContent = s.line; res('');
+  $('more').innerHTML = s.more.map(m => `<li>${m}</li>`).join('');
+  const acts = $('acts'); acts.replaceChildren();
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'act primary'; b.textContent = s.act; acts.append(b);
+  /* "next" opens once the main action ran (toggle steps: ended in the restored state) and, when there is an extra action, after it ran once */
+  let mainOk = false, extraOk = !s.extra;
+  const nx = document.createElement('button'); nx.type = 'button'; nx.className = 'act next'; nx.textContent = k === STEPS.length - 1 ? '처음부터 ↺' : '다음 단계 →'; nx.disabled = true;
+  const syncNext = () => { nx.disabled = !(mainOk && extraOk); };
+  let ex = null; if (s.extra) { ex = document.createElement('button'); ex.type = 'button'; ex.className = 'act'; ex.textContent = s.extra[0]; ex.disabled = true; acts.append(ex); ex.addEventListener('click', () => { ex.disabled = true; nx.disabled = true; spawn(async () => { await s.extra[1](); ex.disabled = false; extraOk = true; syncNext(); }); }); }
+  acts.append(nx);
+  nx.addEventListener('click', () => { if (k === STEPS.length - 1) openGroup(curKey); else show(k + 1); });
+  b.addEventListener('click', () => { b.disabled = true; nx.disabled = true; spawn(async () => { const r = await s.run(b); done.add(k); if (s.repeat || s.toggle) b.disabled = false; if (ex) ex.disabled = false; mainOk = s.toggle ? r === true : true; syncNext(); renderSteps(); }); });
+}
+function openGroup(key){
+  gen++; curKey = key; const g = GROUPS.find(x => x[0] === key) || GROUPS[1];
+  const r = g[2](); STEPS = r.steps; done = new Set();
+  $('gtitle').textContent = r.title; $('foot').textContent = `브라우저 안의 시뮬레이션이다. 시간과 수치는 시연용이다. 동작 설명은 zlink.systems C++ 서버 가이드(${r.foot})를 따른다.`;
+  document.querySelectorAll('#groups button').forEach(b => b.setAttribute('aria-current', String(b.dataset.key === key)));
+  try { history.replaceState(null, '', '#' + key); } catch (_) {}
+  show(0);
+}
+GROUPS.forEach(([key, name]) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.key = key; b.textContent = name; b.addEventListener('click', () => openGroup(key)); $('groups').append(b); });
+$('speedRange').addEventListener('input', e => { const v = +e.target.value; K = 3.5 / v; $('speedVal').textContent = v.toFixed(2).replace(/0$/, '') + '×'; });
+let start = 'clientserver'; try { const h = (location.hash || '').slice(1); if (GROUPS.some(g => g[0] === h)) start = h; } catch (_) {}
+openGroup(start);
+})();
+</script>
+
+</body>
+</html>

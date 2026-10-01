@@ -3,7 +3,6 @@ package systems.zlink.stream.connector;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 
 public final class ZLinkStreamAssert {
     private ZLinkStreamAssert() {}
@@ -63,21 +62,7 @@ public final class ZLinkStreamAssert {
         if (failure instanceof ZLinkStreamException coded) {
             return coded.error();
         }
-        ZLinkStreamErrorCode code;
-        if (failure instanceof TimeoutException) {
-            code =
-                    failure.getMessage() != null
-                                    && failure.getMessage().startsWith("connect timed out")
-                            ? ZLinkStreamErrorCode.CONNECT_TIMEOUT
-                            : ZLinkStreamErrorCode.REQUEST_TIMEOUT;
-        } else {
-            return rethrow(original);
-        }
-        String message = failure.getMessage();
-        if (message == null || message.isBlank()) {
-            message = failure.getClass().getSimpleName();
-        }
-        return new ZLinkStreamError(code, message, failure);
+        return rethrow(original);
     }
 
     private static Throwable unwrap(Throwable error) {

@@ -67,28 +67,28 @@ class redis_location_worker_t
 
     template <typename T, typename TFunc> task_t<T> submit (TFunc &&func)
     {
-        zlink::framework::detail::task_completion_source_t<T> completion;
-        auto task = completion.task ();
+        auto completion = std::make_shared<zlink::framework::task_completion_source_t<T>> ();
+        auto task = completion->task ();
         {
             std::lock_guard lock (_gate);
             _queue.emplace_back ([completion, func = std::forward<TFunc> (func)] () mutable {
                 try {
                     if constexpr (std::is_void_v<T>) {
                         func ();
-                        completion.complete (result_t<void>::success ());
+                        completion->complete (result_t<void>::success ());
                     } else {
-                        completion.complete (result_t<T>::success (func ()));
+                        completion->complete (result_t<T>::success (func ()));
                     }
                 }
                 catch (const framework_exception_t &error) {
-                    completion.complete (result_t<T>::failure (error.kind (), error.what ()));
+                    completion->complete (result_t<T>::failure (error.kind (), error.what ()));
                 }
                 catch (const std::exception &error) {
-                    completion.complete (result_t<T>::failure (
+                    completion->complete (result_t<T>::failure (
                       framework_error_kind_t::internal_failure, error.what ()));
                 }
                 catch (...) {
-                    completion.complete (result_t<T>::failure (
+                    completion->complete (result_t<T>::failure (
                       framework_error_kind_t::internal_failure, "redis worker failure"));
                 }
             });

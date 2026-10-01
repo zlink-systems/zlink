@@ -10,7 +10,7 @@ title: "1. Overview · C++"
 # 1. Overview
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Next: C++ Quickstart — from Install to a First Request](../../quickstart.en.md)
+[Guide Home](README.en.md) | [Next: Interactive Tour](02-tour.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

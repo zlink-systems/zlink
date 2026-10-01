@@ -33,15 +33,7 @@ class async_delay_timer_t
   public:
     static task_t<void> start (std::chrono::milliseconds duration)
     {
-        /* capture_native_continuation_scheduler() must run on the awaiting
-         * coroutine's own thread, before it suspends -- it snapshots the
-         * ambient dispatch context and (if the coroutine currently holds a
-         * serial turn) a scheduler that re-enters that turn around the
-         * resume. Without this the coroutine would resume with empty
-         * thread-local turn/ambient state, since it resumes on a thread this
-         * helper spins up rather than the caller's thread. */
-        auto source = std::make_shared<detail::task_completion_source_t<void>> (
-          capture_native_continuation_scheduler ());
+        auto source = std::make_shared<task_completion_source_t<void>> ();
         auto pending = source->task ();
         auto timer = std::make_shared<async_delay_timer_t> ();
         void *const key = timer.get ();

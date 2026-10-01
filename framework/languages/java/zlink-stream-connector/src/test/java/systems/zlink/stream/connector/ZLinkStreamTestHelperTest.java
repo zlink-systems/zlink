@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 final class ZLinkStreamTestHelperTest {
     private final List<ZLinkStreamConnector> connectors = new ArrayList<>();
@@ -253,14 +252,16 @@ final class ZLinkStreamTestHelperTest {
         ZLinkStreamError timeout =
                 ZLinkStreamAssert.expectFailure(
                         () -> {
-                            throw new TimeoutException("request timed out");
+                            throw ZLinkStreamException.of(
+                                    ZLinkStreamErrorCode.REQUEST_TIMEOUT, "request timed out");
                         },
                         "REQUEST_TIMEOUT");
         assertEquals(ZLinkStreamErrorCode.REQUEST_TIMEOUT, timeout.code());
 
         ZLinkStreamAssert.expectTimeout(
                 () -> {
-                    throw new TimeoutException("request timed out");
+                    throw ZLinkStreamException.of(
+                            ZLinkStreamErrorCode.REQUEST_TIMEOUT, "request timed out");
                 });
         assertThrows(
                 IllegalArgumentException.class,

@@ -30,7 +30,7 @@ public final class Program {
                         .enableActorDispatch()
                         .registerSession(PerfActorRelaySession.class);
             });
-            app.bean(ObjectsReadiness.class, () -> new ObjectsReadiness(false, "No Actor is bound to a session yet."));
+            app.bean(ObjectsReadiness.class, () -> new ObjectsReadiness(true, ""));
             app.bean(SessionActorSetup.class);
         }
         app.start();
