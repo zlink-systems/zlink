@@ -1,3 +1,13 @@
+import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import { ZLinkApplicationJobQueueProfile } from '../../contracts/Dispatch';
+import {
+  DEFAULT_PAUSE_THRESHOLD_PERCENT,
+  DEFAULT_RESUME_THRESHOLD_PERCENT,
+  APPLICATION_JOB_QUEUE_PERCENT_SCALE,
+  isKnownApplicationJobQueueProfile,
+  validateApplicationJobQueueMaximum,
+  validateApplicationJobQueuePressureThresholds
+} from '../../contracts/Configuration/Registration';
 import { readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import type {
@@ -52,9 +62,6 @@ export interface ApplicationJobQueueSnapshot extends ApplicationJobQueueConfigur
   readonly flowStateConfigFailureCount: bigint;
 }
 
-const MAX_QUEUED_APPLICATION_JOBS = 2_147_483_647n;
-const DEFAULT_PAUSE_THRESHOLD_PERCENT = 80;
-const DEFAULT_RESUME_THRESHOLD_PERCENT = 60;
 const CGROUP_V2_CPU_MAX = '/sys/fs/cgroup/cpu.max';
 const CGROUP_V1_CPU_QUOTA = '/sys/fs/cgroup/cpu/cpu.cfs_quota_us';
 const CGROUP_V1_CPU_PERIOD = '/sys/fs/cgroup/cpu/cpu.cfs_period_us';
@@ -69,35 +76,34 @@ export function resolveApplicationJobQueueConfiguration(
   options: ApplicationJobQueueOptions = {},
   effectiveProcessorCount: () => bigint = () => nodeEffectiveProcessorCount()
 ): ApplicationJobQueueConfiguration {
-  const configuredProfile = options.profile ?? 'balanced';
-  if (!(configuredProfile in JOBS_PER_PROCESSOR)) {
+  const configuredProfile = options.profile ?? ZLinkApplicationJobQueueProfile.Balanced;
+  if (!isKnownApplicationJobQueueProfile(configuredProfile)) {
     throw new TypeError('applicationJobQueueProfile must be a supported profile.');
   }
 
   const configuredManualMax = options.maxQueuedApplicationJobs;
-  if (
-    configuredManualMax !== undefined &&
-    (typeof configuredManualMax !== 'bigint' ||
-      configuredManualMax < 1n ||
-      configuredManualMax > MAX_QUEUED_APPLICATION_JOBS)
-  ) {
-    throw new RangeError('maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.');
-  }
+  validateApplicationJobQueueMaximum(configuredManualMax, (message) => new RangeError(message));
 
   const processors = effectiveProcessorCount();
   if (typeof processors !== 'bigint' || processors < 1n) {
     throw new RangeError('effectiveProcessorCount must be a positive bigint.');
   }
   const effectiveMax = configuredManualMax ?? JOBS_PER_PROCESSOR[configuredProfile] * processors;
-  if (effectiveMax < 1n || effectiveMax > MAX_QUEUED_APPLICATION_JOBS) {
-    throw new RangeError('Application job queue profile calculation exceeds the supported range.');
-  }
+  validateApplicationJobQueueMaximum(
+    effectiveMax,
+    () => new RangeError('Application job queue profile calculation exceeds the supported range.')
+  );
 
   const configuredPauseThresholdPercent =
     options.pauseThresholdPercent ?? DEFAULT_PAUSE_THRESHOLD_PERCENT;
   const configuredResumeThresholdPercent =
     options.resumeThresholdPercent ?? DEFAULT_RESUME_THRESHOLD_PERCENT;
-  validatePressureThresholds(configuredPauseThresholdPercent, configuredResumeThresholdPercent);
+  validateApplicationJobQueuePressureThresholds(
+    configuredPauseThresholdPercent,
+    configuredResumeThresholdPercent,
+    (message) => new RangeError(message)
+  );
+  const percentScale = BigInt(APPLICATION_JOB_QUEUE_PERCENT_SCALE);
   const pauseNumerator = effectiveMax * BigInt(configuredPauseThresholdPercent);
   const resumeNumerator = effectiveMax * BigInt(configuredResumeThresholdPercent);
 
@@ -108,8 +114,8 @@ export function resolveApplicationJobQueueConfiguration(
     configuredResumeThresholdPercent,
     effectiveProcessorCount: processors,
     effectiveMaxQueuedApplicationJobs: effectiveMax,
-    pausePermitCount: (pauseNumerator + 99n) / 100n,
-    resumePermitCount: resumeNumerator / 100n
+    pausePermitCount: (pauseNumerator + percentScale - 1n) / percentScale,
+    resumePermitCount: resumeNumerator / percentScale
   });
 }
 
@@ -383,7 +389,7 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   private recordCompletedWait(waiter: CapacityWaiter): void {
     if (waiter.metricsEpoch !== this.metricsEpoch) return;
     const durationMs = Math.max(0, this.nowMs() - waiter.startedAtMs);
-    this.capacityWaitDurationSeconds += durationMs / 1_000;
+    this.capacityWaitDurationSeconds += durationMs / MILLISECONDS_PER_SECOND;
   }
 
   private evaluatePressure(): void {
@@ -417,24 +423,12 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
 
   private pauseDurationAt(nowMs: number): number {
     if (this.pauseStartedAtMs === undefined) return 0;
-    return Math.max(0, nowMs - this.pauseStartedAtMs) / 1_000;
+    return Math.max(0, nowMs - this.pauseStartedAtMs) / MILLISECONDS_PER_SECOND;
   }
 
   private cumulativePauseDurationAt(nowMs: number): number {
     if (this.cumulativePauseStartedAtMs === undefined) return 0;
-    return Math.max(0, nowMs - this.cumulativePauseStartedAtMs) / 1_000;
-  }
-}
-
-function validatePressureThresholds(pause: number, resume: number): void {
-  if (!Number.isInteger(pause) || pause < 1 || pause > 100) {
-    throw new RangeError('pauseThresholdPercent must be an integer in the range 1..100.');
-  }
-  if (!Number.isInteger(resume) || resume < 0 || resume > 99) {
-    throw new RangeError('resumeThresholdPercent must be an integer in the range 0..99.');
-  }
-  if (resume >= pause) {
-    throw new RangeError('resumeThresholdPercent must be less than pauseThresholdPercent.');
+    return Math.max(0, nowMs - this.cumulativePauseStartedAtMs) / MILLISECONDS_PER_SECOND;
   }
 }
 

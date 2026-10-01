@@ -101,13 +101,17 @@ export interface ZLinkAuthorityEntry {
   readonly snapshot: ZLinkAuthoritySnapshot;
 }
 
+const ZLINK_AUTHORITY_MAX_SCAN_CURSOR_BYTES = 4096;
+
 export class ZLinkAuthorityScanCursor {
   private constructor(readonly encoded: string) {}
 
   static from(encoded: string): ZLinkAuthorityScanCursor {
     const byteLength = Buffer.byteLength(encoded, 'utf8');
-    if (byteLength < 1 || byteLength > 4096) {
-      throw new RangeError('Authority scan cursor must contain 1..4096 UTF-8 bytes.');
+    if (byteLength < 1 || byteLength > ZLINK_AUTHORITY_MAX_SCAN_CURSOR_BYTES) {
+      throw new RangeError(
+        `Authority scan cursor must contain 1..${ZLINK_AUTHORITY_MAX_SCAN_CURSOR_BYTES} UTF-8 bytes.`
+      );
     }
     return new ZLinkAuthorityScanCursor(encoded);
   }

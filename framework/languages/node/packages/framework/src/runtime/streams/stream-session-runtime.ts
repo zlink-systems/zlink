@@ -1,61 +1,66 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type { ZLinkMessageSerializer, RoutingId, ZLinkSession } from '../../contracts';
+import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
-import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
-import { boundSessionErrorPayload } from './bound-session-response-target';
-import { flowIfEnabled } from '../diagnostics';
-import type { ZLinkRuntimeMetrics } from '../diagnostics';
-import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { type ZLinkApplicationWorkClaim, shouldCompactBackingArray } from '../admission';
+
+import {
+  releaseApplicationJobPermitBeforeHandler,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import type {
+  ZLinkBackendReadablePoller,
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent,
-  ZLinkBackendReadablePoller,
   ZLinkBackendStreamPacket,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
-import type { StreamSessionService } from '../foundation/service-runtime-contracts';
-import {
-  decodeStreamHeader,
-  messageToBytes,
-  streamCodecContentType,
-  type ZLinkStreamFrameHeader,
-  ZLINK_STREAM_HEARTBEAT_PING,
-  ZLINK_STREAM_HEARTBEAT_PONG,
-  ZLinkStreamCloseReasonCode,
-  ZLinkStreamMessageKind
-} from './protocol';
+import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
+import { type ZLinkRuntimeMetrics, flowIfEnabled } from '../diagnostics';
+
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
+import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
+import type { StreamSessionService } from '../foundation/service-runtime-contracts';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { boundSessionErrorPayload } from './bound-session-response-target';
 import {
   streamSessionIdFromRoutingId,
   ZLinkManagedStream,
   type ZLinkNativeSessionRoute
 } from './managed-stream';
+import {
+  decodeStreamHeader,
+  messageToBytes,
+  streamCodecContentType,
+  ZLINK_STREAM_HEARTBEAT_PING,
+  ZLINK_STREAM_HEARTBEAT_PONG,
+  ZLinkStreamCloseReasonCode,
+  ZLinkStreamMessageKind,
+  type ZLinkStreamFrameHeader
+} from './protocol';
 import { createSessionDispatchContext, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkSessionSerialExecutor } from './session-serial-executor';
-import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
-import type { ServiceActorRef } from '../foundation/service-stateful-registry';
-import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
-import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const ZLINK_RECV_DONT_WAIT = 1;
@@ -63,7 +68,6 @@ const ZLINK_STREAM_HEARTBEAT_INTERVAL_MS = 1_000;
 const ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS = 5_000;
 const ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
-const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
 const ZLINK_STREAM_MONITOR_IDLE_MIN_DELAY_MS = 1;
 const ZLINK_STREAM_MONITOR_IDLE_MAX_DELAY_MS = 20;
@@ -389,7 +393,7 @@ export class ZLinkStreamSessionRuntime {
         }
         forcedClose = true;
         void this.close().catch((error) => this.options.onError?.(error));
-      }, this.options.replacementCallbackTimeoutMs ?? ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS);
+      }, this.options.replacementCallbackTimeoutMs ?? DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS);
 
       const callback = session.onActorBindingReplaced;
       if (callback === undefined) {
@@ -455,8 +459,8 @@ export class ZLinkStreamSessionRuntime {
     this.connected = true;
     this.lastApplicationActivityAt = this.livenessClock.now();
     this.scheduleLivenessCheck();
-    this.options.metrics?.change('zlink.stream.connections.active', 1, { transport: 'tcp' });
-    this.options.metrics?.count('zlink.stream.connections.opened', 1, { transport: 'tcp' });
+    this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, 1, { transport: 'tcp' });
+    this.options.metrics?.count(METRIC_NAMES.StreamConnectionsOpened, 1, { transport: 'tcp' });
     const session = await this.requireSession();
     await session.onConnected?.(this.context);
   }
@@ -829,8 +833,8 @@ export class ZLinkStreamSessionRuntime {
   private async cleanup(): Promise<void> {
     if (this.connected && !this.metricsClosed) {
       this.metricsClosed = true;
-      this.options.metrics?.change('zlink.stream.connections.active', -1, { transport: 'tcp' });
-      this.options.metrics?.count('zlink.stream.connections.closed', 1, {
+      this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, -1, { transport: 'tcp' });
+      this.options.metrics?.count(METRIC_NAMES.StreamConnectionsClosed, 1, {
         transport: 'tcp',
         close_reason: normalizeStreamCloseReason(this.closeReason)
       });
@@ -1350,8 +1354,10 @@ export class ZLinkStreamSessionNodeRuntime {
       this.pendingConnectionMetadata.length = 0;
       this.pendingConnectionMetadataHead = 0;
     } else if (
-      this.pendingConnectionMetadataHead >= 1024 &&
-      this.pendingConnectionMetadataHead * 2 >= this.pendingConnectionMetadata.length
+      shouldCompactBackingArray(
+        this.pendingConnectionMetadataHead,
+        this.pendingConnectionMetadata.length
+      )
     ) {
       this.pendingConnectionMetadata.splice(0, this.pendingConnectionMetadataHead);
       this.pendingConnectionMetadataHead = 0;
@@ -1379,8 +1385,10 @@ export class ZLinkStreamSessionNodeRuntime {
       this.unaddressedMonitorSessions.length = 0;
       this.unaddressedMonitorSessionHead = 0;
     } else if (
-      this.unaddressedMonitorSessionHead >= 1024 &&
-      this.unaddressedMonitorSessionHead * 2 >= this.unaddressedMonitorSessions.length
+      shouldCompactBackingArray(
+        this.unaddressedMonitorSessionHead,
+        this.unaddressedMonitorSessions.length
+      )
     ) {
       this.unaddressedMonitorSessions.splice(0, this.unaddressedMonitorSessionHead);
       this.unaddressedMonitorSessionHead = 0;

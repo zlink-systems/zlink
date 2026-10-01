@@ -1,3 +1,4 @@
+import { FLOW_ORIGIN_VALUES } from '../diagnostics/flow-context';
 export const ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE = 'zlink.bound_session.fence';
 
 /**
@@ -69,17 +70,10 @@ export function encodeRemoteBoundSessionSendPayload(input: {
   };
 }
 
-const WIRE_FLOW_ORIGIN: Record<import('../../contracts').ZLinkFlowOrigin, string> = {
-  Inbound: 'inbound',
-  Timer: 'timer',
-  Application: 'application',
-  Lifecycle: 'lifecycle'
-};
-
 function encodeWireFlowOrigin(
   origin: import('../../contracts').ZLinkFlowOrigin | undefined
 ): string | undefined {
-  return origin === undefined ? undefined : WIRE_FLOW_ORIGIN[origin];
+  return origin === undefined ? undefined : FLOW_ORIGIN_VALUES[origin];
 }
 
 export function encodeRemoteBoundSessionResponsePayload(input: {

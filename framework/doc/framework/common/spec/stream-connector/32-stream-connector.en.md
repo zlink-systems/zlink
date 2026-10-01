@@ -133,7 +133,7 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 - **The header's first byte is `format_marker = 0xF2`.** A different
   value is a decode error.
 - `kind`/`codec` are encoded as a **1-byte enum**, not a string.
-- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**.
+- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**. The packet name of a `Send`, a `Request` and a push can't be empty or consist only of whitespace, and every surface that takes a name rejects such a name.
   **`Response` and `Error` don't carry a
   [packet name](../server/00-foundation/02-glossary.en.md#packet-name)** — encoded with
   `name_len = 0`. Since a response doesn't select a handler and
@@ -364,6 +364,7 @@ is put **only in request/response/error response.**
 - **When a request timeout, close, or disconnect occurs, pending
   requests complete as failure and are removed from the map.** They are not
   automatically resent after reconnection (§6).
+- When a Request ends by timeout or caller cancellation, its frame that hasn't started being written isn't sent.
 - A Request timeout starts at operation acceptance and covers queue wait, frame write, and reply
   wait.
 
@@ -800,6 +801,8 @@ reason, or the reconnect condition.
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
+
+If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event.
 
 ### 9.1 The Closed Error Code Set
 

@@ -16,6 +16,12 @@ interface Cookie {
   secure: boolean;
 }
 
+const COOKIE_ATTRIBUTE = Object.freeze({
+  Path: 'path',
+  Secure: 'secure',
+  MaxAge: 'max-age'
+} as const);
+
 const MAX_COOKIES_PER_HOST = 128;
 
 export class CookieJar {
@@ -43,11 +49,12 @@ export class CookieJar {
       const attrEquals = attribute.indexOf('=');
       const attrName = (attrEquals < 0 ? attribute : attribute.slice(0, attrEquals)).trim();
       const attrValue = attrEquals < 0 ? '' : attribute.slice(attrEquals + 1).trim();
-      if (attrName.toLowerCase() === 'path' && attrValue.length > 0) {
+      const normalizedName = attrName.toLowerCase();
+      if (normalizedName === COOKIE_ATTRIBUTE.Path && attrValue.length > 0) {
         path = attrValue;
-      } else if (attrName.toLowerCase() === 'secure') {
+      } else if (normalizedName === COOKIE_ATTRIBUTE.Secure) {
         secure = true;
-      } else if (attrName.toLowerCase() === 'max-age') {
+      } else if (normalizedName === COOKIE_ATTRIBUTE.MaxAge) {
         const maxAge = Number.parseInt(attrValue, 10);
         if (!Number.isNaN(maxAge)) {
           expired = maxAge <= 0;

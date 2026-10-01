@@ -1,19 +1,21 @@
 import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   type ZLinkDispatchFailure
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import {
-  ZLinkMessageFlowTracer,
+  type ZLinkRuntimeMetrics,
   DEFAULT_ZLINK_DIAGNOSTICS,
+  ZLinkMessageFlowTracer,
   type ZLinkDiagnosticsContext
 } from '../diagnostics';
-import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
+
 import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 
 export type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
 
@@ -49,7 +51,7 @@ export class ZLinkDispatchErrorReporter {
     const normalized = normalizeDispatchFailure(event);
     const dropReason = channelDropReason(normalized);
     if (dropReason !== undefined) {
-      this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
+      this.metrics?.count(METRIC_NAMES.MeshNodeMessagesDropped, 1, {
         surface: normalized.surface,
         message_kind: normalized.messageKind,
         reason: dropReason

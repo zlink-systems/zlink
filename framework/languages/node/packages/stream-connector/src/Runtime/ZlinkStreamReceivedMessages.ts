@@ -1,10 +1,12 @@
 import { Disposable, ZlinkStreamEncodedPayload, ZlinkStreamMessage } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
-import { currentRegistrations, subscription } from './ZlinkStreamSupport';
+import {
+  currentRegistrations,
+  shouldCompactBackingArray,
+  subscription
+} from './ZlinkStreamSupport';
 import { zlinkStreamActorBinding, type DefaultZlinkStreamActor } from './ZlinkStreamActors';
-
-const QUEUE_COMPACTION_MIN_REMOVED = 1024;
 
 type EncodedMessageHandler = (
   message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
@@ -434,7 +436,7 @@ export class ZlinkStreamReceivedMessages {
       return;
     }
     const removed = this.queue.length - this.queuedCount;
-    if (removed >= QUEUE_COMPACTION_MIN_REMOVED && removed >= this.queuedCount) {
+    if (shouldCompactBackingArray(removed, this.queue.length)) {
       let destination = 0;
       for (let source = this.queueHead; source < this.queue.length; source += 1) {
         const queued = this.queue[source];

@@ -1,28 +1,31 @@
-import type {
-  RoutingId,
-  ZLinkActor,
-  ZLinkMessageSerializer,
-  ZLinkSpot,
-  ZLinkSpotActorJoinResult
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import {
+  type RoutingId,
+  type ZLinkActor,
+  type ZLinkMessageSerializer,
+  type ZLinkSpot,
+  type ZLinkSpotActorJoinResult,
+  ZLinkEncodedPayload,
+  ZLinkMessage
 } from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
-import { throwIfAborted } from '../abort';
+
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import { ZLinkConfigurationException } from '../configuration';
-import { ZLinkDispatchErrorReporter } from '../channels';
-import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import type { ZLinkSpotActivation } from './spot-activation-state';
-import type { ZLinkSpotActorTransferRuntime } from './spot-runtime-ports';
-import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
   ZLinkRuntimeDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { throwIfAborted } from '../abort';
+import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { ZLinkDispatchErrorReporter } from '../channels';
+import { ZLinkConfigurationException } from '../configuration';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import type { ZLinkSpotActivation } from './spot-activation-state';
+import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
+import type { ZLinkSpotActorTransferRuntime } from './spot-runtime-ports';
 
 export interface ZLinkSpotActorMembershipOptions {
   readonly resolveActivation: (
@@ -54,7 +57,7 @@ export class ZLinkSpotActorMembership {
     commit: (spot: ZLinkSpot) => Promise<void> | void,
     signal?: AbortSignal,
     leaveSource?: () => Promise<void>,
-    contentType = 'application/json'
+    contentType: string = ZlinkStreamContentType.Json
   ): Promise<ZLinkSpotActorJoinResult> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);

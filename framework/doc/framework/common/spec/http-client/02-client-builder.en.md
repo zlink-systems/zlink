@@ -10,7 +10,7 @@
   a language deviation (the same builder internally).
 - The client builder also has a verb shorthand (7 kinds, such as
   `get(path)`). This path is **one-shot**: it lazy-builds the client at
-  submit time and closes it after completion. Since there's no
+  submit time and closes it after completion. If closing fails, the result is the request's failure when the request failed, and the close failure when the request succeeded. Since there's no
   connection pool reuse, it isn't for repeated calls
   ([Chapter 5](05-execution-model.en.md) §5.4).
 

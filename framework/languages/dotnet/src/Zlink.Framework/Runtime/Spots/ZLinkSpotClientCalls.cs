@@ -282,54 +282,15 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             : await runtime
                 .ResolveInstanceSpotHandleAsync(target, cancellationToken)
                 .ConfigureAwait(false);
-        while (handle is not null)
+        if (handle is not null)
         {
-            try
-            {
-                return await RequestExistingAsync<TReply>(
-                        handle,
-                        terminator,
-                        Remaining(deadline),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
-            catch (ZLinkFrameworkException error)
-                when (_instanceIntent && IsAuthorityTransitionConflict(error))
-            {
-                handle.InvalidateRoute();
-                handle = await runtime
-                    .WaitForInstanceSpotRouteOrMissingAsync(target, deadline, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (ZLinkFrameworkException error)
-                when (_instanceIntent && ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
-            {
-                // Idle eviction can remove the native activation while its
-                // location row is still being released. The durable Instance
-                // Spot operation must refresh the route before deciding
-                // whether to cold-activate a replacement.
-                handle.InvalidateRoute();
-                handle = await runtime
-                    .WaitForInstanceSpotRouteOrMissingAsync(target, deadline, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (ZLinkFrameworkException error)
-                when (!_instanceIntent && ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
-            {
-                // A global Spot ID can retain a cached route after its owner
-                // has stopped. Refresh only the location row to distinguish a
-                // removed Spot (NotFound) from a still-existing Spot whose
-                // target route is temporarily unavailable. Do not resubmit
-                // the application request after a stale-route response: the
-                // target may have accepted it before the response was lost.
-                handle.InvalidateRoute();
-                handle = await runtime
-                    .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
-                    .ConfigureAwait(false);
-                if (handle is not null)
-                    throw;
-            }
+            return await RequestExistingAsync<TReply>(
+                    handle,
+                    terminator,
+                    Remaining(deadline),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         }
 
         if (!_instanceIntent)
@@ -387,10 +348,6 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         return await call.ExecuteAfterTerminatorAsync<TReply>(terminator, cancellationToken)
             .ConfigureAwait(false);
     }
-
-    private static bool IsAuthorityTransitionConflict(ZLinkFrameworkException error) =>
-        error.InnerException
-            is ZlinkRequestException { Result: ZlinkRequestException.ErrorCode.Conflict };
 
     private static TimeSpan Remaining(TimeSpan deadline)
     {

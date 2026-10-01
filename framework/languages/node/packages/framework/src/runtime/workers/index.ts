@@ -1,23 +1,24 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
 import { Worker } from 'node:worker_threads';
-import type { ZLinkWorkerCall } from '../../contracts';
-import { ZLinkFrameworkException } from '../../contracts';
-import type { ZLinkWorkerOptions } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
+import { type ZLinkWorkerCall, ZLinkFrameworkException } from '../../contracts';
+
 import {
-  defaultWorkerMaxThreads,
   DEFAULT_WORKER_IDLE_TIMEOUT_MS,
-  DEFAULT_WORKER_MIN_THREADS
+  DEFAULT_WORKER_MIN_THREADS,
+  defaultWorkerMaxThreads
 } from '../../contracts/Configuration/InternalDefaults';
 import { createAbortError } from '../abort';
+import { shouldCompactBackingArray } from '../admission';
+import { type ZLinkWorkerOptions, ZLinkConfigurationException } from '../configuration';
+
 import {
   captureZLinkSpotSerialTurn,
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 export type ZLinkCpuWorkerWork<T> = (signal: AbortSignal) => T;
 export type ZLinkIoWorkerWork<T> = (signal: AbortSignal) => Promise<T>;
@@ -332,7 +333,7 @@ class ZLinkCpuWorkerPool {
     if (this.queueCount === 0) {
       this.queue.length = 0;
       this.queueHead = 0;
-    } else if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+    } else if (shouldCompactBackingArray(this.queueHead, this.queue.length)) {
       this.queue.splice(0, this.queueHead);
       this.queueHead = 0;
     }
@@ -351,7 +352,7 @@ class ZLinkCpuWorkerPool {
         while (this.queueHead < this.queue.length && this.queue[this.queueHead] === undefined) {
           this.queueHead += 1;
         }
-        if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+        if (shouldCompactBackingArray(this.queueHead, this.queue.length)) {
           this.queue.splice(0, this.queueHead);
           this.queueHead = 0;
         }

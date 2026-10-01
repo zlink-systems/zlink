@@ -1,4 +1,5 @@
 import type { ZLinkStreamCompressionCodec, ZLinkStreamCompressionOptions } from '../../contracts';
+import { defaultMaxDecompressedPayloadSize } from '@zlink-systems/stream-wire';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as ZLinkBindingMessage } from '../backend/runtime-message';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
@@ -17,8 +18,6 @@ import {
   ZLinkStreamMessageKind,
   type ZLinkStreamReplyMessageKind
 } from './protocol';
-
-const DEFAULT_MAX_DECOMPRESSED_STREAM_PAYLOAD_SIZE = 64 * 1024;
 
 export interface ZLinkStreamFramePayloadCodec {
   encode(
@@ -245,7 +244,7 @@ function compressStreamPayload(
 export function decompressStreamPayload(
   payload: Uint8Array,
   codec: ZLinkStreamCompressionCodec | undefined,
-  maxDecompressedSize = DEFAULT_MAX_DECOMPRESSED_STREAM_PAYLOAD_SIZE
+  maxDecompressedSize = defaultMaxDecompressedPayloadSize
 ): Uint8Array {
   if (codec === undefined) {
     throw new Error('Compression codec is not configured.');

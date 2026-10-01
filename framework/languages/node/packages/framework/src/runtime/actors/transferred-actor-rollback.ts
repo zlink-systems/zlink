@@ -1,3 +1,4 @@
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import type { ZLinkActor } from '../../contracts';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import { closeMeshCompletion } from '../backend';
@@ -123,6 +124,6 @@ export class ZLinkTransferredActorRollbackCoordinator {
     this.options.actorDestroyedCleanup?.(actor.context.actorId);
     state.clearAfterDestroy();
     this.states.delete(actor.context.actorId);
-    this.options.metrics?.change('zlink.actor.count', -1);
+    this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
   }
 }
