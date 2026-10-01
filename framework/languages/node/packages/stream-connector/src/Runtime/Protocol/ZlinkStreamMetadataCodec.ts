@@ -1,8 +1,11 @@
+import {
+  streamWireMetadataSize,
+  ZLINK_STREAM_MAX_METADATA_BYTES
+} from '@zlink-systems/stream-wire';
 import { ZlinkStreamErrorCode, ZlinkStreamMetadata } from '../../Contracts';
-import { streamWireMetadataSize } from '@zlink-systems/stream-wire';
 import { connectorError } from '../ZlinkStreamSupport';
 
-export const ZLINK_STREAM_MAX_METADATA_BYTES = 1024;
+export { ZLINK_STREAM_MAX_METADATA_BYTES } from '@zlink-systems/stream-wire';
 
 export class ZlinkStreamMetadataCodec {
   static size(metadata: ZlinkStreamMetadata): number {

@@ -1,3 +1,17 @@
+const enum DynamicValueField {
+  Kind = 1,
+  Bool = 2,
+  Number = 3,
+  String = 4,
+  Object = 5,
+  Array = 6,
+  Bytes = 7
+}
+const enum ObjectEntryField {
+  Key = 1,
+  Value = 2
+}
+
 const enum WireType {
   Varint = 0,
   Fixed64 = 1,
@@ -30,40 +44,46 @@ export function createDynamicValueProtobufType(): {
 
 export function encodeDynamicValue(value: unknown): Buffer {
   if (value === null || value === undefined) {
-    return encodeFields([encodeVarintField(1, ValueKind.Null)]);
+    return encodeFields([encodeVarintField(DynamicValueField.Kind, ValueKind.Null)]);
   }
   if (typeof value === 'boolean') {
     return encodeFields([
-      encodeVarintField(1, ValueKind.Bool),
-      encodeVarintField(2, value ? 1 : 0)
+      encodeVarintField(DynamicValueField.Kind, ValueKind.Bool),
+      encodeVarintField(DynamicValueField.Bool, value ? 1 : 0)
     ]);
   }
   if (typeof value === 'number') {
-    return encodeFields([encodeVarintField(1, ValueKind.Number), encodeDoubleField(3, value)]);
+    return encodeFields([
+      encodeVarintField(DynamicValueField.Kind, ValueKind.Number),
+      encodeDoubleField(DynamicValueField.Number, value)
+    ]);
   }
   if (typeof value === 'string') {
     return encodeFields([
-      encodeVarintField(1, ValueKind.String),
-      encodeBytesField(4, Buffer.from(value))
+      encodeVarintField(DynamicValueField.Kind, ValueKind.String),
+      encodeBytesField(DynamicValueField.String, Buffer.from(value))
     ]);
   }
   if (value instanceof Uint8Array) {
     return encodeFields([
-      encodeVarintField(1, ValueKind.Bytes),
-      encodeBytesField(7, Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+      encodeVarintField(DynamicValueField.Kind, ValueKind.Bytes),
+      encodeBytesField(
+        DynamicValueField.Bytes,
+        Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+      )
     ]);
   }
   if (Array.isArray(value)) {
     return encodeFields([
-      encodeVarintField(1, ValueKind.Array),
-      ...value.map((item) => encodeBytesField(6, encodeDynamicValue(item)))
+      encodeVarintField(DynamicValueField.Kind, ValueKind.Array),
+      ...value.map((item) => encodeBytesField(DynamicValueField.Array, encodeDynamicValue(item)))
     ]);
   }
   if (typeof value === 'object') {
     return encodeFields([
-      encodeVarintField(1, ValueKind.Object),
+      encodeVarintField(DynamicValueField.Kind, ValueKind.Object),
       ...Object.entries(value as Record<string, unknown>).map(([key, entryValue]) =>
-        encodeBytesField(5, encodeObjectEntry(key, entryValue))
+        encodeBytesField(DynamicValueField.Object, encodeObjectEntry(key, entryValue))
       )
     ]);
   }
@@ -81,27 +101,27 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
 
   for (const field of readFields(bytes)) {
     switch (field.fieldNumber) {
-      case 1:
+      case DynamicValueField.Kind:
         kind = Number(readVarintPayload(field)) as ValueKind;
         break;
-      case 2:
+      case DynamicValueField.Bool:
         boolValue = readVarintPayload(field) !== 0n;
         break;
-      case 3:
+      case DynamicValueField.Number:
         numberValue = readDoublePayload(field);
         break;
-      case 4:
+      case DynamicValueField.String:
         stringValue = readBytesPayload(field).toString();
         break;
-      case 5: {
+      case DynamicValueField.Object: {
         const entry = decodeObjectEntry(readBytesPayload(field));
         objectValue[entry.key] = entry.value;
         break;
       }
-      case 6:
+      case DynamicValueField.Array:
         arrayValue.push(decodeDynamicValue(readBytesPayload(field)));
         break;
-      case 7:
+      case DynamicValueField.Bytes:
         bytesValue = Buffer.from(readBytesPayload(field));
         break;
       default:
@@ -131,8 +151,8 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
 
 function encodeObjectEntry(key: string, value: unknown): Buffer {
   return encodeFields([
-    encodeBytesField(1, Buffer.from(key)),
-    encodeBytesField(2, encodeDynamicValue(value))
+    encodeBytesField(ObjectEntryField.Key, Buffer.from(key)),
+    encodeBytesField(ObjectEntryField.Value, encodeDynamicValue(value))
   ]);
 }
 
@@ -140,9 +160,9 @@ function decodeObjectEntry(bytes: Buffer): { readonly key: string; readonly valu
   let key = '';
   let value: unknown = null;
   for (const field of readFields(bytes)) {
-    if (field.fieldNumber === 1) {
+    if (field.fieldNumber === ObjectEntryField.Key) {
       key = readBytesPayload(field).toString();
-    } else if (field.fieldNumber === 2) {
+    } else if (field.fieldNumber === ObjectEntryField.Value) {
       value = decodeDynamicValue(readBytesPayload(field));
     }
   }

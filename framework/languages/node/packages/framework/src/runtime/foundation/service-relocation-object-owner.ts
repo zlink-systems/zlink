@@ -13,6 +13,7 @@ import type {
   ServiceRelocationQueuedMessage,
   ServiceRelocationTimer
 } from './service-relocation-runtime';
+const DEFAULT_RELOCATION_CALLBACK_CONCURRENCY = 8;
 
 export interface ServiceRelocationSealedWork {
   readonly boundSessionState: Uint8Array;
@@ -84,7 +85,9 @@ export class ServiceCapturedObjectRelocation {
 
 /** Captures the two valid relocation units: User Spot aggregate or one Actor. */
 export class ServiceRelocationObjectCaptureOwner {
-  constructor(private readonly maxConcurrentCallbacks = 8) {
+  constructor(
+    private readonly maxConcurrentCallbacks: number = DEFAULT_RELOCATION_CALLBACK_CONCURRENCY
+  ) {
     requireCallbackConcurrency(maxConcurrentCallbacks);
   }
 
@@ -254,7 +257,7 @@ export class ServiceRelocationObjectRestoreOwner<
   constructor(
     private readonly target: ServiceRelocationTargetObjectPort<THidden>,
     private readonly authorityKey: (value: string) => ZLinkAuthorityKey,
-    private readonly maxConcurrentCallbacks = 8
+    private readonly maxConcurrentCallbacks: number = DEFAULT_RELOCATION_CALLBACK_CONCURRENCY
   ) {
     requireCallbackConcurrency(maxConcurrentCallbacks);
   }

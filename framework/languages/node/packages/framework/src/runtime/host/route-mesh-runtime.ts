@@ -1,28 +1,41 @@
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type { RoutingId } from '../../contracts';
-import {
+  type RoutingId,
   ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
-  ZLinkTopologyState,
-  ZLinkTopologyReason,
+  ZLinkObjectRole,
   ZLinkPeerState,
+  ZLinkTopologyReason,
+  ZLinkTopologyState,
+  type ZLinkMeshNodeDescriptor,
   type ZLinkObservedStatus,
-  type ZLinkRouteMeshStatus,
-  type ZLinkRouteMeshRuntime
+  type ZLinkRouteMeshRuntime,
+  type ZLinkRouteMeshStatus
 } from '../../contracts';
+
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import { createDeadlineExceededError } from '../abort';
+import type { ZLinkActivationAdmission } from '../activation-admission';
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
+import type { ZLinkBackendMeshNode } from '../backend';
+import type { ZLinkSpotNodeOptions } from '../configuration';
+import { isRelocationDebugEnabled } from '../diagnostics';
 import {
   RuntimeEventQueue,
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
 } from '../diagnostics/runtime-observation-queue';
-import { createDeadlineExceededError } from '../abort';
-import { debugPendingWorkNames } from '../execution/state-lane';
+import { debugPendingWorkNames, isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   runtimeStateIsReady,
   topologyRuntimeIsReady
 } from '../foundation/runtime-state-projections';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import { ZLinkOwnerCleanupError } from '../locations/runtime';
+const DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS = 30_000;
+const MAX_ROUTE_MESH_OBSERVATION_WAIT_MS = 1000;
+const PLACEMENT_OBSERVATION_INTERVAL_MS = 100;
 
 type ZLinkDrainForceReason =
   'deadline_exceeded' | 'drain_state_publish_failed' | 'owner_cleanup_failed' | 'teardown_failed';
@@ -34,11 +47,6 @@ type ZLinkMeshDrainResult =
       readonly reason: ZLinkDrainForceReason;
       readonly error?: unknown;
     };
-import type { ZLinkBackendMeshNode } from '../backend';
-import type { ZLinkRuntimeAdmissionGate } from '../admission';
-import type { ZLinkActivationAdmission } from '../activation-admission';
-import type { ZLinkSpotNodeOptions } from '../configuration';
-import { ZLinkObjectRole, type ZLinkMeshNodeDescriptor } from '../../contracts';
 
 export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
   readonly meshNames: readonly string[];
@@ -158,7 +166,8 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
               )
           ).length
         );
-        const localWeight = descriptor?.channelWeights[channelName] ?? channel.weight ?? 100;
+        const localWeight =
+          descriptor?.channelWeights[channelName] ?? channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
         const readyTargetCount =
           Number(readyMemberCount) + (channel.server === true && localWeight > 0 ? 1 : 0);
         return { channelName, isReady: readyTargetCount > 0, readyTargetCount };
@@ -319,7 +328,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
 
   drain(
     meshName: string,
-    deadlineMs = 30_000,
+    deadlineMs: number = DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS,
     signal?: AbortSignal
   ): Promise<ZLinkMeshDrainResult> {
     const state = this.requireState(meshName);
@@ -340,7 +349,10 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return waitForOperation(operation, signal);
   }
 
-  drainHost(deadlineMs = 30_000, signal?: AbortSignal): Promise<ZLinkMeshDrainResult> {
+  drainHost(
+    deadlineMs: number = DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<ZLinkMeshDrainResult> {
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
       return Promise.reject(new TypeError('Drain deadlineMs must be greater than zero.'));
     }
@@ -398,7 +410,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           rollback.abort(
             createDeadlineExceededError('Retire descriptor rollback deadline exceeded.')
           ),
-        Math.min(deadlineMs, 1000)
+        Math.min(deadlineMs, MAX_ROUTE_MESH_OBSERVATION_WAIT_MS)
       );
       let rollbackFailed = false;
       for (const meshName of attempted.reverse()) {
@@ -445,7 +457,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       return { kind: 'drained' };
     } catch (error) {
       const classified = drainFailureReason(error);
-      if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION === '1') {
+      if (isRelocationDebugEnabled()) {
         console.error('[zlink.runtime.relocation.drain_failed]', classified, error);
       }
       const reason: ZLinkDrainForceReason = deadline.signal.aborted
@@ -457,7 +469,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           rollback.abort(
             createDeadlineExceededError('Relocation descriptor rollback deadline exceeded.')
           ),
-        Math.min(Math.max(1, deadlineMs), 1000)
+        Math.min(Math.max(1, deadlineMs), MAX_ROUTE_MESH_OBSERVATION_WAIT_MS)
       );
       try {
         await Promise.all(
@@ -719,7 +731,10 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
 
   private startPlacementObserver(): void {
     if (this.placementObserver !== undefined) return;
-    this.placementObserver = setInterval(() => this.observePlacementChanges(), 100);
+    this.placementObserver = setInterval(
+      () => this.observePlacementChanges(),
+      PLACEMENT_OBSERVATION_INTERVAL_MS
+    );
     this.placementObserver.unref();
   }
 
@@ -841,6 +856,13 @@ function peerFingerprintMap(peers: ReturnType<ZLinkBackendMeshNode['peers']>): M
   );
 }
 
+export class ZLinkDrainingStatePublishError extends Error {
+  constructor(cause: unknown) {
+    super('Failed to publish draining peer rows.', { cause });
+    this.name = 'ZLinkDrainingStatePublishError';
+  }
+}
+
 export class ZLinkRetiringRollbackError extends Error {
   constructor() {
     super('Retiring descriptor publication could not be rolled back to Serving.');
@@ -908,18 +930,15 @@ function peerUnavailableReason(state: ZLinkPeerState): ZLinkTopologyReason | und
 }
 
 function drainFailureReason(error: unknown): ZLinkDrainForceReason {
-  if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+  if (isStructuralGuardEnabled()) {
     const pending = debugPendingWorkNames();
     if (pending.length > 0) console.error('[zlink.runtime.drain.pending]', pending);
   }
-  const name = error instanceof Error ? error.name : '';
-  if (name === 'ZLinkDrainingStatePublishError') return 'drain_state_publish_failed';
+  if (error instanceof ZLinkDrainingStatePublishError) return 'drain_state_publish_failed';
   if (
-    name === 'ZLinkOwnerCleanupError' ||
+    error instanceof ZLinkOwnerCleanupError ||
     (error instanceof AggregateError &&
-      error.errors.some(
-        (nested) => nested instanceof Error && nested.name === 'ZLinkOwnerCleanupError'
-      ))
+      error.errors.some((nested) => nested instanceof ZLinkOwnerCleanupError))
   ) {
     return 'owner_cleanup_failed';
   }

@@ -1,27 +1,10 @@
+import { ZLinkFrameworkException, ZLinkSpotKind, type RoutingId } from '../../contracts';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind,
-  internalFrameworkErrorKindFromWireReply,
-  isCanonicalWireReplyTerminal
-} from '../framework-errors-internal';
-import {
-  RequestResult,
-  type ZLinkBackendMessageLike as MessageLike
-} from '../backend/runtime-values';
-import { ZLinkFrameworkException, type RoutingId } from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  classifySubmitResult,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
-import { ZLinkSpotKind } from '../../contracts';
-import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { awaitWithAbort } from '../abort';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
@@ -30,16 +13,32 @@ import {
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import {
+  RequestResult,
+  type ZLinkBackendMessageLike as MessageLike
+} from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels';
+import {
+  ZLinkChannelMessageKind,
   decodeChannelReply,
   encodeChannelEnvelopeParts,
   encodeChannelEnvelopePartsAtDeadline,
-  type ZLinkChannelEnvelopeCodecRegistry,
-  ZLinkChannelMessageKind
+  type ZLinkChannelEnvelopeCodecRegistry
 } from '../channels/channel-envelope';
-import type { ZLinkDispatchErrorReporter } from '../channels';
 import { flowIfEnabled } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  internalFrameworkErrorKindFromWireReply,
+  isCanonicalWireReplyTerminal
+} from '../framework-errors-internal';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
+import {
+  ZLinkSubmitStatus,
+  classifySubmitResult,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import type {
   ZLinkSpotAddressCallOptions,
   ZLinkSpotAddressTransport,

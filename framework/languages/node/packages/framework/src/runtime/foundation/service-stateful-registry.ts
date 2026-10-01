@@ -1,3 +1,4 @@
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 
 export type ServiceSpotKind = 'entry' | 'user' | 'instance';
@@ -661,8 +662,10 @@ function actorKey(actor: ServiceActorRef): string {
 
 function requireText(value: string, name: string): void {
   const bytes = Buffer.byteLength(value);
-  if (bytes < 1 || bytes > 255 || value.includes('\0')) {
-    throw new RangeError(`${name} must be 1..255 UTF-8 bytes without NUL.`);
+  if (bytes < 1 || bytes > ZLINK_MAX_IDENTITY_TEXT_BYTES || value.includes('\0')) {
+    throw new RangeError(
+      `${name} must be 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes without NUL.`
+    );
   }
 }
 

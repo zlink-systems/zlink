@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { availableParallelism } from 'node:os';
-import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
+import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import { runZLinkExecutionArea } from '../execution';
 import {
   ReadyDomain,
   type ReadyBatch,
@@ -8,13 +13,20 @@ import {
   type ReceiveBatch,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
+import {
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_MAJOR_OFFSET,
+  SERVICE_WIRE_PREFIX_SIZE
+} from '../foundation/service-wire-binary-primitives';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR
+} from '../foundation/service-wire-constants.generated';
 import type { ZLinkBackendMeshNode } from './contracts';
-import { runZLinkExecutionArea } from '../execution';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
+const DEFAULT_MESH_READY_CAPACITY = 32;
+
+const DEFAULT_MESH_PART_CAPACITY = 256;
 
 const MESH_DISPATCH_YIELD_RECORDS = 16;
 const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;
@@ -151,7 +163,7 @@ export class ZLinkMeshDispatchPump {
     const readyBatch = this.node.createReadyBatch(1);
     const receiveBatch = this.node.createReceiveBatch(
       MESH_DISPATCH_RECEIVE_CAPACITY,
-      this.options.partCapacity ?? 256
+      this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
     );
     try {
       for (;;) {
@@ -217,7 +229,10 @@ export class ZLinkMeshDispatchPump {
 
   private async drainInfrastructure(): Promise<void> {
     const readyBatch = this.node.createReadyBatch(
-      Math.min(this.options.readyCapacity ?? 32, MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET)
+      Math.min(
+        this.options.readyCapacity ?? DEFAULT_MESH_READY_CAPACITY,
+        MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
+      )
     );
     try {
       while (!this.disposed) {
@@ -277,7 +292,7 @@ export class ZLinkMeshDispatchPump {
             try {
               ownerReceiveBatch ??= this.node.createReceiveBatch(
                 MESH_DISPATCH_RECEIVE_CAPACITY,
-                this.options.partCapacity ?? 256
+                this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
               );
               const capacity =
                 owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
@@ -418,8 +433,11 @@ function meshDispatchFailureContext(record: ReceiveRecord): ZLinkMeshDispatchFai
 function serviceWireCommand(record: ReceiveRecord): number | undefined {
   if (record.parts.length !== 1) return undefined;
   const bytes = record.parts[0]!.data();
-  return bytes.byteLength >= 5 && bytes[0] === 0x5a && bytes[1] === 0x4d && bytes[2] === 1
-    ? bytes[3]
+  return bytes.byteLength >= SERVICE_WIRE_PREFIX_SIZE &&
+    bytes[0] === SERVICE_WIRE_MAGIC[0] &&
+    bytes[1] === SERVICE_WIRE_MAGIC[1] &&
+    bytes[SERVICE_WIRE_MAJOR_OFFSET] === SERVICE_WIRE_MAJOR
+    ? bytes[SERVICE_WIRE_COMMAND_OFFSET]
     : undefined;
 }
 

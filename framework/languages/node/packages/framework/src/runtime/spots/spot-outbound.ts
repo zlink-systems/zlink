@@ -1,35 +1,40 @@
 import {
+  type RoutingId,
+  type ZLinkChannelClient,
+  type ZLinkChannelRequestCall,
+  type ZLinkMessageMetadata,
+  type ZLinkPublishCall,
+  type ZLinkRequestCall,
+  type ZLinkSendCall,
+  type ZLinkSpotOutbound,
+  type ZLinkSpotPublisherClient,
+  type ZLinkSpotRequestCall,
+  type ZLinkSpotSendCall,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import {
+  ZLINK_MAX_MESH_NAME_BYTES,
+  ZLINK_MAX_STABLE_TYPE_BYTES
+} from '../../contracts/Common/CoreTypes';
+import type { ZLinkBackendSpot } from '../backend/contracts';
+import { ZLinkConfigurationException } from '../configuration';
+import { requireZLinkYieldTurn } from '../execution';
+import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import { ZLinkSpotKind } from '../../contracts';
-import type {
-  RoutingId,
-  ZLinkChannelClient,
-  ZLinkChannelRequestCall,
-  ZLinkPublishCall,
-  ZLinkRequestCall,
-  ZLinkSendCall,
-  ZLinkMessageMetadata,
-  ZLinkSpotOutbound,
-  ZLinkSpotRequestCall,
-  ZLinkSpotSendCall,
-  ZLinkSpotPublisherClient
-} from '../../contracts';
+import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
   requireOneWayCompletion,
   throwAlreadySubmitted,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
 import { normalizeOpaqueRoutingId } from '../routing-id';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkBackendSpot } from '../backend/contracts';
 import { deliverOnSerial } from '../workers';
-import { requireZLinkYieldTurn } from '../execution';
-import { resolveFrameworkPacketName } from '../messaging/packet-name';
+import { resolveSpotHandle, type ResolvedSpotHandle, type SpotHandle } from './spot-handle';
 import type { ZLinkSpotRouteTarget } from './spot-routing-internal';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import { resolveSpotHandle, type SpotHandle, type ResolvedSpotHandle } from './spot-handle';
 
 export interface DefaultZLinkSpotOutboundOptions {
   readonly serial: ZLinkSpotSerialTurnExecutor;
@@ -260,13 +265,21 @@ function createAddressedSpotSendCall(
       selectOnce(options, 'instanceSpot');
       options.instanceSpot = true;
       if (instanceSpotType !== undefined) {
-        options.instanceSpotType = requireAddressValue(instanceSpotType, 'Instance Spot type', 255);
+        options.instanceSpotType = requireAddressValue(
+          instanceSpotType,
+          'Instance Spot type',
+          ZLINK_MAX_STABLE_TYPE_BYTES
+        );
       }
       return this;
     },
     inMesh(meshName: string) {
       selectOnce(options, 'inMesh');
-      options.initialMeshName = requireAddressValue(meshName, 'Mesh name', 255);
+      options.initialMeshName = requireAddressValue(
+        meshName,
+        'Mesh name',
+        ZLINK_MAX_MESH_NAME_BYTES
+      );
       return this;
     },
     async submit(signal?: AbortSignal): Promise<void> {
@@ -316,13 +329,21 @@ function createAddressedSpotRequestCall(
       selectOnce(options, 'instanceSpot');
       options.instanceSpot = true;
       if (instanceSpotType !== undefined) {
-        options.instanceSpotType = requireAddressValue(instanceSpotType, 'Instance Spot type', 255);
+        options.instanceSpotType = requireAddressValue(
+          instanceSpotType,
+          'Instance Spot type',
+          ZLINK_MAX_STABLE_TYPE_BYTES
+        );
       }
       return this;
     },
     inMesh(meshName: string) {
       selectOnce(options, 'inMesh');
-      options.initialMeshName = requireAddressValue(meshName, 'Mesh name', 255);
+      options.initialMeshName = requireAddressValue(
+        meshName,
+        'Mesh name',
+        ZLINK_MAX_MESH_NAME_BYTES
+      );
       return this;
     },
     timeout(timeoutMs: number) {

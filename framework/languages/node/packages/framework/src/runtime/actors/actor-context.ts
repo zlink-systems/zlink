@@ -1,45 +1,51 @@
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type {
-  RoutingId,
-  SpotId,
-  ZLinkActor,
-  ZLinkActorContext,
-  ZLinkActorJoinCompletion,
-  ZLinkActorJoinEntrySpotCall,
-  ZLinkActorJoinSpotCall,
-  ZLinkBoundSession,
-  ZLinkBoundSessionSendCall
+  type RoutingId,
+  type SpotId,
+  type ZLinkActor,
+  type ZLinkActorContext,
+  type ZLinkActorJoinCompletion,
+  type ZLinkActorJoinEntrySpotCall,
+  type ZLinkActorJoinSpotCall,
+  type ZLinkBoundSession,
+  type ZLinkBoundSessionSendCall,
+  ZLinkEncodedPayload,
+  ZLinkFrameworkException,
+  ZLinkMessage,
+  type ZLinkMessageSerializer
 } from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkFrameworkException, ZLinkMessage } from '../../contracts';
+
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import { type ZLinkMessageSerializer } from '../../contracts';
-import { ZLinkConfigurationException } from '../configuration';
 import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { ZLinkConfigurationException } from '../configuration';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import { captureZLinkSpotSerialTurn } from '../execution';
+import { createRandomOperationIdentity } from '../foundation/operation-identity';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { ZLinkActorRuntimeState, toFrameworkActorRef } from './actor-runtime-state';
-import type {
-  ZLinkActorBoundSessionFactory,
-  ZLinkActorJoinCoordinator
-} from './actor-runtime-contracts';
-import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
+import { deferActorJoin } from './actor-join-deferred-scope';
 import {
   ZLINK_ACTOR_LIFECYCLE_SNAPSHOT,
   type ZLinkActorLifecycleSnapshotSource
 } from './actor-lifecycle-snapshot';
-import { createRandomOperationIdentity } from '../foundation/operation-identity';
-import { deferActorJoin } from './actor-join-deferred-scope';
-import { captureZLinkSpotSerialTurn } from '../execution';
-import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import type {
+  ZLinkActorBoundSessionFactory,
+  ZLinkActorJoinCoordinator,
+  ZLinkActorManagerOptions
+} from './actor-runtime-contracts';
+import { ZLinkActorRuntimeState, toFrameworkActorRef } from './actor-runtime-state';
+const DEFAULT_ACTOR_JOIN_TIMEOUT_MS = 5_000;
+
+const MAX_ACTOR_JOIN_TIMEOUT_MS = 2_147_483_647;
 
 export const ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME = Symbol('zlink.actor.join-entry-spot-runtime');
 
@@ -166,7 +172,7 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
 }
 
 class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
-  private timeoutMs = 5_000;
+  private timeoutMs: number = DEFAULT_ACTOR_JOIN_TIMEOUT_MS;
   private deferred = false;
   private readonly turn = captureZLinkSpotSerialTurn();
 
@@ -305,7 +311,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
 }
 
 class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall {
-  private timeoutMs = 5_000;
+  private timeoutMs: number = DEFAULT_ACTOR_JOIN_TIMEOUT_MS;
   private deferred = false;
   private readonly turn = captureZLinkSpotSerialTurn();
 
@@ -480,9 +486,9 @@ function encodeJoinRequest(
 
 function validateJoinTimeout(timeoutMs: number): number {
   const rounded = Math.ceil(timeoutMs);
-  if (!Number.isFinite(timeoutMs) || rounded < 1 || rounded > 2_147_483_647) {
+  if (!Number.isFinite(timeoutMs) || rounded < 1 || rounded > MAX_ACTOR_JOIN_TIMEOUT_MS) {
     throw new ZLinkConfigurationException(
-      'Actor join timeout must be a finite value from 1 through 2147483647 milliseconds.'
+      `Actor join timeout must be a finite value from 1 through ${MAX_ACTOR_JOIN_TIMEOUT_MS} milliseconds.`
     );
   }
   return rounded;

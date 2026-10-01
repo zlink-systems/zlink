@@ -6,17 +6,18 @@ import {
   type ZLinkFanoutPublisherDescriptor,
   type ZLinkLocationOwnerToken
 } from '../../contracts/Locations';
-import type { ZLinkFanoutLocationStore } from '../locations/internal-store-contracts';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import type { ZLinkBackendSubscriberSocket } from '../backend/contracts';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import { type ZLinkFrameworkRegistration, ZLinkConfigurationException } from '../configuration';
+
 import { ZLinkStateLane } from '../execution/state-lane';
+import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import type { ZLinkFanoutLocationStore } from '../locations/internal-store-contracts';
+import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 
 interface ActiveFanoutTarget {
   descriptor: ZLinkFanoutPublisherDescriptor;
@@ -346,7 +347,7 @@ export class ZLinkFanoutLocationRuntime {
     do {
       const page = await this.store.listFanoutPublishers(
         channelName,
-        { pageSize: 1000, continuationToken },
+        { pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE, continuationToken },
         signal
       );
       rows.push(...page.items);
