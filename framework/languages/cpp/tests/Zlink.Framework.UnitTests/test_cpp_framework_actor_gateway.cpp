@@ -5100,10 +5100,8 @@ int parked_request_reply_case (const std::string &requester_rid,
     const auto park_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     bool pending_recorded = false;
     while (std::chrono::steady_clock::now () < park_deadline) {
-        {
-            std::lock_guard<std::recursive_mutex> lock (node->mutex);
-            pending_recorded = !node->pending_handoff_requests.empty ();
-        }
+        pending_recorded =
+          node->lane.run_checked ([&] { return !node->pending_handoff_requests.empty (); }).get ();
         if (pending_recorded)
             break;
         std::this_thread::yield ();
@@ -5127,13 +5125,16 @@ int parked_request_reply_case (const std::string &requester_rid,
                 break;
         }
         if (std::chrono::steady_clock::now () >= reply_deadline) {
-            std::lock_guard<std::recursive_mutex> lock (node->mutex);
-            std::cerr << "parked-replay debug: handler_ran=" << handler_ran.load ()
-                      << " pending=" << node->pending_handoff_requests.size () << " phase="
-                      << (node->actor_transfer_coordinator.phase (key)
-                            ? static_cast<int> (*node->actor_transfer_coordinator.phase (key))
-                            : -1)
-                      << '\n';
+            node->lane
+              .run_checked ([&] {
+                  std::cerr << "parked-replay debug: handler_ran=" << handler_ran.load ()
+                            << " pending=" << node->pending_handoff_requests.size () << " phase="
+                            << (node->actor_transfer_coordinator.phase (key)
+                                  ? static_cast<int> (*node->actor_transfer_coordinator.phase (key))
+                                  : -1)
+                            << '\n';
+              })
+              .get ();
             return 4;
         }
         std::this_thread::yield ();
@@ -5154,15 +5155,16 @@ int parked_request_reply_case (const std::string &requester_rid,
     const auto reply_body = codec.decode_body (reply_envelope);
     if (!reply_body || reply_body.value ().to_string () != "pong")
         return 9;
-    {
-        std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        if (test_case == parked_request_case_t::replay) {
-            if (!node->pending_handoff_requests.empty ())
-                return 8;
-        } else if (node->pending_handoff_requests.size () != pending_handoff_capacity) {
-            return 8;
-        }
-    }
+    const auto pending_settled =
+      node->lane
+        .run_checked ([&] {
+            return test_case == parked_request_case_t::replay
+                     ? node->pending_handoff_requests.empty ()
+                     : node->pending_handoff_requests.size () == pending_handoff_capacity;
+        })
+        .get ();
+    if (!pending_settled)
+        return 8;
     return 0;
 }
 

@@ -495,10 +495,10 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
                                     moved.authority_owner_generation,
                                     static_cast<std::uint64_t> (new_owner.lease_generation)};
 
-    {
-        std::lock_guard<std::recursive_mutex> lock (old_state->spot_state->mutex);
-        old_state->spot_state->actor_types_by_id[key.global_id] = "route-probe";
-    }
+    old_state->spot_state->lane
+      .run_checked (
+        [&] { old_state->spot_state->actor_types_by_id[key.global_id] = "route-probe"; })
+      .get ();
     detail::spot_node_runtime_t old_spots (old_state->spot_state);
     old_spots.bind_spot_location_resolver (spot_resolver);
     assert (old_spots
