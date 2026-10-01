@@ -82,7 +82,7 @@ later stage doesn't infer the Store result again.
 | `Missing` | Lookup version proving authority absence | Creation coordinator |
 | `Creating` | Attempt and reservation fence | Waiter for the same attempt |
 | `Ready` | Route and authority/owner-lease fences | Route admission |
-| `Unavailable` | Authority and invalid-owner evidence | For Instance intent, the forwarding target described below; otherwise the terminal completion adapter |
+| `Unavailable` | Authority and invalid-owner evidence | An Instance intent satisfying the forwarding conditions below goes to the corresponding component; otherwise it goes to the terminal completion adapter. |
 
 The resolver's `Unavailable` preserves the authority state without a Ready route. Instance
 intent seeing `Creating` goes to the waiter above; under explicit Close it keeps the owner route and fence and goes to that owner node ([Spot messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)); during idle cleanup it follows the route
