@@ -4,6 +4,7 @@
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include "runtime/locations/location_repository.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <nlohmann/json.hpp>
@@ -22,19 +23,6 @@
 namespace zlink::framework::runtime::aggregate_inventory
 {
 
-namespace fields
-{
-inline constexpr char key[] = "key";
-inline constexpr char expectedStoreVersion[] = "expectedStoreVersion";
-inline constexpr char ownerTransition[] = "ownerTransition";
-inline constexpr char authorityPayload[] = "authorityPayload";
-inline constexpr char membershipMutation[] = "membershipMutation";
-inline constexpr char version[] = "version";
-inline constexpr char pageIndex[] = "pageIndex";
-inline constexpr char entries[] = "entries";
-inline constexpr char level[] = "level";
-inline constexpr char childStart[] = "childStart";
-}
 inline constexpr int format_version = 1;
 inline constexpr std::string_view flat_tree_root_domain = "zlink:aggregate-inventory-root:v1";
 inline constexpr std::string_view indexed_tree_root_domain = "zlink:aggregate-inventory-root:v2";
@@ -110,23 +98,24 @@ inline bytes_t bytes_from_string (std::string_view value)
 
 inline json_t encode_participant (const aggregate_participant_t &participant)
 {
-    json_t result{{fields::key, participant.key.value},
-                  {fields::expectedStoreVersion, participant.expected_store_version},
-                  {fields::ownerTransition, static_cast<int> (participant.owner_transition)},
-                  {fields::authorityPayload, hex (participant.authority_payload)},
-                  {fields::membershipMutation, hex (participant.membership_mutation)}};
+    json_t result{
+      {location_record_fields::key, participant.key.value},
+      {location_record_fields::expectedStoreVersion, participant.expected_store_version},
+      {location_record_fields::ownerTransition, static_cast<int> (participant.owner_transition)},
+      {location_record_fields::authorityPayload, hex (participant.authority_payload)},
+      {location_record_fields::membershipMutation, hex (participant.membership_mutation)}};
     return result;
 }
 
 inline aggregate_participant_t decode_participant (const json_t &value)
 {
     aggregate_participant_t result{
-      {value.at (fields::key).get<std::string> ()},
-      value.at (fields::expectedStoreVersion).get<std::string> (),
+      {value.at (location_record_fields::key).get<std::string> ()},
+      value.at (location_record_fields::expectedStoreVersion).get<std::string> (),
       static_cast<authority_generation_transition_t> (
-        value.at (fields::ownerTransition).get<int> ()),
-      unhex (value.at (fields::authorityPayload).get<std::string> ()),
-      unhex (value.at (fields::membershipMutation).get<std::string> ())};
+        value.at (location_record_fields::ownerTransition).get<int> ()),
+      unhex (value.at (location_record_fields::authorityPayload).get<std::string> ()),
+      unhex (value.at (location_record_fields::membershipMutation).get<std::string> ())};
     return result;
 }
 
@@ -136,9 +125,9 @@ inline bytes_t encode_page (std::size_t index,
     json_t entries = json_t::array ();
     for (const auto &participant : participants)
         entries.push_back (encode_participant (participant));
-    const auto encoded = json_t{{fields::version, format_version},
-                                {fields::pageIndex, index},
-                                {fields::entries, std::move (entries)}}
+    const auto encoded = json_t{{location_record_fields::version, format_version},
+                                {location_record_fields::pageIndex, index},
+                                {location_record_fields::entries, std::move (entries)}}
                            .dump ();
     return bytes_from_string (encoded);
 }
@@ -152,16 +141,17 @@ decode_page (const bytes_t &encoded, std::optional<std::size_t> expected_page_in
         const auto text =
           std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
-        if (value.value (fields::version, 0) != format_version
-            || !value.contains (fields::pageIndex)
+        if (value.value (location_record_fields::version, 0) != format_version
+            || !value.contains (location_record_fields::pageIndex)
             || (expected_page_index
-                && value.at (fields::pageIndex).get<std::size_t> () != *expected_page_index)
-            || !value.at (fields::entries).is_array ()
-            || value.at (fields::entries).size () > page_item_limit)
+                && value.at (location_record_fields::pageIndex).get<std::size_t> ()
+                     != *expected_page_index)
+            || !value.at (location_record_fields::entries).is_array ()
+            || value.at (location_record_fields::entries).size () > page_item_limit)
             return std::nullopt;
         std::vector<aggregate_participant_t> participants;
-        participants.reserve (value.at (fields::entries).size ());
-        for (const auto &entry : value.at (fields::entries)) {
+        participants.reserve (value.at (location_record_fields::entries).size ());
+        for (const auto &entry : value.at (location_record_fields::entries)) {
             const auto participant = decode_participant (entry);
             if (participant.key.value.empty () || participant.expected_store_version.empty ()
                 || participant.owner_transition != authority_generation_transition_t::new_owner)
@@ -184,11 +174,11 @@ inline bytes_t encode_index_page (std::size_t level,
     for (const auto &digest : child_digests)
         entries.push_back (hex (bytes_t (digest.begin (), digest.end ())));
     return bytes_from_string (json_t{
-      {fields::version, format_version},
-      {fields::level, level},
-      {fields::pageIndex, page_index},
-      {fields::childStart, child_start},
-      {fields::entries,
+      {location_record_fields::version, format_version},
+      {location_record_fields::level, level},
+      {location_record_fields::pageIndex, page_index},
+      {location_record_fields::childStart, child_start},
+      {location_record_fields::entries,
        std::move (entries)}}.dump ());
 }
 
@@ -204,14 +194,17 @@ decode_index_page (const bytes_t &encoded,
         const auto text =
           std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
-        if (value.value (fields::version, 0) != format_version || !value.contains (fields::level)
-            || !value.contains (fields::pageIndex) || !value.contains (fields::childStart)
-            || !value.at (fields::entries).is_array () || value.at (fields::entries).empty ()
-            || value.at (fields::entries).size () > index_item_limit)
+        if (value.value (location_record_fields::version, 0) != format_version
+            || !value.contains (location_record_fields::level)
+            || !value.contains (location_record_fields::pageIndex)
+            || !value.contains (location_record_fields::childStart)
+            || !value.at (location_record_fields::entries).is_array ()
+            || value.at (location_record_fields::entries).empty ()
+            || value.at (location_record_fields::entries).size () > index_item_limit)
             return std::nullopt;
-        const auto level = value.at (fields::level).get<std::size_t> ();
-        const auto page_index = value.at (fields::pageIndex).get<std::size_t> ();
-        const auto child_start = value.at (fields::childStart).get<std::size_t> ();
+        const auto level = value.at (location_record_fields::level).get<std::size_t> ();
+        const auto page_index = value.at (location_record_fields::pageIndex).get<std::size_t> ();
+        const auto child_start = value.at (location_record_fields::childStart).get<std::size_t> ();
         if ((expected_level && level != *expected_level)
             || (expected_page_index && page_index != *expected_page_index)
             || (expected_child_start && child_start != *expected_child_start))
@@ -220,8 +213,8 @@ decode_index_page (const bytes_t &encoded,
         result.level = level;
         result.page_index = page_index;
         result.child_start = child_start;
-        result.child_digests.reserve (value.at (fields::entries).size ());
-        for (const auto &entry : value.at (fields::entries)) {
+        result.child_digests.reserve (value.at (location_record_fields::entries).size ());
+        for (const auto &entry : value.at (location_record_fields::entries)) {
             const auto digest = unhex (entry.get<std::string> ());
             if (digest.size () != digest_t{}.size ())
                 return std::nullopt;

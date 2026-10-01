@@ -4,6 +4,7 @@
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -38,108 +39,21 @@
 
 namespace zlink::framework::runtime
 {
+namespace aggregate_status
+{
+inline constexpr char pending[] = "pending";
+inline constexpr char preparing[] = "preparing";
+inline constexpr char prepared[] = "prepared";
+inline constexpr char committing[] = "committing";
+inline constexpr char committed[] = "committed";
+inline constexpr char aborted[] = "aborted";
+}
+
 
 /*
  * Framework-owned domain repository over the public opaque Store SPI.
  * Providers never receive descriptor, lease, authority or placement DTOs.
  */
-namespace location_record_fields
-{
-inline constexpr char activationConcurrency[] = "activationConcurrency";
-inline constexpr char actors[] = "actors";
-inline constexpr char actorsActive[] = "actorsActive";
-inline constexpr char actorsPending[] = "actorsPending";
-inline constexpr char after[] = "after";
-inline constexpr char aggregateGeneration[] = "aggregateGeneration";
-inline constexpr char aggregateId[] = "aggregateId";
-inline constexpr char allocation[] = "allocation";
-inline constexpr char applicationVersion[] = "applicationVersion";
-inline constexpr char authority[] = "authority";
-inline constexpr char authorityKey[] = "authorityKey";
-inline constexpr char authorityOwnerGeneration[] = "authorityOwnerGeneration";
-inline constexpr char before[] = "before";
-inline constexpr char capacity[] = "capacity";
-inline constexpr char capacityBundle[] = "capacityBundle";
-inline constexpr char channelName[] = "channelName";
-inline constexpr char channelWeights[] = "channelWeights";
-inline constexpr char client[] = "client";
-inline constexpr char commitPageCount[] = "commitPageCount";
-inline constexpr char count[] = "count";
-inline constexpr char descriptor[] = "descriptor";
-inline constexpr char descriptorLifecycleGeneration[] = "descriptorLifecycleGeneration";
-inline constexpr char descriptorRevision[] = "descriptorRevision";
-inline constexpr char disabled[] = "disabled";
-inline constexpr char draining[] = "draining";
-inline constexpr char endpoint[] = "endpoint";
-inline constexpr char entries[] = "entries";
-inline constexpr char entryIndex[] = "entryIndex";
-inline constexpr char entrySpotId[] = "entrySpotId";
-inline constexpr char error[] = "error";
-inline constexpr char expectedStoreVersion[] = "expectedStoreVersion";
-inline constexpr char hasSnapshotAdapter[] = "hasSnapshotAdapter";
-inline constexpr char inventoryCount[] = "inventoryCount";
-inline constexpr char inventoryDigest[] = "inventoryDigest";
-inline constexpr char inventoryIndexLevelCount[] = "inventoryIndexLevelCount";
-inline constexpr char inventoryIndexPageCount[] = "inventoryIndexPageCount";
-inline constexpr char inventoryPageCount[] = "inventoryPageCount";
-inline constexpr char inventoryRoot[] = "inventoryRoot";
-inline constexpr char leaseGeneration[] = "leaseGeneration";
-inline constexpr char lifecycleGeneration[] = "lifecycleGeneration";
-inline constexpr char limit[] = "limit";
-inline constexpr char maintenanceWave[] = "maintenanceWave";
-inline constexpr char meshName[] = "meshName";
-inline constexpr char nodeGeneration[] = "nodeGeneration";
-inline constexpr char nodeLifecycleGeneration[] = "nodeLifecycleGeneration";
-inline constexpr char nodeRid[] = "nodeRid";
-inline constexpr char none[] = "none";
-inline constexpr char objectCapabilities[] = "objectCapabilities";
-inline constexpr char objectGeneration[] = "objectGeneration";
-inline constexpr char objectKind[] = "objectKind";
-inline constexpr char objectRole[] = "objectRole";
-inline constexpr char owner[] = "owner";
-inline constexpr char ownerGenerationEnd[] = "ownerGenerationEnd";
-inline constexpr char ownerGenerationStart[] = "ownerGenerationStart";
-inline constexpr char ownerId[] = "ownerId";
-inline constexpr char ownerLeaseGeneration[] = "ownerLeaseGeneration";
-inline constexpr char pageIndex[] = "pageIndex";
-inline constexpr char payload[] = "payload";
-inline constexpr char pending[] = "pending";
-inline constexpr char pendingCreation[] = "pendingCreation";
-inline constexpr char placementWeight[] = "placementWeight";
-inline constexpr char policy[] = "policy";
-inline constexpr char publisherRid[] = "publisherRid";
-inline constexpr char recordVersion[] = "recordVersion";
-inline constexpr char recreate[] = "recreate";
-inline constexpr char relocated[] = "relocated";
-inline constexpr char relocating[] = "relocating";
-inline constexpr char requestContentReference[] = "requestContentReference";
-inline constexpr char requestEncodedSize[] = "requestEncodedSize";
-inline constexpr char requestSha256[] = "requestSha256";
-inline constexpr char reservationId[] = "reservationId";
-inline constexpr char routingIdHex[] = "routingIdHex";
-inline constexpr char securityIdentity[] = "securityIdentity";
-inline constexpr char server[] = "server";
-inline constexpr char serverRid[] = "serverRid";
-inline constexpr char serving[] = "serving";
-inline constexpr char snapshot[] = "snapshot";
-inline constexpr char spotType[] = "spotType";
-inline constexpr char spotTypes[] = "spotTypes";
-inline constexpr char spots[] = "spots";
-inline constexpr char spotsActive[] = "spotsActive";
-inline constexpr char spotsPending[] = "spotsPending";
-inline constexpr char stableType[] = "stableType";
-inline constexpr char state[] = "state";
-inline constexpr char status[] = "status";
-inline constexpr char stopped[] = "stopped";
-inline constexpr char targetLifecycleGeneration[] = "targetLifecycleGeneration";
-inline constexpr char targetMeshName[] = "targetMeshName";
-inline constexpr char targetNodeRid[] = "targetNodeRid";
-inline constexpr char targetOwner[] = "targetOwner";
-inline constexpr char updatedAt[] = "updatedAt";
-inline constexpr char updatedAtEpochMs[] = "updatedAtEpochMs";
-inline constexpr char version[] = "version";
-inline constexpr char weight[] = "weight";
-}
 
 class provider_location_repository_t final : public location_repository_t
 {
@@ -715,13 +629,13 @@ class provider_location_repository_t final : public location_repository_t
         // reservation identity while the row remains reserved.
         object_reservation_fence_t fence{"reservation-" + std::to_string (object_generation) + "-"
                                            + std::to_string (owner_generation_value),
-                                         location_record_fields::pending,
+                                         aggregate_status::pending,
                                          object_generation,
                                          owner_generation_value,
                                          request.target,
                                          request.capacity_bundle};
         authority_snapshot_t creating{
-          location_record_fields::pending,
+          aggregate_status::pending,
           request.creating_payload,
           object_generation,
           owner_generation_value,
@@ -1074,16 +988,18 @@ class provider_location_repository_t final : public location_repository_t
             const auto status = stored.value (location_record_fields::status, "");
             if (!aggregate_record_matches_request (stored, request, *inventory_tree))
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
-            if (status == "prepared" || status == "committing" || status == "committed")
+            if (status == aggregate_status::prepared || status == aggregate_status::committing
+                || status == aggregate_status::committed)
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
                   {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
-            if (status != "preparing")
+            if (status != aggregate_status::preparing)
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         } else {
             // Claim the aggregate before writing any inventory or lock child.
             // A restart can now find a partial prepare and abort those children
             // without guessing whether the claim reached the provider.
-            const auto preparing = encode_aggregate (request, "preparing", *inventory_tree);
+            const auto preparing =
+              encode_aggregate (request, aggregate_status::preparing, *inventory_tree);
             const auto claimed =
               write ({{missing_condition (row_key)},
                       {store_put_t{row_key, to_bytes (preparing.dump ()), std::nullopt}}});
@@ -1091,7 +1007,8 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         }
 
-        const auto encoded = encode_aggregate (request, "prepared", *inventory_tree);
+        const auto encoded =
+          encode_aggregate (request, aggregate_status::prepared, *inventory_tree);
         std::size_t participant_offset = 0;
         std::size_t page_index = 0;
         for (const auto &page : inventory_tree->pages) {
@@ -1143,7 +1060,7 @@ class provider_location_repository_t final : public location_repository_t
                     if (!old_aggregate_found
                         || parse_json (old_aggregate_found->value.bytes)
                                .value (location_record_fields::status, "")
-                             != "committed")
+                             != aggregate_status::committed)
                         return completed (
                           aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
                     lock_request.conditions.push_back (
@@ -1160,7 +1077,7 @@ class provider_location_repository_t final : public location_repository_t
                               request.aggregate_id, request.aggregate_generation,
                               request.participants[participant_index].key.value,
                               request.participants[participant_index].expected_store_version,
-                              "prepared", page_index - 1, index)
+                              aggregate_status::prepared, page_index - 1, index)
                               .dump ()),
                   std::nullopt});
             }
@@ -1190,7 +1107,8 @@ class provider_location_repository_t final : public location_repository_t
                         const auto raced = parse_json (raced_found->value.bytes);
                         const auto status = raced.value (location_record_fields::status, "");
                         if (aggregate_record_matches_request (raced, request, *inventory_tree)
-                            && (status == "preparing" || status == "prepared"))
+                            && (status == aggregate_status::preparing
+                                || status == aggregate_status::prepared))
                             return prepare_aggregate (std::move (request), cancellation);
                     }
                     return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
@@ -1234,10 +1152,14 @@ class provider_location_repository_t final : public location_repository_t
         if (!preparing_found)
             return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         const auto preparing_record = parse_json (preparing_found->value.bytes);
-        if (preparing_record.value (location_record_fields::status, "") != "preparing") {
-            if (preparing_record.value (location_record_fields::status, "") == "prepared"
-                || preparing_record.value (location_record_fields::status, "") == "committing"
-                || preparing_record.value (location_record_fields::status, "") == "committed")
+        if (preparing_record.value (location_record_fields::status, "")
+            != aggregate_status::preparing) {
+            if (preparing_record.value (location_record_fields::status, "")
+                  == aggregate_status::prepared
+                || preparing_record.value (location_record_fields::status, "")
+                     == aggregate_status::committing
+                || preparing_record.value (location_record_fields::status, "")
+                     == aggregate_status::committed)
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
                   {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
             return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
@@ -1275,12 +1197,12 @@ class provider_location_repository_t final : public location_repository_t
             != fence.aggregate_generation)
             return completed (aggregate_commit_result_t::stale);
         const auto status = record.value (location_record_fields::status, "");
-        if (status == "committed")
+        if (status == aggregate_status::committed)
             return completed (aggregate_commit_result_t::already_committed);
-        if (status != "prepared" && status != "committing")
+        if (status != aggregate_status::prepared && status != aggregate_status::committing)
             return completed (aggregate_commit_result_t::stale);
         const auto target_owner = decode_owner (record.at (location_record_fields::targetOwner));
-        const bool resuming_commit = status == "committing";
+        const bool resuming_commit = status == aggregate_status::committing;
         const object_creation_target_t target{
           record.at (location_record_fields::targetMeshName).get<std::string> (),
           node_rid_t::from_string (
@@ -1364,7 +1286,7 @@ class provider_location_repository_t final : public location_repository_t
         if (participant_count > max_generation)
             return completed (aggregate_commit_result_t::generation_exhausted);
         std::uint64_t owner_generation_start = 0;
-        if (status == "prepared") {
+        if (status == aggregate_status::prepared) {
             auto owner_generations = read (authority_owner_counter_key);
             const auto next_owner_generation = counter_next_value (owner_generations);
             if (next_owner_generation > max_generation - participant_count)
@@ -1405,11 +1327,12 @@ class provider_location_repository_t final : public location_repository_t
                 || lock->aggregate_generation != fence.aggregate_generation
                 || lock->authority_key != participant.key.value
                 || lock->expected_store_version != participant.expected_store_version
-                || (lock->status != "prepared" && lock->status != "committing"))
+                || (lock->status != aggregate_status::prepared
+                    && lock->status != aggregate_status::committing))
                 return completed (aggregate_commit_result_t::stale);
 
             aggregate_commit_entry_t entry;
-            if (lock->status == "committing") {
+            if (lock->status == aggregate_status::committing) {
                 if (!lock->page_index || !lock->entry_index)
                     return completed (aggregate_commit_result_t::stale);
                 auto page =
@@ -1472,12 +1395,12 @@ class provider_location_repository_t final : public location_repository_t
         const auto commit_pages = split_aggregate_commit_entries (entries);
         if (!commit_pages)
             return completed (aggregate_commit_result_t::stale);
-        if (status == "prepared") {
+        if (status == aggregate_status::prepared) {
             auto owner_generations = read (authority_owner_counter_key);
             const auto current_owner_generation = counter_next_value (owner_generations);
             if (current_owner_generation != owner_generation_start)
                 return completed (aggregate_commit_result_t::stale);
-            record[location_record_fields::status] = "committing";
+            record[location_record_fields::status] = aggregate_status::committing;
             record[location_record_fields::ownerGenerationStart] = owner_generation_start;
             record[location_record_fields::ownerGenerationEnd] =
               owner_generation_start + participant_count - 1;
@@ -1526,7 +1449,7 @@ class provider_location_repository_t final : public location_repository_t
                 if (!found_authority || !found_lock)
                     return completed (aggregate_commit_result_t::stale);
                 const auto lock = decode_aggregate_lock (found_lock->value.bytes);
-                if (!lock || lock->status != "prepared")
+                if (!lock || lock->status != aggregate_status::prepared)
                     return completed (aggregate_commit_result_t::stale);
                 page_request.conditions.push_back (version_condition (
                   key_authority (participant.key.value), found_authority->value.version));
@@ -1534,14 +1457,14 @@ class provider_location_repository_t final : public location_repository_t
                   key_aggregate_lock (participant.key.value), found_lock->value.version));
                 page_request.mutations.push_back (
                   store_put_t{key_authority (participant.key.value), entry.after, std::nullopt});
-                page_request.mutations.push_back (store_put_t{
-                  key_aggregate_lock (participant.key.value),
-                  to_bytes (encode_aggregate_lock (fence.aggregate_id, fence.aggregate_generation,
-                                                   participant.key.value,
-                                                   participant.expected_store_version, "committing",
-                                                   page_index, entry_index)
-                              .dump ()),
-                  std::nullopt});
+                page_request.mutations.push_back (
+                  store_put_t{key_aggregate_lock (participant.key.value),
+                              to_bytes (encode_aggregate_lock (
+                                          fence.aggregate_id, fence.aggregate_generation,
+                                          participant.key.value, participant.expected_store_version,
+                                          aggregate_status::committing, page_index, entry_index)
+                                          .dump ()),
+                              std::nullopt});
             }
             page_request.mutations.push_back (store_put_t{page_key, encoded_page, std::nullopt});
             if (!std::holds_alternative<store_write_applied_t> (write (std::move (page_request))))
@@ -1557,7 +1480,7 @@ class provider_location_repository_t final : public location_repository_t
             return completed (aggregate_commit_result_t::stale);
         record = parse_json (current_found->value.bytes);
         stored = current_found;
-        if (record.value (location_record_fields::status, "") != "committing")
+        if (record.value (location_record_fields::status, "") != aggregate_status::committing)
             return completed (aggregate_commit_result_t::stale);
 
         auto target_capacity_state = capacities.find (target_capacity_key);
@@ -1581,7 +1504,7 @@ class provider_location_repository_t final : public location_repository_t
             final_request.mutations.push_back (
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         }
-        record[location_record_fields::status] = "committed";
+        record[location_record_fields::status] = aggregate_status::committed;
         final_request.mutations.push_back (
           store_put_t{row_key, to_bytes (record.dump ()), std::nullopt});
         auto written = write (std::move (final_request));
@@ -1605,9 +1528,10 @@ class provider_location_repository_t final : public location_repository_t
             != fence.aggregate_generation)
             return completed (aggregate_abort_result_t::stale);
         const auto status = record.value (location_record_fields::status, "");
-        if (status == "aborted")
+        if (status == aggregate_status::aborted)
             return completed (aggregate_abort_result_t::already_aborted);
-        if (status != "preparing" && status != "prepared" && status != "committing")
+        if (status != aggregate_status::preparing && status != aggregate_status::prepared
+            && status != aggregate_status::committing)
             return completed (aggregate_abort_result_t::stale);
         const object_creation_target_t target{
           record.at (location_record_fields::targetMeshName).get<std::string> (),
@@ -1615,7 +1539,7 @@ class provider_location_repository_t final : public location_repository_t
             record.at (location_record_fields::targetNodeRid).get<std::string> ()),
           record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
           decode_owner (record.at (location_record_fields::targetOwner))};
-        if (status == "committing") {
+        if (status == aggregate_status::committing) {
             const auto commit_page_count =
               record.value (location_record_fields::commitPageCount, std::size_t{0});
             if (commit_page_count == 0)
@@ -1647,7 +1571,7 @@ class provider_location_repository_t final : public location_repository_t
                             || decoded_lock->aggregate_id.value != fence.aggregate_id.value
                             || decoded_lock->aggregate_generation != fence.aggregate_generation
                             || decoded_lock->authority_key != entry.authority_key
-                            || decoded_lock->status != "committing"
+                            || decoded_lock->status != aggregate_status::committing
                             || decoded_lock->page_index != page_index
                             || decoded_lock->entry_index != entry_index)
                             return completed (aggregate_abort_result_t::stale);
@@ -1672,7 +1596,7 @@ class provider_location_repository_t final : public location_repository_t
             }
         }
 
-        const bool target_capacity_reserved = status != "preparing";
+        const bool target_capacity_reserved = status != aggregate_status::preparing;
         std::optional<stored_target_t> target_descriptor;
         std::optional<stored_capacity_t> target_capacity;
         if (target_capacity_reserved) {
@@ -1696,7 +1620,7 @@ class provider_location_repository_t final : public location_repository_t
                 // child page. Missing pages after that point cannot own a
                 // lock, so the durable claim can still be marked aborted
                 // without inventing participant keys.
-                if (status == "preparing")
+                if (status == aggregate_status::preparing)
                     break;
                 return completed (aggregate_abort_result_t::stale);
             }
@@ -1724,7 +1648,7 @@ class provider_location_repository_t final : public location_repository_t
                 && !std::holds_alternative<store_write_applied_t> (write (std::move (cleanup))))
                 return completed (aggregate_abort_result_t::stale);
         }
-        record[location_record_fields::status] = "aborted";
+        record[location_record_fields::status] = aggregate_status::aborted;
         store_write_request_t final_request;
         final_request.conditions.push_back (version_condition (key, found->value.version));
         final_request.mutations.push_back (
@@ -2035,8 +1959,9 @@ class provider_location_repository_t final : public location_repository_t
                 result.entry_index =
                   record.at (location_record_fields::entryIndex).get<std::size_t> ();
             if (result.aggregate_generation == 0 || result.authority_key.empty ()
-                || (result.status != "prepared" && result.status != "committing"
-                    && result.status != "committed"))
+                || (result.status != aggregate_status::prepared
+                    && result.status != aggregate_status::committing
+                    && result.status != aggregate_status::committed))
                 return std::nullopt;
             return result;
         }
@@ -2087,12 +2012,13 @@ class provider_location_repository_t final : public location_repository_t
     {
         auto raw = decode_authority (raw_bytes, raw_version, store_now);
         const auto lock = co_await read_aggregate_lock_async (authority_key);
-        if (!lock || lock->status != "committing")
+        if (!lock || lock->status != aggregate_status::committing)
             co_return raw;
         auto aggregate = co_await _store->read (key_aggregate (lock->aggregate_id));
         if (const auto *aggregate_found = std::get_if<store_found_t> (&aggregate)) {
             const auto aggregate_record = parse_json (aggregate_found->value.bytes);
-            if (aggregate_record.value (location_record_fields::status, "") == "committed")
+            if (aggregate_record.value (location_record_fields::status, "")
+                == aggregate_status::committed)
                 co_return raw;
         }
         if (!lock->page_index || !lock->entry_index)
@@ -2119,14 +2045,17 @@ class provider_location_repository_t final : public location_repository_t
     task_t<bool> authority_mutation_locked_async (std::string authority_key)
     {
         const auto lock = co_await read_aggregate_lock_async (authority_key);
-        if (!lock || (lock->status != "prepared" && lock->status != "committing"))
+        if (!lock
+            || (lock->status != aggregate_status::prepared
+                && lock->status != aggregate_status::committing))
             co_return false;
-        if (lock->status == "committing") {
+        if (lock->status == aggregate_status::committing) {
             auto aggregate = co_await _store->read (key_aggregate (lock->aggregate_id));
             if (const auto *found = std::get_if<store_found_t> (&aggregate)) {
                 const auto record = parse_json (found->value.bytes);
-                if (record.value (location_record_fields::status, "") == "committed"
-                    || record.value (location_record_fields::status, "") == "aborted")
+                if (record.value (location_record_fields::status, "") == aggregate_status::committed
+                    || record.value (location_record_fields::status, "")
+                         == aggregate_status::aborted)
                     co_return false;
             }
         }
@@ -3126,27 +3055,27 @@ class provider_location_repository_t final : public location_repository_t
 
     static json_t encode (const capacity_usage_t &value)
     {
-        return {{"active", value.active},
-                {"reserved", value.reserved},
+        return {{location_record_fields::active, value.active},
+                {location_record_fields::reserved, value.reserved},
                 {location_record_fields::limit, value.limit}};
     }
 
     static capacity_usage_t decode_capacity_usage (const json_t &value)
     {
-        return {value.at ("active").get<std::uint64_t> (),
-                value.at ("reserved").get<std::uint64_t> (),
+        return {value.at (location_record_fields::active).get<std::uint64_t> (),
+                value.at (location_record_fields::reserved).get<std::uint64_t> (),
                 value.at (location_record_fields::limit).get<std::int32_t> ()};
     }
 
     static inline constexpr std::array<std::pair<framework_runtime_state_t, const char *>, 7>
       runtime_state_names{{
         {framework_runtime_state_t::preparing, "preparing"},
-        {framework_runtime_state_t::serving, location_record_fields::serving},
-        {framework_runtime_state_t::relocating, location_record_fields::relocating},
-        {framework_runtime_state_t::relocated, location_record_fields::relocated},
-        {framework_runtime_state_t::draining, location_record_fields::draining},
-        {framework_runtime_state_t::stopped, location_record_fields::stopped},
-        {framework_runtime_state_t::error, location_record_fields::error},
+        {framework_runtime_state_t::serving, "serving"},
+        {framework_runtime_state_t::relocating, "relocating"},
+        {framework_runtime_state_t::relocated, "relocated"},
+        {framework_runtime_state_t::draining, "draining"},
+        {framework_runtime_state_t::stopped, "stopped"},
+        {framework_runtime_state_t::error, "error"},
       }};
 
     static const char *runtime_state_name (framework_runtime_state_t value)
@@ -3161,9 +3090,9 @@ class provider_location_repository_t final : public location_repository_t
 
     static inline constexpr std::array<std::pair<maintenance_policy_kind_t, const char *>, 3>
       maintenance_policy_names{{
-        {maintenance_policy_kind_t::disabled, location_record_fields::disabled},
-        {maintenance_policy_kind_t::recreate, location_record_fields::recreate},
-        {maintenance_policy_kind_t::snapshot, location_record_fields::snapshot},
+        {maintenance_policy_kind_t::disabled, "disabled"},
+        {maintenance_policy_kind_t::recreate, "recreate"},
+        {maintenance_policy_kind_t::snapshot, "snapshot"},
       }};
 
     static const char *maintenance_policy_name (maintenance_policy_kind_t value)
@@ -3178,8 +3107,8 @@ class provider_location_repository_t final : public location_repository_t
                                  maintenance_policy_kind_t::disabled);
     }
 
-    static inline constexpr std::array<const char *, 3> object_role_names{
-      location_record_fields::none, location_record_fields::client, location_record_fields::server};
+    static inline constexpr std::array<const char *, 3> object_role_names{"none", "client",
+                                                                          "server"};
 
     static const char *object_role_name (object_role_t value)
     {
@@ -3214,8 +3143,8 @@ class provider_location_repository_t final : public location_repository_t
             spot_types.push_back (
               {{location_record_fields::objectKind, object_kind3_name (item.object_kind)},
                {location_record_fields::stableType, item.stable_type},
-               {"active", item.usage.active},
-               {"reserved", item.usage.reserved},
+               {location_record_fields::active, item.usage.active},
+               {location_record_fields::reserved, item.usage.reserved},
                {location_record_fields::limit, item.usage.limit}});
         return {
           {location_record_fields::meshName, value.mesh_name},
@@ -3238,7 +3167,7 @@ class provider_location_repository_t final : public location_repository_t
             {location_record_fields::spots, encode (value.capacity.spots)},
             {location_record_fields::spotTypes, std::move (spot_types)}}},
           {location_record_fields::activationConcurrency,
-           {{"active", value.activation_concurrency.active},
+           {{location_record_fields::active, value.activation_concurrency.active},
             {location_record_fields::limit, value.activation_concurrency.limit}}},
           {location_record_fields::maintenanceWave,
            value.maintenance_wave ? json_t (*value.maintenance_wave) : json_t (nullptr)},
@@ -3361,7 +3290,8 @@ class provider_location_repository_t final : public location_repository_t
     {
         const auto value = parse_json (bytes);
         capacity_record_t result;
-        if (value.contains ("active") && value.contains (location_record_fields::pending)) {
+        if (value.contains (location_record_fields::active)
+            && value.contains (location_record_fields::pending)) {
             result.format = capacity_record_format_t::node_compatible;
             const auto decode_usage = [&] (const json_t &usage, bool active) {
                 auto &actors = active ? result.actors.active : result.actors.pending;
@@ -3374,7 +3304,7 @@ class provider_location_repository_t final : public location_repository_t
                     (active ? typed.active : typed.pending) = count.get<std::int64_t> ();
                 }
             };
-            decode_usage (value.at ("active"), true);
+            decode_usage (value.at (location_record_fields::active), true);
             decode_usage (value.at (location_record_fields::pending), false);
         } else {
             result.actors.active =
@@ -3388,7 +3318,7 @@ class provider_location_repository_t final : public location_repository_t
             for (const auto &[key, count] : value.at (location_record_fields::spotTypes).items ())
                 result.spot_types.emplace (
                   key, capacity_count_t{
-                         count.at ("active").get<std::int64_t> (),
+                         count.at (location_record_fields::active).get<std::int64_t> (),
                          count.at (location_record_fields::pending).get<std::int64_t> ()});
         }
         const auto non_negative = [] (const capacity_count_t &count) {
@@ -3413,7 +3343,7 @@ class provider_location_repository_t final : public location_repository_t
                 if (count.pending != 0)
                     pending_types[key] = count.pending;
             }
-            value = {{"active",
+            value = {{location_record_fields::active,
                       {{location_record_fields::actors, record.actors.active},
                        {location_record_fields::spots, record.spots.active},
                        {location_record_fields::spotTypes, std::move (active_types)}}},
@@ -3424,7 +3354,7 @@ class provider_location_repository_t final : public location_repository_t
         } else {
             json_t typed = json_t::object ();
             for (const auto &[key, count] : record.spot_types)
-                typed[key] = {{"active", count.active},
+                typed[key] = {{location_record_fields::active, count.active},
                               {location_record_fields::pending, count.pending}};
             value = {{location_record_fields::actorsActive, record.actors.active},
                      {location_record_fields::actorsPending, record.actors.pending},
@@ -3663,11 +3593,12 @@ class provider_location_repository_t final : public location_repository_t
               {parse_object_kind3 (
                  item.at (location_record_fields::objectKind).get<std::string> ()),
                item.at (location_record_fields::stableType).get<std::string> (),
-               {item.at ("active").get<std::uint64_t> (),
-                item.at ("reserved").get<std::uint64_t> (),
+               {item.at (location_record_fields::active).get<std::uint64_t> (),
+                item.at (location_record_fields::reserved).get<std::uint64_t> (),
                 item.at (location_record_fields::limit).get<std::int32_t> ()}});
         const auto &activation = value.at (location_record_fields::activationConcurrency);
-        result.activation_concurrency.active = activation.at ("active").get<std::uint32_t> ();
+        result.activation_concurrency.active =
+          activation.at (location_record_fields::active).get<std::uint32_t> ();
         result.activation_concurrency.limit =
           activation.at (location_record_fields::limit).get<std::int32_t> ();
         if (value.contains (location_record_fields::maintenanceWave)

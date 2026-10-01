@@ -219,33 +219,31 @@ class host_capacity_runtime_t
           jobs.pressure_state == application_job_queue_pressure_state_t::paused ? "paused"
                                                                                 : "running";
         switch (registration.id) {
-            case host_capacity_metric_id_t::
-              core_effective_budget: // zlink.host.core_hwm.effective_budget
+            case host_capacity_metric_id_t::core_effective_budget:
                 observer->Observe (static_cast<double> (core.effective_budget_bytes));
                 break;
-            case host_capacity_metric_id_t::core_applied: // zlink.host.core_hwm.applied
+            case host_capacity_metric_id_t::core_applied:
                 observer->Observe (static_cast<double> (core.total_applied_hwm_bytes));
                 break;
-            case host_capacity_metric_id_t::core_accounted: // zlink.host.core_hwm.accounted
+            case host_capacity_metric_id_t::core_accounted:
                 observer->Observe (static_cast<double> (core.current_accounted_bytes),
                                    {{host_capacity_state_label_key, "current"}});
                 observer->Observe (static_cast<double> (core.peak_accounted_bytes),
                                    {{host_capacity_state_label_key, "peak"}});
                 break;
-            case host_capacity_metric_id_t::
-              core_completion_accounted: // zlink.host.core_hwm.completion_accounted
+            case host_capacity_metric_id_t::core_completion_accounted:
                 observer->Observe (static_cast<double> (core.completion_current_accounted_bytes),
                                    {{host_capacity_state_label_key, "current"}});
                 observer->Observe (static_cast<double> (core.completion_peak_accounted_bytes),
                                    {{host_capacity_state_label_key, "peak"}});
                 break;
-            case host_capacity_metric_id_t::core_blocked_ratio: // zlink.host.core_hwm.blocked_ratio
+            case host_capacity_metric_id_t::core_blocked_ratio:
                 observer->Observe (static_cast<double> (core.blocked_ratio_ppm));
                 break;
-            case host_capacity_metric_id_t::queue_limit: // zlink.host.application_job_queue.limit
+            case host_capacity_metric_id_t::queue_limit:
                 observer->Observe (jobs.effective_max_queued_application_jobs);
                 break;
-            case host_capacity_metric_id_t::queue_jobs: // zlink.host.application_job_queue.jobs
+            case host_capacity_metric_id_t::queue_jobs:
                 observer->Observe (jobs.reserved_supply_permits,
                                    {{host_capacity_state_label_key, "reserved"}});
                 observer->Observe (jobs.queued_application_jobs,
@@ -255,32 +253,26 @@ class host_capacity_runtime_t
                 observer->Observe (jobs.peak_permits_in_use,
                                    {{host_capacity_state_label_key, "peak"}});
                 break;
-            case host_capacity_metric_id_t::
-              queue_capacity_waiters: // zlink.host.application_job_queue.capacity_waiters
+            case host_capacity_metric_id_t::queue_capacity_waiters:
                 observer->Observe (jobs.capacity_waiters);
                 break;
-            case host_capacity_metric_id_t::
-              queue_capacity_waits: // zlink.host.application_job_queue.capacity_waits
+            case host_capacity_metric_id_t::queue_capacity_waits:
                 observer->Observe (static_cast<double> (jobs.capacity_wait_count));
                 break;
-            case host_capacity_metric_id_t::
-              queue_capacity_wait_duration: // zlink.host.application_job_queue.capacity_wait_duration
+            case host_capacity_metric_id_t::queue_capacity_wait_duration:
                 observer->Observe (
                   std::chrono::duration<double> (jobs.capacity_wait_duration).count ());
                 break;
-            case host_capacity_metric_id_t::
-              queue_pressure_state: // zlink.host.application_job_queue.pressure_state
+            case host_capacity_metric_id_t::queue_pressure_state:
                 observer->Observe (1.0, {{host_capacity_state_label_key, pressure_state}});
                 break;
-            case host_capacity_metric_id_t::
-              queue_pressure_transitions: // zlink.host.application_job_queue.pressure_transitions
+            case host_capacity_metric_id_t::queue_pressure_transitions:
                 observer->Observe (static_cast<double> (pressure.running_transition_count),
                                    {{host_capacity_state_label_key, "running"}});
                 observer->Observe (static_cast<double> (pressure.paused_transition_count),
                                    {{host_capacity_state_label_key, "paused"}});
                 break;
-            case host_capacity_metric_id_t::
-              queue_pause_duration: // zlink.host.application_job_queue.pause_duration
+            case host_capacity_metric_id_t::queue_pause_duration:
                 observer->Observe (
                   std::chrono::duration<double> (jobs.current_pause_duration).count (),
                   {{host_capacity_state_label_key, "current"}});
@@ -288,8 +280,7 @@ class host_capacity_runtime_t
                   std::chrono::duration<double> (pressure.cumulative_pause_duration).count (),
                   {{host_capacity_state_label_key, "cumulative"}});
                 break;
-            case host_capacity_metric_id_t::
-              queue_flow_state_config_failures: // zlink.host.application_job_queue.flow_state_config_failures
+            case host_capacity_metric_id_t::queue_flow_state_config_failures:
                 observer->Observe (static_cast<double> (pressure.flow_state_config_failure_count));
                 break;
         }

@@ -7,7 +7,6 @@
 #include <zlink/framework/detail/crc32c.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
-#include "runtime/transport/listener_identity.hpp"
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 #include <zlink/framework/contracts/spots/spot.hpp>
 
@@ -25,6 +24,8 @@
 
 namespace zlink::framework::runtime
 {
+
+inline constexpr char default_mesh_name[] = "default";
 
 enum class actor_authority_state_t : std::uint8_t
 {
@@ -789,8 +790,8 @@ inline std::vector<std::byte> encode_actor_authority_payload (const actor_ref_t 
       .current_spot_kind = actor_authority_spot_kind_t::user,
       .owner_id = std::string (node),
       .owner_lease_generation = 1,
-      .mesh_name = actor.mesh_name ().empty () ? transport::default_security_identity
-                                               : std::string (actor.mesh_name ()),
+      .mesh_name =
+        actor.mesh_name ().empty () ? default_mesh_name : std::string (actor.mesh_name ()),
       .node_rid = actor.node_rid (),
       .node_generation = spot_generation});
 }
