@@ -202,10 +202,11 @@ class route_handler_registry_t
         std::size_t operator() (const key_t &key) const noexcept
         {
             auto seed = std::hash<std::string>{}(key.router_channel_id);
-            seed ^= std::hash<int>{}(static_cast<int> (key.kind)) + 0x9e3779b9U + (seed << 6U)
-                    + (seed >> 2U);
-            seed ^=
-              std::hash<std::string>{}(key.packet_name) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+            constexpr std::size_t hash_mix_constant = 0x9e3779b9U;
+            for (const auto value : {std::hash<int>{}(static_cast<int> (key.kind)),
+                                     std::hash<std::string>{}(key.packet_name)}) {
+                seed ^= value + hash_mix_constant + (seed << 6U) + (seed >> 2U);
+            }
             return seed;
         }
     };

@@ -8,6 +8,8 @@
 #include <winsock2.h>
 #endif
 
+#include "runtime/foundation/operation_terminal.hpp"
+
 #include <opentelemetry/metrics/provider.h>
 #include <opentelemetry/metrics/noop.h>
 
@@ -18,6 +20,13 @@
 
 namespace zlink::framework::runtime
 {
+
+namespace mesh_request_metric_field
+{
+inline constexpr char mesh_name[] = "mesh_name";
+inline constexpr char surface[] = "surface";
+inline constexpr char outcome[] = "outcome";
+} // namespace mesh_request_metric_field
 
 enum class mesh_request_surface_t
 {
@@ -51,20 +60,25 @@ class mesh_request_metrics_t
 
     void start (mesh_request_surface_t surface) const noexcept
     {
-        _inflight->Add (1, {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}});
+        _inflight->Add (1, {{mesh_request_metric_field::mesh_name, view (_mesh_name)},
+                            {mesh_request_metric_field::surface, name (surface)}});
     }
 
     void complete (mesh_request_surface_t surface,
                    std::chrono::steady_clock::time_point started,
-                   opentelemetry::nostd::string_view outcome) const noexcept
+                   foundation::operation_terminal_t terminal) const noexcept
     {
-        _inflight->Add (-1, {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}});
+        _inflight->Add (-1, {{mesh_request_metric_field::mesh_name, view (_mesh_name)},
+                             {mesh_request_metric_field::surface, name (surface)}});
         _duration->Record (
           std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
-          {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}, {"outcome", outcome}},
+          {{mesh_request_metric_field::mesh_name, view (_mesh_name)},
+           {mesh_request_metric_field::surface, name (surface)},
+           {mesh_request_metric_field::outcome, name (terminal)}},
           opentelemetry::context::Context{});
-        if (outcome == "timed_out")
-            _timeouts->Add (1, {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}});
+        if (terminal == foundation::operation_terminal_t::timed_out)
+            _timeouts->Add (1, {{mesh_request_metric_field::mesh_name, view (_mesh_name)},
+                                {mesh_request_metric_field::surface, name (surface)}});
     }
 
   private:
@@ -92,6 +106,23 @@ class mesh_request_metrics_t
         return "";
     }
 
+    static opentelemetry::nostd::string_view
+    name (foundation::operation_terminal_t terminal) noexcept
+    {
+        switch (terminal) {
+            case foundation::operation_terminal_t::completed:
+                return "completed";
+            case foundation::operation_terminal_t::timed_out:
+                return "timed_out";
+            case foundation::operation_terminal_t::cancelled:
+                return "cancelled";
+            case foundation::operation_terminal_t::shutdown:
+                return "shutdown";
+            default:
+                return "failed";
+        }
+    }
+
     const std::string _mesh_name;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _inflight;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>> _duration;
@@ -116,13 +147,13 @@ class mesh_request_metric_t
     mesh_request_metric_t (mesh_request_metric_t &&other) noexcept = default;
     mesh_request_metric_t &operator= (mesh_request_metric_t &&other) noexcept
     {
-        complete ("failed");
+        complete (foundation::operation_terminal_t::transport_failed);
         _metrics = std::move (other._metrics);
         _surface = other._surface;
         _started = other._started;
         return *this;
     }
-    ~mesh_request_metric_t () { complete ("failed"); }
+    ~mesh_request_metric_t () { complete (foundation::operation_terminal_t::transport_failed); }
 
     void start () noexcept
     {
@@ -132,10 +163,10 @@ class mesh_request_metric_t
         }
     }
 
-    void complete (opentelemetry::nostd::string_view outcome) noexcept
+    void complete (foundation::operation_terminal_t terminal) noexcept
     {
         if (_metrics && _started != std::chrono::steady_clock::time_point{})
-            _metrics->complete (_surface, _started, outcome);
+            _metrics->complete (_surface, _started, terminal);
         _metrics.reset ();
     }
 

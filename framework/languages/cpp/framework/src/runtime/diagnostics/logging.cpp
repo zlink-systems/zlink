@@ -6,6 +6,7 @@
 #include "runtime/execution/state_lane.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <ctime>
@@ -19,6 +20,35 @@
 namespace zlink::framework::detail
 {
 
+namespace
+{
+
+constexpr std::array log_level_names{"trace", "debug", "info", "warn", "error", "critical", "off"};
+
+} // namespace
+
+const char *log_level_name (log_level_t level) noexcept
+{
+    const auto index = static_cast<std::size_t> (level);
+    return log_level_names[index < log_level_names.size ()
+                             ? index
+                             : static_cast<std::size_t> (log_level_t::info)];
+}
+
+log_level_t parse_log_level (std::string level)
+{
+    std::transform (level.begin (), level.end (), level.begin (), [] (char ch) {
+        return static_cast<char> (std::tolower (static_cast<unsigned char> (ch)));
+    });
+    if (level == "warning")
+        return log_level_t::warn;
+    for (std::size_t index = 0; index < log_level_names.size (); ++index) {
+        if (level == log_level_names[index])
+            return static_cast<log_level_t> (index);
+    }
+    return log_level_t::info;
+}
+
 class logging_state_t
 {
   public:
@@ -26,7 +56,7 @@ class logging_state_t
     bool async_enabled = false;
     logging_backend_t backend = logging_backend_t::builtin;
     log_level_t min_level = log_level_t::info;
-    std::string level_name = "info";
+    std::string level_name = log_level_name (log_level_t::info);
     logging_async_options_t async_options{};
     std::vector<std::string> file_paths;
     std::vector<rotating_file_options_t> rotating_options;
@@ -36,60 +66,11 @@ class logging_state_t
     // The in-memory record buffer is a test/inspection aid; bounded by default so it
     // never grows without limit in production. capture_records=false disables it.
     bool capture_records = true;
-    std::size_t max_captured_records = 4096;
+    static constexpr std::size_t default_captured_record_limit = 4096;
+    std::size_t max_captured_records = default_captured_record_limit;
     runtime::offload_executor_t lane_executor;
     mutable runtime::state_lane_t lane{lane_executor};
 };
-
-const char *log_level_name (log_level_t level) noexcept
-{
-    switch (level) {
-        case log_level_t::trace:
-            return "trace";
-        case log_level_t::debug:
-            return "debug";
-        case log_level_t::info:
-            return "info";
-        case log_level_t::warn:
-            return "warn";
-        case log_level_t::error:
-            return "error";
-        case log_level_t::critical:
-            return "critical";
-        case log_level_t::off:
-            return "off";
-    }
-    return "info";
-}
-
-log_level_t parse_log_level (std::string level)
-{
-    std::transform (level.begin (), level.end (), level.begin (), [] (char ch) {
-        return static_cast<char> (std::tolower (static_cast<unsigned char> (ch)));
-    });
-    if (level == "trace") {
-        return log_level_t::trace;
-    }
-    if (level == "debug") {
-        return log_level_t::debug;
-    }
-    if (level == "info") {
-        return log_level_t::info;
-    }
-    if (level == "warn" || level == "warning") {
-        return log_level_t::warn;
-    }
-    if (level == "error") {
-        return log_level_t::error;
-    }
-    if (level == "critical") {
-        return log_level_t::critical;
-    }
-    if (level == "off") {
-        return log_level_t::off;
-    }
-    return log_level_t::info;
-}
 
 std::string format_record (const log_record_t &record)
 {

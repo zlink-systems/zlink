@@ -12,6 +12,28 @@
 namespace
 {
 
+namespace monitoring_field
+{
+inline constexpr char actor_id[] = "actor_id";
+inline constexpr char actor_type[] = "actor_type";
+inline constexpr char category[] = "category";
+inline constexpr char delivery_index[] = "delivery_index";
+inline constexpr char entry_count[] = "entry_count";
+inline constexpr char handler_type[] = "handler_type";
+inline constexpr char message[] = "message";
+inline constexpr char reason[] = "reason";
+inline constexpr char session_id[] = "session_id";
+inline constexpr char source_name[] = "source_name";
+inline constexpr char spot_id[] = "spot_id";
+inline constexpr char state[] = "state";
+inline constexpr char stopped[] = "stopped";
+inline constexpr char stream_name[] = "stream_name";
+inline constexpr char summary_count[] = "summary_count";
+inline constexpr char timer_name[] = "timer_name";
+}
+
+constexpr char unknown_label[] = "unknown";
+
 bool blank_monitoring_source (const std::string &value)
 {
     return value.empty () || std::all_of (value.begin (), value.end (), [] (char ch) {
@@ -83,7 +105,7 @@ const char *socket_event_name (socket_event_kind_t event) noexcept
         case socket_event_kind_t::closed:
             return "closed";
     }
-    return "unknown";
+    return unknown_label;
 }
 
 const char *stream_event_name (stream_event_kind_t event) noexcept
@@ -98,7 +120,7 @@ const char *stream_event_name (stream_event_kind_t event) noexcept
         case stream_event_kind_t::handler_exception:
             return "handler_exception";
     }
-    return "unknown";
+    return unknown_label;
 }
 
 const char *actor_event_name (actor_event_kind_t event) noexcept
@@ -113,7 +135,7 @@ const char *actor_event_name (actor_event_kind_t event) noexcept
         case actor_event_kind_t::session_disconnected:
             return "session_disconnected";
     }
-    return "unknown";
+    return unknown_label;
 }
 
 const char *drain_state_name (drain_state_t state) noexcept
@@ -128,7 +150,7 @@ const char *drain_state_name (drain_state_t state) noexcept
         case drain_state_t::force_stopping:
             return "force_stopping";
     }
-    return "unknown";
+    return unknown_label;
 }
 
 } // namespace
@@ -243,9 +265,9 @@ void monitoring_runtime_t::log (log_level_t level,
 
 void monitoring_runtime_t::publish_socket (socket_event_payload_t event) const
 {
-    log (
-      log_level_t::debug, "zlink.runtime.transport.connection_changed",
-      {{"source_name", std::move (event.source_name)}, {"state", socket_event_name (event.event)}});
+    log (log_level_t::debug, "zlink.runtime.transport.connection_changed",
+         {{monitoring_field::source_name, std::move (event.source_name)},
+          {monitoring_field::state, socket_event_name (event.event)}});
 }
 
 void monitoring_runtime_t::publish_location_snapshot (
@@ -267,22 +289,23 @@ void monitoring_runtime_t::publish_location_changes (
 {
     const auto level = status.store_healthy ? log_level_t::info : log_level_t::warn;
     if (status_changed && _state && _state->diagnostics_logger.is_enabled (level)) {
-        std::vector<log_field_t> fields{{"source_name", source_name},
-                                        {"state", status.store_healthy ? "ready" : "degraded"}};
+        std::vector<log_field_t> fields{
+          {monitoring_field::source_name, source_name},
+          {monitoring_field::state, status.store_healthy ? "ready" : "degraded"}};
         if (status.last_error)
-            fields.push_back ({"reason", *status.last_error});
+            fields.push_back ({monitoring_field::reason, *status.last_error});
         log (level, "zlink.runtime.location.store_changed", std::move (fields));
     }
     if (_state && _state->diagnostics_logger.is_enabled (log_level_t::debug)) {
         if (topology) {
-            log (
-              log_level_t::debug, "zlink.runtime.mesh_node.peer_changed",
-              {{"source_name", source_name}, {"entry_count", std::to_string (topology->size ())}});
+            log (log_level_t::debug, "zlink.runtime.mesh_node.peer_changed",
+                 {{monitoring_field::source_name, source_name},
+                  {monitoring_field::entry_count, std::to_string (topology->size ())}});
         }
         if (summary) {
             log (log_level_t::debug, "zlink.runtime.mesh_node.state_changed",
-                 {{"source_name", std::move (source_name)},
-                  {"summary_count", std::to_string (summary->size ())}});
+                 {{monitoring_field::source_name, std::move (source_name)},
+                  {monitoring_field::summary_count, std::to_string (summary->size ())}});
         }
     }
 }
@@ -294,30 +317,31 @@ void monitoring_runtime_t::publish_stream (stream_event_payload_t event) const
            ? log_level_t::warn
            : log_level_t::debug,
          "zlink.runtime.stream.state_changed",
-         {{"source_name", std::move (event.source_name)},
-          {"stream_name", std::move (event.stream_name)},
-          {"session_id", std::move (event.session_id)},
-          {"state", stream_event_name (event.event)},
-          {"message", std::move (event.message)}});
+         {{monitoring_field::source_name, std::move (event.source_name)},
+          {monitoring_field::stream_name, std::move (event.stream_name)},
+          {monitoring_field::session_id, std::move (event.session_id)},
+          {monitoring_field::state, stream_event_name (event.event)},
+          {monitoring_field::message, std::move (event.message)}});
 }
 
 void monitoring_runtime_t::publish_actor (actor_event_payload_t event) const
 {
     log (event.event == actor_event_kind_t::relay_failed ? log_level_t::warn : log_level_t::debug,
          "zlink.runtime.actor.session_changed",
-         {{"source_name", std::move (event.source_name)},
-          {"actor_type", std::move (event.actor_type)},
-          {"actor_id", std::move (event.actor_id)},
-          {"session_id", std::move (event.session_id)},
-          {"state", actor_event_name (event.event)},
-          {"message", std::move (event.message)}});
+         {{monitoring_field::source_name, std::move (event.source_name)},
+          {monitoring_field::actor_type, std::move (event.actor_type)},
+          {monitoring_field::actor_id, std::move (event.actor_id)},
+          {monitoring_field::session_id, std::move (event.session_id)},
+          {monitoring_field::state, actor_event_name (event.event)},
+          {monitoring_field::message, std::move (event.message)}});
 }
 
 void monitoring_runtime_t::publish_application_job_queue_failure () const
 {
     log (log_level_t::error, "zlink.runtime.host.application_job_queue.receive_flow_config_failed",
-         {{"category", "receive_flow_state_configuration"},
-          {"message", "Failed to apply the absolute Application Job Queue receive-flow state"}});
+         {{monitoring_field::category, "receive_flow_state_configuration"},
+          {monitoring_field::message,
+           "Failed to apply the absolute Application Job Queue receive-flow state"}});
 }
 
 void monitoring_runtime_t::publish_timer_failure (std::string source_name,
@@ -353,13 +377,13 @@ void monitoring_runtime_t::publish_timer_failure (std::string source_name,
         }
     }
     log (log_level_t::error, "zlink.runtime.spot.timer_failed",
-         {{"source_name", std::move (source_name)},
-          {"spot_id", std::string (spot_id)},
-          {"timer_name", std::move (failure.timer_name)},
-          {"handler_type", failure.handler_type.name ()},
-          {"delivery_index", std::to_string (failure.delivery_index)},
-          {"stopped", failure.stopped ? "true" : "false"},
-          {"message", std::move (failure.message)}});
+         {{monitoring_field::source_name, std::move (source_name)},
+          {monitoring_field::spot_id, std::string (spot_id)},
+          {monitoring_field::timer_name, std::move (failure.timer_name)},
+          {monitoring_field::handler_type, failure.handler_type.name ()},
+          {monitoring_field::delivery_index, std::to_string (failure.delivery_index)},
+          {monitoring_field::stopped, failure.stopped ? "true" : "false"},
+          {monitoring_field::message, std::move (failure.message)}});
 }
 
 void monitoring_runtime_t::publish_metric (metric_event_payload_t event) const
@@ -380,7 +404,7 @@ void monitoring_runtime_t::publish_metric (metric_event_payload_t event) const
 void monitoring_runtime_t::publish_drain (drain_event_t event) const
 {
     log (log_level_t::info, "zlink.runtime.host.termination_changed",
-         {{"state", drain_state_name (event.state)}});
+         {{monitoring_field::state, drain_state_name (event.state)}});
 }
 
 } // namespace zlink::framework::detail

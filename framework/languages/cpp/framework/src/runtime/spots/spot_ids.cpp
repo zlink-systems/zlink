@@ -2,6 +2,7 @@
 
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include "runtime/utils/uuid.hpp"
+#include <zlink/framework/detail/utf8.hpp>
 
 #include <cstdint>
 #include <stdexcept>
@@ -14,52 +15,14 @@ namespace detail
 {
 namespace
 {
-bool valid_utf8 (std::string_view value) noexcept
-{
-    for (std::size_t index = 0; index < value.size ();) {
-        const auto first = static_cast<std::uint8_t> (value[index]);
-        std::size_t continuation = 0;
-        std::uint32_t codepoint = 0;
-        if (first <= 0x7f) {
-            if (first == 0)
-                return false;
-            ++index;
-            continue;
-        }
-        if ((first & 0xe0u) == 0xc0u) {
-            continuation = 1;
-            codepoint = first & 0x1fu;
-        } else if ((first & 0xf0u) == 0xe0u) {
-            continuation = 2;
-            codepoint = first & 0x0fu;
-        } else if ((first & 0xf8u) == 0xf0u) {
-            continuation = 3;
-            codepoint = first & 0x07u;
-        } else {
-            return false;
-        }
-        if (value.size () - index - 1 < continuation)
-            return false;
-        for (std::size_t part = 0; part < continuation; ++part) {
-            const auto next = static_cast<std::uint8_t> (value[index + part + 1]);
-            if ((next & 0xc0u) != 0x80u)
-                return false;
-            codepoint = (codepoint << 6u) | (next & 0x3fu);
-        }
-        if ((continuation == 1 && codepoint < 0x80) || (continuation == 2 && codepoint < 0x800)
-            || (continuation == 3 && codepoint < 0x10000) || codepoint > 0x10ffff
-            || (codepoint >= 0xd800 && codepoint <= 0xdfff))
-            return false;
-        index += continuation + 1;
-    }
-    return true;
-}
+constexpr std::string_view entry_spot_marker = "-entry-";
 
 } // namespace
 
 bool valid_spot_id (std::string_view value) noexcept
 {
-    return !value.empty () && value.size () <= 255 && valid_utf8 (value);
+    return !value.empty () && value.size () <= identifier_max_bytes
+           && is_valid_non_nul_utf8 (value);
 }
 
 void require_spot_id (std::string_view value)
@@ -76,7 +39,7 @@ spot_id_t new_user_spot_id ()
 spot_id_t new_entry_spot_id (std::string_view diagnostic_prefix)
 {
     std::string value (diagnostic_prefix);
-    value += "-entry-";
+    value += entry_spot_marker;
     value += new_uuid_v4 ();
     require_spot_id (value);
     return value;
@@ -84,20 +47,13 @@ spot_id_t new_entry_spot_id (std::string_view diagnostic_prefix)
 
 bool is_framework_entry_spot_id (std::string_view value) noexcept
 {
-    const auto marker = value.rfind ("-entry-");
-    if (marker == std::string_view::npos || value.size () - marker - 7 != 36)
+    const auto marker = value.rfind (entry_spot_marker);
+    if (marker == std::string_view::npos
+        || value.size () - marker - entry_spot_marker.size () != uuid_text_length)
         return false;
-    const auto uuid = value.substr (marker + 7);
-    for (std::size_t index = 0; index < uuid.size (); ++index) {
-        if (index == 8 || index == 13 || index == 18 || index == 23) {
-            if (uuid[index] != '-')
-                return false;
-            continue;
-        }
-        const auto ch = uuid[index];
-        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')))
-            return false;
-    }
+    const auto uuid = value.substr (marker + entry_spot_marker.size ());
+    if (!is_lowercase_uuid_text (uuid))
+        return false;
     return uuid[14] == '4'
            && (uuid[19] == '8' || uuid[19] == '9' || uuid[19] == 'a' || uuid[19] == 'b');
 }
