@@ -1,14 +1,28 @@
 cmake_minimum_required(VERSION 3.24)
 
-# Perf spec §6.5, §17.5: the perf project consumes the published framework-cpp prebuilt package only.
-# scripts/build_role.sh runs samples/bootstrap.cmake with -DZLINK_PROJECT_DIR=<this directory> once: it downloads and
-# extracts the release package and configures this project against it, exactly as a sample in package mode.
-# There is no workspace mode: perf never links Core or Framework sources.
+# Perf spec §6.5, §17.5: published builds use the sample bootstrap package; local builds stage the checkout Framework
+# against the sample's local binding/Core packages before configuring this project.
 project(ZlinkFrameworkPerf LANGUAGES C CXX)
+include(CTest)
+if(DEFINED ENV{ZLINK_PERF_FRAMEWORK_VERSION})
+  set(ZLINK_PERF_FRAMEWORK_VERSION "$ENV{ZLINK_PERF_FRAMEWORK_VERSION}")
+endif()
+if(DEFINED ENV{ZLINK_PERF_PACKAGE_SOURCE})
+  set(ZLINK_PERF_PACKAGE_SOURCE "$ENV{ZLINK_PERF_PACKAGE_SOURCE}")
+endif()
+if(NOT ZLINK_PERF_FRAMEWORK_VERSION)
+  message(FATAL_ERROR "ZLINK_PERF_FRAMEWORK_VERSION is required; the common perf runner supplies the declared package version.")
+endif()
+if(NOT ZLINK_PERF_PACKAGE_SOURCE MATCHES "^(published|local)$")
+  message(FATAL_ERROR "ZLINK_PERF_PACKAGE_SOURCE must be published or local.")
+endif()
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 find_package(zlink CONFIG REQUIRED)
-find_package(zlink_framework CONFIG REQUIRED)
+find_package(zlink_framework ${ZLINK_PERF_FRAMEWORK_VERSION} EXACT CONFIG REQUIRED)
 find_package(Boost CONFIG REQUIRED)
+if(NOT zlink_cpp_VERSION)
+  message(FATAL_ERROR "The selected Framework package did not expose its required zlink_cpp dependency version.")
+endif()
 
 # Header-only harness shared by every role and the client (§6.1 Shared, ServerSupport).
 add_library(perf_shared INTERFACE)
@@ -16,7 +30,8 @@ target_include_directories(perf_shared INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/sh
 target_compile_features(perf_shared INTERFACE cxx_std_20)
 # One owner of the histogram bounds: the schema file the common runner also reads (§15.3).
 target_compile_definitions(perf_shared INTERFACE
-  PERF_HISTOGRAM_BOUNDS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../../perf/schema/histogram-bounds.json")
+  PERF_HISTOGRAM_BOUNDS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../../perf/schema/histogram-bounds.json"
+  )
 target_link_libraries(perf_shared INTERFACE zlink::framework zlink::framework_locations_redis
   zlink::stream_connector zlink::http_client)
 
@@ -36,3 +51,16 @@ foreach(role IN ITEMS client session_actor_local_server session_server actor_ser
     endif()
   endif()
 endforeach()
+
+if(BUILD_TESTING)
+  add_executable(perf_contract_tests tests/perf_contract_tests.cpp)
+  target_link_libraries(perf_contract_tests PRIVATE perf_shared)
+  target_compile_features(perf_contract_tests PRIVATE cxx_std_20)
+  if(COMMAND zlink_framework_cpp_add_boost_headers)
+    zlink_framework_cpp_add_boost_headers(perf_contract_tests)
+  else()
+    target_link_libraries(perf_contract_tests PRIVATE Boost::headers)
+  endif()
+  add_test(NAME cpp_perf_contract_tests COMMAND perf_contract_tests)
+  set_tests_properties(cpp_perf_contract_tests PROPERTIES LABELS "framework-unit")
+endif()

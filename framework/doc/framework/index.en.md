@@ -425,6 +425,14 @@ Every remaining chapter is just a combination of these five.
 | **STREAM** | A long-lived connection an external client attaches to (TCP / TLS / WS / WSS) | Socket framing and session lifetime management |
 | **relocation** | The procedure that moves a Spot/Actor to another node | Offsets the weakness of a stateful system where state is pinned to a specific physical machine, keeping location transparency while enabling zero-downtime deployment |
 
+## Try It Yourself
+
+The [interactive tour](dotnet/guide/server/02-tour.en.md) shows how the concepts above behave. It is a
+browser simulation that steps through ClientServer · Fanout · RouteMesh, Instance Spot, relocation
+without downtime, and backpressure, using a single MORPG as the example. The same chapter is under
+"Getting started" in each language's guide, and you can also
+[open it full size](common/diagrams/zlink-tour-en.html).
+
 ## Where It Applies
 
 Representative domains where the patterns described above actually show up. What they

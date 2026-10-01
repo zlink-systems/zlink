@@ -488,35 +488,7 @@ class planned_relocation_service_t final : public hosted_service_t
                             }
                         }
                     });
-                    struct completion_t
-                    {
-                        std::condition_variable ready;
-                        std::mutex mutex;
-                        std::exception_ptr error;
-                        bool completed = false;
-                    };
-                    auto completion = std::make_shared<completion_t> ();
-                    observe_task_completion (
-                      operation, [completion] (const result_t<relocation_result_t> &result) {
-                          std::exception_ptr error;
-                          try {
-                              (void) result.value ();
-                          }
-                          catch (...) {
-                              error = std::current_exception ();
-                          }
-                          {
-                              std::lock_guard lock (completion->mutex);
-                              completion->error = std::move (error);
-                              completion->completed = true;
-                          }
-                          completion->ready.notify_one ();
-                      });
-                    std::unique_lock lock (completion->mutex);
-                    completion->ready.wait (lock, [&completion] { return completion->completed; });
-                    if (completion->error) {
-                        std::rethrow_exception (completion->error);
-                    }
+                    (void) operation.result ().value ();
                     return;
                 }
             }

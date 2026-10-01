@@ -64,7 +64,7 @@ locations.message_follow_duration = std::chrono::seconds{30};
 
 | Field | 기본값 | 의미 |
 | --- | --- | --- |
-| `owner_lease_renew_interval` / `owner_lease_ttl` / `owner_lease_fencing_margin` / `owner_lease_renew_timeout` | 5초 / 15초 / 5초 / 3초 | Owner lease 갱신 주기와 유효기간. `renew_interval + renew_timeout < ttl - fencing_margin`을 만족해야 한다 |
+| `owner_lease_renew_interval` / `owner_lease_ttl` / `owner_lease_fencing_margin` / `owner_lease_renew_timeout` | 5초 / 15초 / 5초 / 3초 | Owner lease 갱신 주기와 유효기간. `max(renew_interval, renew_timeout) + renew_timeout < ttl - fencing_margin`을 만족해야 한다 |
 | `polling_interval` | 1초 | Store 상태 확인 주기 |
 | `store_failure_grace` | 30초 | Store 장애를 감내하는 유예 시간 |
 | `route_cache_max_age` / `message_follow_duration` | 15초 / 30초 | `0`이면 기능을 끈다. 둘 다 양수면 cache age가 message follow duration보다 최소 5초 작아야 한다 |

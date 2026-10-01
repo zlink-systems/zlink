@@ -7,11 +7,31 @@ public sealed class HarnessContractTests
 {
     private static RoleConfig Config(double seconds = .05) => new("test", "session-echo-only/1024/test", new string('a', 64),
         "client", 0, "session-echo-only", null, null, null, [], null, "", "", false, "None", null, [], [],
-        "Immediate", new(1024, seconds, seconds, 1, 1, null, 1, 1, 1000, 1000, 5000, 30000, 5000, 1000), []);
+        "Immediate", TestWorkload.Create(seconds, seconds, connections: 1, logicalStreams: null), []);
     private static PerfTriggerRequest Trigger(Measurement measurement, string phase, string seq) => new()
     { runId = measurement.Config.runId, cellId = measurement.Config.cellId, phase = phase, resetSeq = seq };
     private static ResetRequest Reset(Measurement measurement, string seq = "1") => new()
     { runId = measurement.Config.runId, cellId = measurement.Config.cellId, resetSeq = seq };
+
+    [Fact]
+    public async Task CompleteOperationReturnsWhetherSuccessWasInsideTheWindow()
+    {
+        using var measurement = new Measurement(Config(), true);
+        Func<long, Exception?, long?, bool> complete = measurement.CompleteOperation;
+        Assert.Equal("0", measurement.Snapshot(null).metrics["messages.inflightAtEnd"]);
+        Assert.True(measurement.Start(Trigger(measurement, "warmup", "0"), () =>
+        {
+            Assert.True(measurement.BeginOperation(out var first));
+            Assert.True(complete(first, null, measurement.EndTicks - 1));
+            Assert.True(measurement.BeginOperation(out var second));
+            Assert.False(complete(second, null, measurement.EndTicks));
+            return Task.CompletedTask;
+        }).accepted);
+        await measurement.PhaseTask;
+        var snapshot = measurement.Snapshot(null);
+        Assert.Equal("1", snapshot.metrics["messages.completed"]);
+        Assert.Equal("1", snapshot.metrics["messages.inflightAtEnd"]);
+    }
 
     [Fact]
     public void PayloadValidatesEveryByteAndCanonicalPaddedBase64()
@@ -39,16 +59,30 @@ public sealed class HarnessContractTests
         Dictionary<string, NullReason> reasons = [];
         histogram.Export("latencyMs", "latency", metrics, histograms, reasons);
         var snapshot = histogram.Snapshot();
-        Assert.Equal("1", snapshot.counts[0]);
-        Assert.Equal("1", snapshot.counts[1]);
+        var firstBucket = Array.IndexOf(snapshot.bounds, .1);
+        Assert.Equal("1", snapshot.counts[firstBucket]);
+        Assert.Equal("1", snapshot.counts[firstBucket + 1]);
         Assert.Equal("1", snapshot.overflow);
         Assert.Equal("3", snapshot.count);
         Assert.Equal("1024200002", snapshot.sumNs);
-        Assert.Equal(.25, metrics["latency.p50Ms"]);
+        Assert.Equal(snapshot.bounds[firstBucket + 1], metrics["latency.p50Ms"]);
         Assert.Null(metrics["latency.p95Ms"]);
+        Assert.Equal("nearest-rank-bucket-upper-bound-capped-by-max", snapshot.percentileMethod);
         Assert.Equal("HISTOGRAM_OVERFLOW", reasons["/metrics/latency.p95Ms"].code);
-        Assert.Equal(1024, reasons["/metrics/latency.p95Ms"].lowerBoundMs);
+        Assert.Equal(snapshot.bounds[^1], reasons["/metrics/latency.p95Ms"].lowerBoundMs);
         Assert.Equal(1024.000001, metrics["latency.maxMs"]);
+    }
+    [Fact]
+    public void HistogramCapsRegularBucketPercentileAtObservedMaximum()
+    {
+        var histogram = new Histogram();
+        histogram.Record(100_001);
+        Dictionary<string, object?> metrics = [], histograms = [];
+        Dictionary<string, NullReason> reasons = [];
+        histogram.Export("latencyMs", "latency", metrics, histograms, reasons);
+        Assert.Equal(0.100001, metrics["latency.p50Ms"]);
+        Assert.Equal(0.100001, metrics["latency.p95Ms"]);
+        Assert.DoesNotContain("/metrics/latency.p95Ms", reasons.Keys);
     }
     [Fact]
     public void EmptyHistogramHasReasonsForEveryLatencyAndMax()
@@ -116,7 +150,7 @@ public sealed class HarnessContractTests
         await measurement.PhaseTask;
     }
     [Fact]
-    public async Task SettleSuccessIsExcludedFromWindowRateAndDuplicateStartRunsOnce()
+    public async Task OperationsStillPendingAtWindowEndAreCountedAsInflightAtEnd()
     {
         using var measurement = new Measurement(Config(.08), true);
         measurement.Start(Trigger(measurement, "warmup", "0"), null);
@@ -145,10 +179,32 @@ public sealed class HarnessContractTests
         Assert.Equal(1, calls);
         Assert.Equal("1", snapshot.metrics["messages.sent"]);
         Assert.Equal("0", snapshot.metrics["messages.completed"]);
-        Assert.Equal("1", snapshot.metrics["messages.settleCompleted"]);
-        Assert.Equal("0", snapshot.metrics["messages.unresolved"]);
+        Assert.Equal("0", snapshot.metrics["messages.failed"]);
+        Assert.Equal("0", snapshot.metrics["messages.timeout"]);
+        Assert.Equal("0", snapshot.metrics["messages.cancelled"]);
+        Assert.Equal("1", snapshot.metrics["messages.inflightAtEnd"]);
+        Assert.Equal("1", Sum("messages.completed", "messages.failed", "messages.timeout", "messages.cancelled", "messages.inflightAtEnd"));
+        Assert.DoesNotContain("messages.settleCompleted", snapshot.metrics.Keys);
+        Assert.DoesNotContain("settleLatencyMs", snapshot.histograms.Keys);
         Assert.Equal(0.0, snapshot.metrics["throughput.kops"]);
         Assert.Equal("0", Assert.IsType<HistogramSnapshot>(snapshot.histograms["latencyMs"]).count);
-        Assert.Equal("1", Assert.IsType<HistogramSnapshot>(snapshot.histograms["settleLatencyMs"]).count);
+
+        string Sum(params string[] keys) => keys.Aggregate(0UL, (total, key) => total + ulong.Parse((string)snapshot.metrics[key]!)).ToString();
+    }
+    [Fact]
+    public async Task PublicOperationCanceledExceptionIsClassifiedAsCancelled()
+    {
+        using var measurement = new Measurement(Config(), true);
+        Assert.True(measurement.Start(Trigger(measurement, "warmup", "0"), () =>
+        {
+            Assert.True(measurement.BeginOperation(out var started));
+            measurement.CompleteOperation(started, new OperationCanceledException("test cancellation"));
+            return Task.CompletedTask;
+        }).accepted);
+        await measurement.PhaseTask;
+        var snapshot = measurement.Snapshot(null);
+        Assert.Equal("1", snapshot.metrics["messages.cancelled"]);
+        Assert.Equal("0", snapshot.metrics["messages.failed"]);
+        Assert.Equal("0", snapshot.metrics["messages.timeout"]);
     }
 }

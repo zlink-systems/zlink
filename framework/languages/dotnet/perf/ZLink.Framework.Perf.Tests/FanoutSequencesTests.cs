@@ -57,7 +57,7 @@ public sealed class FanoutSequencesTests
         try
         {
             FanoutMetrics.WriteOnce(path, new { value = 1 });
-            FanoutMetrics.WriteOnce(path, new { value = 2 });
+            Assert.Throws<IOException>(() => FanoutMetrics.WriteOnce(path, new { value = 2 }));
             Assert.Contains("1", File.ReadAllText(path));
             Assert.DoesNotContain("2", File.ReadAllText(path));
         }
@@ -68,7 +68,7 @@ public sealed class FanoutSequencesTests
     {
         var config = new RoleConfig("test", "pubsub-fanout-echo/1024/x", new string((char)97, 64), "publisher", 0, "pubsub-fanout-echo",
             null, null, null, [], null, "", "", true, "None", null, [], [], "Framework default",
-            new(1024, .05, .05, 1, null, 1, 1, null, 1000, 1000, 5000, 30000, 5000, 1000), []);
+            TestWorkload.Create(), []);
         using var measurement = new Measurement(config, true);
         measurement.MessageTypes = [("event", nameof(PerfPublishEvent))];
         var snapshot = measurement.Snapshot(null);
@@ -84,8 +84,9 @@ public sealed class FanoutSequencesTests
             Assert.All(snapshot.serializedMessageBytes, row => Assert.Equal(("event", nameof(PerfPublishEvent)), (row.direction, row.packetName)));
             Assert.DoesNotContain("/histograms/latencyMs/maxNs", snapshot.nullReasons.Keys);
         }
-        FanoutMetrics.Value(snapshot, "messages.published", "7");
-        Assert.Equal("7", snapshot.metrics["messages.published"]);
-        Assert.DoesNotContain("/metrics/messages.published", snapshot.nullReasons.Keys);
+        FanoutMetrics.Value(snapshot, "messages.publishedInWindow", "7");
+        Assert.Equal("7", snapshot.metrics["messages.publishedInWindow"]);
+        Assert.DoesNotContain("messages.published", snapshot.metrics.Keys);
+        Assert.DoesNotContain("/metrics/messages.publishedInWindow", snapshot.nullReasons.Keys);
     }
 }

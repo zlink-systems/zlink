@@ -64,8 +64,8 @@ class route_handler_registry_t
                     result_t<zlink::message_t>::success (zlink::message_t{}));
               }
               catch (...) {
-                  return task_t<zlink::message_t> (
-                    current_exception_to_message_result ("routed handler threw an exception"));
+                  return task_t<zlink::message_t> (current_exception_result<zlink::message_t> (
+                    "routed handler threw an exception"));
               }
           });
     }
@@ -94,7 +94,7 @@ class route_handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return current_exception_to_message_result (
+                  co_return current_exception_result<zlink::message_t> (
                     "routed handler threw an exception");
               }
           });
@@ -123,8 +123,8 @@ class route_handler_registry_t
                   return serialize_handler_result ((owner.*method) (request, context), serializers);
               }
               catch (...) {
-                  return task_t<zlink::message_t> (
-                    current_exception_to_message_result ("routed handler threw an exception"));
+                  return task_t<zlink::message_t> (current_exception_result<zlink::message_t> (
+                    "routed handler threw an exception"));
               }
           });
     }
@@ -155,7 +155,7 @@ class route_handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return current_exception_to_message_result (
+                  co_return current_exception_result<zlink::message_t> (
                     "routed handler threw an exception");
               }
           });

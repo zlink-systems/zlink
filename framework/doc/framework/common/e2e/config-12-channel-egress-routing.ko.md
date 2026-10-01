@@ -170,7 +170,7 @@ Target membership은 알려졌지만 connection이 ready가 아니면 현재 사
 
 **검증 질문:** Known target의 connection이 준비되지 않은 request가 `Unavailable`로 끝나는가.
 
-- 시작 조건: Caller가 target descriptor를 발견한 뒤 runner가 해당 target으로 가는 network를 차단한다.
+- 시작 조건: RouteMesh caller가 target descriptor를 발견한 뒤 runner가 해당 target으로 가는 network를 차단한다.
   Public status에서 Channel이 ready가 아님을 확인한다.
 - 절차: Caller가 operation ID가 포함된 request를 한 번 보낸다.
 - 검증: Request는 `Unavailable` terminal 하나로 끝나고 어느 handler에도 operation ID가 기록되지 않는다.

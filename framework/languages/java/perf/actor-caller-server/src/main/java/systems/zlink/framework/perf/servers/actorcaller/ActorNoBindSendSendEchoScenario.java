@@ -117,7 +117,13 @@ public final class ActorNoBindSendSendEchoScenario {
                 return Optional.empty();
             }
             PerfEchoRequest sent = request.withSentTicks(started);
-            SendSendCorrelation.Entry entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            SendSendCorrelation.Entry entry;
+            try {
+                entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            } catch (RuntimeException error) {
+                measurement.completeOperation(started, error);
+                return Optional.empty();
+            }
             CompletionStage<Void> first;
             try {
                 first = actorClient.sendToActor(actorId, sent).submit();
@@ -133,7 +139,8 @@ public final class ActorNoBindSendSendEchoScenario {
             }).thenCompose(result -> result);
             return Optional.of(new CompletionLoop.Iteration<>(operation, (result, error) -> {
                 if (error != null) {
-                    measurement.completeOperation(started, error, null);
+                    measurement.completeOperation(started, error);
+                    measurement.recordDiagnostic(error);
                 } else {
                     measurement.completeOperation(started, result.error(), result.completedTicks());
                 }

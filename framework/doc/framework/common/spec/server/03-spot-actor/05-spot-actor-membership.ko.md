@@ -211,8 +211,8 @@ authority를 유지한다. Caller가 명시적 leave 또는 destroy를 끝낸 �
 `JoinSpot`은 이동할 User Spot의 global Spot ID를 받는다. `JoinEntrySpot`은 target node
 RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. Actor와 target
 Spot의 owner node가 다르면 같은 Join operation 안에서 Actor relocation도 수행한다.
-Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh Join record를
-제출하지 않는다.
+Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh `actorJoin`
+요청과 그 요청을 대신하는 local control record를 제출하지 않는다.
 
 Application은 relocation 단계, target node, state adapter 또는 owner token을 직접 지정하지
 않는다. 이 값은 Framework가 현재 설정과 authority를 기준으로 결정한다.
@@ -419,11 +419,11 @@ source User Spot에서 `OnLeaveActor`를 실행한다.
 Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체 순서는
 [Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 단일 기준이다. 이 절은 그
 공통 흐름에서 Actor Join에만 필요한 target admission, membership과 lifecycle callback을
-정의한다. 이동하는 Actor가 Session에 bind되어 있을 때 target runtime이 command 44
-`sessionRelocationRoute`로 Session owner의 binding route를 갱신하는 전체 protocol도 이 절이
-소유한다 — 아래 8-step 흐름의 8번과 sequence diagram이 유일한 서술 자리이며,
-[Actor 모델 §6.1](04-actor-model.ko.md#61-factory와-relocation-policy-등록)과 이 문서의 다른 절은
-이 절만 가리킨다.
+정의한다. 이동하는 Actor가 Session에 bind되어 있으면 target runtime이 command 44
+`sessionRelocationRoute`를 제출하는 시점은 아래 8-step 흐름의 8번이 정한다. Command 44의 구성과
+Session owner의 처리는
+[Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
+소유한다.
 
 다른 node로의 Actor Join에서 target이 보내는 승인 wire 응답은 target의 수락과 temporary queue·factory
 준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS의 실행 조건과 확정된 authority에
@@ -472,14 +472,11 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
 5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 또는 Restore 요청 때 등록한 temporary queue를 사용한다.
 6. Cutover 검증 뒤 target의 owner·membership·capacity·generation CAS는 [공통 relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Join membership 변경은 이 CAS에 포함한다.
 7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다.
-8. Actor가 Session에 bind되어 있으면 target runtime이 CAS와 queue 개방 뒤 Session owner에 target
-   route 적용과 seal 해제를 one-way로 알린다. Session owner는 기본 3,000ms의
-   `SessionRelocationSealTimeout` 안에 그 update를 받으면 route를 바꾸고 held message를 제출한
-   뒤 seal을 해제한다. Timeout이면 physical STREAM connection을 종료하고 Session state를 정리한다.
-   이 step에서 target이 보내는 message는 command 44 `sessionRelocationRoute`이며, commit에 담는
-   값과 Session owner의 처리 규칙은
-   [Session–Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가
-   정의한다.
+8. Actor가 Session에 bind되어 있으면 target runtime은 CAS와 queue 개방 뒤 command 44
+   `sessionRelocationRoute` commit을 Session owner에 one-way로 제출한다. Command 구성과 Session
+   owner의 검증·route 적용·held message·seal·timeout 처리는
+   [Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
+   정한다.
 
 승인이 `Accepted`여도 그 뒤의 relocation policy 검사(`DisableRelocation`), capacity
 충돌이나 state 호환성 실패로 이동이 시작되지 않을 수 있다. 준비 자원은 `RelocationId`와
@@ -549,9 +546,8 @@ sequenceDiagram
         TargetRuntime->>TargetQueue: [local] application dispatch 개방
         TargetQueue->>TargetActor: [local] queue 순서대로 message 처리
         opt bound session이 있으면
-            TargetRuntime->>SessionOwner: [send] 그 binding route 적용·held 제출·seal 해제
-            SessionOwner->>SessionOwner: [local] binding route와 current ActorRef snapshot 교체
-            Note over TargetRuntime,SessionOwner: timeout이면 physical Session 종료 · late update는 Warning
+            TargetRuntime-)SessionOwner: [send] command 44 sessionRelocationRoute
+            Note over TargetRuntime,SessionOwner: Session owner의 처리는 Session–Actor binding §8
         end
     else Rejected
         TargetSpot-->>SourceRuntime: [reply] Actor 수용 Rejected와 optional application reply

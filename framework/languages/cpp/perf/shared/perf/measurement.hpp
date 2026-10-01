@@ -47,20 +47,18 @@ inline void baseline_nulls (json &metrics, json &histograms, json &reasons)
     static const char *const inapplicable[] = {
       "messages.admitted", "messages.expired", "messages.duplicateReply", "messages.lateReply",
       "messages.unknownCorrelation", "spot.applicationYieldCalls", "spot.applicationHandlerEntries", "driver.issued",
-      "driver.notStarted", "driver.failed", "messages.published", "messages.publishedInWindow",
-      "messages.settlePublished", "fanout.subscriberCount", "fanout.uniqueDelivered", "fanout.deliveredInWindow",
-      "fanout.settleDelivered", "fanout.duplicateEvents", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
+      "driver.notStarted", "driver.failed", "messages.publishedInWindow",
+      "fanout.subscriberCount", "fanout.deliveredInWindow",
+      "fanout.duplicateEvents", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
       "fanout.publishOpsPerSec", "fanout.deliveryOpsPerSec", "spot.mailboxDepth.max", "spot.mailboxDepth.mean",
       "spot.suspendedTurns", "spot.resumedTurns", "spot.resumeLatency.p95Ms", "spot.resumeLatency.p99Ms",
       "worker.pool.queueDepth.max", "worker.pool.queueDepth.mean"};
     static const char *const prefixes[] = {"actor.sourceAdmission.latency", "spot.remoteCallLatency", "driver.latency",
                                            "worker.callLatency", "worker.submitToStart", "worker.taskLatency",
-                                           "worker.resultToContinuation", "fanout.deliveryLatency",
-                                           "fanout.settleDeliveryLatency"};
+                                           "worker.resultToContinuation", "fanout.deliveryLatency"};
     static const char *const histogram_keys[] = {"sourceAdmissionMs", "driverLatencyMs", "workerCallLatencyMs",
                                                  "workerSubmitToStartMs", "workerTaskLatencyMs",
-                                                 "workerResultToContinuationMs", "fanoutDeliveryLatencyMs",
-                                                 "fanoutSettleDeliveryLatencyMs"};
+                                                 "workerResultToContinuationMs", "fanoutDeliveryLatencyMs"};
     const auto null_metric = [&] (const std::string &key, const char *code, const char *why) {
         metrics[key] = nullptr;
         reasons["/metrics/" + key] = null_reason (code, why);
@@ -153,7 +151,7 @@ class process_sampler_t
     std::vector<std::int64_t> _intervals;
 };
 
-// The workload coroutines of one phase: the phase thread waits for them to drain (§4 settle).
+// The workload coroutines of one phase. Warmup drains before reset; measured work stops at endTicks.
 class loop_group_t : public std::enable_shared_from_this<loop_group_t>
 {
   public:
@@ -172,28 +170,35 @@ class loop_group_t : public std::enable_shared_from_this<loop_group_t>
     void spawn (zlink::framework::task_t<void> task, std::function<void (std::exception_ptr)> on_error = {})
     {
         enter ();
-        auto holder = std::make_shared<zlink::framework::task_t<void>> (std::move (task));
-        zlink::framework::observe_task_completion (
-          *holder, [self = shared_from_this (), holder, on_error = std::move (on_error)] (const zlink::framework::result_t<void> &result) {
-              if (!result.has_value () && on_error)
-                  on_error (std::make_exception_ptr (*result.error ()));
-              self->leave ();
-          });
+        (void) observe (shared_from_this (), std::move (task), std::move (on_error));
     }
-    // False when the bound elapsed with loops still running.
-    bool wait_idle (std::chrono::nanoseconds bound)
+    void wait_idle ()
     {
         std::unique_lock lock (_mutex);
-        return _idle.wait_for (lock, bound, [this] { return _pending == 0; });
+        _idle.wait (lock, [this] { return _pending == 0; });
     }
 
   private:
+    // Every loop leaves the group once, whatever ended it; a failure goes to on_error.
+    static zlink::framework::task_t<void> observe (std::shared_ptr<loop_group_t> self, zlink::framework::task_t<void> task,
+                                                   std::function<void (std::exception_ptr)> on_error)
+    {
+        try {
+            co_await task;
+        }
+        catch (...) {
+            if (on_error)
+                on_error (std::current_exception ());
+        }
+        self->leave ();
+    }
+
     std::mutex _mutex;
     std::condition_variable _idle;
     std::size_t _pending = 0;
 };
 
-// The group is shared: a callback chain may outlive the phase thread when the settle bound elapses.
+// The group is shared so warmup can wait for all callback chains before reset.
 using loops_t = std::shared_ptr<loop_group_t>;
 using workload_fn_t = std::function<void (const loops_t &)>;
 
@@ -315,7 +320,7 @@ class measurement_t
         return reply;
     }
 
-    // Blocks until the phase thread has finished settling (the control pipe's `wait`).
+    // Blocks until the phase window has ended (the control pipe's `wait`).
     void wait_phase () const
     {
         std::unique_lock lock (_gate);
@@ -348,8 +353,8 @@ class measurement_t
                     409};
         _counts.clear (); _by_kind.clear (); _harness.clear (); _language.clear (); _errors.clear (); _directional.clear ();
         _public_state_samples = json::array ();
-        _latency = histogram_t (); _settle_latency = histogram_t (); _max_inflight = 0;
-        _start = _end = _settled_at = 0;
+        _latency = histogram_t (); _max_inflight = 0;
+        _start = _end = 0;
         _start_unix.reset (); _end_unix.reset (); _sealed = false;
         for (const auto &hook : _on_reset)
             hook ();
@@ -380,22 +385,25 @@ class measurement_t
         return true;
     }
 
-    // completed_ticks: a send/send echo keeps the time it was observed even when the first send's terminal comes later (§13).
-    void complete_operation (std::int64_t started, std::exception_ptr error = nullptr,
+    std::int64_t start_ticks () const { std::lock_guard lock (_gate); return _start; }
+
+    bool complete_operation (std::int64_t started, std::exception_ptr error = nullptr,
                              std::optional<std::int64_t> completed_ticks = std::nullopt)
     {
-        const auto completed = completed_ticks ? *completed_ticks : now_ticks ();
+        const auto completed = completed_ticks.value_or (now_ticks ());
         std::lock_guard lock (_gate);
         if (_sealed)
-            return;
+            return false;
         --_inflight;
+        if (completed >= _end)
+            return false;
         if (!error) {
-            const bool in_window = completed < _end;
-            ++_counts[in_window ? "completed" : "settleCompleted"];
-            (in_window ? _latency : _settle_latency).record (completed - started);
+            ++_counts["completed"];
+            _latency.record (completed - started);
+            return true;
         }
-        else
-            record_error (error, true);
+        record_error (error, true);
+        return false;
     }
 
     void handler_enter () { std::lock_guard lock (_gate); ++_active_handlers; }
@@ -417,26 +425,24 @@ class measurement_t
         std::lock_guard lock (_gate);
         json metrics = json::object (), histograms = json::object (), runtime = json::object (), reasons = json::object ();
         baseline_nulls (metrics, histograms, reasons);
-        static const char *const outcomes[] = {"sent", "completed", "settleCompleted", "failed", "timeout", "cancelled", "unresolved"};
+        static const char *const outcomes[] = {"sent", "completed", "failed", "timeout", "cancelled", "inflightAtEnd"};
         const auto null_metric = [&] (const std::string &key, const char *code, const std::string &why) {
             metrics[key] = nullptr;
             reasons["/metrics/" + key] = null_reason (code, why);
         };
         for (const std::string key : outcomes) {
             if (_primary)
-                metrics["messages." + key] = dec (key == "unresolved" && !_sealed ? _inflight : count (key));
+                metrics["messages." + key] = dec (key == "inflightAtEnd" ? count ("sent") - count ("completed") - count ("failed") - count ("timeout") - count ("cancelled") : count (key));
             else
                 null_metric ("messages." + key, "NOT_APPLICABLE", "Echo outcomes belong to the source process.");
         }
         if (_primary) {
             _latency.export_to ("latencyMs", "latency", metrics, histograms, reasons);
-            _settle_latency.export_to ("settleLatencyMs", "settle.latency", metrics, histograms, reasons);
         }
         else {
-            for (const char *prefix : {"latency", "settle.latency"})
-                for (const auto &suffix : latency_suffixes ())
-                    null_metric (std::string (prefix) + "." + suffix, "NOT_APPLICABLE", "RTT belongs to the source process.");
-            for (const char *key : {"latencyMs", "settleLatencyMs"}) {
+            for (const auto &suffix : latency_suffixes ())
+                null_metric (std::string ("latency.") + suffix, "NOT_APPLICABLE", "RTT belongs to the source process.");
+            for (const char *key : {"latencyMs"}) {
                 histograms[key] = nullptr;
                 reasons[std::string ("/histograms/") + key] = null_reason ("NOT_APPLICABLE", "RTT belongs to the source process.");
             }
@@ -498,11 +504,10 @@ class measurement_t
                        {"endedAtUnixMs", _end_unix ? json (*_end_unix) : json (nullptr)},
                        {"startTicks", _start == 0 ? json (nullptr) : json (dec (_start))},
                        {"endTicks", _end == 0 ? json (nullptr) : json (dec (_end))},
-                       {"measuredSeconds", seconds ? json (*seconds) : json (nullptr)},
-                       {"settleSeconds", _settled_at == 0 ? json (nullptr) : json (std::max<std::int64_t> (0, _settled_at - _end) / 1e9)}};
+                       {"measuredSeconds", seconds ? json (*seconds) : json (nullptr)}};
         for (const auto &[key, value] : window.items ())
             if (value.is_null ())
-                reasons["/window/" + key] = null_reason ("PHASE_NOT_STARTED", "Window or settle has not completed.");
+                reasons["/window/" + key] = null_reason ("PHASE_NOT_STARTED", "The measured window has not started.");
         for (const char *key : {"alignmentMethod", "maxErrorNs", "validFromTicks", "validThroughTicks"})
             reasons[std::string ("/clock/") + key] = null_reason ("NOT_APPLICABLE", "RTT uses the caller process clock only.");
         if (public_status.is_null ())
@@ -529,7 +534,7 @@ class measurement_t
         provenance["executor"] = {{"name", "Framework host coroutine executor"},
                                   {"threads", "not publicly observable; see effectiveProcessorCount"}};
         json snapshot = {{"schemaVersion", 2}, {"runId", _config.run_id}, {"cellId", _config.cell_id}, {"resetSeq", _reset_seq},
-                         {"language", "cpp"}, {"role", _config.role}, {"roleInstance", _config.role_instance},
+                         {"language", _config.language}, {"role", _config.role}, {"roleInstance", _config.role_instance},
                          {"configHash", _config.config_hash}, {"phase", _phase}, {"window", window}, {"clock", clock_metadata ()},
                          {"serializedMessageBytes", serialized}, {"metrics", metrics}, {"histograms", histograms},
                          {"nullReasons", reasons}, {"publicStatus", public_status}, {"publicMetrics", json::array ()},
@@ -572,21 +577,23 @@ class measurement_t
             if (!public_state.is_null ())
                 _public_state_samples.push_back (public_state);
         }
+        const bool warmup = _phase == "warmup";
         {
             std::lock_guard lock (_gate);
             _sampler.end ();
             _end_unix = unix_ms ();
-            _phase = "settle";
+            if (!warmup) {
+                _sealed = true;
+                _phase = "complete";
+                _phase_complete = true;
+                _phase_done.notify_all ();
+                return;
+            }
         }
-        const auto settle_bound = std::max<std::int64_t> (0, _end + static_cast<std::int64_t> (_config.workload.settle_timeout_ms) * 1'000'000 - now_ticks ());
-        if (!loops->wait_idle (std::chrono::nanoseconds (settle_bound)))
-            record_diagnostic (std::make_exception_ptr (validation_error_t ("SettleIncomplete", "Workload loops did not finish inside the settle bound.")));
+        // Setup requires every warmup callback to reach a terminal result before reset clears its counters.
+        loops->wait_idle ();
         std::lock_guard lock (_gate);
-        _settled_at = now_ticks ();
-        if (_primary) {
-            _counts["unresolved"] = _inflight;
-            _sealed = true;
-        }
+        _sealed = true;
         _phase = "complete";
         _phase_complete = true;
         _phase_done.notify_all ();
@@ -638,6 +645,15 @@ class measurement_t
                 category = "timeout";
             evidence = {{"type", "zlink::stream_connector::error_t"}, {"message", connector.what ()}, {"publicKind", nullptr}, {"harnessKind", nullptr}, {"connectorCode", connector.code ()}};
         }
+        catch (const std::system_error &system) {
+            ++_language[type_name (typeid (system))];
+            if (system.code () == std::make_error_code (std::errc::timed_out))
+                category = "timeout";
+            else if (system.code () == std::make_error_code (std::errc::operation_canceled))
+                category = "cancelled";
+            evidence = {{"type", type_name (typeid (system))}, {"message", system.what ()}, {"publicKind", nullptr},
+                        {"harnessKind", nullptr}, {"connectorCode", system.code ().message ()}};
+        }
         catch (const std::exception &other) {
             ++_language[type_name (typeid (other))];
             evidence = {{"type", type_name (typeid (other))}, {"message", other.what ()}, {"publicKind", nullptr}, {"harnessKind", nullptr}, {"connectorCode", nullptr}};
@@ -657,13 +673,13 @@ class measurement_t
     mutable std::mutex _gate;
     mutable std::condition_variable _phase_done;
     process_sampler_t _sampler;
-    histogram_t _latency, _settle_latency;
+    histogram_t _latency;
     std::unordered_map<std::string, std::uint64_t> _counts, _by_kind, _harness, _language, _directional;
     std::vector<json> _errors;
     json _public_state_samples = json::array ();
     std::uint64_t _inflight = 0, _max_inflight = 0, _connected = 0, _connection_failures = 0;
     int _active_handlers = 0;
-    std::int64_t _start = 0, _end = 0, _settled_at = 0;
+    std::int64_t _start = 0, _end = 0;
     std::optional<std::string> _start_unix, _end_unix;
     std::string _phase = "setup", _reset_seq = "0";
     bool _sealed = false, _phase_complete = true;

@@ -58,7 +58,7 @@ Lease and polling options must be greater than 0. Every Location host
 must satisfy the following relationship.
 
 ```text
-OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout
+max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout
  < OwnerLeaseTtl - OwnerLeaseFencingMargin
 ```
 
