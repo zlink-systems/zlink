@@ -180,6 +180,7 @@ nav:
       - Guide home: cpp/guide/server/README.md
       - Getting started:
           - Overview: cpp/guide/server/01-overview.md
+          - Interactive tour: cpp/guide/server/02-tour.md
           - Core concepts: cpp/guide/server/03-concepts.md
           - Quickstart: cpp/quickstart.md
       - ZLink host:
@@ -262,6 +263,7 @@ nav:
       - Guide home: dotnet/guide/server/README.md
       - Getting started:
           - Overview: dotnet/guide/server/01-overview.md
+          - Interactive tour: dotnet/guide/server/02-tour.md
           - Core concepts: dotnet/guide/server/03-concepts.md
           - Quickstart: dotnet/quickstart.md
       - Feature guide:
@@ -336,6 +338,7 @@ nav:
       - Guide home: java/guide/server/README.md
       - Getting started:
           - Overview: java/guide/server/01-overview.md
+          - Interactive tour: java/guide/server/02-tour.md
           - Core concepts: java/guide/server/03-concepts.md
           - Quickstart: java/quickstart.md
       - Feature guide:
@@ -408,6 +411,7 @@ nav:
       - Guide home: kotlin/guide/server/README.md
       - Getting started:
           - Overview: kotlin/guide/server/01-overview.md
+          - Interactive tour: kotlin/guide/server/02-tour.md
           - Core concepts: kotlin/guide/server/03-concepts.md
           - Quickstart: kotlin/quickstart.md
       - Feature guide:
@@ -481,6 +485,7 @@ nav:
       - Guide home: node/guide/server/README.md
       - Getting started:
           - Overview: node/guide/server/01-overview.md
+          - Interactive tour: node/guide/server/02-tour.md
           - Core concepts: node/guide/server/03-concepts.md
           - Quickstart: node/quickstart.md
       - Feature guide:

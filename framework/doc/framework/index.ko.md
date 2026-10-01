@@ -411,6 +411,13 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 | **STREAM** | 외부 client가 연결해 유지하는 장기 연결(TCP · TLS · WS · WSS) | 소켓 framing과 세션 수명 관리 |
 | **relocation** | Spot·Actor를 다른 노드로 옮기는 절차 | state가 특정 물리 머신에 고정되는 stateful 시스템의 약점을 보완해, 위치 투명성을 유지한 채 무중단 배포를 가능하게 한다 |
 
+## 직접 눌러 보기
+
+위 개념이 실제로 어떻게 움직이는지는 [둘러보기](dotnet/guide/server/02-tour.ko.md)에서 직접 확인할 수 있다.
+MORPG 하나를 예로 들어 ClientServer · Fanout · RouteMesh, Instance Spot, 무중단 이전, backpressure를
+단계별로 진행하는 브라우저 시뮬레이션이다. 각 언어 가이드의 "시작" 메뉴에 같은 장이 있고,
+[전체 화면으로 열 수도 있다](common/diagrams/zlink-tour.html).
+
 ## 적용 분야
 
 앞서 설명한 패턴이 실제로 나타나는 대표 도메인이다. 여러 서버가 역할을 나눠
