@@ -495,7 +495,7 @@ Session과 Actor가 같은 local object node에 있을 때 connector·session·A
 | Role/process | CS Client × clientCount, SessionActorLocal × 1; session actor route와 Actor owner가 같은 local object node |
 | 부하·mode | Physical connectors; `request`, ordinary; 대표 1024 bytes |
 | 완료·집계 | Client의 public request 직전부터 원래 STREAM request의 typed echo 검증 완료까지 |
-| 준비 | Connector ID마다 Actor 하나를 public manager로 준비하고 그 Ref를 해당 session에 bind; session handler가 setup probe를 받을 때 public API로 생성·bind하고 그 probe를 relay한다 |
+| 준비 | Session handler는 setup probe를 받으면 public manager API로 그 connector ID의 Actor를 생성하고 그 Ref를 해당 session에 bind한 뒤 probe를 relay한다 |
 | Location Store/Docker | Object Server 때문에 필수; run 전용 Docker Redis |
 | Null/unsupported | `actor.sourceAdmission.*`는 direct send가 없어 비적용; 내부 Spot 지표는 public 관측 미지원; worker/fanout은 비적용 |
 
@@ -1158,11 +1158,13 @@ Node bigint와 모든 64-bit 값은 decimal string으로 저장하며 JSON numbe
 Application latency histogram은 다음 형식을 사용한다. Public provider의 자체 histogram을
 이 application histogram과 혼합하지 않는다.
 
-```json
+일부 상한과 count를 생략한 형식 예시다.
+
+```text
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, …, 800, 1000],
+  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 800, 1000],
   "counts": ["0", …],
   "overflow": "0",
   "count": "0",
@@ -1173,8 +1175,9 @@ Application latency histogram은 다음 형식을 사용한다. Public provider�
 ```
 
 - **Bounds는 `framework/perf/schema/histogram-bounds.json` 한 곳이 소유한다.** 0.01ms부터 decade마다
-  `1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8`배로 800ms까지 두고 마지막 상한은 1000ms다(51개). 이웃 상한의
-  비가 1.25 이하라서 percentile 오차가 25%를 넘지 않는다. Runner와 언어 role은 이 파일을 읽고 값을 다시 적지 않는다.
+  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 800ms까지 두고 마지막 상한은 1000ms다(51개). 이웃 상한의
+  비는 최대 약 1.28이므로 bucket 상한 추정값은 그 bucket의 실제 값보다 최대 약 28% 클 수 있다.
+  Runner와 언어 role은 이 파일을 읽고 값을 다시 적지 않는다.
 - **Bucket는 `[0,b0]`, 이후 `(b[i-1],b[i]]`이며 누적 count가 아니다.** 같은 sample이
   하나의 bucket 또는 overflow에만 들어가야 합산할 수 있기 때문이다.
 - **Percentile은 nearest rank의 bucket 상한과 max 중 작은 값으로 추정한다.** `rank=ceil(p*count)`의
@@ -1318,8 +1321,8 @@ ReceiptTiming {
 
 Publisher 성공 집합에는 실패한 sequence를 넣지 않는다. 최종 delivery 집계는 각 subscriber의
 windowRanges를 **windowSuccessRanges와만 교차**한다. Ratio 분모는 `publishedInWindow`다.
-Subscriber별 `deliveredInWindow`는 그 교차 집합의 크기다. Window 끝 직전에 publish돼 전송 중이던
-sequence는 수신되지 않은 것으로 보이며, 이 오차는 window 길이에 비해 작다.
+Subscriber별 `deliveredInWindow`는 그 교차 집합의 크기다. Window 끝에 전송 중인 sequence는 해당
+subscriber의 `deliveredInWindow`에 포함되지 않는다. 이 경계 효과는 관측한 ratio와 함께 해석한다.
 같은 sequence를 다시 수신하면 첫 수신만 unique이며 뒤 수신은 duplicateEvents다.
 Cohort 밖 수신은 outOfCohortEvents이며 unique delivery와 histogram에서 제외한다.
 Subscriber는 handler entry의 monotonic 시각을 자기 `[startTicks, endTicks)`와 비교해 window 수신을 정하고 시작 skew의 관찰 근거를 보존한다.
@@ -1596,7 +1599,7 @@ Spot/Actor mapping, topology/discovery, worker 설정을 남긴다.
 | `unsupported` | 필요한 public 호출/선언을 해당 언어에서 확인·실행하지 못함; 필수 완료 수에 포함하지 않음 |
 
 성공 echo baseline은 `valid`이고 실패·timeout·cancelled·validation 오류가 0인 셀만
-`baselineEligible=true`로 채택한다. PS는 lossless 계약이 아니므로 누락만으로 error를 만들지 않으며,
+`baselineEligible=true`로 채택한다. `inflightAtEnd`는 실패가 아니므로 채택 조건에 들어가지 않는다. PS는 lossless 계약이 아니므로 누락만으로 error를 만들지 않으며,
 유효한 publish 분모와 subscriber 원본이 있으면 ratio를 보존한 채 비교한다.
 PS baseline 채택의 허용 deliveryRatio는 비교 계획에 명시하며 미지정이면 `baselineEligible=false`다.
 오류가 있는 수치를 무오류 baseline으로 저장하지 않는다.

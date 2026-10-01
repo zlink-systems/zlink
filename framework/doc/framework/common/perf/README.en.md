@@ -507,7 +507,7 @@ same local object node, through the [session binding and original-reply contract
 | Roles/processes | CS Client × clientCount, SessionActorLocal × 1; session Actor route and Actor owner share the same local object node |
 | Load/mode | Physical connectors; `request`, ordinary; representative 1024 bytes |
 | Completion/owner | Client: immediately before public request through validated typed echo on the original STREAM request |
-| Preparation | Public manager prepares one Actor per connector ID; bind its Ref to that session; the session handler creates and binds through the public API when it receives the setup probe, then relays that probe |
+| Preparation | When the session handler receives the setup probe, it creates that connector ID's Actor through the public manager API, binds its Ref to that session, then relays the probe |
 | Location Store/Docker | Required for Object Server; run-dedicated Docker Redis |
 | Null/unsupported | `actor.sourceAdmission.*` inapplicable without direct send; internal Spot metrics lack public observations; worker/fanout inapplicable |
 
@@ -1177,11 +1177,13 @@ Node bigint and all 64-bit values are decimal strings, never narrowed to JSON nu
 Application latency histograms use this format. Do not merge public providers' own histograms
 with these application histograms.
 
-```json
+A format example with some bounds and counts omitted:
+
+```text
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, …, 800, 1000],
+  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 800, 1000],
   "counts": ["0", …],
   "overflow": "0",
   "count": "0",
@@ -1192,8 +1194,9 @@ with these application histograms.
 ```
 
 - **`framework/perf/schema/histogram-bounds.json` alone owns the bounds.** Starting at 0.01ms, each
-  decade uses multipliers `1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8` up to 800ms, and the last bound is
-  1000ms (51 bounds). Adjacent bounds differ by at most 1.25x, so percentile error stays within 25%.
+  decade uses the R10 multipliers `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8` up to 800ms, and the last
+  bound is 1000ms (51 bounds). Adjacent bounds differ by at most about 1.28x, so a bucket upper-bound
+  estimate can exceed the actual value in that bucket by up to about 28%.
   The runner and language roles read this file and never restate the values.
 - **Buckets are `[0,b0]`, then `(b[i-1],b[i]]`, with noncumulative counts.** Every sample must enter
   exactly one bucket or overflow to support aggregation.
@@ -1340,8 +1343,9 @@ ReceiptTiming {
 
 Publisher success sets exclude failed sequences. Final delivery aggregation intersects each
 subscriber's windowRanges **only with windowSuccessRanges**. The ratio denominator is `publishedInWindow`.
-Per-subscriber `deliveredInWindow` is the size of that intersection. A sequence published just before the
-window ended and still in transit appears as not received; this error is small relative to the window length.
+Per-subscriber `deliveredInWindow` is the size of that intersection. A sequence still in transit when the
+window ends is not included in that subscriber's `deliveredInWindow`. Interpret this boundary effect
+together with the observed ratio.
 If the same sequence arrives again, only the first receipt is unique; later receipts are duplicates.
 Out-of-cohort receipts are outOfCohortEvents, outside unique delivery and histograms.
 A subscriber compares the monotonic handler-entry time with its own `[startTicks, endTicks)` to decide window receipts, and retains evidence bounding start skew.
@@ -1623,7 +1627,7 @@ deadlines, Spot/Actor mapping, topology/discovery and worker settings.
 | `unsupported` | Required public calls/declarations could not be confirmed/executed in that language; not counted complete |
 
 Only `valid` echo cells with zero failure, timeout, cancellation and validation errors
-are adopted as successful echo baselines with `baselineEligible=true`.
+are adopted as successful echo baselines with `baselineEligible=true`. `inflightAtEnd` is not a failure and does not affect adoption.
 PS has no lossless contract, so missing delivery alone is not an error; a valid publish denominator
 and subscriber originals support comparison with the recorded ratio.
 A comparison plan must state the minimum acceptable deliveryRatio for adopting a PS baseline;
