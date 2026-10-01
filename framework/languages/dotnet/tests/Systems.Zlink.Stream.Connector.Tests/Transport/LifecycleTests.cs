@@ -2846,10 +2846,9 @@ public sealed partial class StreamConnectorTests
             () => connector.State == ZlinkStreamConnectionState.Connected,
             TimeSpan.FromSeconds(5)
         );
-        reconnectedObserved.SetResult();
-
         Assert.True(connector.IsConnected);
         Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
+        reconnectedObserved.SetResult();
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
