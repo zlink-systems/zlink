@@ -170,13 +170,7 @@ class loop_group_t : public std::enable_shared_from_this<loop_group_t>
     void spawn (zlink::framework::task_t<void> task, std::function<void (std::exception_ptr)> on_error = {})
     {
         enter ();
-        auto holder = std::make_shared<zlink::framework::task_t<void>> (std::move (task));
-        zlink::framework::observe_task_completion (
-          *holder, [self = shared_from_this (), holder, on_error = std::move (on_error)] (const zlink::framework::result_t<void> &result) {
-              if (!result.has_value () && on_error)
-                  on_error (std::make_exception_ptr (*result.error ()));
-              self->leave ();
-          });
+        (void) observe (shared_from_this (), std::move (task), std::move (on_error));
     }
     void wait_idle ()
     {
@@ -185,6 +179,20 @@ class loop_group_t : public std::enable_shared_from_this<loop_group_t>
     }
 
   private:
+    // Every loop leaves the group once, whatever ended it; a failure goes to on_error.
+    static zlink::framework::task_t<void> observe (std::shared_ptr<loop_group_t> self, zlink::framework::task_t<void> task,
+                                                   std::function<void (std::exception_ptr)> on_error)
+    {
+        try {
+            co_await task;
+        }
+        catch (...) {
+            if (on_error)
+                on_error (std::current_exception ());
+        }
+        self->leave ();
+    }
+
     std::mutex _mutex;
     std::condition_variable _idle;
     std::size_t _pending = 0;

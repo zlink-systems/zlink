@@ -5,29 +5,10 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 
-#include <exception>
 #include <type_traits>
 
 namespace zlink::framework::detail
 {
-
-inline result_t<zlink::message_t> current_exception_to_message_result (const char *fallback_message)
-{
-    try {
-        throw;
-    }
-    catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<zlink::message_t> (error);
-    }
-    catch (const std::exception &error) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                    error.what ());
-    }
-    catch (...) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                    fallback_message);
-    }
-}
 
 template <typename T> struct task_value_type_t
 {

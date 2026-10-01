@@ -22,13 +22,12 @@ class send_send_correlation_t
     struct entry_t
     {
         entry_t (echo_request_t request_, std::int64_t expires) :
-            request (std::move (request_)), expires_at_ticks (expires),
-            result (zlink::framework::detail::capture_native_continuation_scheduler ())
+            request (std::move (request_)), expires_at_ticks (expires)
         {
         }
         echo_request_t request;
         std::int64_t expires_at_ticks;
-        zlink::framework::detail::task_completion_source_t<int> result;
+        zlink::framework::task_completion_source_t<int> result;
         std::atomic<int> state{pending};
         std::int64_t closed_ticks = 0;
         std::exception_ptr error;

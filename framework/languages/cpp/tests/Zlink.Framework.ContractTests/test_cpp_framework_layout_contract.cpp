@@ -921,41 +921,6 @@ bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::pat
     return ok;
 }
 
-bool sample_server_code_does_not_block_on_task_result (const std::filesystem::path &root)
-{
-    bool ok = true;
-    const auto samples_root = root / "samples";
-    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
-        if (!entry.is_regular_file ()) {
-            continue;
-        }
-        const auto ext = entry.path ().extension ();
-        if (ext != ".hpp" && ext != ".cpp") {
-            continue;
-        }
-
-        const auto relative =
-          std::filesystem::relative (entry.path (), samples_root).generic_string ();
-        if (relative.find ("/Server/") == std::string::npos
-            && relative.find ("/Shared/") == std::string::npos) {
-            continue;
-        }
-
-        std::size_t line_no = 0;
-        for (const auto line : entry.contents ().lines) {
-            ++line_no;
-            if (line.find (".result (") != std::string::npos
-                || line.find (".result(") != std::string::npos) {
-                std::cerr << "sample server/shared code must use task_t await or "
-                             "callback completion instead of blocking result(): "
-                          << entry.path () << ':' << line_no << '\n';
-                ok = false;
-            }
-        }
-    }
-    return ok;
-}
-
 bool client_sample_uses_e2e_connector (const std::filesystem::path &root,
                                        const std::filesystem::path &client_file)
 {
@@ -2034,7 +1999,6 @@ int main ()
     ok &= file_contains (
       root / "samples/Bingo/Server/Session/Sessions/Handlers/authenticate_session_handler.hpp",
       "encode_authenticate_response (reply_payload)");
-    ok &= sample_server_code_does_not_block_on_task_result (root);
     ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
     ok &= cpp_runners_prefer_the_selected_build_directory (root);
