@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } = require('../../packages/framework/dist');
@@ -8,6 +12,11 @@ const {
   DefaultZLinkActorManager,
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/internal');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 function isInvalidOperation(error) {
   return error instanceof ZLinkFrameworkException
@@ -33,7 +42,7 @@ for (const operation of ['create', 'getOrCreate']) {
           submissions.push(args);
           return result;
         }
-      });
+      }, detachedTaskRunner);
       const call = manager[operation]('alice', 'player')
         .inMesh('play').request(undefined).timeout(1000);
       assert.throws(() => call[option](duplicate), isInvalidOperation);
@@ -61,7 +70,7 @@ for (const operation of ['create', 'getOrCreate']) {
             submissions += 1;
             return pendingResult;
           }
-        });
+        }, detachedTaskRunner);
         const serial = new ZLinkSpotSerialTurnExecutor();
         await serial.execute(async () => {
           const call = manager[operation]('alice', 'player').inMesh('play');

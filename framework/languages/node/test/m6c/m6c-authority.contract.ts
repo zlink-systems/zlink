@@ -46,6 +46,10 @@ import {
   ZLinkFrameworkInternalErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkRuntimeAdmissionGate } from '../../packages/framework/src/runtime/admission';
+import {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import { ZLinkPublicSpotManager } from '../../packages/framework/src/runtime/spots/spot-manager-public';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { invokeSpotClosing } from '../../packages/framework/src/runtime/spots/spot-closing';
@@ -55,6 +59,11 @@ import {
   ZLinkOwnerLeaseTracker
 } from '../../packages/framework/src/runtime/locations/lease-tracker';
 import type { ZLinkOwnerLeaseStore } from '../../packages/framework/src/runtime/locations/internal-store-contracts';
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('owner lease uses exact claim read renew and release fencing', async () => {
   let now = 100;
@@ -588,20 +597,23 @@ test('Actor factory failure records and replays a typed failed terminal', async 
   };
   const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
   const callbackFailure = new Error('actor factory failed');
-  const actors = new DefaultZLinkActorManager({
-    actorFactories: new Map([
-      [
-        'player',
-        {
-          create() {
-            throw callbackFailure;
+  const actors = new DefaultZLinkActorManager(
+    {
+      actorFactories: new Map([
+        [
+          'player',
+          {
+            create() {
+              throw callbackFailure;
+            }
           }
-        }
-      ]
-    ]),
-    actorMeshNameProvider: () => 'mesh',
-    actorCreatedNodeRidProvider: () => target.nodeRid
-  });
+        ]
+      ]),
+      actorMeshNameProvider: () => 'mesh',
+      actorCreatedNodeRidProvider: () => target.nodeRid
+    },
+    detachedTaskRunner
+  );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
     store,
@@ -683,23 +695,26 @@ test('Actor onCreateActor failure records and replays a typed failed terminal', 
   };
   const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
   const callbackFailure = new Error('actor onCreateActor failed');
-  const actors = new DefaultZLinkActorManager({
-    actorFactories: new Map([
-      [
-        'player',
-        {
-          async create(context) {
-            return { context };
+  const actors = new DefaultZLinkActorManager(
+    {
+      actorFactories: new Map([
+        [
+          'player',
+          {
+            async create(context) {
+              return { context };
+            }
           }
-        }
-      ]
-    ]),
-    actorMeshNameProvider: () => 'mesh',
-    actorCreatedNodeRidProvider: () => target.nodeRid,
-    async actorCreatedNotifier() {
-      throw callbackFailure;
-    }
-  });
+        ]
+      ]),
+      actorMeshNameProvider: () => 'mesh',
+      actorCreatedNodeRidProvider: () => target.nodeRid,
+      async actorCreatedNotifier() {
+        throw callbackFailure;
+      }
+    },
+    detachedTaskRunner
+  );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
     store,
@@ -848,22 +863,25 @@ test('Actor admission failure aborts without recording a terminal', async () => 
   const admission = new ZLinkRuntimeAdmissionGate();
   admission.register('mesh');
   admission.seal('mesh');
-  const actors = new DefaultZLinkActorManager({
-    actorFactories: new Map([
-      [
-        'player',
-        {
-          async create(context) {
-            factoryCalls++;
-            return { context };
+  const actors = new DefaultZLinkActorManager(
+    {
+      actorFactories: new Map([
+        [
+          'player',
+          {
+            async create(context) {
+              factoryCalls++;
+              return { context };
+            }
           }
-        }
-      ]
-    ]),
-    actorMeshNameProvider: () => 'mesh',
-    actorCreatedNodeRidProvider: () => target.nodeRid,
-    admission
-  });
+        ]
+      ]),
+      actorMeshNameProvider: () => 'mesh',
+      actorCreatedNodeRidProvider: () => target.nodeRid,
+      admission
+    },
+    detachedTaskRunner
+  );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
     store,

@@ -145,8 +145,17 @@ import {
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSubmitStatus } from '../../packages/framework/src/runtime/messaging/submission-result';
+import {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import { meshActorSessionNodeAdapter } from '../../packages/framework/src/runtime/backend/mesh-actor-session-node-adapter';
 import { ZLinkNativeFallbackBoundSession } from '../../packages/framework/src/runtime/streams/native-fallback-bound-session';
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 // Production raw ingress records carry the host Application Job Queue owner
 // that the raw MeshNode pump reserves per received frame (see
@@ -3983,6 +3992,7 @@ test('Instance application factory initializes before the first recovered handle
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]])
   });
@@ -4056,6 +4066,7 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({
@@ -4115,6 +4126,7 @@ test('Instance Close prevents a waiting materialization of the closed generation
   let finishRelease!: () => void;
   const releaseFinished = new Promise<void>((resolve) => (finishRelease = resolve));
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () =>
@@ -4167,6 +4179,7 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({

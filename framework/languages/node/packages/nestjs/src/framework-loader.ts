@@ -36,6 +36,8 @@ import type {
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
+  disposeIntegrationHandler(instance: unknown): Promise<void>;
+  disposeIntegrationHandlers(instances: readonly unknown[]): Promise<void>;
   readonly MAX_LISTENER_PORT: number;
   readonly ZLINK_MAX_PUBLIC_WEIGHT: number;
   readonly ZLINK_MAX_CAPACITY: number;

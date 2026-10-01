@@ -421,7 +421,7 @@ function createProviderResolver(
                 instance = createNestHandlerInstance(moduleRef, contextId, dependencies, type).then(
                   async (created) => {
                     if (disposed) {
-                      await disposeNestOwnedHandler(created);
+                      await framework.disposeIntegrationHandler(created);
                       throw new Error('Handler instance scope was disposed during activation.');
                     }
                     owned.push(created);
@@ -437,12 +437,13 @@ function createProviderResolver(
               disposed = true;
               const pending = [...instances.values()];
               await Promise.allSettled(pending);
-              for (let index = owned.length - 1; index >= 0; index -= 1) {
-                await disposeNestOwnedHandler(owned[index]);
+              try {
+                await framework.disposeIntegrationHandlers(owned);
+              } finally {
+                owned.length = 0;
+                instances.clear();
+                dependencies.clear();
               }
-              owned.length = 0;
-              instances.clear();
-              dependencies.clear();
             }
           };
         }
@@ -469,29 +470,11 @@ function createProviderResolver(
           }
         });
       } finally {
-        for (let index = owned.length - 1; index >= 0; index -= 1) {
-          await disposeNestOwnedHandler(owned[index]);
-        }
+        await framework.disposeIntegrationHandlers(owned);
       }
     })
   );
   return resolver;
-}
-
-export async function disposeNestOwnedHandler(instance: unknown): Promise<void> {
-  if (instance === null || instance === undefined) return;
-  const value = instance as {
-    dispose?: () => unknown;
-    close?: () => unknown;
-    onModuleDestroy?: () => unknown;
-  };
-  if (typeof value.dispose === 'function') {
-    await value.dispose();
-  } else if (typeof value.close === 'function') {
-    await value.close();
-  } else if (typeof value.onModuleDestroy === 'function') {
-    await value.onModuleDestroy();
-  }
 }
 
 export async function createNestHandlerInstance<T>(

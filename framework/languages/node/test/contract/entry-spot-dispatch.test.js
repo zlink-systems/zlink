@@ -5,6 +5,15 @@ const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const spots = require('../../packages/framework/dist/runtime/spots');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 async function waitFor(condition, label, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
@@ -194,6 +203,7 @@ test('Entry Spot routed actor packet replies with its current actor packet targe
     async dispose() {}
   };
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     actorRequestHandlers: [{
       entrySpotType: EntrySpot,
@@ -335,6 +345,7 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
   }
 
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot: {
       routingId: 'play-node-b-entry',
@@ -467,6 +478,7 @@ test('Entry Spot routed bound session command decodes registered channel seriali
     async dispose() {}
   };
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot,
     nativeNode: { routingId: 'session-node' },
