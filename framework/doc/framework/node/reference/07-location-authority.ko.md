@@ -64,7 +64,7 @@ zlinkFramework().configureLocations()
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `.ownerLeaseRenewIntervalMs(value)` / `.ownerLeaseTtlMs(value)` / `.ownerLeaseFencingMarginMs(value)` / `.ownerLeaseRenewTimeoutMs(value)` | 5000 / 15000 / 5000 / 3000 | Owner lease 갱신 주기와 유효기간(ms). `renewInterval + renewTimeout < ttl - fencingMargin`을 만족해야 한다 |
+| `.ownerLeaseRenewIntervalMs(value)` / `.ownerLeaseTtlMs(value)` / `.ownerLeaseFencingMarginMs(value)` / `.ownerLeaseRenewTimeoutMs(value)` | 5000 / 15000 / 5000 / 3000 | Owner lease 갱신 주기와 유효기간(ms). `max(renewInterval, renewTimeout) + renewTimeout < ttl - fencingMargin`을 만족해야 한다 |
 | `.pollingIntervalMs(value)` | 1000 | Store 상태 확인 주기 |
 | `.storeFailureGraceMs(value)` | 30000 | Store 장애를 감내하는 유예 시간 |
 | `.routeCacheMaxAgeMs(value)` / `.messageFollowDurationMs(value)` | 15000 / 30000 | `0`이면 기능을 끈다. 둘 다 양수면 cache age가 message follow duration보다 최소 5초 작아야 한다 |
