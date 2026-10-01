@@ -499,7 +499,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
                                            std::stop_token cancellation = {})
     {
-        ensure_blocking_submit_allowed ();
         std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
         std::unique_lock lock (_mutex);
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
@@ -771,8 +770,10 @@ template <typename T> class task_t
 
     const result_t<T> &result () const { return _state->result (); }
 
+    // Submit/completion §1: rejected in a runtime execution context.
     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout) const
     {
+        detail::ensure_blocking_submit_allowed ();
         return _state->result_for (timeout);
     }
 
@@ -834,8 +835,10 @@ template <> class task_t<void>
 
     const result_t<void> &result () const { return _state->result (); }
 
+    // Submit/completion §1: rejected in a runtime execution context.
     std::optional<result_t<void>> result_for (std::chrono::milliseconds timeout) const
     {
+        detail::ensure_blocking_submit_allowed ();
         return _state->result_for (timeout);
     }
 

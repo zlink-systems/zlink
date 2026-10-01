@@ -280,7 +280,8 @@ class location_runtime_t
         auto attempt =
           std::make_shared<heartbeat_attempt_t> (this, deadline_at, heartbeat, cancellation);
         auto pending = heartbeat_renew_once_async (attempt);
-        auto completed = pending.result_for (remaining_until (deadline_at), cancellation);
+        auto completed =
+          detail::observe_task_result_for (pending, remaining_until (deadline_at), cancellation);
         if (!completed) {
             std::function<void ()> expire;
             {
