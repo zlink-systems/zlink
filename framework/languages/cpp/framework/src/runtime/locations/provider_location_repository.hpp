@@ -2303,12 +2303,12 @@ class provider_location_repository_t final : public location_repository_t
 
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation)
     {
-        constexpr auto *digits = zlink::framework::detail::lowercase_hex_digits;
         const auto fixed_hex = [] (std::uint64_t value) {
             std::string result;
             result.reserve (16);
             for (int shift = 60; shift >= 0; shift -= 4)
-                result.push_back (digits[(value >> shift) & 0x0f]);
+                result.push_back (
+                  zlink::framework::detail::lowercase_hex_digits[(value >> shift) & 0x0f]);
             return result;
         };
         const auto source_rid = hex (to_bytes (operation.source_node_rid.value ()));
