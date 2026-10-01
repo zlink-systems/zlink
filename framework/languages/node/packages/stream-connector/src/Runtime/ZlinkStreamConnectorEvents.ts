@@ -131,7 +131,7 @@ export class ZlinkStreamConnectorEvents {
       () => {
         let count = 0;
         const registrations = currentRegistrations(this.errorHandlers, remaining);
-        while (!registrations.next().done) count += 1;
+        while (registrations.next().done !== true) count += 1;
         return count;
       }
     );
