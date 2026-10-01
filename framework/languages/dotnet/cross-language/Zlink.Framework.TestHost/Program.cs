@@ -75,16 +75,24 @@ internal sealed class ChannelClientStartupRequestHostedService(
     IZLinkRouteClient client,
     TestHostEventSink sink,
     string channelName,
-    string value
+    string value,
+    string? metadataValue
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var reply = await client
-            .RequestToChannel(channelName, new TestHostProfileRequest(value))
+        var request = client.RequestToChannel(channelName, new TestHostProfileRequest(value));
+        if (metadataValue is not null)
+            request.Metadata("tenant-id", metadataValue);
+        var reply = await request
             .Timeout(TimeSpan.FromSeconds(5))
             .Async<TestHostProfileReply>(cancellationToken);
         sink.Append($"channel-client|{reply.Value}");
+        if (metadataValue is not null)
+            await client
+                .SendToChannel(channelName, new TestHostProfileSend(value + "-send"))
+                .Metadata("tenant-id", metadataValue)
+                .Async(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -1017,9 +1025,13 @@ internal sealed class TestHostProfileRequestHandler
         CancellationToken cancellationToken
     )
     {
-        _ = context;
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new TestHostProfileReply(request.Value));
+        var metadata = context.Metadata.Find("tenant-id");
+        return ValueTask.FromResult(
+            new TestHostProfileReply(
+                metadata is null ? request.Value : request.Value + ":metadata=" + metadata
+            )
+        );
     }
 }
 
@@ -1032,9 +1044,10 @@ internal sealed class TestHostProfileSendHandler(TestHostEventSink sink)
         CancellationToken cancellationToken
     )
     {
-        _ = context;
         cancellationToken.ThrowIfCancellationRequested();
         sink.Append($"channel-server-send|{message.Value}");
+        if (context.Metadata.Find("tenant-id") is { } metadata)
+            sink.Append($"channel-server-metadata|{metadata}");
         return ValueTask.CompletedTask;
     }
 }

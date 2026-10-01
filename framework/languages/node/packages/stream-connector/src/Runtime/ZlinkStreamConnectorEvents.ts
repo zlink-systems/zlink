@@ -117,7 +117,8 @@ export class ZlinkStreamConnectorEvents {
       (candidate) => !attempted.has(candidate)
     );
     if (remaining.length === 0) return;
-    const nextAttempted = new Set([...attempted, ...remaining]);
+    const nextAttempted = new Set(attempted);
+    for (const handler of remaining) nextAttempted.add(handler);
     this.enqueueCallback(
       () => {
         for (const handler of currentRegistrations(this.errorHandlers, remaining)) {
@@ -130,7 +131,7 @@ export class ZlinkStreamConnectorEvents {
       () => {
         let count = 0;
         const registrations = currentRegistrations(this.errorHandlers, remaining);
-        while (!registrations.next().done) count += 1;
+        while (registrations.next().done !== true) count += 1;
         return count;
       }
     );

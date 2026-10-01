@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.isValidServiceWireTerminalFailure = exports.ServiceWireExactTerminalByFailureCode = exports.ServiceWireBoundaryTerminalResults = exports.ServiceWireFrameworkErrorCode = exports.ServiceWireFlag = exports.ServiceWireCommand = exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = exports.SERVICE_WIRE_REQUIRED_CAPABILITY = exports.SERVICE_WIRE_MAJOR = exports.SERVICE_WIRE_MAGIC = void 0;
+exports.isValidServiceWireTerminalFailure = exports.ServiceWireExactTerminalByFailureCode = exports.ServiceWireBoundaryTerminalResults = exports.ServiceWireFrameworkErrorCode = exports.ServiceWireFlag = exports.ServiceWireCommand = exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = exports.SERVICE_WIRE_REQUIRED_CAPABILITY = exports.SERVICE_WIRE_METADATA_BYTES = exports.SERVICE_WIRE_MAJOR = exports.SERVICE_WIRE_MAGIC = void 0;
 // Generated from service-wire-v1.schema.json. Do not edit.
 exports.SERVICE_WIRE_MAGIC = [90, 77];
 exports.SERVICE_WIRE_MAJOR = 1;
+exports.SERVICE_WIRE_METADATA_BYTES = 1024;
 exports.SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v13";
 exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart";
 exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart";

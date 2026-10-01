@@ -25,7 +25,8 @@ internal sealed record TestHostOptions(
     string? ActorId,
     string? SpotId,
     int? PayloadBytes,
-    int? PlacementWeight
+    int? PlacementWeight,
+    string? MetadataValue = null
 )
 {
     public static TestHostOptions Parse(string[] args)
@@ -67,6 +68,7 @@ internal sealed record TestHostOptions(
         public string? RegistryRouterEndpoint { get; set; }
         public uint? RegistryId { get; set; }
         public string? ChannelName { get; set; }
+        public string? MetadataValue { get; set; }
         public string? ServerEndpoint { get; set; }
         public string? PublisherEndpoint { get; set; }
         public string? PeerRid { get; set; }
@@ -158,6 +160,9 @@ internal sealed record TestHostOptions(
                 case "--payload-bytes":
                     PayloadBytes = int.Parse(readValue(), CultureInfo.InvariantCulture);
                     break;
+                case "--metadata-value":
+                    MetadataValue = readValue();
+                    break;
                 case "--placement-weight":
                     PlacementWeight = int.Parse(readValue(), CultureInfo.InvariantCulture);
                     break;
@@ -191,7 +196,8 @@ internal sealed record TestHostOptions(
                 ActorId,
                 SpotId,
                 PayloadBytes,
-                PlacementWeight
+                PlacementWeight,
+                MetadataValue
             );
         }
     }

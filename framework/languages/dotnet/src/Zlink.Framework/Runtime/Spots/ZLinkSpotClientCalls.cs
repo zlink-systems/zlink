@@ -151,7 +151,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         }
 
         var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message);
-        call.Metadata(new ZLinkMessageMetadata(_metadata.Snapshot()));
+        call.Metadata(_metadata.Snapshot());
         await call.Async(cancellationToken).ConfigureAwait(false);
     }
 }
@@ -383,7 +383,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         );
         var call = new ZLinkRouteSpotRequestCall<TRequest>(runtime, handle, request);
         call.Timeout(timeout);
-        call.Metadata(new ZLinkMessageMetadata(_metadata.Snapshot()));
+        call.Metadata(_metadata.Snapshot());
         return await call.ExecuteAfterTerminatorAsync<TReply>(terminator, cancellationToken)
             .ConfigureAwait(false);
     }
@@ -435,13 +435,17 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message)
         );
+        var metadata = _metadata.EncodeChannel(
+            activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
+        );
+        header = header with { Metadata = metadata.Header };
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, message, activation.Codecs);
         var result = await activation
             .OutboundEndpoint.SendToChannelAsync(
                 channelName,
                 parts,
                 cancellationToken,
-                _metadata.Encode()
+                metadata.Frame
             )
             .ConfigureAwait(false);
         ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Channel send");
@@ -513,6 +517,10 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
                 packetName,
                 timeout
             );
+            var metadata = _metadata.EncodeChannel(
+                activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
+            );
+            header = header with { Metadata = metadata.Header };
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 header,
@@ -524,7 +532,7 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
                 parts,
                 timeout,
                 cancellationToken,
-                _metadata.Encode()
+                metadata.Frame
             );
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,

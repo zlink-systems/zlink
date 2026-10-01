@@ -287,7 +287,6 @@ final class ZLinkChannelSocketRegistry {
             String channelName,
             Duration timeoutOverride,
             Duration defaultTimeout,
-            boolean metadataSpecified,
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit) {
         long started = nanoTime.getAsLong();
@@ -310,10 +309,6 @@ final class ZLinkChannelSocketRegistry {
                                         && registration.kind() == ChannelKind.CLIENT_SERVER
                                         && registration.clientEnabled();
                         if (client) {
-                            if (metadataSpecified) {
-                                throw new UnsupportedOperationException(
-                                        "ClientServer metadata is not available");
-                            }
                             ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
                             if (target != null) {
                                 return clientSubmit.apply(target, timeout[0]);

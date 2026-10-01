@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 
 #include <nlohmann/json.hpp>
+#include <service_wire_constants.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -216,6 +217,35 @@ class header_writer_t
     std::size_t _size = 0;
 };
 
+void write_metadata (header_writer_t &writer, const std::map<std::string, std::string> &metadata)
+{
+    const auto start = writer.size ();
+    writer.append ("{");
+    bool first = true;
+    for (const auto &[key, value] : metadata) {
+        if (key.empty () || key.find ('\0') != std::string::npos
+            || value.find ('\0') != std::string::npos)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "ZLink envelope metadata key/value is invalid");
+        if (!first)
+            writer.append (",");
+        first = false;
+        try {
+            writer.string (key);
+            writer.append (":");
+            writer.string (value);
+        }
+        catch (const nlohmann::json::exception &error) {
+            throw framework_exception_t (framework_error_kind_t::protocol_error, error.what ());
+        }
+    }
+    writer.append ("}");
+    if (writer.size () - start > protocol::metadataBytes)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "ZLink envelope metadata exceeds "
+                                       + std::to_string (protocol::metadataBytes) + " bytes");
+}
+
 struct header_plan_t
 {
     std::optional<message_kind_t> kind;
@@ -261,7 +291,7 @@ struct header_plan_t
         middle_writer.number (static_cast<int> (header.kind));
         middle_writer.append (",\"messageName\":");
         middle_writer.string (message_name);
-        middle_writer.append (",\"metadata\":{");
+        middle_writer.append (",\"metadata\":");
         kind = header.kind;
     }
 };
@@ -300,16 +330,8 @@ void write_header (header_writer_t &writer,
     else
         writer.append ("null");
     writer.append (plan.middle);
-    bool first = true;
-    for (const auto &[name, value] : header.metadata) {
-        if (!first)
-            writer.append (",");
-        first = false;
-        writer.string (name);
-        writer.append (":");
-        writer.string (value);
-    }
-    writer.append ("},\"source\":");
+    write_metadata (writer, header.metadata);
+    writer.append (",\"source\":");
     writer.optional_string (header.source);
     writer.append (",\"topic\":");
     writer.optional_string (header.topic);
@@ -452,7 +474,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         } else if (_depth == 1 && _member == header_member_t::metadata) {
             _metadata_object_depth = _depth + 1;
             clear_metadata ();
-            _metadata_is_object = true;
+            _invalid_metadata_shape = false;
             _member = header_member_t::none;
         } else {
             container_value ();
@@ -503,12 +525,8 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         return false;
     }
 
-    result_t<envelope_header_t> finish ()
+    result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
     {
-        if (!_parse_error.empty ())
-            return failure (_parse_error);
-        if (!_root_object || !_root_closed || _depth != 0)
-            return failure ("ZLink envelope header must be a JSON object");
         if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
             || _message_name.type != header_value_t::string)
             return failure ("ZLink envelope header has invalid required fields");
@@ -522,8 +540,6 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             return failure ("ZLink envelope header has an invalid field type");
         if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
             return failure ("ZLink envelope header flow fields are invalid");
-        if (!_invalid_metadata_keys.empty ())
-            return failure ("ZLink envelope header metadata value is invalid");
 
         envelope_header_t header;
         header.kind = static_cast<message_kind_t> (_kind.number);
@@ -538,8 +554,6 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         header.error_code = take_optional (_error_code);
         header.error_message = take_optional (_error_message);
         header.source = take_optional (_source);
-        if (_metadata_is_object)
-            header.metadata = std::move (_metadata);
         if (_capture_flow) {
             header.flow_id = take_optional (_flow_id);
             if (_flow_origin.type == header_value_t::number)
@@ -554,6 +568,29 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             return result_t<envelope_header_t>::failure (valid.error_kind (),
                                                          valid.error ()->what ());
         }
+        const auto reject = [&] (const std::string &message) {
+            if (rejection_context)
+                *rejection_context = std::move (header);
+            return failure (message);
+        };
+        if (!_parse_error.empty ())
+            return reject (_parse_error);
+        if (!_root_object || !_root_closed || _depth != 0)
+            return reject ("ZLink envelope header must be a JSON object");
+        if (_invalid_metadata_shape)
+            return reject ("ZLink envelope header metadata must be an object");
+        if (!_invalid_metadata_keys.empty ())
+            return reject ("ZLink envelope header metadata value is invalid");
+        header_writer_t metadata_measure;
+        try {
+            write_metadata (metadata_measure, _metadata);
+        }
+        catch (...) {
+            if (rejection_context)
+                *rejection_context = std::move (header);
+            throw;
+        }
+        header.metadata = std::move (_metadata);
         return result_t<envelope_header_t>::success (std::move (header));
     }
 
@@ -646,7 +683,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             set (*value);
             _member = header_member_t::none;
         } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _metadata_is_object = false;
+            _invalid_metadata_shape = true;
             clear_metadata ();
             _member = header_member_t::none;
         }
@@ -661,7 +698,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             value->set_other ();
             _member = header_member_t::none;
         } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _metadata_is_object = false;
+            _invalid_metadata_shape = true;
             clear_metadata ();
             _member = header_member_t::none;
         }
@@ -724,7 +761,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     std::size_t _metadata_object_depth = 0;
     bool _root_object = false;
     bool _root_closed = false;
-    bool _metadata_is_object = false;
+    bool _invalid_metadata_shape = false;
     header_member_t _member = header_member_t::none;
     std::string _metadata_key;
     std::string _parse_error;
@@ -747,14 +784,18 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
 } // namespace
 
-result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::message_t &message,
-                                                             bool capture_flow) const
+result_t<envelope_header_t>
+envelope_codec_t::decode_header (const zlink::message_t &message,
+                                 bool capture_flow,
+                                 std::optional<envelope_header_t> *rejection_context) const
 {
+    if (rejection_context)
+        rejection_context->reset ();
     try {
         const auto bytes = message.bytes ();
         header_sax_t sax (capture_flow);
         (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
-        return sax.finish ();
+        return sax.finish (rejection_context);
     }
     catch (const std::exception &ex) {
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
