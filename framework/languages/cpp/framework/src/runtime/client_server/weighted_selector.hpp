@@ -16,6 +16,37 @@
 namespace zlink::framework::runtime::client_server
 {
 
+inline constexpr std::size_t max_precomputed_steps = 4096;
+inline constexpr auto max_precompute_time = std::chrono::milliseconds (5);
+
+template <typename Select, typename Apply>
+bool precompute_weighted_schedule (const std::vector<std::int64_t> &initial,
+                                   std::vector<std::size_t> &schedule,
+                                   std::size_t &cycle_start,
+                                   Select select,
+                                   Apply apply)
+{
+    auto simulated = initial;
+    std::map<std::vector<std::int64_t>, std::size_t> seen;
+    schedule.reserve (max_precomputed_steps);
+    const auto started = std::chrono::steady_clock::now ();
+    for (std::size_t step = 0; step < max_precomputed_steps; ++step) {
+        if (std::chrono::steady_clock::now () - started >= max_precompute_time)
+            return false;
+        const auto [found, inserted] = seen.emplace (simulated, step);
+        if (!inserted) {
+            cycle_start = found->second;
+            return true;
+        }
+        const auto selected = select (simulated);
+        if (!selected)
+            return false;
+        schedule.push_back (*selected);
+        apply (simulated, *selected);
+    }
+    return false;
+}
+
 struct weighted_candidate_t
 {
     std::string key;
@@ -140,8 +171,6 @@ class smooth_weighted_selector_t
   private:
     using credit_vector_t = std::vector<std::int64_t>;
 
-    static constexpr std::size_t max_precomputed_steps = 4096;
-    static constexpr auto max_precompute_time = std::chrono::milliseconds (5);
 
     std::optional<std::size_t> select_index (const credit_vector_t &credits) const noexcept
     {
@@ -210,39 +239,29 @@ class smooth_weighted_selector_t
         if (_candidates.empty () || _total == 0)
             return;
 
-        credit_vector_t simulated;
-        simulated.reserve (_candidates.size ());
+        credit_vector_t initial;
+        initial.reserve (_candidates.size ());
         for (const auto &candidate : _candidates)
-            simulated.push_back (_credits[candidate.key]);
-        const auto initial = simulated;
-        std::map<credit_vector_t, std::size_t> seen;
+            initial.push_back (_credits[candidate.key]);
         std::vector<std::size_t> schedule;
-        schedule.reserve (max_precomputed_steps);
-        const auto started = std::chrono::steady_clock::now ();
-        for (std::size_t step = 0; step < max_precomputed_steps; ++step) {
-            if (std::chrono::steady_clock::now () - started >= max_precompute_time)
-                return;
-            const auto [found, inserted] = seen.emplace (simulated, step);
-            if (!inserted) {
-                const auto cycle_start = found->second;
-                credit_vector_t cycle_state = initial;
-                for (std::size_t index = 0; index < cycle_start; ++index)
-                    apply_selection (cycle_state, schedule[index]);
-                _precomputed = true;
-                _precomputed_initial_credits = initial;
-                _precomputed_cycle_start_credits = std::move (cycle_state);
-                _precomputed_selected_counts.assign (_candidates.size (), 0);
-                _precomputed_cycle_start = cycle_start;
-                _precomputed_schedule_end = schedule.size ();
-                _precomputed_schedule = std::move (schedule);
-                return;
-            }
-            const auto selected = select_index (simulated);
-            if (!selected)
-                return;
-            schedule.push_back (*selected);
-            apply_selection (simulated, *selected);
-        }
+        std::size_t cycle_start = 0;
+        if (!precompute_weighted_schedule (
+              initial, schedule, cycle_start,
+              [this] (const credit_vector_t &credits) { return select_index (credits); },
+              [this] (credit_vector_t &credits, std::size_t selected) {
+                  apply_selection (credits, selected);
+              }))
+            return;
+        credit_vector_t cycle_state = initial;
+        for (std::size_t index = 0; index < cycle_start; ++index)
+            apply_selection (cycle_state, schedule[index]);
+        _precomputed = true;
+        _precomputed_initial_credits = initial;
+        _precomputed_cycle_start_credits = std::move (cycle_state);
+        _precomputed_selected_counts.assign (_candidates.size (), 0);
+        _precomputed_cycle_start = cycle_start;
+        _precomputed_schedule_end = schedule.size ();
+        _precomputed_schedule = std::move (schedule);
     }
 
     std::vector<weighted_candidate_t> _candidates;

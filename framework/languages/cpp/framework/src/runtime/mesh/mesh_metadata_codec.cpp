@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include <service_wire_constants.hpp>
+#include <zlink/framework/detail/utf8.hpp>
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
@@ -13,62 +15,7 @@ namespace zlink::framework::detail
 namespace
 {
 
-constexpr std::size_t max_encoded_size = 1024;
 constexpr std::uint8_t version = 1;
-
-bool has_nul (std::string_view value)
-{
-    return value.find ('\0') != std::string_view::npos;
-}
-
-bool valid_utf8 (std::string_view value)
-{
-    const auto *bytes = reinterpret_cast<const unsigned char *> (value.data ());
-    std::size_t index = 0;
-    while (index < value.size ()) {
-        const auto first = bytes[index];
-        if (first <= 0x7f) {
-            ++index;
-            continue;
-        }
-        if (first >= 0xc2 && first <= 0xdf) {
-            if (index + 1 >= value.size () || bytes[index + 1] < 0x80 || bytes[index + 1] > 0xbf)
-                return false;
-            index += 2;
-            continue;
-        }
-        if (first >= 0xe0 && first <= 0xef) {
-            if (index + 2 >= value.size ())
-                return false;
-            const auto second = bytes[index + 1];
-            const auto third = bytes[index + 2];
-            const bool valid_second = first == 0xe0
-                                        ? second >= 0xa0 && second <= 0xbf
-                                        : (first == 0xed ? second >= 0x80 && second <= 0x9f
-                                                         : second >= 0x80 && second <= 0xbf);
-            if (!valid_second || third < 0x80 || third > 0xbf)
-                return false;
-            index += 3;
-            continue;
-        }
-        if (first >= 0xf0 && first <= 0xf4) {
-            if (index + 3 >= value.size ())
-                return false;
-            const auto second = bytes[index + 1];
-            const bool valid_second = first == 0xf0
-                                        ? second >= 0x90 && second <= 0xbf
-                                        : (first == 0xf4 ? second >= 0x80 && second <= 0x8f
-                                                         : second >= 0x80 && second <= 0xbf);
-            if (!valid_second || bytes[index + 2] < 0x80 || bytes[index + 2] > 0xbf
-                || bytes[index + 3] < 0x80 || bytes[index + 3] > 0xbf)
-                return false;
-            index += 4;
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
 
 [[noreturn]] void invalid_metadata (std::string message)
 {
@@ -87,17 +34,17 @@ mesh_metadata_codec_t::encode (const std::map<std::string, std::string> &metadat
 
     std::size_t size = 2;
     for (const auto &[key, value] : metadata) {
-        if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max () || has_nul (key)
-            || !valid_utf8 (key)) {
+        if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max ()
+            || !zlink::framework::detail::is_valid_non_nul_utf8 (key)) {
             invalid_metadata ("application metadata keys must contain 1..255 non-NUL UTF-8 bytes");
         }
-        if (value.size () > std::numeric_limits<std::uint16_t>::max () || has_nul (value)
-            || !valid_utf8 (value)) {
+        if (value.size () > std::numeric_limits<std::uint16_t>::max ()
+            || !zlink::framework::detail::is_valid_non_nul_utf8 (value)) {
             invalid_metadata (
               "application metadata values must contain at most 65535 non-NUL UTF-8 bytes");
         }
         size += 1 + key.size () + 2 + value.size ();
-        if (size > max_encoded_size)
+        if (size > runtime::protocol::metadataBytes)
             invalid_metadata ("encoded application metadata exceeds 1024 bytes");
     }
 
@@ -121,7 +68,8 @@ bool mesh_metadata_codec_t::decode (const std::vector<std::uint8_t> &encoded,
     metadata.clear ();
     if (encoded.empty ())
         return true;
-    if (encoded.size () < 2 || encoded.size () > max_encoded_size || encoded[0] != version)
+    if (encoded.size () < 2 || encoded.size () > runtime::protocol::metadataBytes
+        || encoded[0] != version)
         return false;
 
     const std::size_t count = encoded[1];
@@ -135,7 +83,7 @@ bool mesh_metadata_codec_t::decode (const std::vector<std::uint8_t> &encoded,
         std::string key (encoded.begin () + static_cast<std::ptrdiff_t> (offset),
                          encoded.begin () + static_cast<std::ptrdiff_t> (offset + key_size));
         offset += key_size;
-        if (has_nul (key) || !valid_utf8 (key) || offset + 2 > encoded.size ())
+        if (!zlink::framework::detail::is_valid_non_nul_utf8 (key) || offset + 2 > encoded.size ())
             return false;
         const std::size_t value_size =
           (static_cast<std::size_t> (encoded[offset]) << 8u) | encoded[offset + 1];
@@ -145,7 +93,7 @@ bool mesh_metadata_codec_t::decode (const std::vector<std::uint8_t> &encoded,
         std::string value (encoded.begin () + static_cast<std::ptrdiff_t> (offset),
                            encoded.begin () + static_cast<std::ptrdiff_t> (offset + value_size));
         offset += value_size;
-        if (has_nul (value) || !valid_utf8 (value)
+        if (!zlink::framework::detail::is_valid_non_nul_utf8 (value)
             || !metadata.emplace (std::move (key), std::move (value)).second)
             return false;
     }

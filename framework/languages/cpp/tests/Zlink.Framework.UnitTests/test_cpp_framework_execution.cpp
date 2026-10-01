@@ -4368,13 +4368,28 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       canonical_actor_join_handoff_id (source_rid.to_bytes (), "actor-2", 7, 3, 4220);
     node->actor_transfer_coordinator.fail_commit (second_transfer_id, false);
     store->snapshot = actor_snapshot;
+    service_collection_t unavailable_services;
+    auto unavailable_provider = unavailable_services.build_provider ();
+    owner.bind_service_provider (unavailable_provider);
+    const auto unavailable =
+      admit_wire_actor_join (node, local_rid, make_request (4221), std::nullopt, &serializers);
+    const bool unavailable_kind_preserved =
+      unavailable.terminal_result == 105
+      && unavailable.failure_code
+           == static_cast<std::uint32_t> (
+             runtime::protocol::framework_error_code::routeNotConnected)
+      && runtime::protocol::valid_terminal_failure (
+        unavailable.terminal_result,
+        static_cast<runtime::protocol::framework_error_code> (unavailable.failure_code))
+      && runtime::host::classify_relocation_failure_code (unavailable.failure_code)
+           == framework_error_kind_t::unavailable;
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return reply_round_trip && first_approved && approval_only && duplicate_parked
            && reply_requires_serializers && later_attempt_wins && unknown_not_found
            && stale_protocol_error && stale_target_store_fence_protocol_error && malformed_typed
-           && second_completed;
+           && second_completed && unavailable_kind_preserved;
 }
 
 bool verify_wire_join_requires_active_local_target ()

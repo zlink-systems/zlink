@@ -133,7 +133,7 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 - **The header's first byte is `format_marker = 0xF2`.** A different
   value is a decode error.
 - `kind`/`codec` are encoded as a **1-byte enum**, not a string.
-- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**. The packet name of a `Send`, a `Request` and a push can't be empty or consist only of whitespace, and every surface that takes a name rejects such a name.
+- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**. The packet name of a `Send`, a `Request` and a push can't be empty or consist only of whitespace (characters with the Unicode `White_Space` property), and every surface that takes a name rejects such a name.
   **`Response` and `Error` don't carry a
   [packet name](../server/00-foundation/02-glossary.en.md#packet-name)** — encoded with
   `name_len = 0`. Since a response doesn't select a handler and
@@ -802,7 +802,7 @@ reason, or the reconnect condition.
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
-If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event.
+If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event. An explicit close call that finished its cleanup doesn't fail because of the close failure.
 
 ### 9.1 The Closed Error Code Set
 
@@ -838,7 +838,7 @@ language that delivers by exception defines **a dedicated exception type that
 carries the code.**
 
 The same requirement applies to option validation failures and to violations of the
-observation surfaces (§10.1).
+observation surfaces (§10.1). Test assertion helpers also read only this code: they don't infer a code from an exception's type or message, and they pass on a failure that carries no code unchanged.
 
 ## 10. Receive Message Queue
 

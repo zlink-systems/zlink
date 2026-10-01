@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 
@@ -404,8 +405,6 @@ void service_topology_registry_t::materialize_selection_state (selection_state_t
 
 void service_topology_registry_t::rebuild_selection_schedule (selection_state_t &state)
 {
-    constexpr std::size_t max_precomputed_steps = 4096;
-    constexpr auto max_precompute_time = std::chrono::milliseconds (5);
     state.precomputed = false;
     state.precomputed_initial_cumulative.clear ();
     state.precomputed_schedule.clear ();
@@ -416,16 +415,10 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
              > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
         return;
 
-    std::vector<std::int64_t> simulated;
-    simulated.reserve (state.ordered_node_ids.size ());
+    std::vector<std::int64_t> initial;
+    initial.reserve (state.ordered_node_ids.size ());
     for (const auto &node_id : state.ordered_node_ids)
-        simulated.push_back (state.cumulative[node_id]);
-    const auto initial = simulated;
-    std::map<std::vector<std::int64_t>, std::size_t> seen;
-    std::vector<std::size_t> schedule;
-    schedule.reserve (max_precomputed_steps);
-    const auto started = std::chrono::steady_clock::now ();
-
+        initial.push_back (state.cumulative[node_id]);
     const auto select_index = [&] (const std::vector<std::int64_t> &credits) {
         std::optional<std::size_t> selected;
         for (std::size_t index = 0; index < credits.size (); ++index) {
@@ -451,24 +444,15 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
         credits[selected] -= static_cast<std::int64_t> (state.total_weight);
     };
 
-    for (std::size_t step = 0; step < max_precomputed_steps; ++step) {
-        if (std::chrono::steady_clock::now () - started >= max_precompute_time)
-            return;
-        const auto [found, inserted] = seen.emplace (simulated, step);
-        if (!inserted) {
-            const auto cycle_start = found->second;
-            state.precomputed = true;
-            state.precomputed_initial_cumulative = initial;
-            state.precomputed_cycle_start = cycle_start;
-            state.precomputed_schedule = std::move (schedule);
-            return;
-        }
-        const auto selected = select_index (simulated);
-        if (!selected)
-            return;
-        schedule.push_back (*selected);
-        apply_selection (simulated, *selected);
-    }
+    std::vector<std::size_t> schedule;
+    std::size_t cycle_start = 0;
+    if (!client_server::precompute_weighted_schedule (initial, schedule, cycle_start, select_index,
+                                                      apply_selection))
+        return;
+    state.precomputed = true;
+    state.precomputed_initial_cumulative = initial;
+    state.precomputed_cycle_start = cycle_start;
+    state.precomputed_schedule = std::move (schedule);
 }
 
 void service_topology_registry_t::rebuild_channel_selections ()

@@ -208,19 +208,19 @@ void channel_runtime_manager_t::initialize_route_channels (const zlink_builder_t
 std::string channel_runtime_manager_t::monitoring_source (const std::string &source_name)
 {
     const auto [channel_name, capability] = parse_source (source_name);
-    if (capability == "server"
+    if (capability == capability_t::server
         && _state->server_bundles.find (channel_name) != _state->server_bundles.end ()) {
         return source_name;
     }
-    if (capability == "subscriber"
+    if (capability == capability_t::subscriber
         && _state->subscriber_bundles.find (channel_name) != _state->subscriber_bundles.end ()) {
         return source_name;
     }
-    if (capability == "publisher") {
+    if (capability == capability_t::publisher) {
         (void) get_or_create_publisher_bundle (channel_name);
         return source_name;
     }
-    if (capability == "client") {
+    if (capability == capability_t::client) {
         (void) get_or_create_client_bundle (channel_name);
         return source_name;
     }
@@ -241,7 +241,7 @@ channel_runtime_manager_t::require_channel (const std::string &channel_name,
     return found->second;
 }
 
-std::pair<std::string, std::string>
+std::pair<std::string, channel_runtime_manager_t::capability_t>
 channel_runtime_manager_t::parse_source (const std::string &source_name)
 {
     const auto separator = source_name.rfind ('.');
@@ -249,7 +249,18 @@ channel_runtime_manager_t::parse_source (const std::string &source_name)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "socket monitoring source must use '<channel>.<capability>'");
     }
-    return {source_name.substr (0, separator), source_name.substr (separator + 1)};
+    const auto channel_name = source_name.substr (0, separator);
+    const auto capability = source_name.substr (separator + 1);
+    for (const auto &[name, kind] : {std::pair{"server", capability_t::server},
+                                     {"subscriber", capability_t::subscriber},
+                                     {"publisher", capability_t::publisher},
+                                     {"client", capability_t::client}}) {
+        if (capability == name)
+            return {channel_name, kind};
+    }
+    throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                 "socket monitoring source '" + source_name
+                                   + "' is not registered");
 }
 
 } // namespace zlink::framework::detail

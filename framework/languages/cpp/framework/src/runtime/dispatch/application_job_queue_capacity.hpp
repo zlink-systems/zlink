@@ -83,6 +83,14 @@ inline std::uint32_t calculate_application_job_queue_limit (application_job_queu
 namespace application_job_queue_capacity_detail
 {
 
+inline constexpr char cpuset_v2_path[] = "/sys/fs/cgroup/cpuset.cpus.effective";
+inline constexpr char cpuset_v1_path[] = "/sys/fs/cgroup/cpuset/cpuset.cpus";
+inline constexpr char quota_v2_path[] = "/sys/fs/cgroup/cpu.max";
+inline constexpr char quota_v1_path[] = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us";
+inline constexpr char period_v1_path[] = "/sys/fs/cgroup/cpu/cpu.cfs_period_us";
+inline constexpr char unlimited_quota_token[] = "max";
+
+
 inline std::optional<std::uint64_t> read_unsigned_file (const char *path) noexcept
 {
     try {
@@ -126,8 +134,7 @@ inline std::optional<std::uint32_t> parse_cpuset_count (std::string value) noexc
 inline std::optional<std::uint32_t> read_cpuset_count () noexcept
 {
 #if defined(__linux__)
-    for (const char *path :
-         {"/sys/fs/cgroup/cpuset.cpus.effective", "/sys/fs/cgroup/cpuset/cpuset.cpus"}) {
+    for (const char *path : {cpuset_v2_path, cpuset_v1_path}) {
         try {
             std::ifstream input (path);
             std::string value;
@@ -147,18 +154,18 @@ inline std::optional<std::uint32_t> read_quota_processors () noexcept
 {
 #if defined(__linux__)
     try {
-        std::ifstream input ("/sys/fs/cgroup/cpu.max");
+        std::ifstream input (quota_v2_path);
         std::string quota;
         std::uint64_t period = 0;
-        if (input >> quota >> period && quota != "max" && period != 0) {
+        if (input >> quota >> period && quota != unlimited_quota_token && period != 0) {
             const auto quota_value = std::stoull (quota);
             return static_cast<std::uint32_t> (std::max<std::uint64_t> (1, quota_value / period));
         }
     }
     catch (...) {
     }
-    const auto quota = read_unsigned_file ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
-    const auto period = read_unsigned_file ("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
+    const auto quota = read_unsigned_file (quota_v1_path);
+    const auto period = read_unsigned_file (period_v1_path);
     if (quota && period && *period != 0) {
         return static_cast<std::uint32_t> (std::max<std::uint64_t> (1, *quota / *period));
     }

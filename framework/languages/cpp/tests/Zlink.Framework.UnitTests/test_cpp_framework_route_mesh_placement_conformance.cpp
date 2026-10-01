@@ -512,8 +512,8 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
             break;
         const auto mesh_name = expected.at ("meshName").get<std::string> ();
         const auto expected_state = expected.at ("state") == "degraded"
-                                      ? fw::mesh_node_state_t::degraded
-                                      : fw::mesh_node_state_t::ready;
+                                      ? fw::topology_state_t::degraded
+                                      : fw::topology_state_t::ready;
         const auto expected_available = expected.at ("isAvailable").get<bool> ();
         const auto matches = [&] (const fw::mesh_node_snapshot_t &status) {
             return status.placement.active_actor_count
@@ -538,7 +538,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
                           name.c_str (), mesh_name.c_str (), status.placement.active_actor_count,
                           status.placement.active_spot_count, status.placement.is_available ? 1 : 0,
                           reason_name (status.placement.unavailable_reason).c_str (),
-                          status.state == fw::mesh_node_state_t::degraded ? 1 : 0);
+                          status.state == fw::topology_state_t::degraded ? 1 : 0);
             ok = false;
         }
     }
@@ -582,7 +582,7 @@ bool zero_weight_at_startup (const nlohmann::json &lease)
       routes, "zero",
       [&] {
           const auto status = routes.snapshot ("zero");
-          return status.state == fw::mesh_node_state_t::ready && !status.placement.is_available;
+          return status.state == fw::topology_state_t::ready && !status.placement.is_available;
       },
       std::chrono::seconds (5));
     auto created = services.get_required<fw::spot_manager_t> ()

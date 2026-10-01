@@ -3,6 +3,7 @@
 #include "runtime/mesh/service_mailbox.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/spots/activation_admission.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -20,9 +21,10 @@ std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::
         case host::owner_kind_t::channel:
             return "channel:" + std::string (id);
         case host::owner_kind_t::spot:
-            return "spot:" + std::string (id);
+            return std::string (detail::activation_admission_t::spot_key_prefix) + std::string (id);
         case host::owner_kind_t::actor:
-            return "actor:" + std::string (id);
+            return std::string (detail::activation_admission_t::actor_key_prefix)
+                   + std::string (id);
     }
     throw std::invalid_argument ("unknown application owner kind");
 }

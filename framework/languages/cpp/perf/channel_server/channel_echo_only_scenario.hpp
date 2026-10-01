@@ -71,10 +71,10 @@ class channel_echo_only_scenario_t
                 return true;
             }
             const auto status = _role.client_server.load ()->snapshot (*config.channel_name);
-            if (!status.selectable || status.ready_server_count == 0)
+            if (!status.is_ready || status.ready_target_count == 0)
                 return false;
-            channel_target_status = {{"channelName", status.channel_name}, {"selectable", status.selectable},
-                                     {"readyServerCount", status.ready_server_count}};
+            channel_target_status = {{"channelName", status.channel_name}, {"isReady", status.is_ready},
+                                     {"readyTargetCount", status.ready_target_count}};
             return true;
         }, "a ready Channel target");
         auto &route = _role.service<fw::route_client_t> ();

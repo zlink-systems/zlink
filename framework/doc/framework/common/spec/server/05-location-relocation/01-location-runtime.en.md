@@ -812,17 +812,29 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
 | `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
+| `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 
-Applying `Preserve`, `NewOwner`, or `Delete` to a Reserved record is `Conflict` and
+Applying `Preserve`, `NewOwner`, `Reincarnate`, or `Delete` to a Reserved record is `Conflict` and
 changes nothing. An Active owner change is only done via `NewOwner` or the final change of
 a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
-one Store request. `Preserve` and `Delete` verify the current owner lease. `NewOwner`
+one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
 verifies the target lease and the capacity that relocation pre-secured. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
+
+**An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
+`Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
+authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
+the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and the
+owner lease is valid. If so, it re-reads the capacity, counter, and descriptor records the request
+needs, rebuilds all of its conditions and changes, and requests it again. Otherwise the operation's
+existing result classification applies. Factories and application callbacks aren't run again. This
+repetition happens within the operation's deadline with no separate retry cap, except that
+[§10](#10-when-a-store-response-isnt-received) decides when the repetition of a relocation target's
+`NewOwner` and a `SpotWide` whole-unit batch ends.
 
 A regular `Preserve` has no relocation reservation information. Only for a standalone
 relocation, when updating the completion-record payload location or recording target

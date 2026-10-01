@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include <service_wire_constants.hpp>
 
 namespace zlink::framework::runtime::messaging
 {
@@ -179,69 +180,69 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
                                                   std::uint32_t failure_code,
                                                   const std::string &operation_name) const
 {
-    switch (failure_code) {
-        case 3:
+    switch (static_cast<protocol::framework_error_code> (failure_code)) {
+        case protocol::framework_error_code::actorAlreadyExists:
             return framework_exception_t (framework_error_kind_t::already_exists,
                                           operation_name
                                             + " failed because the actor already exists.");
-        case 4:
-        case 7:
+        case protocol::framework_error_code::actorTypeMismatch:
+        case protocol::framework_error_code::spotTypeMismatch:
             return framework_exception_t (framework_error_kind_t::type_mismatch,
                                           operation_name
                                             + " failed because the object type did not match.");
-        case 8:
+        case protocol::framework_error_code::actorSessionNotBound:
             return framework_exception_t (framework_error_kind_t::invalid_operation,
                                           operation_name
                                             + " failed because the actor session is not bound.");
-        case 9:
+        case protocol::framework_error_code::handlerNotFound:
             return framework_exception_t (framework_error_kind_t::not_found,
                                           operation_name
                                             + " failed because the handler was not found.");
-        case 12:
+        case protocol::framework_error_code::payloadDecodeFailed:
             return framework_exception_t (framework_error_kind_t::protocol_error,
                                           operation_name
                                             + " failed because the payload could not be decoded.");
-        case 13:
+        case protocol::framework_error_code::routeNotConnected:
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name
                                             + " failed because the target route is not connected.");
-        case 14:
+        case protocol::framework_error_code::requestTargetNotFound:
             return framework_exception_t (framework_error_kind_t::not_found,
                                           operation_name
                                             + " failed because the target was not found.");
-        case 15:
+        case protocol::framework_error_code::requestRejected:
             return framework_exception_t (framework_error_kind_t::rejected,
                                           operation_name + " was rejected.");
-        case 16:
+        case protocol::framework_error_code::requestProtocolError:
             return framework_exception_t (framework_error_kind_t::protocol_error,
                                           operation_name + " failed with a protocol error.");
-        case 17:
+        case protocol::framework_error_code::requestFailed:
             return framework_exception_t (framework_error_kind_t::internal_failure,
                                           operation_name + " failed.");
-        case 18:
+        case protocol::framework_error_code::workerQueueFull:
             // Legacy peers may still send workerQueueFull for an unavailable
             // remote target.
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name
                                             + " failed because the remote worker queue is full.");
-        case 19:
+        case protocol::framework_error_code::workerTimedOut:
             return framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                           operation_name + " timed out inside the worker.");
-        case 20:
+        case protocol::framework_error_code::workerFailed:
             return framework_exception_t (framework_error_kind_t::internal_failure,
                                           operation_name + " failed inside the worker.");
-        case 21:
+        case protocol::framework_error_code::actorLocationStale:
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name
                                             + " failed because the actor location was stale.");
-        case 33:
+        case protocol::framework_error_code::spotGenerationStale:
             return framework_exception_t (framework_error_kind_t::invalid_operation,
                                           operation_name
                                             + " failed because the spot generation was stale.");
-        case 34:
+        case protocol::framework_error_code::spotMoving:
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name + " failed because the spot is moving.");
-        case 35:
+        case protocol::framework_error_code::relocationDataLost:
             return framework_exception_t (framework_error_kind_t::data_lost,
                                           operation_name
                                             + " failed because relocation data was lost.");
@@ -249,34 +250,34 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
             break;
     }
 
-    switch (terminal_result) {
-        case 101:
+    switch (static_cast<protocol::request_terminal_result> (terminal_result)) {
+        case protocol::request_terminal_result::timedOut:
             return completion_exception (request_result_t::timed_out, operation_name);
-        case 102:
+        case protocol::request_terminal_result::notFound:
             return completion_exception (request_result_t::not_found, operation_name);
-        case 103:
+        case protocol::request_terminal_result::terminated:
             return completion_exception (request_result_t::terminated, operation_name);
-        case 104:
+        case protocol::request_terminal_result::protocolError:
             return completion_exception (request_result_t::protocol_error, operation_name);
-        case 106:
+        case protocol::request_terminal_result::rejected:
             return completion_exception (request_result_t::rejected, operation_name);
-        case 107:
-        case 108:
+        case protocol::request_terminal_result::conflict:
+        case protocol::request_terminal_result::busy:
             // A terminal-only conflict/busy reply identifies an unavailable
             // remote target. Fine failures are handled above.
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name
                                             + " failed because the remote target was busy.");
-        case 113:
+        case protocol::request_terminal_result::backpressured:
             return framework_exception_t (framework_error_kind_t::unavailable,
                                           operation_name + " target is unavailable.");
-        case 109:
+        case protocol::request_terminal_result::notConnected:
             return completion_exception (request_result_t::not_connected, operation_name);
-        case 110:
+        case protocol::request_terminal_result::invalidArgument:
             return completion_exception (request_result_t::invalid_argument, operation_name);
-        case 111:
+        case protocol::request_terminal_result::invalidState:
             return completion_exception (request_result_t::invalid_state, operation_name);
-        case 112:
+        case protocol::request_terminal_result::notSupported:
             return completion_exception (request_result_t::not_supported, operation_name);
         default:
             return completion_exception (request_result_t::internal_error, operation_name);

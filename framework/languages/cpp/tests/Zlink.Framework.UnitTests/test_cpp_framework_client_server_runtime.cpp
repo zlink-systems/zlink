@@ -5,6 +5,9 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/host/hosted_service_lifecycle.hpp"
+#include "runtime/diagnostics/topology_projection.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "test_completion_poller_driver.hpp"
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
@@ -13,6 +16,7 @@
 #include <zlink/framework.hpp>
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -90,10 +94,9 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     char *arguments[] = {program, nullptr};
     std::thread app_thread ([&] { (void) app.run (1, arguments); });
     const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while (!runtime.snapshot ("slow-send").selectable
-           && std::chrono::steady_clock::now () < deadline)
+    while (!runtime.snapshot ("slow-send").is_ready && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
-    assert (runtime.snapshot ("slow-send").selectable);
+    assert (runtime.snapshot ("slow-send").is_ready);
     const auto submitted =
       channels.send ("slow-send", network_probe_message_t{}).async ().result ();
     assert (submitted);
@@ -383,14 +386,13 @@ void verify_client_server_metadata_snapshot ()
     char *arguments[] = {program, nullptr};
     std::thread app_thread ([&] { (void) app.run (1, arguments); });
     const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while (!runtime.snapshot ("metadata").selectable
+    while (!runtime.snapshot ("metadata").is_ready && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.snapshot ("metadata").is_ready);
+    while (!runtime.snapshot ("metadata-empty").is_ready
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
-    assert (runtime.snapshot ("metadata").selectable);
-    while (!runtime.snapshot ("metadata-empty").selectable
-           && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::sleep_for (1ms);
-    assert (runtime.snapshot ("metadata-empty").selectable);
+    assert (runtime.snapshot ("metadata-empty").is_ready);
     const auto &framework = provider.get_required<zlink::framework::framework_runtime_t> ();
     verify_invalid_metadata_never_dispatches (
       framework.listener_status (zlink::framework::listener_kind_t::client_server, "metadata")
@@ -423,15 +425,17 @@ struct readiness_case_t
 {
     const char *channel_name;
     zlink::framework::client_server_role_t role;
-    int ready_server_count;
+    int ready_target_count;
+    bool is_ready;
 };
 
 constexpr std::array readiness_cases{
-  readiness_case_t{"ready-server", zlink::framework::client_server_role_t::server, 1},
-  readiness_case_t{"zero-weight-server", zlink::framework::client_server_role_t::server, 0},
-  readiness_case_t{"client-without-server", zlink::framework::client_server_role_t::client, 0},
+  readiness_case_t{"ready-server", zlink::framework::client_server_role_t::server, 1, true},
+  readiness_case_t{"zero-weight-server", zlink::framework::client_server_role_t::server, 1, false},
+  readiness_case_t{"client-without-server", zlink::framework::client_server_role_t::client, 0,
+                   false},
   readiness_case_t{"client-and-server", zlink::framework::client_server_role_t::client_and_server,
-                   1}};
+                   1, true}};
 
 class preparing_readiness_probe_t final : public zlink::framework::hosted_service_t
 {
@@ -443,7 +447,7 @@ class preparing_readiness_probe_t final : public zlink::framework::hosted_servic
         assert (host.status ().state == zlink::framework::framework_runtime_state_t::preparing);
         for (const auto &test : readiness_cases) {
             const auto snapshot = runtime.snapshot (test.channel_name);
-            assert (snapshot.ready_server_count == test.ready_server_count);
+            assert (snapshot.ready_target_count == test.ready_target_count);
             assert (!runtime.is_ready (test.channel_name));
         }
         co_return;
@@ -479,7 +483,7 @@ void verify_client_server_readiness_counts_local_ready_servers ()
     const auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
     for (const auto &test : readiness_cases) {
         assert (!runtime.is_ready (test.channel_name));
-        assert (runtime.snapshot (test.channel_name).ready_server_count == 0);
+        assert (runtime.snapshot (test.channel_name).ready_target_count == 0);
     }
 
     char program[] = "client-server-readiness";
@@ -492,17 +496,16 @@ void verify_client_server_readiness_counts_local_ready_servers ()
         std::this_thread::sleep_for (1ms);
     assert (app.runtime_state () == zlink::framework::framework_runtime_state_t::serving);
 
-    while (!runtime.snapshot ("client-and-server").selectable
+    while (!runtime.snapshot ("client-and-server").is_ready
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
 
     for (const auto &test : readiness_cases) {
         const auto snapshot = runtime.snapshot (test.channel_name);
         assert (snapshot.local_role == test.role);
-        assert (snapshot.ready_server_count == test.ready_server_count);
-        assert (runtime.is_ready (test.channel_name) == (test.ready_server_count > 0));
-        assert (snapshot.selectable
-                == (test.role == zlink::framework::client_server_role_t::client_and_server));
+        assert (snapshot.ready_target_count == test.ready_target_count);
+        assert (runtime.is_ready (test.channel_name) == test.is_ready);
+        assert (snapshot.is_ready == test.is_ready);
     }
 
     auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
@@ -520,7 +523,7 @@ void verify_client_server_readiness_counts_local_ready_servers ()
     assert (exit_code.load (std::memory_order_acquire) == 0);
     for (const auto &test : readiness_cases) {
         assert (!runtime.is_ready (test.channel_name));
-        assert (runtime.snapshot (test.channel_name).ready_server_count == 0);
+        assert (runtime.snapshot (test.channel_name).ready_target_count == 0);
     }
 }
 
@@ -598,21 +601,21 @@ void verify_client_server_runtime_projection_and_observation ()
 
     const auto before = runtime.snapshot ("client-server-runtime-unit");
     assert (before.local_role == zlink::framework::client_server_role_t::client);
-    assert (!before.selectable);
-    assert (before.ready_server_count == 0);
+    assert (!before.is_ready);
+    assert (before.ready_target_count == 0);
 
     std::atomic_int event_count{0};
     std::mutex event_mutex;
     std::condition_variable event_changed;
-    auto observation = runtime.observe (
-      "client-server-runtime-unit", 8,
-      [&event_count, &event_changed] (
-        const zlink::framework::observed_status_t<zlink::framework::client_server_runtime_event_t>
-          &observed) {
-          assert (observed.status.channel_name == "client-server-runtime-unit");
-          event_count.fetch_add (1, std::memory_order_relaxed);
-          event_changed.notify_all ();
-      });
+    auto observation =
+      runtime.observe ("client-server-runtime-unit", 8,
+                       [&event_count, &event_changed] (
+                         const zlink::framework::observed_status_t<
+                           zlink::framework::client_server_channel_snapshot_t> &observed) {
+                           assert (observed.status.channel_name == "client-server-runtime-unit");
+                           event_count.fetch_add (1, std::memory_order_relaxed);
+                           event_changed.notify_all ();
+                       });
     {
         std::unique_lock lock (event_mutex);
         const auto observation_deadline = std::chrono::steady_clock::now () + 5s;
@@ -637,12 +640,11 @@ void verify_client_server_runtime_projection_and_observation ()
     }
 
     const auto after = runtime.snapshot ("client-server-runtime-unit");
-    assert (after.selectable);
-    assert (after.ready_server_count == 1);
-    assert (after.connection_intent_count == 1);
-    assert (after.servers.size () == 1);
-    assert (after.servers.front ().ready);
-    assert (after.servers.front ().descriptor_source == "manual");
+    assert (after.is_ready);
+    assert (after.ready_target_count == 1);
+    assert (after.targets.size () == 1);
+    assert (after.targets.front ().state == zlink::framework::peer_state_t::ready);
+    assert (!after.targets.front ().unavailable_reason);
 
     observation->close ();
     app.request_stop ();
@@ -828,8 +830,284 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
 } // namespace
 
+namespace
+{
+
+class observation_1295_drain_probe_t final
+    : public zlink::framework::hosted_service_t,
+      public zlink::framework::runtime::hosted_service_lifecycle_t
+{
+  public:
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        _runtime = &services.get_required<zlink::framework::client_server_runtime_t> ();
+        co_return;
+    }
+    void stop () noexcept override {}
+    bool drain_sessions_until (std::chrono::steady_clock::time_point) noexcept override
+    {
+        const auto status = _runtime->snapshot ("1295-zero-weight");
+        assert (status.state == zlink::framework::topology_state_t::stopping);
+        assert (!status.is_ready);
+        assert (status.targets.size () == 1);
+        assert (status.targets.front ().state == zlink::framework::peer_state_t::draining);
+        assert (status.targets.front ().unavailable_reason
+                == zlink::framework::topology_reason_t::draining);
+        return true;
+    }
+
+  private:
+    zlink::framework::client_server_runtime_t *_runtime = nullptr;
+};
+
+template <typename TAction>
+void with_observation_runtime (TAction action,
+                               std::unique_ptr<zlink::framework::hosted_service_t> probe = {})
+{
+    using namespace zlink::framework;
+    auto app = app_t::create ();
+    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.handlers ().group ("1295-observation").add_send<network_probe_handler_t> ();
+        options.add_client_server_channel ("1295-zero-weight")
+          .server ()
+          .listen ()
+          .set_weight (0)
+          .add_handler_group ("1295-observation");
+        options.add_client_server_channel ("1295-disconnected")
+          .client ()
+          .connect ("tcp://127.0.0.1:1");
+    });
+    if (probe)
+        app.add_hosted_service (std::move (probe));
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &host = provider.get_required<framework_runtime_t> ();
+    auto &runtime = provider.get_required<client_server_runtime_t> ();
+    const auto before = runtime.snapshot ("1295-zero-weight");
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool serving = false;
+    auto host_observation = host.observe (8, [&] (const auto &item) {
+        std::lock_guard lock (mutex);
+        serving = item.status.state == framework_runtime_state_t::serving;
+        changed.notify_all ();
+    });
+    char program[] = "1295-observation";
+    char *arguments[] = {program, nullptr};
+    std::thread worker ([&] { assert (app.run (1, arguments) == 0); });
+    {
+        std::unique_lock lock (mutex);
+        assert (changed.wait_for (lock, 5s, [&] { return serving; }));
+    }
+    action (runtime, app, before);
+    host_observation->close ();
+    app.request_stop ();
+    worker.join ();
+}
+
+void verify_zero_weight_target_stays_ready ()
+{
+    with_observation_runtime ([] (auto &runtime, auto &, const auto &) {
+        const auto status = runtime.snapshot ("1295-zero-weight");
+        assert (status.targets.size () == 1);
+        assert (status.targets.front ().weight == 0);
+        assert (status.targets.front ().state == zlink::framework::peer_state_t::ready);
+        assert (!status.targets.front ().unavailable_reason);
+        assert (status.ready_target_count == 1);
+        assert (!status.is_ready);
+        assert (status.state == zlink::framework::topology_state_t::degraded);
+    });
+}
+
+void verify_first_observation_contains_current_status ()
+{
+    with_observation_runtime ([] (auto &runtime, auto &, const auto &) {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::optional<zlink::framework::client_server_channel_snapshot_t> first;
+        auto observation =
+          runtime.observe ("1295-zero-weight", 8,
+                           [&] (const zlink::framework::observed_status_t<
+                                zlink::framework::client_server_channel_snapshot_t> &item) {
+                               std::lock_guard lock (mutex);
+                               if (!first)
+                                   first = item.status;
+                               changed.notify_all ();
+                           });
+        {
+            std::unique_lock lock (mutex);
+            assert (changed.wait_for (lock, 5s, [&] { return first.has_value (); }));
+            assert (first->targets.size () == 1);
+            assert (first->targets.front ().weight == 0);
+            assert (first->targets.front ().state == zlink::framework::peer_state_t::ready);
+            assert (!first->targets.front ().unavailable_reason);
+            assert (first->ready_target_count == 1);
+            assert (!first->is_ready);
+        }
+        observation->close ();
+    });
+}
+
+void verify_reconnecting_target_status ()
+{
+    with_observation_runtime ([] (auto &runtime, auto &, const auto &) {
+        const auto status = runtime.snapshot ("1295-disconnected");
+        assert (status.targets.size () == 1);
+        assert (status.targets.front ().state == zlink::framework::peer_state_t::connecting);
+        assert (status.targets.front ().unavailable_reason
+                == zlink::framework::topology_reason_t::no_ready_target);
+        assert (status.ready_target_count == 0);
+    });
+}
+
+void verify_draining_host_target_status ()
+{
+    with_observation_runtime ([] (auto &, auto &, const auto &) {},
+                              std::make_unique<observation_1295_drain_probe_t> ());
+}
+
+void verify_status_sequence_tracks_current_readiness ()
+{
+    with_observation_runtime ([] (auto &runtime, auto &, const auto &before) {
+        const auto current = runtime.snapshot ("1295-zero-weight");
+        assert (before.targets.empty ());
+        assert (current.targets.size () == 1);
+        assert (current.sequence > before.sequence);
+        const auto unchanged = runtime.snapshot ("1295-zero-weight");
+        assert (unchanged.sequence == current.sequence);
+        assert (unchanged.ready_target_count == current.ready_target_count);
+        assert (unchanged.targets.front ().state == current.targets.front ().state);
+    });
+}
+
+void verify_terminal_observation_matches_current_status ()
+{
+    with_observation_runtime ([] (auto &runtime, auto &app, const auto &) {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::optional<zlink::framework::client_server_channel_snapshot_t> terminal;
+        auto observation = runtime.observe ("1295-zero-weight", 8, [&] (const auto &item) {
+            std::lock_guard lock (mutex);
+            if (item.status.state == zlink::framework::topology_state_t::stopped)
+                terminal = item.status;
+            changed.notify_all ();
+        });
+        app.request_stop ();
+        zlink::framework::client_server_channel_snapshot_t terminal_status;
+        {
+            std::unique_lock lock (mutex);
+            assert (changed.wait_for (lock, 5s, [&] { return terminal.has_value (); }));
+            assert (!terminal->is_ready);
+            assert (terminal->ready_target_count == 0);
+            assert (terminal->targets.empty ());
+            terminal_status = *terminal;
+        }
+        observation->close ();
+        const auto current = runtime.snapshot ("1295-zero-weight");
+        assert (current.state == zlink::framework::topology_state_t::stopped);
+        assert (current.sequence == terminal_status.sequence);
+        assert (current.ready_target_count == terminal_status.ready_target_count);
+        assert (current.targets.empty ());
+    });
+}
+
+void verify_unregistered_and_other_topology_channels_are_rejected ()
+{
+    using namespace zlink::framework;
+    auto app = app_t::create ();
+    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.add_client_server_channel ("1295-known").client ().connect ("tcp://127.0.0.1:1");
+        options.add_fanout_channel ("1295-fanout").enable_publisher ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<client_server_runtime_t> ();
+    for (const auto *channel : {"1295-unregistered", "1295-fanout"}) {
+        bool snapshot_rejected = false;
+        try {
+            (void) runtime.snapshot (channel);
+        }
+        catch (const framework_exception_t &error) {
+            snapshot_rejected = error.kind () == framework_error_kind_t::not_configured;
+        }
+        assert (snapshot_rejected);
+        bool observation_rejected = false;
+        try {
+            (void) runtime.observe (channel, 8, [] (const auto &) {});
+        }
+        catch (const framework_exception_t &error) {
+            observation_rejected = error.kind () == framework_error_kind_t::not_configured;
+        }
+        assert (observation_rejected);
+    }
+}
+
+void verify_unready_peer_projection_reason ()
+{
+    using namespace zlink::framework;
+    const auto target = detail::project_topology_peer (zlink::routing_id_t::from ("1295-target"),
+                                                       framework_runtime_state_t::stopped, false,
+                                                       false, topology_reason_t::no_ready_target);
+    assert (target.state == peer_state_t::not_connected);
+    assert (target.unavailable_reason == topology_reason_t::no_ready_target);
+    const auto publisher = detail::project_topology_peer (
+      zlink::routing_id_t::from ("1295-publisher"), runtime::mesh::service_node_state_t::stopped,
+      false, false, topology_reason_t::no_ready_peer);
+    assert (publisher.state == peer_state_t::not_connected);
+    assert (publisher.unavailable_reason == topology_reason_t::no_ready_peer);
+}
+
+class observation_1295_publish_handler_t
+{
+  public:
+    using event_type = network_probe_message_t;
+    void handle (const event_type &) {}
+};
+
+void verify_fanout_first_observation_is_complete ()
+{
+    using namespace zlink::framework;
+    auto app = app_t::create ();
+    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
+        options.handlers ()
+          .group ("1295-observation-publish")
+          .add_publish<observation_1295_publish_handler_t> ();
+        options.add_fanout_channel ("1295-automatic-fanout")
+          .enable_subscriber ()
+          .use_handler_group ("1295-observation-publish");
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<fanout_runtime_t> ();
+    std::promise<fanout_channel_snapshot_t> first;
+    std::once_flag first_only;
+    auto observation = runtime.observe (
+      "1295-automatic-fanout", 8, [&] (const observed_status_t<fanout_channel_snapshot_t> &item) {
+          std::call_once (first_only, [&] { first.set_value (item.status); });
+      });
+    auto future = first.get_future ();
+    assert (future.wait_for (5s) == std::future_status::ready);
+    const auto status = future.get ();
+    assert (status.channel_name == "1295-automatic-fanout");
+    assert (status.state == topology_state_t::starting);
+    assert (!status.is_ready);
+    assert (status.ready_publisher_count == 0);
+    assert (status.publishers.empty ());
+    assert (status.sequence == runtime.snapshot ("1295-automatic-fanout").sequence);
+    observation->close ();
+}
+
+} // namespace
+
 int main ()
 {
+    verify_zero_weight_target_stays_ready ();
+    verify_first_observation_contains_current_status ();
+    verify_reconnecting_target_status ();
+    verify_draining_host_target_status ();
+    verify_status_sequence_tracks_current_readiness ();
+    verify_terminal_observation_matches_current_status ();
+    verify_unregistered_and_other_topology_channels_are_rejected ();
+    verify_unready_peer_projection_reason ();
+    verify_fanout_first_observation_is_complete ();
     verify_invalid_metadata_is_a_protocol_error ();
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();

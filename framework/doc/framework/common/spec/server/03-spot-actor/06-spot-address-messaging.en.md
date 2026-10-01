@@ -573,21 +573,28 @@ move an Instance Spot via a separate operational lifecycle.
 
 The close procedure proceeds in the following order.
 
-1. Verifies expected owner and ObjectGeneration and transitions authority to
-   `Closing`.
-2. Seals local admission and processes turns/timers accepted before the
-   seal up to a set boundary.
-3. Invokes `OnClosing` at most once per Close, then cleans up the handler scope, timer, and local
-   activation resource once. If `OnClosing` fails, the failure is recorded in diagnostics and cleanup
-   continues. Resuming Close does not invoke `OnClosing` again if it was already invoked.
-4. Releases authority with the same owner/generation fence.
+1. A Close request enters the Spot's lifecycle lane as one Close work item. Messages and timers
+   that ran before the Close work item starts run on the existing generation. Messages not yet run
+   when the Close work item starts, and messages that reach this node after it, are placed after
+   the Close work item. Timers that haven't run are cleaned up with the existing incarnation.
+2. When the Close work item starts, it verifies expected owner and ObjectGeneration and
+   transitions authority to `Closing`. It invokes `OnClosing` at most once per Close, then cleans up
+   the handler scope, timer, and local activation resource once. If `OnClosing` fails, the failure
+   is recorded in diagnostics and cleanup continues. Resuming Close does not invoke `OnClosing`
+   again if it was already invoked.
+3. If Instance-intent messages are placed after the Close work item and this host isn't draining
+   or relocating, `Reincarnate` of
+   [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
+   changes the authority to a new `ObjectGeneration` on the same node. After initialization and
+   restoring the stored state, the new incarnation runs only those Instance-intent messages, in
+   arrival order. If initialization or restoration fails, that generation is `Delete`d and the
+   waiting messages end with a typed failure. Otherwise the authority is released with the same
+   fence, and remaining Instance-intent messages are placed again from `Missing`.
 
-If that incarnation no longer exists, idempotent `false`; if a different
-generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
-move, `Unavailable`. The framework doesn't re-find the current ref and
-close a new incarnation. An operation accepted before the seal can complete
-on the existing generation, but an operation after the seal ends with a
-closing or stale result.
+A message placed after the Close work item that has no Instance intent ends with the result of
+[§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a
+different generation of the same Spot ID exists, `InvalidOperation`; if sealing for a move,
+`Unavailable`. The framework doesn't re-find the current ref and close a new incarnation.
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
@@ -611,7 +618,7 @@ The target first verifies the peer identity and target lifecycle confirmed
 at service admission, and reads the current User Spot
 authority directly from the store. Only then does it check object generation, owner generation,
 `StoreVersion`, active Actor membership, `Closing`, and relocation state,
-all together, before starting the Closing CAS and local admission seal. The
+all together, before placing the Close work item in that Spot's execution order. The
 target performs this check and step 1 under the lifecycle-lane rule of §7.
 
 Command 20's close-success tail is a single `closed` bool. `false` is only
@@ -666,7 +673,8 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| New admission requested on a `Closing` or `Draining` owner | `Rejected` for `Closing`, `ShuttingDown` for `Draining`. The local admission seal in §7 step 2 decides whether an operation reaching the owner is admitted. This row also determines the terminal kind when the resolver observes `Closing` authority. |
+| Work reached a `Closing` owner, or the resolver observed `Closing` authority | Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. Work without Instance intent gets `NotFound`, the same as `Missing`. |
+| New admission requested on a `Draining` owner | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |

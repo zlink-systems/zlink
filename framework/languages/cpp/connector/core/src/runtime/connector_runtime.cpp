@@ -3,6 +3,7 @@
 #include "connector_runtime.hpp"
 
 #include "runtime/protocol/framing.hpp"
+#include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/packet_name_resolver.hpp"
 #include "runtime/transport/stream_connection.hpp"
 #include "runtime/transport/stream_transport_factory.hpp"
@@ -48,9 +49,6 @@ void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
     }
 }
 
-namespace
-{
-
 bool stream_trace_enabled ()
 {
     static const bool enabled = [] {
@@ -59,6 +57,9 @@ bool stream_trace_enabled ()
     }();
     return enabled;
 }
+
+namespace
+{
 
 const char *connection_state_name (connection_state_t state) noexcept
 {
@@ -85,9 +86,13 @@ std::mutex &shared_runtime_config_mutex ()
     return mutex;
 }
 
+constexpr std::size_t default_runtime_worker_count = 4;
+constexpr std::size_t callback_worker_count = 4;
+constexpr std::size_t connect_worker_count = 4;
+
 std::size_t &shared_runtime_worker_count ()
 {
-    static std::size_t worker_count = 4;
+    static std::size_t worker_count = default_runtime_worker_count;
     return worker_count;
 }
 
@@ -199,9 +204,9 @@ class shared_runtime_t
         callback = std::make_shared<shared_operation_runner_t> ();
         operation = std::make_shared<shared_operation_runner_t> (callback);
         connect = std::make_shared<shared_operation_runner_t> ();
-        callback->start (4);
+        callback->start (callback_worker_count);
         operation->start (worker_count);
-        connect->start (4);
+        connect->start (connect_worker_count);
     }
 
     ~shared_runtime_t ()
@@ -653,7 +658,8 @@ std::chrono::milliseconds jittered_delay (std::chrono::milliseconds base)
       std::random_device{}()
       ^ static_cast<std::uint64_t> (
         std::chrono::steady_clock::now ().time_since_epoch ().count ()));
-    std::uniform_real_distribution<double> fraction (0.5, 1.0);
+    constexpr double minimum_backoff_fraction = 0.5;
+    std::uniform_real_distribution<double> fraction (minimum_backoff_fraction, 1.0);
     const auto scaled =
       static_cast<std::int64_t> (static_cast<double> (base.count ()) * fraction (engine));
     return std::chrono::milliseconds (std::max<std::int64_t> (1, scaled));
@@ -673,7 +679,7 @@ std::size_t packet_handler_count (connector_state_t &state, const dispatch_envel
 
 void count_received_locked (connector_state_t &state, const packet_t &packet)
 {
-    if (packet.name.empty () || packet.name.rfind ("$zlink.", 0) == 0) {
+    if (packet.name.empty () || packet.name.rfind (reserved_control_prefix, 0) == 0) {
         return;
     }
     ++state.received_counts[packet.name];

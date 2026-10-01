@@ -3,8 +3,11 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include "runtime/transport/endpoint_notation.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <zlink/framework/detail/crc32c.hpp>
+#include <zlink/framework/detail/utf8.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,8 +20,27 @@ namespace zlink::framework::runtime::protocol
 namespace
 {
 
-constexpr std::size_t liveness_size = 13;
-constexpr std::size_t prefix_size = 5;
+constexpr std::size_t prefix_size =
+  sizeof (magic) + sizeof (wire_major) + sizeof (command) + sizeof (flag);
+constexpr std::size_t liveness_size = prefix_size + sizeof (std::uint64_t);
+constexpr std::array<std::uint8_t, 5> instance_activation_recovery_prefix{'Z', 'L', 'I', 'A', 1};
+constexpr std::size_t instance_activation_recovery_minimum_size =
+  instance_activation_recovery_prefix.size () + sizeof (std::uint16_t) + sizeof (std::uint32_t)
+  + sizeof (std::uint32_t);
+
+enum class descriptor_tlv_t : std::uint8_t
+{
+    runtime_state = 1,
+    application_version = 2,
+    capabilities = 6,
+    object_role = 7,
+    placement_weight = 8,
+    active_capacity_limit = 9,
+    pending_capacity_limit = 10,
+    active_capacity_used = 11,
+    pending_capacity_used = 12,
+};
+
 constexpr std::uint8_t application_payload_version = 1;
 constexpr std::uint8_t application_payload_flow_version = 2;
 
@@ -26,44 +48,10 @@ void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, 
 std::uint64_t
 read_nonzero_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field);
 
-bool valid_flow_id (std::string_view value) noexcept
-{
-    if (value.size () != 36)
-        return false;
-    for (std::size_t index = 0; index < value.size (); ++index) {
-        const char ch = value[index];
-        if (index == 8 || index == 13 || index == 18 || index == 23) {
-            if (ch != '-')
-                return false;
-            continue;
-        }
-        const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-        if (!hex)
-            return false;
-    }
-    if (value[14] != '7')
-        return false;
-    const char variant = value[19];
-    return variant == '8' || variant == '9' || variant == 'a' || variant == 'b';
-}
-
 bool valid_flow_origin (std::uint8_t value) noexcept
 {
     return value >= static_cast<std::uint8_t> (flow_origin_t::inbound)
            && value <= static_cast<std::uint8_t> (flow_origin_t::lifecycle);
-}
-
-std::uint32_t crc32c (std::span<const std::uint8_t> payload) noexcept
-{
-    std::uint32_t crc = 0xffffffffu;
-    for (const auto byte : payload) {
-        crc ^= byte;
-        for (int bit = 0; bit < 8; ++bit) {
-            const auto mask = static_cast<std::uint32_t> (-static_cast<std::int32_t> (crc & 1u));
-            crc = (crc >> 1u) ^ (0x82f63b78u & mask);
-        }
-    }
-    return ~crc;
 }
 
 void append_u32 (std::vector<std::uint8_t> &bytes, std::uint32_t value)
@@ -122,56 +110,10 @@ std::uint64_t read_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset
     return value;
 }
 
-bool valid_utf8 (std::span<const std::uint8_t> bytes)
-{
-    for (std::size_t index = 0; index < bytes.size ();) {
-        const auto first = bytes[index];
-        std::size_t continuation = 0;
-        std::uint32_t codepoint = 0;
-        if (first <= 0x7f) {
-            if (first == 0) {
-                return false;
-            }
-            ++index;
-            continue;
-        }
-        if ((first & 0xe0u) == 0xc0u) {
-            continuation = 1;
-            codepoint = first & 0x1fu;
-        } else if ((first & 0xf0u) == 0xe0u) {
-            continuation = 2;
-            codepoint = first & 0x0fu;
-        } else if ((first & 0xf8u) == 0xf0u) {
-            continuation = 3;
-            codepoint = first & 0x07u;
-        } else {
-            return false;
-        }
-        if (bytes.size () - index - 1 < continuation) {
-            return false;
-        }
-        for (std::size_t part = 0; part < continuation; ++part) {
-            const auto next = bytes[index + part + 1];
-            if ((next & 0xc0u) != 0x80u) {
-                return false;
-            }
-            codepoint = (codepoint << 6u) | (next & 0x3fu);
-        }
-        if ((continuation == 1 && codepoint < 0x80) || (continuation == 2 && codepoint < 0x800)
-            || (continuation == 3 && codepoint < 0x10000) || codepoint > 0x10ffff
-            || (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
-            return false;
-        }
-        index += continuation + 1;
-    }
-    return true;
-}
-
 void append_text8 (std::vector<std::uint8_t> &bytes, const std::string &value, const char *field)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint8_t>::max ()
-        || !valid_utf8 (std::span<const std::uint8_t> (
-          reinterpret_cast<const std::uint8_t *> (value.data ()), value.size ()))) {
+        || !zlink::framework::detail::is_valid_non_nul_utf8 (value)) {
         throw service_wire_error_t (std::string (field)
                                     + " must be nonempty bounded UTF-8 without NUL");
     }
@@ -189,7 +131,8 @@ std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset
         throw service_wire_error_t (std::string ("invalid ") + field);
     }
     const auto value_bytes = bytes.subspan (offset, length);
-    if (!valid_utf8 (value_bytes)) {
+    if (!zlink::framework::detail::is_valid_non_nul_utf8 (std::string_view (
+          reinterpret_cast<const char *> (value_bytes.data ()), value_bytes.size ()))) {
         throw service_wire_error_t (std::string ("invalid UTF-8 in ") + field);
     }
     offset += length;
@@ -230,8 +173,7 @@ void append_text16 (std::vector<std::uint8_t> &bytes,
                     std::uint64_t maximum_bytes = blobBytes)
 {
     if (value.empty () || value.size () > maximum_bytes
-        || !valid_utf8 (std::span<const std::uint8_t> (
-          reinterpret_cast<const std::uint8_t *> (value.data ()), value.size ()))) {
+        || !zlink::framework::detail::is_valid_non_nul_utf8 (value)) {
         throw service_wire_error_t (std::string (field)
                                     + " must be nonempty bounded UTF-8 without NUL");
     }
@@ -249,7 +191,8 @@ std::string read_text16 (std::span<const std::uint8_t> bytes,
         throw service_wire_error_t (std::string ("invalid ") + field);
     }
     const auto value_bytes = bytes.subspan (offset, length);
-    if (!valid_utf8 (value_bytes)) {
+    if (!zlink::framework::detail::is_valid_non_nul_utf8 (std::string_view (
+          reinterpret_cast<const char *> (value_bytes.data ()), value_bytes.size ()))) {
         throw service_wire_error_t (std::string ("invalid UTF-8 in ") + field);
     }
     offset += length;
@@ -265,41 +208,26 @@ void append_tlv (std::vector<std::uint8_t> &extension,
     extension.insert (extension.end (), value.begin (), value.end ());
 }
 
+constexpr std::array descriptor_runtime_states{
+  mesh::service_node_state_t::preparing, mesh::service_node_state_t::serving,
+  mesh::service_node_state_t::draining, mesh::service_node_state_t::stopped,
+  mesh::service_node_state_t::error};
+
 std::uint8_t runtime_state_wire (mesh::service_node_state_t state)
 {
-    switch (state) {
-        case mesh::service_node_state_t::preparing:
-            return 0;
-        case mesh::service_node_state_t::serving:
-            return 1;
-        case mesh::service_node_state_t::draining:
-            return 2;
-        case mesh::service_node_state_t::stopped:
-            return 3;
-        case mesh::service_node_state_t::error:
-            return 4;
-        default:
-            throw service_wire_error_t (
-              "retiring is a host state and cannot be encoded as a service descriptor");
-    }
+    const auto found =
+      std::find (descriptor_runtime_states.begin (), descriptor_runtime_states.end (), state);
+    if (found == descriptor_runtime_states.end ())
+        throw service_wire_error_t (
+          "retiring is a host state and cannot be encoded as a service descriptor");
+    return static_cast<std::uint8_t> (found - descriptor_runtime_states.begin ());
 }
 
 mesh::service_node_state_t runtime_state_from_wire (std::uint8_t value)
 {
-    switch (value) {
-        case 0:
-            return mesh::service_node_state_t::preparing;
-        case 1:
-            return mesh::service_node_state_t::serving;
-        case 2:
-            return mesh::service_node_state_t::draining;
-        case 3:
-            return mesh::service_node_state_t::stopped;
-        case 4:
-            return mesh::service_node_state_t::error;
-        default:
-            throw service_wire_error_t ("invalid runtime state");
-    }
+    if (value >= descriptor_runtime_states.size ())
+        throw service_wire_error_t ("invalid runtime state");
+    return descriptor_runtime_states[value];
 }
 
 std::uint8_t object_role_wire (mesh::service_object_role_t role)
@@ -309,7 +237,7 @@ std::uint8_t object_role_wire (mesh::service_object_role_t role)
 
 mesh::service_object_role_t object_role_from_wire (std::uint8_t value)
 {
-    if (value > 2) {
+    if (value > static_cast<std::uint8_t> (mesh::service_object_role_t::server)) {
         throw service_wire_error_t ("invalid object role");
     }
     return static_cast<mesh::service_object_role_t> (value);
@@ -489,7 +417,7 @@ std::vector<std::uint8_t> encode_spot_message_header (command kind,
     }
     if ((operation.high == 0 && operation.low == 0)
         || (kind == command::spotRequest) != correlation.has_value ()
-        || (correlation && *correlation == 0) || message_follow_hop_count > 8
+        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
         || target.object_generation == 0 || target.target_node_generation == 0
         || target.authority_owner_generation == 0 || target.owner_lease_generation == 0) {
         throw service_wire_error_t ("invalid Spot route fence");
@@ -543,8 +471,8 @@ spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> 
     result.target.authority_owner_generation = read_u64 (bytes, offset);
     result.target.owner_lease_generation = read_u64 (bytes, offset);
     if ((result.operation.high == 0 && result.operation.low == 0)
-        || result.message_follow_hop_count > 8 || result.target.object_generation == 0
-        || result.target.target_node_generation == 0
+        || result.message_follow_hop_count > messageFollowHopCount
+        || result.target.object_generation == 0 || result.target.target_node_generation == 0
         || result.target.authority_owner_generation == 0
         || result.target.owner_lease_generation == 0 || offset != bytes.size ()) {
         throw service_wire_error_t ("invalid or trailing Spot route fence");
@@ -566,12 +494,12 @@ std::vector<std::uint8_t> encode_actor_message_header (
     }
     if ((operation.high == 0 && operation.low == 0)
         || (kind == command::actorRequest) != correlation.has_value ()
-        || (correlation && *correlation == 0) || message_follow_hop_count > 8
+        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
         || target.object_generation == 0 || target.target_node_generation == 0
         || target.authority_owner_generation == 0 || target.owner_lease_generation == 0
         || (bound_session_source
             && (bound_session_source->session_routing_id.empty ()
-                || bound_session_source->session_routing_id.size () > 255
+                || bound_session_source->session_routing_id.size () > ridBytes
                 || bound_session_source->binding_generation == 0
                 || bound_session_source->session_sequence == 0))) {
         throw service_wire_error_t ("invalid Actor route fence");
@@ -668,8 +596,8 @@ actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t
           read_nonzero_u64 (bytes, offset, "source Session sequence")};
     }
     if ((result.operation.high == 0 && result.operation.low == 0)
-        || result.message_follow_hop_count > 8 || result.target.object_generation == 0
-        || result.target.target_node_generation == 0
+        || result.message_follow_hop_count > messageFollowHopCount
+        || result.target.object_generation == 0 || result.target.target_node_generation == 0
         || result.target.authority_owner_generation == 0
         || result.target.owner_lease_generation == 0 || offset != bytes.size ()) {
         throw service_wire_error_t ("invalid or trailing Actor route fence");
@@ -1559,7 +1487,7 @@ relocation_control_t decode_relocation_control (std::span<const std::uint8_t> by
 
 std::uint32_t relocation_checksum_crc32c (std::span<const std::uint8_t> payload) noexcept
 {
-    return crc32c (payload);
+    return zlink::framework::detail::crc32c (payload);
 }
 
 namespace
@@ -1985,13 +1913,14 @@ frozen_record_t decode_frozen_record_prefix (std::span<const std::uint8_t> bytes
         throw service_wire_error_t ("frozen record kind is truncated");
     frozen_record_t result;
     result.kind = static_cast<frozen_record_kind_t> (bytes[offset++]);
-    if (static_cast<std::uint8_t> (result.kind) < 1 || static_cast<std::uint8_t> (result.kind) > 14)
+    if (result.kind < frozen_record_kind_t::node_send
+        || result.kind > frozen_record_kind_t::instance_spot_activation)
         throw service_wire_error_t ("invalid frozen record kind");
     if (offset >= bytes.size ())
         throw service_wire_error_t ("frozen source kind is truncated");
     result.source_kind = static_cast<frozen_source_kind_t> (bytes[offset++]);
-    if (static_cast<std::uint8_t> (result.source_kind) < 1
-        || static_cast<std::uint8_t> (result.source_kind) > 4)
+    if (result.source_kind < frozen_source_kind_t::node
+        || result.source_kind > frozen_source_kind_t::bound_session)
         throw service_wire_error_t ("invalid frozen source kind");
     const auto source = read_body16 (bytes, offset, "frozen source");
     std::size_t source_offset = 0;
@@ -2322,22 +2251,24 @@ encode_instance_activation_recovery (const instance_activation_recovery_t &recor
     if (body.size () > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("Instance activation recovery exceeds u32 body bound");
     }
-    std::vector<std::uint8_t> result{'Z', 'L', 'I', 'A', 1};
+    std::vector<std::uint8_t> result (instance_activation_recovery_prefix.begin (),
+                                      instance_activation_recovery_prefix.end ());
     append_u16 (result, 0);
     append_u32 (result, static_cast<std::uint32_t> (body.size ()));
     result.insert (result.end (), body.begin (), body.end ());
-    append_u32 (result, crc32c (result));
+    append_u32 (result, zlink::framework::detail::crc32c (std::span<const std::uint8_t> (result)));
     return result;
 }
 
 instance_activation_recovery_t
 decode_instance_activation_recovery (std::span<const std::uint8_t> bytes, bool capture_flow)
 {
-    if (bytes.size () < 15 || bytes[0] != 'Z' || bytes[1] != 'L' || bytes[2] != 'I'
-        || bytes[3] != 'A' || bytes[4] != 1) {
+    if (bytes.size () < instance_activation_recovery_minimum_size
+        || !std::equal (instance_activation_recovery_prefix.begin (),
+                        instance_activation_recovery_prefix.end (), bytes.begin ())) {
         throw service_wire_error_t ("Instance activation recovery prefix is invalid");
     }
-    std::size_t offset = 5;
+    std::size_t offset = instance_activation_recovery_prefix.size ();
     if (read_u16 (bytes, offset) != 0) {
         throw service_wire_error_t ("Instance activation recovery flags are invalid");
     }
@@ -2349,7 +2280,7 @@ decode_instance_activation_recovery (std::span<const std::uint8_t> bytes, bool c
     std::size_t checksum_offset = bytes.size () - 4;
     auto checksum_read_offset = checksum_offset;
     const auto expected_checksum = read_u32 (bytes, checksum_read_offset);
-    if (expected_checksum != crc32c (bytes.first (checksum_offset))) {
+    if (expected_checksum != zlink::framework::detail::crc32c (bytes.first (checksum_offset))) {
         throw service_wire_error_t ("Instance activation recovery checksum mismatch");
     }
     const auto body_end = checksum_offset;
@@ -2630,7 +2561,7 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
         throw service_wire_error_t (
           "application payload flow id and origin must be present together");
     }
-    if (payload.flow_id && !valid_flow_id (*payload.flow_id)) {
+    if (payload.flow_id && !flow_id_t::is_valid (*payload.flow_id)) {
         throw service_wire_error_t ("application payload flow id is invalid");
     }
     const auto *parts = payload.parts ();
@@ -2712,7 +2643,7 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
     if (has_flow) {
         if (capture_flow) {
             result.flow_id = read_text8 (bytes, offset, "flow id");
-            if (!valid_flow_id (*result.flow_id) || offset >= bytes.size ()
+            if (!flow_id_t::is_valid (*result.flow_id) || offset >= bytes.size ()
                 || !valid_flow_origin (bytes[offset])) {
                 throw service_wire_error_t ("application payload flow context is invalid");
             }
@@ -2853,10 +2784,12 @@ encode_route_mesh_admission (command kind, const mesh::service_node_descriptor_t
     }
 
     std::vector<std::uint8_t> extension;
-    append_tlv (extension, 1, {runtime_state_wire (descriptor.state)});
+    append_tlv (extension, static_cast<std::uint8_t> (descriptor_tlv_t::runtime_state),
+                {runtime_state_wire (descriptor.state)});
     std::vector<std::uint8_t> application_version;
     append_u64 (application_version, static_cast<std::uint64_t> (descriptor.application_version));
-    append_tlv (extension, 2, application_version);
+    append_tlv (extension, static_cast<std::uint8_t> (descriptor_tlv_t::application_version),
+                application_version);
 
     if (descriptor.protocol_capabilities.size () > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t ("protocol capability vector exceeds u16");
@@ -2867,15 +2800,22 @@ encode_route_mesh_admission (command kind, const mesh::service_node_descriptor_t
     for (const auto &capability : descriptor.protocol_capabilities) {
         append_text8 (capabilities, capability, "protocol capability");
     }
-    append_tlv (extension, 6, capabilities);
-    append_tlv (extension, 7, {object_role_wire (descriptor.object_role)});
+    append_tlv (extension, static_cast<std::uint8_t> (descriptor_tlv_t::capabilities),
+                capabilities);
+    append_tlv (extension, static_cast<std::uint8_t> (descriptor_tlv_t::object_role),
+                {object_role_wire (descriptor.object_role)});
     for (const auto &[id, value] : std::array<std::pair<std::uint8_t, std::uint32_t>, 5>{
            std::pair<std::uint8_t, std::uint32_t>{
-             8, static_cast<std::uint32_t> (descriptor.placement_weight)},
-           {9, descriptor.active_capacity_limit},
-           {10, descriptor.pending_capacity_limit},
-           {11, descriptor.active_capacity_used},
-           {12, descriptor.pending_capacity_used}}) {
+             static_cast<std::uint8_t> (descriptor_tlv_t::placement_weight),
+             static_cast<std::uint32_t> (descriptor.placement_weight)},
+           {static_cast<std::uint8_t> (descriptor_tlv_t::active_capacity_limit),
+            descriptor.active_capacity_limit},
+           {static_cast<std::uint8_t> (descriptor_tlv_t::pending_capacity_limit),
+            descriptor.pending_capacity_limit},
+           {static_cast<std::uint8_t> (descriptor_tlv_t::active_capacity_used),
+            descriptor.active_capacity_used},
+           {static_cast<std::uint8_t> (descriptor_tlv_t::pending_capacity_used),
+            descriptor.pending_capacity_used}}) {
         std::vector<std::uint8_t> encoded;
         append_u32 (encoded, value);
         append_tlv (extension, id, encoded);
@@ -2944,15 +2884,15 @@ decode_route_mesh_admission (std::span<const std::uint8_t> bytes,
         const auto value = bytes.subspan (offset, length);
         offset += length;
         std::size_t value_offset = 0;
-        switch (id) {
-            case 1:
+        switch (static_cast<descriptor_tlv_t> (id)) {
+            case descriptor_tlv_t::runtime_state:
                 if (value.size () != 1) {
                     throw service_wire_error_t ("runtime state TLV length");
                 }
                 result.state = runtime_state_from_wire (value[0]);
                 required |= 1u << 0u;
                 break;
-            case 2:
+            case descriptor_tlv_t::application_version:
                 if (value.size () != 8) {
                     throw service_wire_error_t ("application version TLV length");
                 }
@@ -2963,7 +2903,7 @@ decode_route_mesh_admission (std::span<const std::uint8_t> bytes,
                 }
                 required |= 1u << 1u;
                 break;
-            case 6: {
+            case descriptor_tlv_t::capabilities: {
                 const auto count = read_u16 (value, value_offset);
                 result.protocol_capabilities.clear ();
                 result.protocol_capabilities.reserve (count);
@@ -2977,37 +2917,39 @@ decode_route_mesh_admission (std::span<const std::uint8_t> bytes,
                 required |= 1u << 2u;
                 break;
             }
-            case 7:
+            case descriptor_tlv_t::object_role:
                 if (value.size () != 1) {
                     throw service_wire_error_t ("object role TLV length");
                 }
                 result.object_role = object_role_from_wire (value[0]);
                 required |= 1u << 3u;
                 break;
-            case 8:
+            case descriptor_tlv_t::placement_weight:
                 result.placement_weight = static_cast<int> (read_u32 (value, value_offset));
                 required |= 1u << 4u;
                 break;
-            case 9:
+            case descriptor_tlv_t::active_capacity_limit:
                 result.active_capacity_limit = read_u32 (value, value_offset);
                 required |= 1u << 5u;
                 break;
-            case 10:
+            case descriptor_tlv_t::pending_capacity_limit:
                 result.pending_capacity_limit = read_u32 (value, value_offset);
                 required |= 1u << 6u;
                 break;
-            case 11:
+            case descriptor_tlv_t::active_capacity_used:
                 result.active_capacity_used = read_u32 (value, value_offset);
                 required |= 1u << 7u;
                 break;
-            case 12:
+            case descriptor_tlv_t::pending_capacity_used:
                 result.pending_capacity_used = read_u32 (value, value_offset);
                 required |= 1u << 8u;
                 break;
             default:
                 break;
         }
-        if (id >= 8 && id <= 12 && value_offset != value.size ()) {
+        if (id >= static_cast<std::uint8_t> (descriptor_tlv_t::placement_weight)
+            && id <= static_cast<std::uint8_t> (descriptor_tlv_t::pending_capacity_used)
+            && value_offset != value.size ()) {
             throw service_wire_error_t ("u32 descriptor TLV length");
         }
     }
@@ -3243,7 +3185,9 @@ std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlati
         return bytes;
     }
     const auto result_value = static_cast<std::uint8_t> (result);
-    if (result_value < 1 || result_value > 3 || object_generation == 0) {
+    if (result_value < static_cast<std::uint8_t> (user_spot_create_result_t::existing)
+        || result_value > static_cast<std::uint8_t> (user_spot_create_result_t::rejected)
+        || object_generation == 0) {
         throw service_wire_error_t ("invalid User Spot create success reply");
     }
     bytes.push_back (result_value);
@@ -3267,7 +3211,9 @@ user_spot_create_reply_t decode_user_spot_create_reply (std::span<const std::uin
         return reply;
     }
     std::size_t offset = prefix_size + 16;
-    if (offset >= bytes.size () || bytes[offset] < 1 || bytes[offset] > 3) {
+    if (offset >= bytes.size ()
+        || bytes[offset] < static_cast<std::uint8_t> (user_spot_create_result_t::existing)
+        || bytes[offset] > static_cast<std::uint8_t> (user_spot_create_result_t::rejected)) {
         throw service_wire_error_t ("invalid User Spot create result");
     }
     reply.result = static_cast<user_spot_create_result_t> (bytes[offset++]);
@@ -3292,7 +3238,8 @@ encode_actor_create_reply (std::uint64_t correlation,
     if (terminal_result != 0)
         return bytes;
     const auto encoded = static_cast<std::uint8_t> (result);
-    if (encoded < 1 || encoded > 3)
+    if (encoded < static_cast<std::uint8_t> (actor_create_result_t::existing)
+        || encoded > static_cast<std::uint8_t> (actor_create_result_t::rejected))
         throw service_wire_error_t ("invalid Actor create result");
     std::vector<std::uint8_t> selected;
     if (result != actor_create_result_t::rejected) {
@@ -3320,7 +3267,9 @@ actor_create_reply_t decode_actor_create_reply (std::span<const std::uint8_t> by
         return reply;
     }
     std::size_t offset = prefix_size + 16;
-    if (offset >= bytes.size () || bytes[offset] < 1 || bytes[offset] > 3)
+    if (offset >= bytes.size ()
+        || bytes[offset] < static_cast<std::uint8_t> (actor_create_result_t::existing)
+        || bytes[offset] > static_cast<std::uint8_t> (actor_create_result_t::rejected))
         throw service_wire_error_t ("invalid Actor create result");
     reply.result = static_cast<actor_create_result_t> (bytes[offset++]);
     const auto selected_length = read_u16 (bytes, offset);

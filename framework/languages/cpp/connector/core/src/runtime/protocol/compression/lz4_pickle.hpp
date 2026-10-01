@@ -23,6 +23,12 @@
 namespace zlink::detail::lz4_pickle
 {
 
+inline constexpr unsigned width_tag_shift = 6;
+inline constexpr std::uint8_t version_mask = 0x07;
+inline constexpr std::uint8_t width_tag_mask = 0x03;
+inline constexpr std::size_t wide_difference_tag = 3;
+inline constexpr std::size_t wide_difference_size = sizeof (std::uint32_t);
+
 inline std::string pickle (std::span<const std::byte> input)
 {
 #ifndef ZLINK_LZ4_PICKLE_WITH_LZ4
@@ -58,12 +64,18 @@ inline std::string pickle (std::span<const std::byte> input)
     }
 
     const auto diff = static_cast<std::uint32_t> (input.size () - compressed_size);
-    const std::size_t diff_width = diff <= 0xff ? 1 : (diff <= 0xffff ? 2 : 4);
-    const std::uint8_t width_bits = diff_width == 4 ? 3 : static_cast<std::uint8_t> (diff_width);
+    const std::size_t diff_width =
+      diff <= std::numeric_limits<std::uint8_t>::max ()
+        ? sizeof (std::uint8_t)
+        : (diff <= std::numeric_limits<std::uint16_t>::max () ? sizeof (std::uint16_t)
+                                                              : wide_difference_size);
+    const std::uint8_t width_bits = diff_width == wide_difference_size
+                                      ? wide_difference_tag
+                                      : static_cast<std::uint8_t> (diff_width);
 
     std::string output;
     output.reserve (1 + diff_width + compressed_size);
-    output.push_back (static_cast<char> (width_bits << 6));
+    output.push_back (static_cast<char> (width_bits << width_tag_shift));
     for (std::size_t index = 0; index < diff_width; index++) {
         output.push_back (static_cast<char> ((diff >> (8 * index)) & 0xff));
     }
@@ -83,11 +95,13 @@ inline std::string unpickle (std::span<const std::byte> input, std::size_t max_d
         return {};
     }
     const auto header = std::to_integer<std::uint8_t> (input[0]);
-    if ((header & 0x07) != 0) {
+    if ((header & version_mask) != 0) {
         throw std::runtime_error ("unexpected LZ4 pickle version");
     }
-    const auto encoded_width = static_cast<std::size_t> ((header >> 6) & 0x03);
-    const std::size_t diff_width = encoded_width == 3 ? 4 : encoded_width;
+    const auto encoded_width =
+      static_cast<std::size_t> ((header >> width_tag_shift) & width_tag_mask);
+    const std::size_t diff_width =
+      encoded_width == wide_difference_tag ? wide_difference_size : encoded_width;
     const std::size_t data_offset = 1 + diff_width;
     if (input.size () < data_offset) {
         throw std::runtime_error ("LZ4 pickle header is incomplete");
