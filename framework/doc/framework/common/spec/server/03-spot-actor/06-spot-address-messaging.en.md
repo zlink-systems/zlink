@@ -587,7 +587,7 @@ generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
 move, `Unavailable`. The framework doesn't re-find the current ref and
 close a new incarnation. An operation accepted before the seal can complete
 on the existing generation, but an operation after the seal ends with a
-closing or stale result, except that an operation with Instance intent follows the `Closing` row of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+closing or stale result, except that an Instance intent request not admitted because of the seal follows, before its public terminal is decided, the `Closing` row of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
@@ -666,7 +666,7 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| New admission requested on a `Closing` or `Draining` owner | `Rejected` for `Closing`, `ShuttingDown` for `Draining`. The local admission seal in §7 step 2 decides whether an operation reaching the owner is admitted. This row also determines the terminal kind when the resolver observes `Closing` authority. A message with Instance intent follows the `Closing` row of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure). |
+| New admission requested on a `Closing` or `Draining` owner | `Rejected` for `Closing`, `ShuttingDown` for `Draining`. The local admission seal in §7 step 2 decides whether an operation reaching the owner is admitted. This row also determines the terminal kind when the resolver observes `Closing` authority. An Instance intent request follows, before its public terminal is decided, the `Closing` row of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure). |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |
