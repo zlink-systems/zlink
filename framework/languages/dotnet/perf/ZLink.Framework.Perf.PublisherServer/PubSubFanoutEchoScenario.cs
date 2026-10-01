@@ -20,7 +20,7 @@ public sealed class PubSubFanoutEchoScenario
 
     private sealed class PublishedSets
     {
-        public readonly SequenceBitSet Window = new(), Settle = new();
+        public readonly SequenceBitSet Window = new();
     }
 
     public PubSubFanoutEchoScenario(IZLinkFanoutClient fanout, IZLinkFrameworkRuntime runtime, Measurement measurement,
@@ -64,9 +64,9 @@ public sealed class PubSubFanoutEchoScenario
     {
         while (measurement.CanIssue)
         {
+            var warmup = measurement.ResetSeq == "0";
             if (!measurement.BeginOperation(out var started, "event")) break;
             var sequence = Interlocked.Increment(ref issued);
-            var warmup = measurement.ResetSeq == "0";
             var message = new PerfPublishEvent
             {
                 runId = config.runId, cellId = config.cellId, resetSeq = measurement.ResetSeq,
@@ -76,14 +76,12 @@ public sealed class PubSubFanoutEchoScenario
             try
             {
                 await fanout.Publish(config.channelName!, FanoutMetrics.Topic, message).Async();
-                var completed = PerfClock.Now;
-                measurement.CompleteOperation(started, null, completed);
+                if (measurement.CompleteOperation(started) && !warmup) sets.Window.TrySet(sequence);
                 if (warmup)
                 {
                     if (measurement.SetupEvidence.Length == 0) measurement.SetupEvidence =
                         [new { kind = "warmupMarkerPublished", source = "IZLinkFanoutClient.Publish.Async", observedValue = message.sequence }];
                 }
-                else (completed < measurement.EndTicks ? sets.Window : sets.Settle).TrySet(sequence);
             }
             catch (Exception error) { measurement.CompleteOperation(started, error); }
         }
@@ -91,11 +89,9 @@ public sealed class PubSubFanoutEchoScenario
 
     private void Enrich(PerfMetricsSnapshot snapshot)
     {
-        var current = sets;
         FanoutMetrics.ApplyCommon(snapshot, hasDeliveryOwner: false);
+        var current = sets;
         FanoutMetrics.Value(snapshot, "messages.publishedInWindow", DecimalText.Of(current.Window.Count));
-        FanoutMetrics.Value(snapshot, "messages.settlePublished", DecimalText.Of(current.Settle.Count));
-        FanoutMetrics.Value(snapshot, "messages.published", DecimalText.Of(current.Window.Count + current.Settle.Count));
         var seconds = snapshot.window.measuredSeconds;
         if (seconds > 0) FanoutMetrics.Value(snapshot, "fanout.publishOpsPerSec", current.Window.Count / seconds.Value);
         else FanoutMetrics.Null(snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.");
@@ -108,7 +104,7 @@ public sealed class PubSubFanoutEchoScenario
         {
             runId = config.runId, cellId = config.cellId, resetSeq = snapshot.resetSeq, phase = "measured",
             attemptedRanges = last > measuredBase ? [new(measuredBase + 1, last)] : [],
-            windowSuccessRanges = current.Window.Ranges(), settleSuccessRanges = current.Settle.Ranges()
+            windowSuccessRanges = current.Window.Ranges()
         });
     }
 }

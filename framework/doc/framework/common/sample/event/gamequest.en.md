@@ -482,10 +482,15 @@ cannot distinguish "no replacement ran" from "the runner looked at the wrong fil
 
 **The last three rows require actually creating those situations.**
 
-- §9-8 holds only if the next intent runs after `ClosePlayerQuestMsg`. .NET, Java, and Kotlin can
-  already send that message through their Mission self-check endpoint. Node uses
-  `ClosePlayerQuestReq/Res` in the same place, and C++ has the handler but exposes no path to it from
-  the client — both are **sample-contract fixes and need no framework change.**
+- §9-8 holds only if the next intent runs after `ClosePlayerQuestMsg`. All five languages have a
+  path that sends that message. Accepting `ClosePlayerQuestMsg` guarantees neither that the Close
+  started nor that it finished, so after it observes the owner entering its `OnClosing` callback
+  the scenario sends the Instance intent request `SyncQuestProgressReq` from the same client.
+  That observation only confirms that the Close request is already in. The request is placed after
+  the Close work item and runs on the new generation
+  ([Spot address messaging §7](../../spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
+  The scenario verifies that one request's terminal and the event stream replay in the new
+  generation. It uses no fixed wait and no resend.
 - §9-9 holds only if the next gameplay call runs after the Ready owner process is killed. This needs
   no new endpoint or message type — the existing `KillMonsterReq` suffices — but it does require
   **runner stage control: read an owner-ready marker, identify and kill that Mission process, then

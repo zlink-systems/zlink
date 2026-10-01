@@ -3,7 +3,6 @@
 // The CS client process (§6.2, §6.1 Client): options, the scenario named by the cell id, and the runner's stdin/stdout
 // JSON control pipe (§16). The measured connector calls live in the scenario headers.
 
-#include "metrics_client.hpp"
 #include "session_echo_only_scenario.hpp"
 
 #include <iostream>
@@ -32,6 +31,7 @@ int main (int argc, char **argv)
     config.run_id = manifest.run_id;
     config.cell_id = manifest.cell_id;
     config.config_hash = manifest.config_hash;
+    config.language = manifest.language;
     config.role = "client";
     config.role_instance = index;
     config.scenario = manifest.cell_id.substr (0, manifest.cell_id.find ('/'));
@@ -45,7 +45,6 @@ int main (int argc, char **argv)
     std::unique_ptr<session_echo_only_scenario_t> scenario;
     if (cs)
         scenario = std::make_unique<session_echo_only_scenario_t> (manifest, measurement, index);
-    const metrics_client_t admin (manifest);
     if (scenario)
         scenario->prepare ();
     reply ({{"type", "prepared"}, {"ok", !measurement.has_errors ()}, {"snapshot", measurement.snapshot (nullptr)}});
@@ -58,10 +57,6 @@ int main (int argc, char **argv)
             if (command == "start")
                 response = measurement.start (document.at ("request").get<trigger_request_t> (),
                                               scenario ? workload_fn_t ([&] (const loops_t &loops) { scenario->run (loops); }) : workload_fn_t{});
-            else if (command == "triggerRoles")
-                response = admin.trigger_roles (document.at ("request").get<trigger_request_t> ());
-            else if (command == "resetRoles")
-                response = admin.reset_roles (document.at ("request").get<reset_request_t> ());
             else if (command == "reset")
                 response = measurement.reset (document.at ("request").get<reset_request_t> (), nullptr).first;
             else if (command == "wait") {

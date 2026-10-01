@@ -174,6 +174,7 @@ distinguishes what the Framework does based on current authority when a message 
 | `Ready` with a valid owner lease | Sends the message to the current owner. Doesn't start cold activation. |
 | The `Ready` owner process terminated, or the owner lease is invalid | Doesn't automatically release the authority record or create a new incarnation on a different node. The operation ends with `Unavailable`. |
 | The application's explicit `Close` finished, including authority release | A subsequent lookup returns `Missing`. The next Instance-intent message can start cold activation of a new `ObjectGeneration`. |
+| The application's explicit `Close` is in progress | Forwarding and the execution target of an Instance-intent message follow [Spot address messaging §§7 and 9](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | A planned `Relocate` is in progress or finished | Moves the same object and `ObjectGeneration` to the target per the relocation contract. Not treated as cold activation or crash failover. |
 
 So the behavior "once the process terminates and the lease expires, the next message reactivates

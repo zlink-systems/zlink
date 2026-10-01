@@ -12,8 +12,17 @@
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+struct ambient_context_hooks_t;
+}
+
 namespace zlink::framework::runtime
 {
+
+// Ambient flow and actor capture for Framework continuations; installed by
+// install_host_context_hooks().
+const framework::detail::ambient_context_hooks_t &ambient_flow_hooks () noexcept;
 
 /* flow_id wire form (flow-correlation §6): lowercase hyphenated UUIDv7,
  * 36 ASCII bytes. The generation algorithm is a framework-internal decision;

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -73,10 +74,10 @@ class FanoutSupportTest {
     }
 
     @Test
-    void anOriginalIsWrittenOnceAndNeverReplaced(@TempDir Path directory) throws Exception {
+    void anOriginalCollisionFailsAndNeverReplacesTheFirstFile(@TempDir Path directory) throws Exception {
         Path path = directory.resolve("fanout.json");
         FanoutSupport.writeOnce(path, Map.of("value", 1));
-        FanoutSupport.writeOnce(path, Map.of("value", 2));
+        assertThrows(IllegalStateException.class, () -> FanoutSupport.writeOnce(path, Map.of("value", 2)));
         String text = Files.readString(path);
         assertTrue(text.contains("1"));
         assertFalse(text.contains("2"));
@@ -84,7 +85,7 @@ class FanoutSupportTest {
 
     @Test
     void fanoutRolesReplaceEchoMetricsWithReasonedNullsAndTheEventRow() {
-        RoleConfig config = new RoleConfig("test", "pubsub-fanout-echo/1024/x", "a".repeat(64), "publisher", 0,
+        RoleConfig config = new RoleConfig("test", "pubsub-fanout-echo/1024/x", "a".repeat(64), "java", "publisher", 0,
                 "pubsub-fanout-echo", "publish", "ordinary", null, null, null, Map.of(), null, "", "", true, "None", true, null,
                 List.of(), List.of(), null, null, null, "Framework default",
                 new RoleConfig.Workload(1024, .05, .05, 1, null, 1, 1, null, 1000, 1000, 5000, 30000, 5000, 1000), null, Map.of());
@@ -106,8 +107,8 @@ class FanoutSupportTest {
             });
             assertFalse(snapshot.nullReasons.containsKey("/histograms/latencyMs/maxNs"));
         }
-        FanoutSupport.value(snapshot, "messages.published", "7");
-        assertEquals("7", snapshot.metrics.get("messages.published"));
-        assertFalse(snapshot.nullReasons.containsKey("/metrics/messages.published"));
+        FanoutSupport.value(snapshot, "messages.publishedInWindow", "7");
+        assertEquals("7", snapshot.metrics.get("messages.publishedInWindow"));
+        assertFalse(snapshot.nullReasons.containsKey("/metrics/messages.publishedInWindow"));
     }
 }

@@ -12,6 +12,18 @@ from typing import Callable
 
 from scenarios import EXECUTABLES as ROLES
 
+PACKAGES_FILE = Path(__file__).resolve().parents[1] / "schema/packages.json"
+
+
+def declared_framework_version(language: str) -> str:
+    packages = json.loads(PACKAGES_FILE.read_text())
+    if not isinstance(packages, dict) or set(packages) != set(LAUNCHERS):
+        raise ValueError("Perf packages.json must declare every supported Framework language")
+    version = packages.get(language)
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"Perf packages.json has no Framework version for '{language}'")
+    return version
+
 
 @dataclass(frozen=True)
 class Launcher:
@@ -59,7 +71,7 @@ def _dotnet_provenance(perf_dir: Path, roles: list[str]) -> dict:
         "packages": listed_packages,
         "frameworkVersion": version_of("Zlink.Framework"),
         "bindingVersion": version_of("Zlink"),
-        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
+        "declaredFrameworkVersion": declared_framework_version("dotnet"),
         "runtimeSettings": runtime_settings,
         "dotnetInfo": subprocess.check_output(["dotnet", "--info"], text=True),
         "installedRuntimes": subprocess.check_output(["dotnet", "--list-runtimes"], text=True),
@@ -84,12 +96,14 @@ def _node_output(perf_dir: Path, role: str) -> Path:
 
 
 def _node_build(perf_dir: Path, role: str) -> list[str]:
-    # Each role build reuses node_modules only when its lock hash matches. npm ci must leave the lock unchanged.
+    # Each role build reuses node_modules only when its lock hash and package source match. npm ci must leave the lock
+    # unchanged; a local build relinks workspace packages, so a published build after it installs again.
     script = r'''set -euo pipefail
 cd "$1"
 lock_hash=$(sha256sum package-lock.json | cut -d ' ' -f 1)
 marker="node_modules/.zlink-perf-package-lock.sha256"
-if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$lock_hash" ]; then
+install_key="$lock_hash $ZLINK_PERF_PACKAGE_SOURCE"
+if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$install_key" ]; then
   set +e
   npm ci --no-audit --no-fund --loglevel=error
   npm_status=$?
@@ -102,7 +116,7 @@ if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$lock_hash" ]; then
   if [ "$npm_status" -ne 0 ]; then
     exit "$npm_status"
   fi
-  printf '%s\n' "$installed_lock_hash" > "$marker.tmp"
+  printf '%s\n' "$install_key" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
 fi
 npm run build'''
@@ -126,7 +140,7 @@ def _node_provenance(perf_dir: Path, roles: list[str]) -> dict:
         "packages": sorted(packages.values(), key=lambda item: item["name"]),
         "frameworkVersion": packages["@zlink-systems/framework"]["version"],
         "bindingVersion": packages["@zlink-systems/zlink"]["version"],
-        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
+        "declaredFrameworkVersion": declared_framework_version("node"),
         "runtimeSettings": {"node": {"execPath": _node_binary(), "versions": node_versions,
                                      "arguments": []}},
         "installedRuntimes": subprocess.check_output(["node", "--version"], text=True).strip(),
@@ -148,11 +162,12 @@ def _cpp_target(role: str) -> str:
 
 
 def _cpp_provenance(perf_dir: Path, roles: list[str]) -> dict:
-    """The C++ perf links the published framework-cpp package that samples/bootstrap.cmake extracted into .zlink/install
-    (§17.5): Core is loaded dynamically, the binding is static, Framework is a shared library of the package."""
+    """The C++ perf links the framework-cpp package in .zlink/install (§17.5): samples/bootstrap.cmake extracts the release
+    asset (published) or scripts/build_role.sh installs this checkout (local). Core is loaded dynamically, the binding is
+    static, Framework is a shared library of the package."""
     install = perf_dir / ".zlink" / "install"
     downloads = perf_dir / ".zlink" / "downloads"
-    declared = _declared_framework_version(perf_dir)
+    declared = declared_framework_version("cpp")
 
     def sha256(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -162,8 +177,9 @@ def _cpp_provenance(perf_dir: Path, roles: list[str]) -> dict:
         match = re.search(r'set\(PACKAGE_VERSION "([^"]+)"\)', found.read_text()) if found.is_file() else None
         return match.group(1) if match else None
 
-    archives = sorted(downloads.glob("zlink-framework-cpp-*.tar.gz")) if downloads.is_dir() else []
     framework = cmake_version("zlink_framework", "zlink_frameworkConfigVersion.cmake")
+    # A local build removes the downloaded release assets, so an archive here is the one the installed package came from.
+    archives = sorted(downloads.glob(f"zlink-framework-cpp-{framework}-*.tar.gz")) if framework and downloads.is_dir() else []
     binding = cmake_version("zlink_cpp", "zlink_cppConfigVersion.cmake")
     artifacts = []
     packages = []
@@ -218,11 +234,11 @@ def _java_install(perf_dir: Path, role: str) -> Path:
 
 
 def _gradle_install_dist(perf_dir: Path, project: str) -> list[str]:
-    return ["flock", "--exclusive", "--close", JAVA_LOCK, str(perf_dir.parent / "gradlew"), "--project-dir", str(perf_dir),
-            project + ":installDist", "-q"]
+    return ["flock", "--exclusive", "--close", JAVA_LOCK, "bash", str(perf_dir / "scripts/build_role.sh"), str(perf_dir),
+            project + ":installDist"]
 
 
-def _java_provenance(perf_dir: Path, roles: list[str]) -> dict:
+def _java_provenance(language: str, perf_dir: Path, roles: list[str]) -> dict:
     """Packages are what Gradle resolved into each role's installDist lib folder (published Maven artifacts only)."""
     artifacts, packages, runtime_settings = [], {}, {}
     jackson = None
@@ -250,7 +266,7 @@ def _java_provenance(perf_dir: Path, roles: list[str]) -> dict:
         # The launcher reports the versions resolved into the published Maven installDist artifacts.
         "frameworkVersion": version_of("systems.zlink:zlink-framework-core"),
         "bindingVersion": version_of("systems.zlink:zlink"),
-        "declaredFrameworkVersion": _declared_framework_version(perf_dir),
+        "declaredFrameworkVersion": declared_framework_version(language),
         "runtimeSettings": runtime_settings,
         "installedRuntimes": java,
         "javaHome": os.environ.get("JAVA_HOME"),
@@ -297,7 +313,7 @@ LAUNCHERS = {
     "java": Launcher(
         build=lambda perf_dir, role: _gradle_install_dist(perf_dir, ":" + _java_module(role)),
         command=lambda perf_dir, role: [str(_java_install(perf_dir, role) / "bin" / _java_module(role))],
-        provenance=_java_provenance,
+        provenance=lambda perf_dir, roles: _java_provenance("java", perf_dir, roles),
         loaded_artifact_markers=("libzlink.so", ".jar"),
         stream_scheme="tcp",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/java/interfaces/monitoring.ko.md:227",
@@ -307,7 +323,7 @@ LAUNCHERS = {
     "kotlin": Launcher(
         build=lambda perf_dir, role: _gradle_install_dist(perf_dir.parent, ":kotlin:" + _java_module(role)),
         command=lambda perf_dir, role: [str(_java_install(perf_dir, role) / "bin" / _java_module(role))],
-        provenance=_java_provenance,
+        provenance=lambda perf_dir, roles: _java_provenance("kotlin", perf_dir, roles),
         loaded_artifact_markers=("libzlink.so", ".jar"),
         stream_scheme="tcp",
         clientserver_interface="framework/doc/framework/common/spec/server/languages/kotlin/interfaces/monitoring.ko.md:39",
@@ -315,16 +331,6 @@ LAUNCHERS = {
                           "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkTopologyRuntimeViews.java:71.",
     ),
 }
-
-
-def _declared_framework_version(perf_dir: Path) -> str | None:
-    """Read the nearest language VERSION file, including shared build-root children such as Kotlin."""
-    for directory in (perf_dir, *perf_dir.parents):
-        version_file = directory / "VERSION"
-        if version_file.is_file():
-            return next((line.split("=", 1)[1].strip() for line in version_file.read_text().splitlines()
-                         if line.startswith("ZLINK_FRAMEWORK_VERSION=")), None)
-    return None
 
 
 def launcher(language: str) -> Launcher:

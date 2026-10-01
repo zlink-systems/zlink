@@ -47,18 +47,23 @@ public final class SpotWorkerOffloadEchoScenario {
     private final ZLinkRouteClient spots;
     private final ZLinkSpotManager manager;
     private final Measurement measurement;
+    private final ScenarioMetrics metrics;
+    private final WorkerSamples workerSamples;
     private final ZLinkRouteMeshRuntime meshRuntime;
     private final ObjectsReadiness readiness;
     private AtomicLongArray sequences = new AtomicLongArray(0);
 
     public SpotWorkerOffloadEchoScenario(ZLinkRouteClient spots, ZLinkSpotManager manager, Measurement measurement,
-            ZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness) {
+            ScenarioMetrics metrics, WorkerSamples workerSamples, ZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness) {
         this.config = measurement.config();
         this.spots = spots;
         this.manager = manager;
         this.measurement = measurement;
+        this.metrics = metrics;
+        this.workerSamples = workerSamples;
         this.meshRuntime = meshRuntime;
         this.readiness = readiness;
+        measurement.onReset(workerSamples::clear);
     }
 
     public static void run(RoleConfig config) {
@@ -79,9 +84,6 @@ public final class SpotWorkerOffloadEchoScenario {
         workerOptions.put("taskMillis", worker.taskMillis());
         workerOptions.put("applied", applied);
         workerOptions.put("callTimeoutMs", worker.workerTimeoutMs());
-        workerOptions.put("maxQueueLength", null);
-        workerOptions.put("maxQueueLengthReason", "The Java public ZLinkWorkerOptions has no queue length; the requested "
-                + worker.maxQueueLength() + " is not applied.");
         app.bean(ScenarioMetrics.class, () -> new ScenarioMetrics(app.measurement())
                 .counters("spot.applicationHandlerEntries", "spot.applicationYieldCalls")
                 .latency("workerCallLatencyMs", "worker.callLatency").latency("workerSubmitToStartMs", "worker.submitToStart")
@@ -91,6 +93,7 @@ public final class SpotWorkerOffloadEchoScenario {
                         "worker.pool.queueDepth.max", "worker.pool.queueDepth.mean")
                 .spotInternalsUnsupported()
                 .provenance("workerOptions", workerOptions));
+        app.bean(WorkerSamples.class);
         app.bean(SpotWorkerOffloadEchoScenario.class);
         app.workload(SpotWorkerOffloadEchoScenario.class, SpotWorkerOffloadEchoScenario::run);
         app.start().getBean(SpotWorkerOffloadEchoScenario.class).prepare();
@@ -149,6 +152,11 @@ public final class SpotWorkerOffloadEchoScenario {
                 return Optional.empty();
             }
             PerfEchoRequest sent = request.withSentTicks(started);
+            boolean measured = "measured".equals(sent.phase());
+            if (measured && !workerSamples.begin(sent.correlationId())) {
+                measurement.completeOperation(started, new IllegalStateException("Worker timing correlation was already active."));
+                return Optional.empty();
+            }
             CompletionStage<PerfEchoReply> call;
             try {
                 call = spots.requestToSpot(spotId, sent)
@@ -162,12 +170,12 @@ public final class SpotWorkerOffloadEchoScenario {
                     try {
                         PayloadPattern.validateIdentity(sent, reply);
                         measurement.pattern().validate(reply.payload());
-                        measurement.completeOperation(started);
+                        workerSamples.complete(measurement, started, sent.correlationId(), null, PerfClock.now(), metrics);
                     } catch (RuntimeException invalid) {
-                        measurement.completeOperation(started, invalid);
+                        workerSamples.complete(measurement, started, sent.correlationId(), invalid, null, metrics);
                     }
                 } else {
-                    measurement.completeOperation(started, error);
+                    workerSamples.complete(measurement, started, sent.correlationId(), error, null, metrics);
                 }
             }));
         });
@@ -185,11 +193,14 @@ public final class SpotWorkerOffloadEchoScenario {
             implements ZLinkSpotRequestHandler<SpotWorkerOffloadSpot, PerfEchoRequest, PerfEchoReply> {
         private final Measurement measurement;
         private final ScenarioMetrics metrics;
+        private final WorkerSamples workerSamples;
         private final RoleConfig config;
 
-        public SpotWorkerOffloadHandler(Measurement measurement, ScenarioMetrics metrics, RoleConfig config) {
+        public SpotWorkerOffloadHandler(Measurement measurement, ScenarioMetrics metrics, WorkerSamples workerSamples,
+                RoleConfig config) {
             this.measurement = measurement;
             this.metrics = metrics;
+            this.workerSamples = workerSamples;
             this.config = config;
         }
 
@@ -272,10 +283,7 @@ public final class SpotWorkerOffloadEchoScenario {
             }
             long started = DecimalText.i64(observation.startedTicks());
             long ended = DecimalText.i64(observation.endedTicks());
-            metrics.record("workerCallLatencyMs", submitted, resumed);
-            metrics.record("workerSubmitToStartMs", submitted, started, resumed);
-            metrics.record("workerTaskLatencyMs", started, ended, resumed);
-            metrics.record("workerResultToContinuationMs", ended, resumed, resumed);
+            workerSamples.observe(request.correlationId(), new WorkerSamples.Intervals(submitted, started, ended, resumed));
         }
     }
 }

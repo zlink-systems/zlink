@@ -74,8 +74,10 @@ class ChannelSpotReturnHandler(
         val received = PerfClock.now()
         measurement.handlerEnter()
         try {
-            val returnSpotId = message.returnSpotId()
-            if (returnSpotId.isNullOrEmpty()) throw PerfValidationException("IdentityMismatch", "No return SpotId in the request.")
+            if (message.clientId() < 0 || config.spotIds().isEmpty()) {
+                throw PerfValidationException("IdentityMismatch", "The request has no source Spot in this cell.")
+            }
+            val returnSpotId = config.spotIds()[message.clientId() % config.spotIds().size]
             measurement.validateRequest(message, null, returnSpotId)
             val reply = PayloadPattern.reply(message, received)
             measurement.recordApplicationCall(message, "send")

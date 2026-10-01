@@ -8,6 +8,7 @@ public record EndpointManifest(
         String runId,
         String cellId,
         String configHash,
+        String language,
         RoleConfig.Workload workload,
         List<EndpointRole> roles,
         Map<String, Object> provenance) {

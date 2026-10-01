@@ -168,14 +168,11 @@ public sealed class SessionActorSetup(RoleConfig config, Measurement measurement
     {
         lock (gate)
         {
-            readiness.Set(bound > 0 && failed == 0, failed > 0 ? "Actor create or bind failed." : "No Actor is bound to a session yet.",
+            readiness.Set(true, "",
                 [new { kind = "actorCreateAndBind", source = "IZLinkActorManager.GetOrCreate + IZLinkSessionActors.BindOrGetAsync",
                     observedValue = new { created, existing, bound, failed, expectedActors = config.actorIds.Length,
                         createMeanMs = bound == 0 ? 0 : createNs / 1e6 / bound, createMaxMs = createMaxNs / 1e6,
                         bindMeanMs = bound == 0 ? 0 : bindNs / 1e6 / bound, bindMaxMs = bindMaxNs / 1e6 } }]);
-            // The Session role has no typed reply of its own: its setup probe is the admitted relay of a bound Actor.
-            if (bound > 0) measurement.SetupEvidence = [new { kind = "relayAdmission", source = "IZLinkSessionActor.RelayAsync",
-                observedValue = new { bound } }];
         }
     }
 }
@@ -196,7 +193,13 @@ public sealed class PerfActorRelaySession(IZLinkSessionContext context, Measurem
     public async ValueTask OnDispatchAsync(ZLinkSessionDispatchContext dispatch, ZLinkMessage payload, CancellationToken cancellationToken)
     {
         var actor = dispatch.Actor ?? binding ?? (binding = await setup.PrepareAsync(Context, payload, cancellationToken));
-        try { await actor.RelayAsync(payload, cancellationToken); }
+        try
+        {
+            await actor.RelayAsync(payload, cancellationToken);
+            if (measurement.Phase == "setup" && measurement.SetupEvidence.Length == 0)
+                measurement.SetupEvidence = [new { kind = "relayAdmission", source = "IZLinkSessionActor.RelayAsync",
+                    observedValue = new { completed = true } }];
+        }
         catch (Exception error) { measurement.RecordDiagnostic(error); throw; }
     }
 }

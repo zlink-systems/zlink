@@ -656,7 +656,7 @@ Metadata의 공개 계약은 다음과 같다.
 
 | 항목 | 계약 |
 |---|---|
-| Key와 value | UTF-8이며 NUL을 포함하지 않는다. |
+| Key와 value | UTF-8이며 NUL을 포함하지 않는다. Key는 비어 있지 않다. |
 | 전체 크기 | Encoding된 key, value와 구조 overhead를 모두 합쳐 최대 1024 bytes다. |
 | 같은 key를 여러 번 설정 | 마지막 값이 전송된다. |
 | Handler에서 읽기 | 변경할 수 없는 snapshot으로 제공하며 handler turn이 끝난 뒤 보관하려면 application이 복사한다. |

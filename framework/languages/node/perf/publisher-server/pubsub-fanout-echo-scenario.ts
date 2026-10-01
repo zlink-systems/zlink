@@ -14,7 +14,7 @@ import { runLoops, until } from '../server-support/wait';
 export class PubSubFanoutEchoScenario {
   private issued = 0; // run-wide: warmup and measured ranges never overlap
   private measuredBase = 0; // `issued` when the measured epoch was reset
-  private sets = { window: new SequenceBitSet(), settle: new SequenceBitSet() };
+  private windowSuccesses = new SequenceBitSet();
   private readonly sequenceFile: string;
 
   constructor(
@@ -24,7 +24,7 @@ export class PubSubFanoutEchoScenario {
     this.sequenceFile = path.join(cellDirectory, 'publisher-sequences.json');
     measurement.onReset = () => {
       this.measuredBase = this.issued;
-      this.sets = { window: new SequenceBitSet(), settle: new SequenceBitSet() };
+      this.windowSuccesses = new SequenceBitSet();
     };
     measurement.messageTypes = [{ direction: 'event', packetName: 'PerfPublishEvent' }];
     measurement.enrichSnapshot = (snapshot) => this.enrich(snapshot);
@@ -58,10 +58,10 @@ export class PubSubFanoutEchoScenario {
       try {
         await this.fanout.publish(config.channelName!, FanoutMetrics.topic, message).submit();
         const completed = PerfClock.now();
-        measurement.completeOperation(started, undefined, completed);
+        const windowSuccess = measurement.completeOperation(started, undefined, completed);
         if (warmup) {
           if (measurement.setupEvidence.length === 0) measurement.setupEvidence = [{ kind: 'warmupMarkerPublished', source: 'ZLinkFanoutClient.publish.submit', observedValue: message.sequence }];
-        } else (completed < measurement.endTicks ? this.sets.window : this.sets.settle).trySet(sequence);
+        } else if (windowSuccess) this.windowSuccesses.trySet(sequence);
       } catch (error) {
         measurement.completeOperation(started, error);
       }
@@ -69,13 +69,10 @@ export class PubSubFanoutEchoScenario {
   }
 
   private enrich(snapshot: Parameters<NonNullable<Measurement['enrichSnapshot']>>[0]): void {
-    const current = this.sets;
     FanoutMetrics.applyCommon(snapshot, false);
-    FanoutMetrics.value(snapshot, 'messages.publishedInWindow', String(current.window.count));
-    FanoutMetrics.value(snapshot, 'messages.settlePublished', String(current.settle.count));
-    FanoutMetrics.value(snapshot, 'messages.published', String(current.window.count + current.settle.count));
+    FanoutMetrics.value(snapshot, 'messages.publishedInWindow', String(this.windowSuccesses.count));
     const seconds = snapshot.window.measuredSeconds;
-    if (seconds !== null && seconds > 0) FanoutMetrics.value(snapshot, 'fanout.publishOpsPerSec', current.window.count / seconds);
+    if (seconds !== null && seconds > 0) FanoutMetrics.value(snapshot, 'fanout.publishOpsPerSec', this.windowSuccesses.count / seconds);
     else FanoutMetrics.setNull(snapshot, 'fanout.publishOpsPerSec', 'PHASE_NOT_STARTED', 'No measured window has run.');
     snapshot.provenance.fanout = { channelName: this.config.channelName, topic: FanoutMetrics.topic, noDrop: false,
       publisherSequenceScope: 'one counter per run; warmup and measured ranges are disjoint', sequenceOriginal: 'publisher-sequences.json' };
@@ -84,7 +81,7 @@ export class PubSubFanoutEchoScenario {
     const original: PublisherSequences = {
       runId: this.config.runId, cellId: this.config.cellId, resetSeq: snapshot.resetSeq, phase: 'measured',
       attemptedRanges: last > this.measuredBase ? [{ first: String(this.measuredBase + 1), last: String(last) }] : [],
-      windowSuccessRanges: current.window.ranges(), settleSuccessRanges: current.settle.ranges()
+      windowSuccessRanges: this.windowSuccesses.ranges()
     };
     FanoutMetrics.writeOnce(this.sequenceFile, original);
   }

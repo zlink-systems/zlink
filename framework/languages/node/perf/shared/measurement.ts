@@ -10,7 +10,7 @@ import { MetricCatalog } from './metric-catalog';
 import { PayloadPattern } from './payload';
 import { ProcessSampler } from './process-sampler';
 
-export type MeasurementConfig = Pick<RoleConfig, 'runId' | 'cellId' | 'configHash' | 'role' | 'roleInstance' | 'workload' | 'provenance'>;
+export type MeasurementConfig = Pick<RoleConfig, 'runId' | 'cellId' | 'configHash' | 'language' | 'role' | 'roleInstance' | 'workload' | 'provenance'>;
 
 export interface PerfMetricsSnapshot {
   schemaVersion: number;
@@ -28,7 +28,6 @@ export interface PerfMetricsSnapshot {
     startTicks: string | null;
     endTicks: string | null;
     measuredSeconds: number | null;
-    settleSeconds: number | null;
   };
   clock: ClockMetadata;
   serializedMessageBytes: { direction: string; packetName: string; logicalPayloadBytes: string; observedSerializedBytes: string | null }[];
@@ -48,7 +47,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export class Measurement {
   private readonly sampler = new ProcessSampler();
   private latency = new Histogram();
-  private settleLatency = new Histogram();
   private counts = new Map<string, number>();
   private byKind = new Map<string, number>();
   private harness = new Map<string, number>();
@@ -61,7 +59,6 @@ export class Measurement {
   private activeHandlers = 0;
   private start = 0n;
   private end = 0n;
-  private settledAt = 0n;
   private startUnix: string | null = null;
   private endUnix: string | null = null;
   private currentPhase = 'setup';
@@ -76,11 +73,12 @@ export class Measurement {
   connected = 0;
   connectionFailures = 0;
   setupEvidence: unknown[] = [];
+  preparationEvidence: Record<string, unknown> = {};
   samplePublicState: (() => unknown) | undefined;
   // A scenario's own counters: cleared with the window at reset, and added to every snapshot (family metrics, §14).
   onReset: (() => void) | undefined;
   enrichSnapshot: ((snapshot: PerfMetricsSnapshot) => void) | undefined;
-  // True only while the runner reads the final snapshot of a phase (§4.1: the settle ends with that read).
+  // True only while the runner reads the final snapshot that seals phase-owned artifacts.
   finalSnapshot = false;
   // The typed messages this scenario's measured path carries, one serializedMessageBytes row each (§15.2).
   messageTypes: { direction: string; packetName: string }[] = [{ direction: 'request', packetName: 'PerfEchoRequest' }, { direction: 'reply', packetName: 'PerfEchoReply' }];
@@ -91,6 +89,7 @@ export class Measurement {
 
   get phase(): string { return this.currentPhase; }
   get resetSeq(): string { return this.currentResetSeq; }
+  get startTicks(): bigint { return this.start; }
   get endTicks(): bigint { return this.end; }
   get phaseTask(): Promise<void> { return this.phaseDone; }
   get canIssue(): boolean { return !this.sealedResults && this.start !== 0n && PerfClock.now() < this.end; }
@@ -108,7 +107,8 @@ export class Measurement {
   }
 
   // A send/send request names its return address (§10.4, §10.6); an echo request names none.
-  validateRequest(request: PerfEchoRequest, returnChannel: string | null = null, returnSpotId: string | null = null): void {
+  validateRequest(request: PerfEchoRequest, returnChannel: string | null = null,
+    returnSpotId: string | null = null): void {
     if (
       request.runId !== this.config.runId || request.cellId !== this.config.cellId || !(request.clientId >= 0) ||
       (request.phase !== 'warmup' && request.phase !== 'measured') || request.returnSpotId !== returnSpotId || request.returnChannel !== returnChannel ||
@@ -153,6 +153,7 @@ export class Measurement {
   }
 
   private async runPhase(workload: (() => Promise<void>) | undefined): Promise<void> {
+    const phase = this.currentPhase;
     let operations: Promise<void>;
     try {
       operations = workload ? workload() : Promise.resolve();
@@ -173,18 +174,8 @@ export class Measurement {
     }
     this.sampler.end();
     this.endUnix = PerfClock.unixMs();
-    this.currentPhase = 'settle';
-    const settleBoundNs = this.end + BigInt(this.config.workload.settleTimeoutMs) * 1_000_000n - PerfClock.now();
-    let timer: NodeJS.Timeout | undefined;
-    const bound = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), Math.max(0, Number(settleBoundNs) / 1e6)); });
-    const outcome = await Promise.race([operations.then(() => 'done' as const), bound]);
-    clearTimeout(timer);
-    if (outcome === 'timeout') this.recordDiagnostic(new PerfValidationException('SettleIncomplete', 'The measured cohort did not finish inside settleTimeoutMs.'));
-    this.settledAt = PerfClock.now();
-    if (this.primary) {
-      this.counts.set('unresolved', this.inflight);
-      this.sealedResults = true;
-    }
+    if (phase === 'warmup') await operations;
+    else this.sealedResults = true;
     this.currentPhase = 'complete';
     this.phaseFinished = true;
   }
@@ -203,8 +194,8 @@ export class Measurement {
     }
     this.counts.clear(); this.byKind.clear(); this.harness.clear(); this.language.clear(); this.errors = []; this.directional.clear();
     this.publicStateSamples.length = 0;
-    this.latency = new Histogram(); this.settleLatency = new Histogram(); this.maxInflight = 0;
-    this.start = this.end = this.settledAt = 0n; this.startUnix = this.endUnix = null; this.sealedResults = false;
+    this.latency = new Histogram(); this.maxInflight = 0;
+    this.start = this.end = 0n; this.startUnix = this.endUnix = null; this.sealedResults = false;
     this.onReset?.();
     this.currentResetSeq = request.resetSeq;
     this.currentPhase = 'reset';
@@ -228,15 +219,18 @@ export class Measurement {
   }
 
   // completedTicks: a send/send echo keeps the time it was observed even when the first send's terminal comes later (§13).
-  completeOperation(started: bigint, error?: unknown, completedTicks?: bigint): void {
+  completeOperation(started: bigint, error?: unknown, completedTicks?: bigint): boolean {
     const completed = completedTicks ?? PerfClock.now();
-    if (this.sealedResults) return;
+    if (this.sealedResults) return false;
     this.inflight--;
-    if (error === undefined || error === null) {
-      const inWindow = completed < this.end;
-      this.increment(this.counts, inWindow ? 'completed' : 'settleCompleted');
-      (inWindow ? this.latency : this.settleLatency).record(completed - started);
-    } else this.recordError(error, true);
+    if (completed >= this.end) return false;
+    if (error !== undefined && error !== null) {
+      this.recordError(error, true);
+      return false;
+    }
+    this.increment(this.counts, 'completed');
+    this.latency.record(completed - started);
+    return true;
   }
 
   handlerEnter(): void { this.activeHandlers++; }
@@ -259,6 +253,7 @@ export class Measurement {
       const shaped = error as Error;
       this.errors.push({ type: error instanceof Error ? error.constructor.name : typeof error, message: error instanceof Error ? shaped.message : String(error),
         publicKind: classified.publicKind, harnessKind: classified.harnessKind, connectorCode: classified.connectorCode,
+        unrecognizedFrameworkKind: classified.unrecognizedFrameworkKind ?? null,
         stack: error instanceof Error ? (shaped.stack ?? '').split('\n').slice(0, 6) : null });
     }
   }
@@ -277,16 +272,18 @@ export class Measurement {
     const workload = this.config.workload;
     MetricCatalog.baselineNulls(metrics, histograms, reasons);
     for (const key of MetricCatalog.outcomes) {
-      if (this.primary) metrics[`messages.${key}`] = String(key === 'unresolved' && !this.sealedResults ? this.inflight : this.count(key));
+      if (this.primary) {
+        const inflightAtEnd = this.count('sent') - this.count('completed') - this.count('failed') - this.count('timeout') - this.count('cancelled');
+        metrics[`messages.${key}`] = String(key === 'inflightAtEnd' ? inflightAtEnd : this.count(key));
+      }
       else MetricCatalog.setNull(metrics, reasons, 'metrics', `messages.${key}`, 'NOT_APPLICABLE', 'Echo outcomes belong to the source process.');
     }
     if (this.primary) {
       this.latency.export('latencyMs', 'latency', metrics, histograms, reasons);
-      this.settleLatency.export('settleLatencyMs', 'settle.latency', metrics, histograms, reasons);
     } else {
-      for (const prefix of ['latency', 'settle.latency'])
-        for (const suffix of ['meanMs', 'p50Ms', 'p95Ms', 'p99Ms', 'maxMs']) MetricCatalog.setNull(metrics, reasons, 'metrics', `${prefix}.${suffix}`, 'NOT_APPLICABLE', 'RTT belongs to the source process.');
-      for (const key of ['latencyMs', 'settleLatencyMs']) MetricCatalog.setNull(histograms, reasons, 'histograms', key, 'NOT_APPLICABLE', 'RTT belongs to the source process.');
+      for (const suffix of ['meanMs', 'p50Ms', 'p95Ms', 'p99Ms', 'maxMs'])
+        MetricCatalog.setNull(metrics, reasons, 'metrics', `latency.${suffix}`, 'NOT_APPLICABLE', 'RTT belongs to the source process.');
+      MetricCatalog.setNull(histograms, reasons, 'histograms', 'latencyMs', 'NOT_APPLICABLE', 'RTT belongs to the source process.');
     }
     const csClient = this.config.role === 'client' && workload.connections !== null;
     for (const key of ['requested', 'connected', 'failed']) {
@@ -323,16 +320,16 @@ export class Measurement {
         MetricCatalog.setNull(metrics, reasons, 'metrics', key, 'PHASE_NOT_STARTED', 'Process window sampling has not completed.');
     }
     runtime.setupEvidence = { name: 'setupEvidence', unit: 'observation', type: 'array', value: this.setupEvidence };
+    runtime.preparationEvidence = { name: 'preparation evidence', unit: 'observation', type: 'object', value: this.preparationEvidence };
     runtime.publicReadinessSamples = { name: 'public host readiness and pressure samples', unit: 'observation', type: 'array', value: this.publicStateSamples };
     runtime.errors = { name: 'firstErrors', unit: 'observation', type: 'array', value: this.errors };
     runtime.activeHandlers = { name: 'application active handlers', unit: 'count', type: 'integer', value: String(this.activeHandlers) };
     const window = {
       startedAtUnixMs: this.startUnix, endedAtUnixMs: this.endUnix, startTicks: this.start === 0n ? null : this.start.toString(),
-      endTicks: this.end === 0n ? null : this.end.toString(), measuredSeconds: seconds,
-      settleSeconds: this.settledAt === 0n ? null : Math.max(0, Number(this.settledAt - this.end)) / 1e9
+      endTicks: this.end === 0n ? null : this.end.toString(), measuredSeconds: seconds
     };
     for (const [key, value] of Object.entries(window))
-      if (value === null) reasons[`/window/${key}`] = nullReason('PHASE_NOT_STARTED', 'Window or settle has not completed.');
+      if (value === null) reasons[`/window/${key}`] = nullReason('PHASE_NOT_STARTED', 'Measurement window has not completed.');
     for (const key of ['alignmentMethod', 'maxErrorNs', 'validFromTicks', 'validThroughTicks'])
       reasons[`/clock/${key}`] = nullReason('NOT_APPLICABLE', 'RTT uses the caller process clock only.');
     if (publicStatus === null || publicStatus === undefined) reasons['/publicStatus'] = nullReason('NOT_APPLICABLE', 'The client has no Framework host runtime.');
@@ -348,7 +345,7 @@ export class Measurement {
         v8: process.versions.v8, nodeVersion: process.version }
     };
     const snapshot: PerfMetricsSnapshot = {
-      schemaVersion: 2, runId: this.config.runId, cellId: this.config.cellId, resetSeq: this.currentResetSeq, language: 'node', role: this.config.role,
+      schemaVersion: 2, runId: this.config.runId, cellId: this.config.cellId, resetSeq: this.currentResetSeq, language: this.config.language, role: this.config.role,
       roleInstance: this.config.roleInstance, configHash: this.config.configHash, phase: this.currentPhase, window, clock: PerfClock.metadata(),
       serializedMessageBytes: serialized, metrics, histograms, nullReasons: reasons, publicStatus: publicStatus ?? null, publicMetrics: [], runtimeMetrics: runtime, provenance
     };

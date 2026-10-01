@@ -11,20 +11,20 @@ public final class MetricCatalog {
     public static final List<String> LATENCY_SUFFIXES = List.of("meanMs", "p50Ms", "p95Ms", "p99Ms", "maxMs");
     public static final List<String> AUXILIARY_PREFIXES = List.of("actor.sourceAdmission.latency", "spot.remoteCallLatency",
             "driver.latency", "worker.callLatency", "worker.submitToStart", "worker.taskLatency",
-            "worker.resultToContinuation", "fanout.deliveryLatency", "fanout.settleDeliveryLatency");
+            "worker.resultToContinuation", "fanout.deliveryLatency");
     public static final List<String> AUXILIARY_HISTOGRAMS = List.of("sourceAdmissionMs", "driverLatencyMs",
             "workerCallLatencyMs", "workerSubmitToStartMs", "workerTaskLatencyMs", "workerResultToContinuationMs",
-            "fanoutDeliveryLatencyMs", "fanoutSettleDeliveryLatencyMs");
+            "fanoutDeliveryLatencyMs");
     public static final List<String> INAPPLICABLE = List.of("messages.admitted", "messages.expired",
             "messages.duplicateReply", "messages.lateReply", "messages.unknownCorrelation", "spot.applicationYieldCalls",
-            "spot.applicationHandlerEntries", "driver.issued", "driver.notStarted", "driver.failed", "messages.published",
-            "messages.publishedInWindow", "messages.settlePublished", "fanout.subscriberCount", "fanout.uniqueDelivered",
-            "fanout.deliveredInWindow", "fanout.settleDelivered", "fanout.duplicateEvents", "fanout.outOfCohortEvents",
+            "spot.applicationHandlerEntries", "driver.issued", "driver.notStarted", "driver.failed",
+            "messages.publishedInWindow", "fanout.subscriberCount",
+            "fanout.deliveredInWindow", "fanout.duplicateEvents", "fanout.outOfCohortEvents",
             "fanout.deliveryRatio", "fanout.publishOpsPerSec", "fanout.deliveryOpsPerSec", "spot.mailboxDepth.max",
             "spot.mailboxDepth.mean", "spot.suspendedTurns", "spot.resumedTurns", "spot.resumeLatency.p95Ms",
             "spot.resumeLatency.p99Ms", "worker.pool.queueDepth.max", "worker.pool.queueDepth.mean");
     public static final List<String> OUTCOMES =
-            List.of("sent", "completed", "settleCompleted", "failed", "timeout", "cancelled", "unresolved");
+            List.of("sent", "completed", "failed", "timeout", "cancelled", "inflightAtEnd");
 
     public static void nullValue(Map<String, Object> values, Map<String, NullReason> reasons, String container,
             String key, String code, String reason) {

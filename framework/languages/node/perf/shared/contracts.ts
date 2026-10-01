@@ -144,7 +144,7 @@ export interface Workload {
   connectConcurrency: number | null;
   requestTimeoutMs: number;
   correlationExpiryMs: number;
-  settleTimeoutMs: number;
+  driverTimeoutMs: number;
   setupTimeoutMs: number;
   adminTimeoutMs: number;
   socketSendTimeoutMs: number;
@@ -164,7 +164,6 @@ export interface WorkerConfig {
   taskMillis: number;
   minThreads: number;
   maxThreads: number;
-  maxQueueLength: number;
   idleTimeoutMs: number;
   workerTimeoutMs: number;
 }
@@ -179,6 +178,7 @@ export interface RoleConfig {
   runId: string;
   cellId: string;
   configHash: string;
+  language: 'node';
   role: string;
   roleInstance: number;
   scenario: string;
@@ -222,6 +222,7 @@ export interface EndpointManifest {
   runId: string;
   cellId: string;
   configHash: string;
+  language: 'node';
   workload: Workload;
   roles: EndpointRole[];
   provenance: Record<string, unknown>;
