@@ -38,7 +38,7 @@ public class SessionEchoOnlyScenario implements ClientControl.Workload {
 
     private final EndpointManifest manifest;
     private final Measurement measurement;
-    private final int index;
+    private final Measurement.ConnectionRange connectionRange;
     private final List<Connected> connectors = Collections.synchronizedList(new ArrayList<>());
     private final List<ZLinkStreamConnector> owned = Collections.synchronizedList(new ArrayList<>());
     private AtomicLongArray sequences = new AtomicLongArray(0);
@@ -46,20 +46,7 @@ public class SessionEchoOnlyScenario implements ClientControl.Workload {
     public SessionEchoOnlyScenario(EndpointManifest manifest, Measurement measurement, int index) {
         this.manifest = manifest;
         this.measurement = measurement;
-        this.index = index;
-    }
-
-    // §6.2: the connector IDs of this process; q = N/P, r = N%P, count = q + (i < r), first = i*q + min(i,r).
-    private int first() {
-        int total = manifest.workload().connections();
-        int clients = manifest.workload().clientCount();
-        return index * (total / clients) + Math.min(index, total % clients);
-    }
-
-    private int count() {
-        int total = manifest.workload().connections();
-        int clients = manifest.workload().clientCount();
-        return total / clients + (index < total % clients ? 1 : 0);
+        this.connectionRange = java.util.Objects.requireNonNull(measurement.connectionRange());
     }
 
     private ZLinkStreamConnector create(URI endpoint) {
@@ -77,8 +64,8 @@ public class SessionEchoOnlyScenario implements ClientControl.Workload {
     /** Connect/setup (§4): each connector connects once and probes once; concurrency is connect-concurrency per process. */
     public CompletionStage<Void> prepare() {
         var workload = manifest.workload();
-        int count = count();
-        int first = first();
+        int count = connectionRange.count();
+        int first = connectionRange.first();
         sequences = new AtomicLongArray(count);
         URI endpoint = URI.create(manifest.roles().stream().filter(role -> role.streamEndpoint() != null)
                 .findFirst().orElseThrow().streamEndpoint());
@@ -184,7 +171,7 @@ public class SessionEchoOnlyScenario implements ClientControl.Workload {
 
     /** The measured loop: every connector runs `inflight` closed-loop operation chains. */
     public CompletionStage<Void> run() {
-        int first = first();
+        int first = connectionRange.first();
         List<CompletableFuture<Void>> loops = new ArrayList<>();
         List<Connected> ready;
         synchronized (connectors) {

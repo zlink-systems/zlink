@@ -28,7 +28,7 @@ public sealed class Histogram
     }
     public HistogramSnapshot Snapshot() => new("ms", "ns", Bounds.ToArray(), counts.Select(DecimalText.Of).ToArray(),
         DecimalText.Of(overflow), DecimalText.Of(count), sum.ToString(CultureInfo.InvariantCulture),
-        count == 0 ? null : DecimalText.Of(max), "nearest-rank-bucket-upper-bound");
+        count == 0 ? null : DecimalText.Of(max), "nearest-rank-bucket-upper-bound-capped-by-max");
     public void Export(string histogramKey, string metricPrefix, Dictionary<string, object?> metrics,
         Dictionary<string, object?> histograms, Dictionary<string, NullReason> reasons)
     {
@@ -45,7 +45,7 @@ public sealed class Histogram
             metrics[key] = value;
             if (value is null) reasons["/metrics/" + key] = count == 0
                 ? new("NO_SAMPLES", "No successful samples in this cohort and window.")
-                : new("HISTOGRAM_OVERFLOW", "Nearest rank lies above the final bucket.", lowerBoundMs: 1024);
+                : new("HISTOGRAM_OVERFLOW", "Nearest rank is above the final bucket.", lowerBoundMs: Bounds[^1]);
         }
         if (count == 0) reasons["/histograms/" + histogramKey + "/maxNs"] =
             new("NO_SAMPLES", "No successful samples in this cohort and window.");
@@ -57,7 +57,7 @@ public sealed class Histogram
         for (var i = 0; i < counts.Length; i++)
         {
             cumulative += counts[i];
-            if (cumulative >= rank) return Bounds[i];
+            if (cumulative >= rank) return Math.Min(Bounds[i], max / 1_000_000.0);
         }
         return null;
     }

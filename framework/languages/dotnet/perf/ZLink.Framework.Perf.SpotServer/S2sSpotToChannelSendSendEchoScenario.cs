@@ -16,10 +16,11 @@ namespace ZLink.Framework.Perf;
 // validation. The DTO's returnSpotId names the source User SpotId. send-send; ordinary; payload 4096 bytes.
 // Store: run Docker Redis. Null: physical connections, worker, Actor, fanout; Spot internals are not observable.
 public sealed class S2sSpotToChannelSendSendEchoScenario(IZLinkSpotClient spots, IZLinkSpotManager manager, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness, ScenarioMetrics metrics, SendSendCorrelation correlations)
+    IZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness, ScenarioMetrics metrics, SendSendCorrelation correlations,
+    long[]? initialSequences = null)
 {
     private readonly RoleConfig config = measurement.Config;
-    private long[] sequences = [];
+    private long[] sequences = initialSequences ?? [];
 
     public static async Task RunAsync(RoleConfig config)
     {
@@ -55,7 +56,7 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(IZLinkSpotClient spots,
                 var echo = measurement.Request(target, (ulong)Interlocked.Increment(ref sequences[target % sequences.Length]), probe: true)
                     with { returnSpotId = config.spotIds[target] };
                 var driven = await spots.RequestToSpot(config.spotIds[target], new PerfDriveRequest(echo))
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs * 2)).Async<PerfDriveReply>();
+                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs)).Async<PerfDriveReply>();
                 if (!driven.started) throw new PerfValidationException("IdentityMismatch", "The setup probe was not started.");
                 var (error, _) = await correlations.CompleteAsync(correlations.Find(echo.correlationId)
                     ?? throw new PerfValidationException("UnknownCorrelation", "The setup probe registered no correlation."));
@@ -77,24 +78,33 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(IZLinkSpotClient spots,
         while (measurement.CanIssue)
         {
             var echo = measurement.Request(stream, checked((ulong)Interlocked.Increment(ref sequences[stream]))) with { returnSpotId = spotId };
+            var drive = new PerfDriveRequest(echo);
             var driverStarted = PerfClock.Now;
             metrics.Count("driver.issued");
+            PerfDriveReply? driven = null;
             try
             {
-                var driven = await spots.RequestToSpot(spotId, new PerfDriveRequest(echo))
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs * 2)).Async<PerfDriveReply>();
-                if (!driven.started) { metrics.Count("driver.notStarted"); continue; }
-                // Outside the Spot turn: the final result of the correlation the handler registered (§13).
-                var entry = correlations.Find(echo.correlationId) ?? throw new PerfValidationException("UnknownCorrelation", "The started drive registered no correlation.");
-                var (result, completed) = await correlations.CompleteAsync(entry);
-                measurement.CompleteOperation(entry.StartedTicks, result, completed);
-                if (result is null) metrics.Record("driverLatencyMs", driverStarted, PerfClock.Now);
+                driven = await spots.RequestToSpot(spotId, drive)
+                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs)).Async<PerfDriveReply>();
             }
             catch (Exception error)
             {
                 metrics.Count("driver.failed");
                 measurement.RecordDiagnostic(error);
             }
+            var driverEnded = PerfClock.Now;
+            if (driven is { started: false }) { metrics.Count("driver.notStarted"); continue; }
+            // A driver error can race an already-started operation; only its correlation owner closes that operation.
+            if (correlations.Find(echo.correlationId) is not { } entry)
+            {
+                if (driven?.started == true)
+                    measurement.RecordDiagnostic(new PerfValidationException("UnknownCorrelation", "The started drive registered no correlation."));
+                continue;
+            }
+            var (result, completed) = await correlations.CompleteAsync(entry);
+            var operationSucceeded = measurement.CompleteOperation(entry.StartedTicks, result, completedTicks: completed);
+            if (driven?.started == true && operationSucceeded)
+                metrics.Record("driverLatencyMs", driverStarted, driverEnded);
         }
     }
 }
@@ -119,28 +129,33 @@ public sealed class S2sSendDriveHandler(Measurement measurement, ScenarioMetrics
         try
         {
             var request = drive.echo;
-            measurement.ValidateRequest(request, returnSpotId: request.returnSpotId);
+            var expectedReturnSpotId = spot.Context.SpotId;
+            measurement.ValidateRequest(request, returnSpotId: expectedReturnSpotId);
             if (string.IsNullOrEmpty(request.returnSpotId)) throw new PerfValidationException("IdentityMismatch", "No return SpotId in the request.");
             if (request.phase == "measured") metrics.Count("spot.applicationHandlerEntries");
             var probe = measurement.Phase == "setup";   // the setup probe is no measured operation
-            var started = PerfClock.Now;
-            if (!probe && !measurement.BeginOperation(out started, "send")) return new PerfDriveReply(false, null);
+            long started;
+            if (probe) started = PerfClock.Now;
+            else if (!measurement.BeginOperation(out started, "send")) return new PerfDriveReply(false, null);
             request = request with { sentTicks = DecimalText.Of(started) };
+            SendSendCorrelation.Entry entry;
             try
             {
-                var entry = correlations.Register(request, started);   // §13: registered right before the first public send
-                try
-                {
-                    await spot.Context.Outbound.SendToChannel(config.channelName!, request).Async(cancellationToken);
-                    correlations.FirstSendEnded(entry, null);
-                }
-                catch (Exception error) { correlations.FirstSendEnded(entry, error); }
+                entry = correlations.Register(request, started);   // §13: register immediately before the first public send
             }
             catch (Exception error)
             {
-                // The operation started but cannot be tied to a correlation: it ends here as a failure.
                 if (!probe) measurement.CompleteOperation(started, error);
                 throw;
+            }
+            try
+            {
+                await spot.Context.Outbound.SendToChannel(config.channelName!, request).Async(cancellationToken);
+                correlations.FirstSendEnded(entry, null);
+            }
+            catch (Exception error)
+            {
+                correlations.FirstSendEnded(entry, error);
             }
             return new PerfDriveReply(true, null);   // send/send: the reply is only the first send's acknowledgement
         }

@@ -7,6 +7,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -809,10 +810,279 @@ bool wait_for_raw_status (const zlink::http_client::client_t &client, std::strin
     return false;
 }
 
+struct source_wait_probe_t
+{
+    zlink::framework::task_t<void> awaited;
+    std::promise<void> entered;
+    std::promise<void> finished;
+    std::promise<void> started;
+    zlink::framework::task_completion_source_t<void> *outside_phase = nullptr;
+    std::atomic<bool> blocking_rejected{false};
+    std::atomic_int shutting_down_count{0};
+    int expected_waiters = 1;
+    std::atomic_int entered_count{0};
+    std::atomic_int finished_count{0};
+    std::atomic_int observer_calls{0};
+    std::atomic_int failed_observers{0};
+    std::promise<void> *cleanup_entered = nullptr;
+    std::shared_future<void> cleanup_release;
+    std::atomic_bool cleanup_signalled{false};
+};
+
+class source_wait_ready_service_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit source_wait_ready_service_t (source_wait_probe_t &probe) : probe (probe) {}
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    {
+        probe.started.set_value ();
+        co_return;
+    }
+    void request_stop () noexcept override {}
+    void stop () noexcept override {}
+
+  private:
+    source_wait_probe_t &probe;
+};
+
+struct source_wait_http_handler_t
+{
+    using request_type = create_game_http_handler_t::request_type;
+    using reply_type = int;
+    explicit source_wait_http_handler_t (source_wait_probe_t &probe) : probe (probe) {}
+    source_wait_probe_t &probe;
+    zlink::framework::task_t<reply_type> handle (const request_type &)
+    {
+        auto pending = wait ();
+        if (++probe.entered_count == probe.expected_waiters)
+            probe.entered.set_value ();
+        return pending;
+    }
+    static zlink::framework::task_t<void> wait_source (zlink::framework::task_t<void> &source,
+                                                       bool &cleanup_finished)
+    {
+        struct cleanup_t
+        {
+            bool &finished;
+            ~cleanup_t () { finished = true; }
+        } cleanup{cleanup_finished};
+        co_await source;
+    }
+    zlink::framework::task_t<reply_type> wait ()
+    {
+        auto cleanup_finished = std::make_unique<bool> (false);
+        try {
+            try {
+                (void) probe.awaited.result_for (std::chrono::milliseconds (0));
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                probe.blocking_rejected =
+                  error.kind () == zlink::framework::framework_error_kind_t::invalid_operation;
+            }
+            if (probe.outside_phase)
+                probe.outside_phase->complete (zlink::framework::result_t<void>::success ());
+            zlink::framework::detail::observe_task_completion (
+              probe.awaited, [this] (const auto &result) {
+                  ++probe.observer_calls;
+                  if (!result
+                      && result.error_kind ()
+                           == zlink::framework::framework_error_kind_t::shutting_down)
+                      ++probe.failed_observers;
+              });
+            auto child = wait_source (probe.awaited, *cleanup_finished);
+            co_await child;
+            if (!*cleanup_finished)
+                throw std::logic_error ("source child cleanup did not finish before parent");
+            if (++probe.finished_count == probe.expected_waiters)
+                probe.finished.set_value ();
+            co_return 64;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            if (!*cleanup_finished)
+                throw std::logic_error (
+                  "cancelled source child cleanup did not finish before parent");
+            if (error.kind () == zlink::framework::framework_error_kind_t::shutting_down)
+                ++probe.shutting_down_count;
+            if (probe.cleanup_entered) {
+                if (!probe.cleanup_signalled.exchange (true))
+                    probe.cleanup_entered->set_value ();
+                probe.cleanup_release.wait ();
+            }
+            if (++probe.finished_count == probe.expected_waiters)
+                probe.finished.set_value ();
+            throw;
+        }
+    }
+};
+
+zlink::framework::task_t<void> observe_external_source (zlink::framework::task_t<void> first,
+                                                        zlink::framework::task_t<void> second)
+{
+    co_await first;
+    co_await second;
+}
+
+bool verify_source_waiter_host_ownership (bool completion_first = false,
+                                          bool bounded_cleanup_probe = false)
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    task_completion_source_t<void> source;
+    task_completion_source_t<void> outside_phase;
+    source_wait_probe_t first{.awaited = source.task ()};
+    first.outside_phase = &outside_phase;
+    first.expected_waiters = 2;
+    std::promise<void> cleanup_entered, cleanup_release;
+    auto cleanup_started = cleanup_entered.get_future ();
+    if (bounded_cleanup_probe) {
+        first.cleanup_entered = &cleanup_entered;
+        first.cleanup_release = cleanup_release.get_future ().share ();
+    }
+    source_wait_probe_t second{.awaited = source.task ()};
+    auto first_started = first.started.get_future ();
+    auto second_started = second.started.get_future ();
+    auto first_entered = first.entered.get_future ();
+    auto second_entered = second.entered.get_future ();
+    auto first_finished = first.finished.get_future ();
+    auto second_finished = second.finished.get_future ();
+    auto outside = observe_external_source (outside_phase.task (), source.task ());
+    auto make_host = [] (source_wait_probe_t &probe) {
+        auto app = app_t::create ();
+        app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+            options.services ().add_singleton<source_wait_http_handler_t> (
+              std::make_unique<source_wait_http_handler_t> (probe));
+            options.http ()
+              .listen ("http://127.0.0.1:0")
+              .map_get<source_wait_http_handler_t> ("/wait");
+        });
+        app.add_hosted_service (std::make_unique<source_wait_ready_service_t> (probe));
+        return app;
+    };
+    auto first_host = make_host (first);
+    auto second_host = make_host (second);
+    std::promise<void> drain_entered;
+    auto drain_started = drain_entered.get_future ();
+    std::atomic_bool drain_signalled{false};
+    second_host.logging ().use_callback_sink ([&] (const log_record_t &record) {
+        if (record.message == "zlink.runtime.host.termination_changed") {
+            for (const auto &field : record.fields)
+                if (field.key == "state" && field.value == "draining"
+                    && !drain_signalled.exchange (true))
+                    drain_entered.set_value ();
+        }
+    });
+    char command[] = "task-source-host";
+    char *argv[] = {command};
+    int first_exit = -1, second_exit = -1;
+    std::atomic_bool first_returned{false};
+    std::thread first_thread ([&] {
+        first_exit = first_host.run (1, argv);
+        first_returned.store (true);
+    });
+    std::thread second_thread ([&] { second_exit = second_host.run (1, argv); });
+    auto bound_endpoint = [] (app_t &app) {
+        auto provider = app.advanced ().services ().build_provider ();
+        auto &runtime = provider.get_required<framework_runtime_t> ();
+        for (const auto &status : runtime.http_listener_statuses ())
+            if (!status.bound_url.empty ())
+                return status.bound_url;
+        return std::string{};
+    };
+    const bool started = first_started.wait_for (2s) == std::future_status::ready
+                         && second_started.wait_for (2s) == std::future_status::ready;
+    const auto first_url = started ? bound_endpoint (first_host) : std::string{};
+    const auto second_url = bound_endpoint (second_host);
+    if (first_url.empty () || second_url.empty ()) {
+        source.complete (result_t<void>::success ());
+        first_host.stop ();
+        second_host.stop ();
+        first_thread.join ();
+        second_thread.join ();
+        return false;
+    }
+    auto request = [] (const std::string &url) {
+        return zlink::http_client::client_t::create (url)
+          .timeout (2s)
+          .get ("/wait")
+          .submit<source_wait_http_handler_t::reply_type> ();
+    };
+    auto first_request = std::async (std::launch::async, request, first_url);
+    auto another_first_request = std::async (std::launch::async, request, first_url);
+    auto second_request = std::async (std::launch::async, request, second_url);
+    const bool both_entered = first_entered.wait_for (2s) == std::future_status::ready
+                              && second_entered.wait_for (2s) == std::future_status::ready;
+    if (completion_first) {
+        const bool completed = source.complete (result_t<void>::success ());
+        const bool duplicate = source.complete (result_t<void>::success ());
+        const bool finished = first_finished.wait_for (1s) == std::future_status::ready
+                              && second_finished.wait_for (1s) == std::future_status::ready;
+        auto first_shutdown = first_host.shutdown (1s).result ();
+        auto second_shutdown = second_host.shutdown (1s).result ();
+        first_thread.join ();
+        second_thread.join ();
+        auto a = first_request.get ();
+        auto b = another_first_request.get ();
+        auto c = second_request.get ();
+        return both_entered && completed && !duplicate && finished && a && b && c
+               && a.value ().body == 64 && b.value ().body == 64 && c.value ().body == 64
+               && first.shutting_down_count == 0 && second.shutting_down_count == 0
+               && first.finished_count == 2 && second.finished_count == 1
+               && first.observer_calls == 2 && first.failed_observers == 0
+               && second.observer_calls == 1 && second.failed_observers == 0 && first_shutdown
+               && second_shutdown && outside.result () && first_exit == 0 && second_exit == 0;
+    }
+    auto stop_task = first_host.shutdown (1ms);
+    bool teardown_waited_for_cleanup = false;
+    if (bounded_cleanup_probe) {
+        // Host relocation §14: an expired deadline ends as ForceStopped/DeadlineExceeded
+        // while teardown keeps the resources that running user cleanup still uses.
+        const bool entered = cleanup_started.wait_for (1s) == std::future_status::ready;
+        const auto terminal = entered ? stop_task.result_for (1s) : std::nullopt;
+        const bool deadline_terminal =
+          terminal && *terminal
+          && terminal->value ()
+               == termination_result_t{termination_outcome_t::force_stopped,
+                                       termination_reason_t::deadline_exceeded};
+        teardown_waited_for_cleanup = deadline_terminal && !first_returned.load ();
+        std::cout << "cleanup_entered=" << entered << " deadline_terminal=" << deadline_terminal
+                  << " teardown_waited_for_cleanup=" << teardown_waited_for_cleanup << '\n';
+        cleanup_release.set_value ();
+    }
+    auto stopped = stop_task.result ();
+    const bool first_cancelled = first_finished.wait_for (1s) == std::future_status::ready
+                                 && first.shutting_down_count == first.expected_waiters
+                                 && first.finished_count == first.expected_waiters;
+    const bool others_pending = second_finished.wait_for (0ms) == std::future_status::timeout
+                                && !source.task ().result_for (0ms) && !outside.result_for (0ms);
+    auto normal_shutdown_task = second_host.shutdown (1s);
+    const bool normal_waited = drain_started.wait_for (1s) == std::future_status::ready
+                               && !normal_shutdown_task.result_for (0ms);
+    bool completed = source.complete (result_t<void>::success ());
+    bool duplicate = source.complete (result_t<void>::success ());
+    auto normal_shutdown = normal_shutdown_task.result ();
+    first_thread.join ();
+    second_thread.join ();
+    auto first_response = first_request.get ();
+    auto another_first_response = another_first_request.get ();
+    auto second_response = second_request.get ();
+    return (!bounded_cleanup_probe || teardown_waited_for_cleanup) && both_entered && stopped
+           && first_cancelled && normal_waited && others_pending && completed && !duplicate
+           && outside.result () && source.task ().result () && !first_response
+           && !another_first_response && first.observer_calls == 2 && first.failed_observers == 2
+           && second.observer_calls == 1 && second.failed_observers == 0
+           && second.finished_count == 1 && second.shutting_down_count == 0 && second_response
+           && second_response.value ().body == 64 && first.blocking_rejected
+           && second.blocking_rejected && normal_shutdown
+           && normal_shutdown.value ().outcome == termination_outcome_t::stopped && first_exit == 0
+           && second_exit == 0;
+}
+
 } // namespace
 
 int main (int test_argc, char **test_argv)
 {
+    if (test_argc == 2 && std::string (test_argv[1]) == "--bounded-source-cleanup-repro")
+        return verify_source_waiter_host_ownership (false, true) ? 0 : 78;
     const bool http_submit_only =
       test_argc == 2 && std::string (test_argv[1]) == "--http-submit-only";
     failure_trace_t trace;
@@ -1796,6 +2066,10 @@ int main (int test_argc, char **test_argv)
         return 71;
     }
 
+    trace.phase = "task completion source host ownership";
+    if (!verify_source_waiter_host_ownership () || !verify_source_waiter_host_ownership (true)
+        || !verify_source_waiter_host_ownership (false, true))
+        return 77;
     trace.success = true;
     return 0;
 }

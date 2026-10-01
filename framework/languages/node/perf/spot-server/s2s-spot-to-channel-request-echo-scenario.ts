@@ -40,7 +40,7 @@ export class S2sSpotToChannelRequestEchoScenario {
       const probes: unknown[] = [];
       for (let target = 0; target < config.spotIds.length; target++) {
         const echo = measurement.request(target, ++this.sequences[target % this.sequences.length], true);
-        const driven = await this.spots.requestToSpot(config.spotIds[target], new PerfDriveRequest(echo)).timeout(config.workload.requestTimeoutMs * 2).submit<PerfDriveReply>();
+        const driven = await this.spots.requestToSpot(config.spotIds[target], new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
         if (!driven.started || driven.echo === null) throw new Error('The setup probe did not reach the Channel.');
         PayloadPattern.validateIdentity(echo, driven.echo);
         measurement.pattern.validate(driven.echo.payload);
@@ -63,15 +63,16 @@ export class S2sSpotToChannelRequestEchoScenario {
       const echo = measurement.request(stream, ++this.sequences[stream]);
       const started = PerfClock.now();
       metrics.count('driver.issued');
+      let driven: PerfDriveReply;
       try {
-        // The driver call must outlast the measured remote call it wraps, so it gets twice the request deadline.
-        const driven = await this.spots.requestToSpot(spotId, new PerfDriveRequest(echo)).timeout(config.workload.requestTimeoutMs * 2).submit<PerfDriveReply>();
-        if (driven.started) metrics.record('driverLatencyMs', started, PerfClock.now());
-        else metrics.count('driver.notStarted');
+        driven = await this.spots.requestToSpot(spotId, new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
       } catch (error) {
         metrics.count('driver.failed');
         measurement.recordDiagnostic(error);
+        continue;
       }
+      if (!driven.started) { metrics.count('driver.notStarted'); continue; }
+      if (driven.echo !== null) metrics.record('driverLatencyMs', started, PerfClock.now());
     }
   }
 }
@@ -104,8 +105,8 @@ export class S2sRemoteRequestDriveHandler implements ZLinkSpotRequestHandler<S2s
         started = begun;
       }
       request = new PerfEchoRequest({ ...request, sentTicks: started.toString() }); // decoded requests are plain objects
-      const call = spot.context.outbound.requestToChannel(config.channelName!, request).timeout(config.workload.requestTimeoutMs);
       try {
+        const call = spot.context.outbound.requestToChannel(config.channelName!, request).timeout(config.workload.requestTimeoutMs);
         let reply: PerfEchoReply;
         if (config.terminal === 'yield') {
           metrics.count('spot.applicationYieldCalls');

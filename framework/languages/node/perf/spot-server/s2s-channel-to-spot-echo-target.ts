@@ -50,7 +50,7 @@ export class S2sSendEchoHandler implements ZLinkSpotPacketHandler<S2sSendEchoSpo
     const measurement = this.measurement;
     measurement.handlerEnter();
     try {
-      measurement.validateRequest(message, message.returnChannel);
+      measurement.validateRequest(message, this.config.channelName);
       if (!message.returnChannel) throw new Error('No return Channel in the request.');
       const reply = PayloadPattern.reply(message, received);
       measurement.recordApplicationCall(message, 'send');

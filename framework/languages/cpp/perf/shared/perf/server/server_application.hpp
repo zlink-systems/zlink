@@ -7,6 +7,7 @@
 
 #include <perf/send_send_correlation.hpp>
 
+#include <algorithm>
 #include <zlink/core/api.h>
 #include <zlink/locations/redis.hpp>
 
@@ -136,11 +137,9 @@ class role_t
                 {"targetCount", c.targets.size ()}};
     }
 
-    // A role that reports objects not ready has not registered this cell's mesh or channel yet, so only the host is observed.
+    // Select topology from the role config; runtime status is present only after its public interface is bound.
     std::optional<std::string> observed_topology () const
     {
-        if (objects && !objects->ready ())
-            return std::nullopt;
         return config.topology;
     }
     json public_status () const
@@ -196,7 +195,8 @@ class role_t
             infrastructure = infrastructure && mesh_runtime
                              && mesh_runtime->snapshot (*config.mesh_name).ready_peer_count > 0;
         }
-        const bool probe = measurement.has_setup_evidence ();
+        const auto setup_evidence = measurement.setup_evidence ();
+        const bool probe = setup_evidence.is_array () && !setup_evidence.empty ();
         const bool objects_ready = objects ? objects->ready () : true;
         json evidence = json::array ({{{"kind", "publicStatus"},
                                        {"source", "public Framework runtime status"},
@@ -209,7 +209,7 @@ class role_t
         if (objects)
             for (const auto &item : objects->evidence ())
                 evidence.push_back (item);
-        for (const auto &item : measurement.setup_evidence ())
+        for (const auto &item : setup_evidence)
             evidence.push_back (item);
         for (const auto &item : measurement.error_evidence ())
             evidence.push_back (item);
@@ -219,7 +219,7 @@ class role_t
         if (!objects_ready)
             reasons.push_back (objects->reason ());
         if (!probe)
-            reasons.push_back ("No successful typed probe echo has been observed.");
+            reasons.push_back ("No successful typed probe echo or fanout warmup marker has been observed.");
         if (measurement.has_errors ())
             reasons.push_back ("Application preparation or phase failed.");
         return {{"runId", config.run_id},
@@ -278,7 +278,7 @@ class stats_handler_t
     fw::http_response_t handle (const fw::http_request_t &request)
     {
         try {
-            // The runner's last read of a phase (?final=1) ends the settle: roles that keep recording seal their originals then.
+            // The runner's final phase read seals sequence originals after the measured window has ended.
             _role.measurement.set_final_snapshot (request.query_values.contains ("final"));
             auto snapshot = _role.measurement.snapshot (_role.public_status ());
             snapshot["provenance"]["coreVersion"] = loaded_core_version ();

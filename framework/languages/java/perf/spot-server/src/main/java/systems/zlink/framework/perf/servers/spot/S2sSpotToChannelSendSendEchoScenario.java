@@ -98,7 +98,7 @@ public final class S2sSpotToChannelSendSendEchoScenario {
                                         sequences.incrementAndGet(spot % sequences.length()), true)
                                         .withReturnSpotId(config.spotIds().get(spot));
                                 return spots.requestToSpot(config.spotIds().get(spot), new PerfDriveRequest(echo))
-                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs() * 2L))
+                                        .timeout(Duration.ofMillis(config.workload().driverTimeoutMs()))
                                         .submit(PerfDriveReply.class)
                                         .thenCompose(driven -> {
                                             if (!driven.started()) {
@@ -148,41 +148,50 @@ public final class S2sSpotToChannelSendSendEchoScenario {
             CompletionStage<PerfDriveReply> call;
             try {
                 call = spots.requestToSpot(spotId, new PerfDriveRequest(echo))
-                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs() * 2L))
+                        .timeout(Duration.ofMillis(config.workload().driverTimeoutMs()))
                         .submit(PerfDriveReply.class);
             } catch (RuntimeException error) {
                 call = CompletableFuture.failedFuture(error);
             }
             CompletionStage<Void> operation = call.handle((driven, error) -> {
                 if (error != null) {
-                    return CompletableFuture.<Void>failedFuture(error);
+                    driverFailed(error);
+                    return completeCorrelation(echo, driverStarted, 0, false);
                 } else if (!driven.started()) {
                     metrics.count("driver.notStarted");
                     return CompletableFuture.<Void>completedFuture(null);
                 } else {
                     // Outside the Spot turn: the final result of the correlation the handler registered (§13).
-                    SendSendCorrelation.Entry entry = correlations.find(echo.correlationId());
-                    if (entry == null) {
-                        return CompletableFuture.<Void>failedFuture(new PerfValidationException("UnknownCorrelation",
-                                "The started drive registered no correlation."));
-                    }
-                    return correlations.completeAsync(entry).thenAccept(result -> {
-                        measurement.completeOperation(entry.startedTicks(), result.error(), result.completedTicks());
-                        if (result.error() == null) {
-                            metrics.record("driverLatencyMs", driverStarted, PerfClock.now());
-                        }
-                    });
+                    return completeCorrelation(echo, driverStarted, PerfClock.now(), true);
                 }
             }).thenCompose(result -> result);
             return Optional.of(new CompletionLoop.Iteration<>(operation, (ignored, error) -> {
                 if (error != null) {
-                    driverFailed(error);
+                    measurement.recordDiagnostic(error);
                 }
             }));
         });
     }
 
-    private void driverFailed(Throwable error) {
+    CompletionStage<Void> completeCorrelation(PerfEchoRequest echo, long driverStarted, long driverCompleted,
+            boolean driverSucceeded) {
+        SendSendCorrelation.Entry entry = correlations.find(echo.correlationId());
+        if (entry == null) {
+            if (driverSucceeded) {
+                measurement.recordDiagnostic(new PerfValidationException("UnknownCorrelation",
+                        "The started drive registered no correlation."));
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+        return correlations.completeAsync(entry).thenAccept(result -> {
+            boolean counted = measurement.completeOperation(entry.startedTicks(), result.error(), result.completedTicks());
+            if (driverSucceeded && counted) {
+                metrics.record("driverLatencyMs", driverStarted, driverCompleted);
+            }
+        });
+    }
+
+    void driverFailed(Throwable error) {
         metrics.count("driver.failed");
         measurement.recordDiagnostic(error);
     }
@@ -216,7 +225,7 @@ public final class S2sSpotToChannelSendSendEchoScenario {
             measurement.handlerEnter();
             try {
                 PerfEchoRequest request = drive.echo();
-                measurement.validateRequest(request, null, request.returnSpotId());
+                measurement.validateRequest(request, null, spot.context().spotId());
                 if (request.returnSpotId() == null || request.returnSpotId().isEmpty()) {
                     throw new PerfValidationException("IdentityMismatch", "No return SpotId in the request.");
                 }

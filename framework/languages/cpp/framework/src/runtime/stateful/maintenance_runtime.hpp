@@ -680,7 +680,7 @@ class maintenance_runtime_t
      * FIFO; a new unit acquires headroom before its source admission seal. */
     mutable std::mutex _budget_mutex;
     std::uint64_t _budget_in_flight_bytes = 0;
-    std::deque<std::pair<std::uint64_t, std::shared_ptr<detail::task_completion_source_t<bool>>>>
+    std::deque<std::pair<std::uint64_t, std::shared_ptr<task_completion_source_t<bool>>>>
       _budget_waiters;
 };
 
@@ -774,7 +774,7 @@ class host_maintenance_runtime_t
     std::uint64_t _active_attempt = 0;
     std::uint64_t _next_attempt = 1;
     std::map<std::uint64_t, termination_result_t> _attempt_results;
-    std::shared_ptr<detail::task_completion_source_t<termination_result_t>> _active_completion;
+    std::shared_ptr<task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
 };
 

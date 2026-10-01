@@ -142,7 +142,7 @@ class AdminServer {
       if (url.pathname.startsWith('/perf') !== isMetrics) return send404(response);
       if (request.method === 'GET' && url.pathname === '/perf/ready') return send(200, this.ready());
       if (request.method === 'GET' && url.pathname === '/perf/stats') {
-        // The runner's last read of a phase (?final=1) ends the settle: roles that keep recording seal their originals then.
+        // The runner's final read seals phase-owned originals after the measurement window closes.
         this.measurement.finalSnapshot = url.searchParams.has('final');
         const snapshot = this.measurement.snapshot(this.publicStatus());
         snapshot.publicMetrics = await this.collector.snapshot();
@@ -174,16 +174,11 @@ class AdminServer {
     }
   }
 
-  // A role that reports ObjectsReadiness.ready=false has not registered this cell's mesh or channel, so only the host is observed.
-  private observedTopology(): string | null {
-    return this.options.objects && !this.options.objects.ready ? null : this.config.topology;
-  }
-
   private publicStatus(): unknown {
     const runtimes = this.runtimes();
     if (!runtimes) return null;
     const host = runtimes.host.status;
-    const topology = this.observedTopology();
+    const topology = this.config.topology;
     if (topology === 'routemesh') return { host, routeMesh: runtimes.mesh.snapshot(this.config.meshName!) };
     if (topology === 'clientserver') return { host, clientServer: runtimes.clientServer.snapshot(this.config.channelName!) };
     return { host };
@@ -194,7 +189,7 @@ class AdminServer {
     const runtimes = this.runtimes();
     const reasons: string[] = [];
     let infrastructure = runtimes !== undefined && runtimes.host.status.isReady;
-    const topology = this.observedTopology();
+    const topology = config.topology;
     if (runtimes && topology === 'routemesh') {
       const mesh = runtimes.mesh.snapshot(config.meshName!);
       // Channel messaging §3: RouteMesh excludes the sending node itself from candidates. Only the source needs a selectable
@@ -215,6 +210,7 @@ class AdminServer {
     if (Object.keys(config.transportEndpoints).length > 0)
       evidence.push({ kind: 'verifiedListenerReservation', source: 'role config; coordinator OS bind reservation and public host startup', observedValue: config.transportEndpoints });
     if (objects) evidence.push(...objects.evidence);
+    evidence.push(...Object.values(measurement.preparationEvidence));
     evidence.push(...measurement.setupEvidence, ...measurement.errorEvidence);
     if (!infrastructure) reasons.push('Public host/channel/listener infrastructure is not ready.');
     if (!objectsReady) reasons.push(objects!.reason);

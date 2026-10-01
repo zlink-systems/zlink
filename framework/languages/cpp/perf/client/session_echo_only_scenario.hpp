@@ -140,15 +140,23 @@ class session_echo_only_scenario_t
                 return;
             }
             request.sent_ticks = dec (started);
+            echo_request_t expected;
+            expected.run_id = request.run_id;
+            expected.cell_id = request.cell_id;
+            expected.reset_seq = request.reset_seq;
+            expected.phase = request.phase;
+            expected.client_id = request.client_id;
+            expected.sequence = request.sequence;
+            expected.correlation_id = request.correlation_id;
             slot.connector->request (request)
               .timeout (std::chrono::milliseconds (_manifest.workload.request_timeout_ms))
-              .submit<echo_reply_t> ([this, loops, slot, request, started, chain] (sc::result_t<echo_reply_t> reply) {
+              .submit<echo_reply_t> ([this, loops, slot, expected = std::move (expected), started, chain] (sc::result_t<echo_reply_t> reply) {
                   std::exception_ptr error;
                   try {
                       if (!reply)
                           throw connector_error_t (std::to_string (static_cast<int> (reply.error ()->code)),
                                                    reply.error ()->code == sc::error_code_t::request_timeout, reply.error ()->message);
-                      payload_pattern_t::validate_identity (request, reply.value ());
+                      payload_pattern_t::validate_identity (expected, reply.value ());
                       _measurement.pattern ().validate (reply.value ().payload);
                   }
                   catch (...) {

@@ -25,11 +25,6 @@ import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.kotlin.completionStage
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
-private class PublishedSets {
-    val window = FanoutSupport.SequenceBitSet()
-    val settle = FanoutSupport.SequenceBitSet()
-}
-
 class PubSubFanoutEchoScenario(
     private val fanout: ZLinkFanoutClient,
     private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
@@ -41,10 +36,10 @@ class PubSubFanoutEchoScenario(
     private val sequenceFile: Path = cellDirectory.path().resolve("publisher-sequences.json")
     private val issued = AtomicLong()
     @Volatile private var measuredBase = 0L
-    @Volatile private var sets = PublishedSets()
+    @Volatile private var windowSuccess = FanoutSupport.SequenceBitSet()
 
     init {
-        measurement.onReset { measuredBase = issued.get(); sets = PublishedSets() }
+        measurement.onReset { measuredBase = issued.get(); windowSuccess = FanoutSupport.SequenceBitSet() }
         measurement.messageTypes(listOf(arrayOf("event", "PerfPublishEvent")))
         measurement.enrichSnapshot(::enrich)
     }
@@ -80,30 +75,34 @@ class PubSubFanoutEchoScenario(
                 repeat(config.workload().inflight()) {
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
+                            val warmup = measurement.resetSeq() == "0"
                             val started = measurement.beginOperation("event")
                             if (started < 0) break
-                            val sequence = issued.incrementAndGet()
-                            val warmup = measurement.resetSeq() == "0"
-                            val message = PerfPublishEvent(
-                                config.runId(), config.cellId(), measurement.resetSeq(),
-                                if (warmup) "warmup" else "measured", DecimalText.of(sequence), FanoutSupport.TOPIC,
-                                DecimalText.of(started), PerfClock.DOMAIN, measurement.pattern().base64(),
-                            )
+                            val sequence: Long
+                            val completedTicks: Long
                             try {
+                                sequence = issued.incrementAndGet()
+                                val message = PerfPublishEvent(
+                                    config.runId(), config.cellId(), measurement.resetSeq(),
+                                    if (warmup) "warmup" else "measured", DecimalText.of(sequence), FanoutSupport.TOPIC,
+                                    DecimalText.of(started), PerfClock.DOMAIN, measurement.pattern().base64(),
+                                )
                                 fanout.kotlin().publish(config.channelName(), FanoutSupport.TOPIC, message).await()
-                                val completed = PerfClock.now()
-                                measurement.completeOperation(started, null, completed)
-                                if (warmup) {
-                                    if (measurement.setupEvidence().isEmpty()) {
-                                        measurement.setupEvidence(listOf(Evidence.of("warmupMarkerPublished", "Kotlin ZLinkKotlinFanoutClient.publish(...).await()", message.sequence())))
-                                    }
-                                } else {
-                                    val current = sets
-                                    (if (completed < measurement.endTicks()) current.window else current.settle).trySet(sequence)
-                                }
-                            } catch (error: Exception) {
-                                if (error is CancellationException) throw error
+                                completedTicks = PerfClock.now()
+                            } catch (error: Throwable) {
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException || error !is Exception) throw error
+                                continue
+                            }
+                            val counted = measurement.completeOperation(started, null, completedTicks)
+                            if (warmup) {
+                                if (measurement.setupEvidence().isEmpty()) {
+                                    measurement.setupEvidence(listOf(Evidence.of(
+                                        "warmupMarkerPublished", "Kotlin ZLinkKotlinFanoutClient.publish(...).await()", DecimalText.of(sequence),
+                                    )))
+                                }
+                            } else if (counted) {
+                                windowSuccess.trySet(sequence)
                             }
                         }
                     }
@@ -113,14 +112,11 @@ class PubSubFanoutEchoScenario(
     }
 
     private fun enrich(snapshot: PerfSnapshot) {
-        val current = sets
         FanoutSupport.applyCommon(snapshot, false)
-        FanoutSupport.value(snapshot, "messages.publishedInWindow", DecimalText.of(current.window.count()))
-        FanoutSupport.value(snapshot, "messages.settlePublished", DecimalText.of(current.settle.count()))
-        FanoutSupport.value(snapshot, "messages.published", DecimalText.of(current.window.count() + current.settle.count()))
+        FanoutSupport.value(snapshot, "messages.publishedInWindow", DecimalText.of(windowSuccess.count()))
         val seconds = snapshot.window["measuredSeconds"]
         if (seconds is Double && seconds > 0) {
-            FanoutSupport.value(snapshot, "fanout.publishOpsPerSec", current.window.count() / seconds)
+            FanoutSupport.value(snapshot, "fanout.publishOpsPerSec", windowSuccess.count() / seconds)
         } else {
             FanoutSupport.nullValue(snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.")
         }
@@ -132,10 +128,14 @@ class PubSubFanoutEchoScenario(
         if (!measurement.finalSnapshot() || snapshot.phase != "complete" || snapshot.resetSeq != "1") return
         val last = issued.get()
         val base = measuredBase
+        val attemptedRanges = if (last > base) {
+            listOf(FanoutSupport.SequenceRange(DecimalText.of(base + 1), DecimalText.of(last)))
+        } else {
+            emptyList()
+        }
         FanoutSupport.writeOnce(sequenceFile, FanoutSupport.PublisherSequences(
             config.runId(), config.cellId(), snapshot.resetSeq, "measured",
-            if (last > base) listOf(FanoutSupport.SequenceRange(DecimalText.of(base + 1), DecimalText.of(last))) else emptyList(),
-            current.window.ranges(), current.settle.ranges(),
+            attemptedRanges, windowSuccess.ranges(),
         ))
     }
 }

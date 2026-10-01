@@ -42,6 +42,8 @@ using tcp = asio::ip::tcp;
 
 namespace
 {
+constexpr auto active_request_poll_interval = std::chrono::milliseconds (5);
+
 result_t<void> listener_failure (std::exception_ptr failure)
 {
     std::string message;
@@ -154,9 +156,23 @@ class http_host_service_t::listener_t
         // This also closes listeners whose startup never reached thread launch.
         beast::error_code ignored;
         _acceptor.close (ignored);
-        (void) wait_for_active_requests (_options->server.graceful_shutdown_timeout);
+        if (!_wait_stop.stop_requested ())
+            (void) wait_for_active_requests (_options->server.graceful_shutdown_timeout);
+        _wait_stop.request_stop ();
         close_open_connections ();
         wait_for_workers ();
+    }
+
+    void seal_application_dispatch () noexcept { _io.stop (); }
+    void cancel_execution_waits () noexcept { _wait_stop.request_stop (); }
+    bool
+    wait_for_active_requests_until (std::chrono::steady_clock::time_point deadline) const noexcept
+    {
+        while (_active_requests.load (std::memory_order_acquire) != 0
+               && std::chrono::steady_clock::now () < deadline) {
+            zlink::framework::runtime::wait_poll_interval (active_request_poll_interval);
+        }
+        return _active_requests.load (std::memory_order_acquire) == 0;
     }
 
   private:
@@ -288,12 +304,7 @@ class http_host_service_t::listener_t
         if (timeout <= std::chrono::milliseconds::zero ()) {
             return _active_requests.load (std::memory_order_acquire) == 0;
         }
-        const auto deadline = std::chrono::steady_clock::now () + timeout;
-        while (_active_requests.load (std::memory_order_acquire) != 0
-               && std::chrono::steady_clock::now () < deadline) {
-            zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (5));
-        }
-        return _active_requests.load (std::memory_order_acquire) == 0;
+        return wait_for_active_requests_until (std::chrono::steady_clock::now () + timeout);
     }
 
     // Keep-alive clients hold connections open between requests. Closing is
@@ -459,6 +470,8 @@ class http_host_service_t::listener_t
                   static_cast<listener_t *> (listener)->_active_requests.fetch_sub (
                     1, std::memory_order_acq_rel);
               });
+            const detail::ambient_context_scope_t invocation (nullptr, this,
+                                                              _wait_stop.get_token ());
             auto response =
               handle_http_request (*_options, *_services, *_health, _handler_executor, request);
             request_guard.reset ();
@@ -532,6 +545,7 @@ class http_host_service_t::listener_t
     std::atomic_bool *_stop;
     std::atomic_size_t _active_connections;
     std::atomic_size_t _active_requests;
+    std::stop_source _wait_stop;
     std::atomic_bool _workers_stopped{false};
     std::mutex _worker_stop_mutex;
     std::mutex _sockets_mutex;
@@ -593,12 +607,32 @@ task_t<void> http_host_service_t::start (service_provider_t &services)
     }
 }
 
+void http_host_service_t::seal_application_dispatch () noexcept
+{
+    _stop.store (true, std::memory_order_release);
+    for (const auto &listener : _listeners)
+        listener->seal_application_dispatch ();
+}
+
+bool http_host_service_t::wait_for_accepted_callbacks_until (
+  std::chrono::steady_clock::time_point deadline) noexcept
+{
+    return std::all_of (_listeners.begin (), _listeners.end (), [deadline] (const auto &listener) {
+        return listener->wait_for_active_requests_until (deadline);
+    });
+}
+
+void http_host_service_t::cancel_execution_waits () noexcept
+{
+    for (const auto &listener : _listeners)
+        listener->cancel_execution_waits ();
+}
+
 void http_host_service_t::request_stop () noexcept
 {
-    if (_stop.exchange (true, std::memory_order_acq_rel)) {
-        return;
+    if (!_stop.exchange (true, std::memory_order_acq_rel)) {
+        _health->set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are stopped");
     }
-    _health->set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are stopped");
     for (auto &listener : _listeners) {
         listener->stop ();
     }

@@ -222,7 +222,7 @@ struct client_server_location_runtime_t::ready_waiter_t
 {
     std::string channel_name;
     std::chrono::steady_clock::time_point deadline;
-    std::shared_ptr<detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>>
+    std::shared_ptr<task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>>
       completion;
 };
 
@@ -1452,7 +1452,7 @@ task_t<std::shared_ptr<raw_client_server_client_t>>
 client_server_location_runtime_t::select_ready (std::string channel_name)
 {
     using client_t = std::shared_ptr<raw_client_server_client_t>;
-    using completion_t = detail::task_completion_source_t<client_t>;
+    using completion_t = task_completion_source_t<client_t>;
     using selection_t = std::variant<result_t<client_t>, std::shared_ptr<completion_t>>;
     auto selected = co_await _lane.run_task (
       [this, channel_name = std::move (channel_name)] () mutable -> selection_t {
@@ -1551,7 +1551,7 @@ client_server_location_runtime_t::select_ready_locked (
 task_t<void> client_server_location_runtime_t::complete_ready_waiters ()
 {
     using client_t = std::shared_ptr<raw_client_server_client_t>;
-    using completion_t = detail::task_completion_source_t<client_t>;
+    using completion_t = task_completion_source_t<client_t>;
     std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> completed;
     completed = co_await _lane.run_task ([this] {
         std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> result;

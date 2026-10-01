@@ -40,7 +40,7 @@ class deferred_owner_read_store_t final : public location_store_t
         return inner.write (std::move (request));
     }
 
-    detail::task_completion_source_t<store_read_result_t> completion;
+    task_completion_source_t<store_read_result_t> completion;
     in_memory_location_store_t inner;
 };
 
@@ -168,7 +168,7 @@ class delayed_renew_write_store_t final : public location_store_t
     in_memory_location_store_t inner;
     bool delay_write = false;
     std::promise<void> write_called;
-    detail::task_completion_source_t<store_write_result_t> pending;
+    task_completion_source_t<store_write_result_t> pending;
     std::optional<store_write_request_t> pending_request;
 };
 

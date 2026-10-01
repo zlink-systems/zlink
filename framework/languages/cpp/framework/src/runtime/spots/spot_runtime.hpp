@@ -1632,6 +1632,7 @@ class spot_node_runtime_t
     void request_stop () noexcept;
     bool stopping () const noexcept;
     void cancel_timers () noexcept;
+    void cancel_dispatch_waits () noexcept;
     void cancel_pending_dispatch () noexcept;
     void cancel_pending_work () noexcept;
 

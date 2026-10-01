@@ -7,8 +7,14 @@
 
 #include <perf/server/server_application.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <cerrno>
+#include <cstdio>
+#include <fstream>
 #include <filesystem>
 #include <map>
+#include <system_error>
 
 namespace perf
 {
@@ -28,14 +34,6 @@ class sequence_bit_set_t
             return false;
         _count.fetch_add (1);
         return true;
-    }
-    bool contains (std::uint64_t sequence) const
-    {
-        const auto *chunk = const_cast<sequence_bit_set_t *> (this)->chunk_of (sequence / chunk_bits, false);
-        if (!chunk)
-            return false;
-        const auto bit = static_cast<std::size_t> (sequence % chunk_bits);
-        return (chunk[bit >> 6].load () & (1ULL << (bit & 63))) != 0;
     }
     std::uint64_t count () const noexcept { return _count.load (); }
     std::uint64_t retained_bytes () const
@@ -129,39 +127,39 @@ inline void null_key (json &snapshot, const std::string &key, const char *code, 
 // Every PS role: the echo outcomes and echo latency do not apply (§10.11); delivery is intersected by the runner.
 inline void apply_common (json &snapshot, bool has_delivery_owner)
 {
-    for (const char *key : {"fanout.subscriberCount", "fanout.uniqueDelivered", "fanout.deliveredInWindow", "fanout.settleDelivered",
+    for (const char *key : {"fanout.subscriberCount", "fanout.deliveredInWindow",
                             "fanout.outOfCohortEvents", "fanout.deliveryRatio", "fanout.deliveryOpsPerSec"})
         null_key (snapshot, key, "NOT_APPLICABLE", "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4).");
-    for (const char *prefix : {"latency", "settle.latency"})
-        for (const auto &suffix : latency_suffixes ())
-            null_key (snapshot, std::string (prefix) + "." + suffix, "NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
-    for (const char *key : {"latencyMs", "settleLatencyMs"}) {
+    for (const auto &suffix : latency_suffixes ())
+        null_key (snapshot, std::string ("latency.") + suffix, "NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
+    for (const char *key : {"latencyMs"}) {
         snapshot["histograms"][key] = nullptr;
         snapshot["nullReasons"][std::string ("/histograms/") + key] = null_reason ("NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
-        snapshot["nullReasons"].erase (std::string ("/histograms/") + key + "/maxNs");
     }
-    for (const char *key : {"messages.completed", "messages.settleCompleted", "throughput.kops"})
+    for (const char *key : {"messages.completed", "throughput.kops"})
         null_key (snapshot, key, "NOT_APPLICABLE", "A fanout cell records publish admission, not echo completion (§10.11).");
     const char *code = has_delivery_owner ? "CLOCK_DOMAIN_UNVERIFIED" : "NOT_APPLICABLE";
     const std::string why = has_delivery_owner ? "Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2)."
                                                : "Delivery latency is observed by Subscriber processes.";
-    for (const char *prefix : {"fanout.deliveryLatency", "fanout.settleDeliveryLatency"})
-        for (const auto &suffix : latency_suffixes ())
-            null_key (snapshot, std::string (prefix) + "." + suffix, code, why);
-    for (const char *key : {"fanoutDeliveryLatencyMs", "fanoutSettleDeliveryLatencyMs"}) {
+    for (const auto &suffix : latency_suffixes ())
+        null_key (snapshot, std::string ("fanout.deliveryLatency.") + suffix, code, why);
+    for (const char *key : {"fanoutDeliveryLatencyMs"}) {
         snapshot["histograms"][key] = nullptr;
         snapshot["nullReasons"][std::string ("/histograms/") + key] = null_reason (code, has_delivery_owner ? "No verified shared clock domain between Publisher and Subscriber processes (§15.2)." : why);
     }
 }
 } // namespace fanout_metrics
 
-// The original of this cell is written once and never replaced.
+// A sequence original is a single-writer artifact. A second write means this cell path was reused.
 inline void write_once (const std::string &path, const json &original)
 {
-    if (std::filesystem::exists (path))
-        return;
-    std::ofstream file (path, std::ios::out | std::ios::trunc | std::ios::binary);
-    file << original.dump () << '\n';
+    std::unique_ptr<std::FILE, void (*) (std::FILE *)> file (std::fopen (path.c_str (), "wbx"),
+                                                              [] (std::FILE *handle) { std::fclose (handle); });
+    if (!file)
+        throw std::system_error (errno, std::generic_category (), "Cannot create sequence original");
+    const auto contents = original.dump () + '\n';
+    if (std::fwrite (contents.data (), 1, contents.size (), file.get ()) != contents.size () || std::fflush (file.get ()) != 0)
+        throw std::system_error (errno, std::generic_category (), "Cannot write sequence original");
 }
 
 // role-configs/<role>.json sits one folder below the cell directory (perf §15.1), where the sequence original is written.
