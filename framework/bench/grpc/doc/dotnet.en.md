@@ -42,11 +42,11 @@ bound are fixed by the runner.
 | `zlink-dotnet` | `WithGrpcBench.Client`: only the raw ROUTER sockets the cell needs | 5205/5206 | `WithGrpcBench.ZLinkRawServer`: request echo ROUTER and command count ROUTER kept separate | request 5207, command 5208, stats 5209 |
 | `zlink-framework-dotnet` | `WithGrpcBench.Client`: `IZLinkRouteClient` | 5212/5213 | `WithGrpcBench.ZLinkServer`: typed request/send handlers | RouteMesh 5214, stats 5215 |
 
-A's trigger, stats and phase rules reuse the canonical perf runner's
-`ZLink.Framework.Perf.ServerSupport` (`BenchHttpApplication`) through a ProjectReference. The
-trigger client is the runner's `curl` and generates no load. The cell order is spec §10.4 as is, and
-every cell uses a fresh A/B process pair. The runner checks LISTEN sockets on 5200-5219 before the
-run and after each cell and stops, without moving ports, if one is in use.
+A's trigger, stats and phase rules are owned by the .NET bench Client's `BenchHttpApplication` and
+`BenchPhaseController`. The trigger client is the runner's `curl` and generates no load. The cell
+order is spec §10.4 as is, and every cell uses a fresh A/B process pair. The runner checks LISTEN
+sockets on 5200-5219 before the run and after each cell and stops, without moving ports, if one is
+in use.
 
 | Pattern | `streams.count` | `streams.inFlightPerStream` | .NET implementation |
 |---|---:|---:|---|

@@ -40,8 +40,8 @@ warmup 호출 수, process·operation 상한, settle quiet 구간과 drain 상�
 | `zlink-dotnet` | `WithGrpcBench.Client` — 셀에 필요한 raw ROUTER만 생성 | 5205/5206 | `WithGrpcBench.ZLinkRawServer` — request echo ROUTER와 command count ROUTER 분리 | request 5207, command 5208, stats 5209 |
 | `zlink-framework-dotnet` | `WithGrpcBench.Client` — `IZLinkRouteClient` | 5212/5213 | `WithGrpcBench.ZLinkServer` — typed request/send handler | RouteMesh 5214, stats 5215 |
 
-A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.Perf.ServerSupport`
-(`BenchHttpApplication`)를 ProjectReference로 재사용한다. trigger client는 runner의 `curl`이며
+A의 trigger·stats·phase 규칙은 .NET bench Client의 `BenchHttpApplication`과
+`BenchPhaseController`가 소유한다. trigger client는 runner의 `curl`이며
 부하를 만들지 않는다. 셀 순서는 규격 §10.4 그대로이고 셀마다 새 A/B process 쌍을 쓴다. runner는
 시작 전과 셀 종료 뒤 5200-5219의 LISTEN 소켓을 확인하고, 있으면 포트를 바꾸지 않고 중단한다.
 
