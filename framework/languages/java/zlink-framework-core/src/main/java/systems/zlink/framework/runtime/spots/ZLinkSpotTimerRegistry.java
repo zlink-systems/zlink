@@ -343,18 +343,22 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private void scheduleNext(long delayNanos) {
-            SchedulePlan plan =
-                    inStateLane(
-                            () -> {
-                                if (disposed || frozen) {
-                                    return null;
-                                }
-                                long boundedDelay = Math.max(0L, delayNanos);
-                                ScheduleAttempt attempt = new ScheduleAttempt();
-                                scheduled = attempt;
-                                nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
-                                return new SchedulePlan(attempt, boundedDelay);
-                            });
+            SchedulePlan plan = inStateLane(() -> prepareScheduleCore(delayNanos));
+            publishSchedule(plan);
+        }
+
+        private SchedulePlan prepareScheduleCore(long delayNanos) {
+            if (disposed || frozen) {
+                return null;
+            }
+            long boundedDelay = Math.max(0L, delayNanos);
+            ScheduleAttempt attempt = new ScheduleAttempt();
+            scheduled = attempt;
+            nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
+            return new SchedulePlan(attempt, boundedDelay);
+        }
+
+        private void publishSchedule(SchedulePlan plan) {
             if (plan == null) {
                 return;
             }
@@ -439,7 +443,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                                         return new DispatchResult(
                                                                 false,
                                                                 false,
-                                                                false,
+                                                                null,
                                                                 dispatchCompletion);
                                                     }
                                                     boolean stopped =
@@ -449,11 +453,16 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                                     if (error == null) {
                                                         schedule.markDelivered(selected);
                                                     }
-                                                    pendingTick = null;
+                                                    SchedulePlan next = null;
+                                                    if (!stopped) {
+                                                        pendingTick = null;
+                                                        next = prepareScheduleCore(
+                                                                schedule.delayAfterDispatchNanos());
+                                                    }
                                                     return new DispatchResult(
                                                             true,
                                                             stopped,
-                                                            !stopped,
+                                                            next,
                                                             dispatchCompletion);
                                                 });
                                 Throwable completionFailure = null;
@@ -475,17 +484,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                                 .completeExceptionally(completionFailure);
                                     }
                                 }
-                                if (result.reschedule()) {
-                                    scheduleAfterDispatch();
-                                }
+                                publishSchedule(result.nextSchedule());
                             });
-        }
-
-        private void scheduleAfterDispatch() {
-            Long delay = inStateLane(() -> disposed ? null : schedule.delayAfterDispatchNanos());
-            if (delay != null) {
-                scheduleNext(delay);
-            }
         }
 
         Optional<ScheduledFuture<?>> freezeCore() {
@@ -651,7 +651,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private record DispatchResult(
             boolean stillCurrent,
             boolean stopped,
-            boolean reschedule,
+            SchedulePlan nextSchedule,
             CompletableFuture<Void> dispatchCompletion) {}
 
     private record FinalizationPlan(

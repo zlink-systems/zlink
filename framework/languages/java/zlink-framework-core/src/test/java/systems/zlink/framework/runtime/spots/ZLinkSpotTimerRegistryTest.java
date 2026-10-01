@@ -436,6 +436,53 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
+    void failureObserverCanFreezeTheNextLogicalTimerAction() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ThrowingTimerHandler(new AtomicInteger()),
+                        List.of(),
+                        null,
+                        "freeze-observer",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        java.util.logging.Handler observer = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                if (!record.getMessage().contains("source=freeze-observer")) return;
+                try {
+                    frozen.complete(registry.freeze());
+                } catch (RuntimeException failure) {
+                    frozen.completeExceptionally(failure);
+                }
+            }
+
+            @Override
+            public void flush() {}
+
+            @Override
+            public void close() {}
+        };
+        logger.addHandler(observer);
+        try {
+            registry.add("timer", Duration.ofMillis(1), ThrowingTimerHandler.class, null);
+            var timers = frozen.get(2, TimeUnit.SECONDS).timers();
+            assertEquals(1, timers.size());
+            assertTrue(timers.getFirst().nextScheduledAt().isPresent());
+            assertTrue(timers.getFirst().pendingTick().isEmpty());
+        } finally {
+            logger.removeHandler(observer);
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void relocationEnvelopeRejectsTrailingBytes() {
         ZLinkFrameworkException failure =
                 assertThrows(
