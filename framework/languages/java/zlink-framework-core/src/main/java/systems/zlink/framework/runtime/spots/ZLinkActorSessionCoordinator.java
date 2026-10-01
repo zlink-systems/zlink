@@ -11,12 +11,14 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -266,11 +268,10 @@ final class ZLinkActorSessionCoordinator {
     }
 
     CompletionStage<Void> completeRelocationSource(List<String> actorIds) {
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-        for (String actorId : List.copyOf(actorIds)) {
-            chain = chain.thenCompose(ignored -> requireActors().completeRelocationSource(actorId));
-        }
-        return chain;
+        List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
+        for (String actorId : List.copyOf(actorIds))
+            cleanups.add(() -> requireActors().completeRelocationSource(actorId));
+        return ZLinkHandlerStages.completeAll(cleanups);
     }
 
     boolean isActorMember(String spotId, String actorId) {

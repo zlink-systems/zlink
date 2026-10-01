@@ -11,6 +11,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <nlohmann/json.hpp>
@@ -846,7 +847,7 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 }
 
 void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
-  test_context_t &test)
+  test_context_t &test, const std::shared_ptr<authority_relocation_port_t> &authority)
 {
     namespace detail = zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
@@ -859,7 +860,9 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
     {
     };
 
-    const auto run_case = [&] (bool remote) {
+    const auto run_case = [&] (bool remote, bool decline_source = false, bool cancel_source = false,
+                               bool cleanup_before_cancel = false) {
+        std::atomic_int failed_leave_diagnostics{0};
         const std::string case_name = remote ? "remote" : "same-node";
         const auto node =
           std::make_shared<detail::spot_node_builder_state_t> ("entry-return-" + case_name);
@@ -940,6 +943,113 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
         source->actor_count = 1;
 
         detail::spot_node_runtime_t spot_runtime (node);
+        if (decline_source) {
+            constexpr auto transfer_id = "entry-return-declined-leave";
+            node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+            detail::dispatch_options_access_t::set_observer_for_tests (
+              node->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+                  if (event.packet_name == "spot_actor_leave"
+                      && event.result == zlink::framework::message_flow_result_t::failed
+                      && event.exception) {
+                      ++failed_leave_diagnostics;
+                      test.require (event.correlation_id == transfer_id,
+                                    "source leave failure must retain its transfer correlation");
+                      if (cleanup_before_cancel)
+                          test.require (
+                            !event.spot_id && !event.actor_id,
+                            "removed source record must diagnose without borrowed context");
+                  }
+              });
+            const auto native_source = std::make_shared<detail::service::spot_t> (
+              nullptr, object_ref_t{object_kind_t::user_spot,
+                                    std::string (source_id),
+                                    source->object_generation,
+                                    0,
+                                    {},
+                                    local_node_name});
+            source->native_spot = native_source;
+            const object_ref_t source_ref{object_kind_t::actor, "actor-1", 1, 1, {},
+                                          local_node_name};
+            auto target_ref = source_ref;
+            target_ref.node_id = "entry-return-next-owner";
+            ++target_ref.authority_owner_generation;
+            const auto target_id = spot_id_t ("entry-return-next-spot");
+            const auto target_fence = runtime::protocol::actor_route_fence_t{
+              source_ref.key,
+              source_ref.object_generation,
+              zlink::routing_id_t::from (target_ref.node_id).to_bytes (),
+              source->object_generation,
+              target_ref.authority_owner_generation,
+              1};
+            authority->publish (source_ref, target_ref, {"entry-return-next-owner", 1}, {},
+                                transfer_id, 0, {});
+            node->relocation_authority = authority;
+            const auto cleanup_boundary = std::chrono::steady_clock::now ();
+            node->pending_remote_source_cleanups.push_back (
+              detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
+                .source_actor = actor_ref,
+                .transfer_id = transfer_id,
+                .source_spot_id = source_id,
+                .source_spot_generation = source->object_generation,
+                .target_spot_id = target_id,
+                .target_fence = target_fence,
+                .not_before = cleanup_boundary,
+                .leave_deadline = cleanup_boundary + node->message_follow_duration});
+            std::optional<runtime::serial_execution_queue_t::async_completion_t> blocker;
+            if (cancel_source) {
+                std::promise<runtime::serial_execution_queue_t::async_completion_t> entered;
+                auto started = entered.get_future ();
+                const bool accepted = source->serial_queue->try_post_async (
+                  "source-leave-cancellation-boundary",
+                  [&] (auto complete) { entered.set_value (std::move (complete)); });
+                test.require (accepted, "source cancellation fixture must hold an actual turn");
+                if (!accepted)
+                    return;
+                blocker = started.get ();
+            } else {
+                source->admission_sealed = true;
+            }
+            const auto submitted = spot_runtime.submit_remote_actor_leave (
+              transfer_id, actor_ref, source_id, source->object_generation, target_id,
+              target_fence);
+            if (cancel_source) {
+                if (cleanup_before_cancel) {
+                    spot_runtime.cleanup_expired_actor_admissions_at (
+                      node->pending_remote_source_cleanups.front ().leave_deadline);
+                    test.require (!node->actor_instances.contains (key)
+                                    && node->pending_remote_source_cleanups.empty (),
+                                  "fixture must remove the source record at its existing deadline");
+                }
+                source->serial_queue->cancel_pending ();
+                (*blocker) ([] {});
+                source->serial_queue->drain ();
+            }
+            test.require (submitted
+                            && (cleanup_before_cancel
+                                  ? node->pending_remote_source_cleanups.empty ()
+                                  : node->pending_remote_source_cleanups.front ().leave_completed),
+                          cancel_source
+                            ? "source leave canceled before activation must finish retirement"
+                            : "source leave declined before activation must finish retirement");
+            spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            test.require (!node->actor_instances.contains (key)
+                            && node->pending_remote_source_cleanups.empty ()
+                            && leave_callbacks.load (std::memory_order_acquire) == 0
+                            && failed_leave_diagnostics == 1,
+                          "terminal source leave failure must remove registry and diagnose once");
+            spot_runtime.submit_remote_actor_leave (transfer_id, actor_ref, source_id,
+                                                    source->object_generation, target_id,
+                                                    target_fence);
+            spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            test.require (leave_callbacks.load (std::memory_order_acquire) == 0
+                            && failed_leave_diagnostics == 1,
+                          "terminal source leave failure must not rerun callback or diagnostics");
+            spot_runtime.request_stop ();
+            spot_runtime.cancel_pending_dispatch ();
+            spot_runtime.cancel_pending_work ();
+            spot_runtime.release_native_handles ();
+            return;
+        }
         const auto joined =
           remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
                                                                   zlink::message_t{})
@@ -965,6 +1075,9 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
 
     run_case (false);
     run_case (true);
+    run_case (false, true);
+    run_case (false, true, true);
+    run_case (false, true, true, true);
 }
 
 void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
@@ -4555,7 +4668,7 @@ class entry_relocation_test_actor_factory_t final
  * target node). This fixture proves the target-local Entry Spot is resolved
  * during materialize_relocation_state, the relocated Actor is joined into
  * it, and the Actor immediately serves an application message through it. */
-class entry_relocation_test_entry_spot_t final
+class entry_relocation_test_entry_spot_t
     : public zlink::framework::entry_spot_t<entry_relocation_test_actor_t>
 {
   public:
@@ -4606,6 +4719,19 @@ class entry_relocation_test_entry_spot_t final
 
   private:
     zlink::framework::entry_spot_context_t _context;
+};
+
+class failing_source_leave_entry_spot_t final : public entry_relocation_test_entry_spot_t
+{
+  public:
+    using entry_relocation_test_entry_spot_t::entry_relocation_test_entry_spot_t;
+
+    zlink::framework::task_t<void> on_leave_actor (entry_relocation_test_actor_t &) override
+    {
+        ++leave_count;
+        throw std::runtime_error ("source leave failed");
+        co_return;
+    }
 };
 
 /* checklist B: cpp's standalone Entry Spot Actor direct-relocation restore
@@ -4707,8 +4833,10 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
  * the local instance is the departed source remnant; a newer Store-confirmed
  * target authority may replace it, while the old leave is sealed so it cannot
  * run against the newly materialized Actor. */
-void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test)
+void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test,
+                                                                   bool source_leave_fails = false)
 {
+    std::atomic_int failed_leave_diagnostics{0};
     entry_relocation_test_actor_t::create_count = 0;
     entry_relocation_test_entry_spot_t::joined_count = 0;
     entry_relocation_test_entry_spot_t::leave_count = 0;
@@ -4718,7 +4846,10 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     zlink::framework::zlink_builder_t builder;
     auto mesh = builder.add_route_mesh ("return-relocation-remnant-mesh");
     mesh.add_entry_spot<entry_relocation_test_entry_spot_t> (
-      [] (zlink::framework::entry_spot_context_t context) {
+      [source_leave_fails] (zlink::framework::entry_spot_context_t context)
+        -> std::shared_ptr<entry_relocation_test_entry_spot_t> {
+          if (source_leave_fails)
+              return std::make_shared<failing_source_leave_entry_spot_t> (std::move (context));
           return std::make_shared<entry_relocation_test_entry_spot_t> (std::move (context));
       });
     mesh.add_actor_factory<entry_relocation_test_actor_t, entry_relocation_test_actor_factory_t> (
@@ -4739,6 +4870,13 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     test.require (state != nullptr, "return relocation fixture must retain its runtime state");
     if (!state)
         return;
+    state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      state->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+          if (event.packet_name == "spot_actor_leave"
+              && event.result == zlink::framework::message_flow_result_t::failed && event.exception)
+              ++failed_leave_diagnostics;
+      });
     auto authority = std::make_shared<memory_authority_store_t> ();
     runtime.bind_relocation_authority (authority);
 
@@ -4831,6 +4969,18 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
                     && cleanup->leave_submitted && cleanup->leave_completed,
                   "a newer exact-fenced return must retire the old source lifecycle, "
                   "suppress its late leave, and install a fresh local Actor");
+    test.require (
+      failed_leave_diagnostics == (source_leave_fails ? 1 : 0),
+      "source OnLeave failure must be diagnosed once while return restores a fresh Actor");
+    test.require (state->actor_generations.at (key) == first_source.object_generation,
+                  "fresh return instance must retain ObjectGeneration");
+    if (cleanup == state->pending_remote_source_cleanups.end ())
+        return;
+    runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
+    test.require (entry_relocation_test_entry_spot_t::leave_count == 1
+                    && failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
+                    && state->actor_instances.contains (key),
+                  "retired source cleanup must not rerun leave or erase newer local authority");
 
     // The ordinary source cleanup may have already erased the instance and
     // its cleanup record while the longer-lived remote Message Follow route
@@ -5874,7 +6024,8 @@ int main ()
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
     test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
-    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
+    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
+      test, std::make_shared<memory_authority_store_t> ());
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);
@@ -5900,6 +6051,7 @@ int main ()
     test_relocation_adapter_single_capture_restore_path (test);
     test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test);
+    test_return_actor_relocation_replaces_departed_spot_instance (test, true);
     test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_queue_accepts_active_backlog (test);

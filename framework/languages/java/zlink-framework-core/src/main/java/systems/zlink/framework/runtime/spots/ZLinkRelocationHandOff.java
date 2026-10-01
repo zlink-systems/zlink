@@ -1,15 +1,18 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -23,6 +26,20 @@ final class ZLinkRelocationHandOff {
     private static final Logger LOGGER = Logger.getLogger(ZLinkRelocationHandOff.class.getName());
 
     private ZLinkRelocationHandOff() {}
+
+    /** Reports source cleanup failures without changing the confirmed target owner. */
+    static CompletionStage<Void> completeSourceCleanup(
+            List<? extends Supplier<? extends CompletionStage<Void>>> operations) {
+        return ZLinkHandlerStages.completeAll(operations)
+                .exceptionally(
+                        failure -> {
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "Relocation source cleanup failed:",
+                                    unwrap(failure));
+                            return null;
+                        });
+    }
 
     /**
      * Runs one unit. {@code timeout} bounds each control request; {@code restoreDeadline} is the

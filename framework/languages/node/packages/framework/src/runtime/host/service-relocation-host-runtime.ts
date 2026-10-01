@@ -336,7 +336,7 @@ interface SourceActorJoinProfile {
     Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]['canonicalRecovery']
   >;
   readonly ready: Promise<void>;
-  readonly resolveReady: () => void;
+  readonly resolveReady: (failure?: ServiceRelocationPostCommitError) => void;
 }
 
 interface PendingRelocationReplyRelay {
@@ -453,9 +453,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
     }
     this.reserveExactRelocationId(input.relocationId);
-    let resolveReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      resolveReady = resolve;
+    let resolveReady!: (failure?: ServiceRelocationPostCommitError) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = (failure) => {
+        if (failure === undefined) resolve();
+        else reject(failure.cause);
+      };
     });
     this.sourceActorJoinProfiles.set(input.relocationId, {
       actor: input.actor,
@@ -498,8 +501,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       resolveReady();
     } catch (error) {
-      this.sourceActorJoinProfiles.delete(input.relocationId);
-      throw error;
+      if (error instanceof ServiceRelocationPostCommitError) {
+        resolveReady(error);
+        this.completeActorJoinSourceCleanup(input.state.actorId);
+      } else {
+        this.sourceActorJoinProfiles.delete(input.relocationId);
+        throw error;
+      }
     }
     return {
       actorRef: {
@@ -568,19 +576,39 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (profile.state.actorId !== actorId) continue;
       this.sourceActorJoinProfiles.delete(relocationId);
       this.terminalActorJoinSourceLeaves.remember(relocationId, actorId);
-      void profile.ready
-        .then(async () => {
-          await this.options.actorTransfer.completeRelocationSourceLeave(
-            profile.actor,
-            profile.sourceSpotId
-          );
-          await this.options
-            .actorManager()
-            ?.completeRelocationSource(actorId, profile.sourceActorRef);
-        })
-        .catch((error) => {
-          console.error('[zlink.runtime.relocation.source_cleanup_failed]', error);
-        });
+      void this.finalizeActorJoinSource(profile);
+    }
+  }
+
+  private async finalizeActorJoinSource(profile: SourceActorJoinProfile): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      await profile.ready;
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.options.actorTransfer.completeRelocationSourceLeave(
+        profile.actor,
+        profile.sourceSpotId
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.options
+        .actorManager()
+        ?.completeRelocationSource(profile.state.actorId, profile.sourceActorRef);
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      console.error(
+        '[zlink.runtime.relocation.source_cleanup_failed]',
+        failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, 'Actor source retirement failed.')
+      );
     }
   }
 
@@ -1572,47 +1600,72 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       captureApplicationState: (captureSignal) =>
         this.captureApplication(spotRegistration.relocation, activation.spot, captureSignal),
       commitSeal: async () => {
-        if (!spotSealCommitted) {
-          if (spotCapture === undefined || !(await activation.commitRelocation(spotCapture))) {
-            throw new Error(`Spot '${String(activation.spotId)}' relocation seal became stale.`);
+        const failures: unknown[] = [];
+        try {
+          if (!spotSealCommitted) {
+            if (spotCapture === undefined || !(await activation.commitRelocation(spotCapture))) {
+              throw new Error(`Spot '${String(activation.spotId)}' relocation seal became stale.`);
+            }
+            spotSealCommitted = true;
           }
-          spotSealCommitted = true;
-        }
-        if (spotMessageFollowSeal !== undefined) {
-          await this.commitSpotMessageFollow(
-            meshName,
-            spotMessageFollowSeal,
-            spotKey,
-            activation,
-            target
-          );
+          if (spotMessageFollowSeal !== undefined) {
+            await this.commitSpotMessageFollow(
+              meshName,
+              spotMessageFollowSeal,
+              spotKey,
+              activation,
+              target
+            );
+          }
+        } catch (error) {
+          failures.push(error);
         }
         for (const session of sessions) {
-          const committedAuthority = await requireAuthority(
-            this.requireLocationStore(),
-            encodeAuthorityKey('actor', session.state.actorId)
-          );
-          const targetActorRef = {
-            actorId: session.state.actorId,
-            objectGeneration: actorAuthorities.get(session.state.actorId)!.objectGeneration,
-            meshName,
-            nodeRid: target.rid
-          };
-          await session.prepared.commit(
-            {
-              routerChannelId: meshName,
-              targetNodeRid: target.rid,
-              spotId: activation.spotId,
-              spotKind: kind === 'user_spot' ? ZLinkSpotKind.User : ZLinkSpotKind.Instance,
-              authorityOwnerGeneration: committedAuthority.authorityOwnerGeneration
-            } as never,
-            targetActorRef,
-            committedActorOwnerFence(session.state.actorId, targetActorRef, committedAuthority)
-          );
-          activation.commitActorDeparture(session.state.actorId);
-          await this.requireActorManager().completeRelocationSource(session.state.actorId);
+          try {
+            const committedAuthority = await requireAuthority(
+              this.requireLocationStore(),
+              encodeAuthorityKey('actor', session.state.actorId)
+            );
+            const targetActorRef = {
+              actorId: session.state.actorId,
+              objectGeneration: actorAuthorities.get(session.state.actorId)!.objectGeneration,
+              meshName,
+              nodeRid: target.rid
+            };
+            await session.prepared.commit(
+              {
+                routerChannelId: meshName,
+                targetNodeRid: target.rid,
+                spotId: activation.spotId,
+                spotKind: kind === 'user_spot' ? ZLinkSpotKind.User : ZLinkSpotKind.Instance,
+                authorityOwnerGeneration: committedAuthority.authorityOwnerGeneration
+              } as never,
+              targetActorRef,
+              committedActorOwnerFence(session.state.actorId, targetActorRef, committedAuthority)
+            );
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            activation.commitActorDeparture(session.state.actorId);
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            await this.requireActorManager().completeRelocationSource(session.state.actorId);
+          } catch (error) {
+            failures.push(error);
+          }
         }
-        await this.requireSpotManager().completeRelocationSource(activation);
+        try {
+          await this.requireSpotManager().completeRelocationSource(activation);
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length > 0)
+          throw failures.length === 1
+            ? failures[0]
+            : new AggregateError(failures, 'Spot source retirement failed.');
       },
       abortSeal: async () => {
         const failures: unknown[] = [];
@@ -2069,32 +2122,45 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           meshName === undefined
         )
           return;
-        const membershipSpotId =
-          targetMembership?.spotId ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
-        const committedAuthority = await requireAuthority(
-          this.requireLocationStore(),
-          encodeAuthorityKey('actor', state.actorId)
-        );
-        const targetActorRef = {
-          actorId: state.actorId,
-          objectGeneration: authority.objectGeneration,
-          meshName,
-          nodeRid: target.rid
-        };
-        await ownSession.prepared.commit(
-          {
-            routerChannelId: meshName,
-            targetNodeRid: target.rid,
-            spotId: membershipSpotId,
-            spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry,
-            authorityOwnerGeneration: committedAuthority.authorityOwnerGeneration
-          } as never,
-          targetActorRef,
-          committedActorOwnerFence(state.actorId, targetActorRef, committedAuthority)
-        );
-        if (!retainSourceForActorJoin) {
-          await this.requireActorManager().completeRelocationSource(state.actorId);
+        const failures: unknown[] = [];
+        try {
+          const membershipSpotId =
+            targetMembership?.spotId ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
+          const committedAuthority = await requireAuthority(
+            this.requireLocationStore(),
+            encodeAuthorityKey('actor', state.actorId)
+          );
+          const targetActorRef = {
+            actorId: state.actorId,
+            objectGeneration: authority.objectGeneration,
+            meshName,
+            nodeRid: target.rid
+          };
+          await ownSession.prepared.commit(
+            {
+              routerChannelId: meshName,
+              targetNodeRid: target.rid,
+              spotId: membershipSpotId,
+              spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry,
+              authorityOwnerGeneration: committedAuthority.authorityOwnerGeneration
+            } as never,
+            targetActorRef,
+            committedActorOwnerFence(state.actorId, targetActorRef, committedAuthority)
+          );
+        } catch (error) {
+          failures.push(error);
         }
+        if (!retainSourceForActorJoin) {
+          try {
+            await this.requireActorManager().completeRelocationSource(state.actorId);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0)
+          throw failures.length === 1
+            ? failures[0]
+            : new AggregateError(failures, 'Actor source retirement failed.');
       },
       abortSeal: async () => {
         if (standalone && ownSession !== undefined) await ownSession.prepared.rollback();
@@ -3174,19 +3240,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     this.sourceActorJoinProfiles.delete(input.transferId);
     this.terminalActorJoinSourceLeaves.remember(input.transferId, input.actorId);
-    void profile.ready
-      .then(async () => {
-        await this.options.actorTransfer.completeRelocationSourceLeave(
-          profile.actor,
-          profile.sourceSpotId
-        );
-        await this.options
-          .actorManager()
-          ?.completeRelocationSource(input.actorId, profile.sourceActorRef);
-      })
-      .catch((error) => {
-        console.error('[zlink.runtime.relocation.source_leave_failed]', error);
-      });
+    void this.finalizeActorJoinSource(profile);
     return true;
   }
 

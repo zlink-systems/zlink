@@ -1463,6 +1463,23 @@ void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder
     });
 }
 
+void report_actor_leave_failure (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+                                 const result_t<void> &result,
+                                 std::string_view spot_id,
+                                 std::string_view actor_id = {},
+                                 std::string_view transfer_id = {})
+{
+    if (result || !state
+        || !detail::message_flow_tracer_t (state->dispatch)
+              .enabled (message_flow_log_mode_t::errors))
+        return;
+    report_spot_dispatch_trace (
+      state, message_flow_outcome_t::completed, dispatch_error_surface_t::spot_actor,
+      dispatch_message_kind_t::control, "spot_actor_leave", {}, spot_id, actor_id, transfer_id,
+      message_flow_result_t::failed, std::nullopt, "leave_failed",
+      result.error () ? std::make_exception_ptr (*result.error ()) : nullptr);
+}
+
 template <typename BuildResult>
 void report_actor_dispatch_stage_trace_lazy (
   const std::shared_ptr<detail::spot_node_builder_state_t> &state,
@@ -5948,13 +5965,7 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
           },
           [state, spot_id = leave.context->spot_id,
            completed = std::move (completed)] (result_t<void> left) mutable {
-              if (!left) {
-                  report_spot_dispatch_trace (
-                    state, message_flow_outcome_t::completed, dispatch_error_surface_t::spot_actor,
-                    dispatch_message_kind_t::control, "spot_actor_leave", {}, spot_id, {}, {},
-                    message_flow_result_t::failed, std::nullopt, "leave_failed",
-                    left.error () ? std::make_exception_ptr (*left.error ()) : nullptr);
-              }
+              report_actor_leave_failure (state, left, spot_id);
               if (completed)
                   completed (std::move (left));
           });
@@ -7961,8 +7972,11 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
                     return_remnant->context->spot_instance.get (), return_remnant->actor.get ());
               });
         }
-        catch (const framework_exception_t &) {
-            // The leave outcome is not part of this materialization result.
+        catch (const framework_exception_t &error) {
+            report_actor_leave_failure (_state, detail::result_access_t::failure<void> (error),
+                                        return_remnant->context->spot_id,
+                                        return_remnant->source_fence.actor_id,
+                                        return_remnant->transfer_id);
         }
         _state->lane
           .run ([&] {
@@ -9571,32 +9585,29 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
       use_pending_owner_reservation ? pending_owner_byte_cost : transferred_owner_byte_cost;
     if (leave_callback) {
         auto state = _state;
-        auto callback_invoked = std::make_shared<std::atomic_bool> (false);
         source_state->run_serial_task_async (
           "spot-actor-remote-leave",
-          [source_state, actor_instance, callback_invoked,
-           leave_callback = std::move (leave_callback)] () mutable {
-              callback_invoked->store (true, std::memory_order_release);
+          [source_state, actor_instance, leave_callback = std::move (leave_callback)] () mutable {
               return leave_callback (source_state->spot_instance.get (), actor_instance.get ());
           },
-          [state = std::move (state), callback_invoked, key, transfer_id] (result_t<void>) {
-              // Source lifecycle is notification-only. Completion and
-              // failure do not participate in the committed target's Join
-              // terminal -- but the sweep in
-              // cleanup_expired_actor_admissions_at waits for this callback
-              // to actually finish (leave_completed) before erasing the
-              // local Actor instance the callback just ran against.
+          [state = std::move (state), transfer_id] (result_t<void> left) {
+              // 실행 전 거부·취소 또는 실행한 callback의 실제 종료가 이 단계의 terminal이다.
+              // Source 정리는 이 완료를 따르며 이미 commit된 target Join 결과를 바꾸지 않는다.
               state->lane
                 .run ([&] {
                     const auto found = std::find_if (
                       state->pending_remote_source_cleanups.begin (),
                       state->pending_remote_source_cleanups.end (),
                       [&] (const auto &candidate) { return candidate.transfer_id == transfer_id; });
-                    if (found != state->pending_remote_source_cleanups.end ()
-                        && callback_invoked->load (std::memory_order_acquire)) {
+                    if (found != state->pending_remote_source_cleanups.end ()) {
                         found->leave_completed = true;
                         if (const auto host = state->native_node.lock ())
                             host->signal_dispatch_activity ();
+                        report_actor_leave_failure (state, left, found->source_spot_id,
+                                                    found->source_actor.actor_id ().value (),
+                                                    transfer_id);
+                    } else {
+                        report_actor_leave_failure (state, left, {}, {}, transfer_id);
                     }
                 })
                 .get ();
