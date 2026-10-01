@@ -4214,7 +4214,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     },
     async requestToSpot(address, request, options) {
       events.push(
-        `request:${address.routerChannelId}:${address.spotId}:${address.spotKind}:` +
+        `request:${address.routerChannelId}:${address.targetNodeRid}:${address.spotId}:${address.spotKind}:` +
         `${address.targetSpotGeneration}:${options.timeoutMs}:${request}`
       );
       return 'routed-reply';
@@ -4231,25 +4231,33 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     outbound = spot.context.outbound;
   });
 
+  let releaseFirst;
+  let firstStarted;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const firstStart = new Promise((resolve) => { firstStarted = resolve; });
   const first = manager.executeOnSpot(StageSpot, created.spotId, async () => {
     events.push('spot:start');
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    firstStarted();
+    await firstGate;
     events.push('spot:end');
   });
+  await firstStart;
   class Notice extends String {}
   class Ping extends String {}
   const send = outbound.sendToSpot(targetSpot, new Notice('notice')).submit();
-  const reply = await outbound.requestToSpot(targetSpot, new Ping('ping')).timeout(250).submit();
+  const request = outbound.requestToSpot(targetSpot, new Ping('ping')).timeout(250).submit();
+  releaseFirst();
+  const reply = await request;
   await send;
   await first;
 
   assert.equal(reply, 'routed-reply');
-  assert.deepEqual(events, [
-    'spot:start',
-    'spot:end',
-    `request:play.route:stage-b:${framework.ZLinkSpotKind.User}:9:250:ping`,
+  assert.deepEqual(events.slice(0, 2), ['spot:start', 'spot:end']);
+  assert.equal(events.length, 4);
+  assert.deepEqual(new Set(events.slice(2)), new Set([
+    `request:play.route:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:250:ping`,
     `send:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:Notice:notice`
-  ]);
+  ]));
 });
 
 test('spot outbound one-way admission does not hold the serial executor during transport wait', async () => {
