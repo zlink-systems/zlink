@@ -38,7 +38,7 @@ namespace
 
 void complete_cancel_if_ready (const std::shared_ptr<detail::timer_state_t> &state)
 {
-    std::shared_ptr<detail::task_completion_source_t<void>> completion;
+    std::shared_ptr<task_completion_source_t<void>> completion;
     std::optional<result_t<void>> result;
     {
         std::lock_guard lock (state->mutex);
@@ -61,7 +61,7 @@ task_t<void> timer_t::cancel ()
         return task_t<void> (result_t<void>::success ());
 
     const auto state = _state;
-    std::shared_ptr<detail::task_completion_source_t<void>> completion;
+    std::shared_ptr<task_completion_source_t<void>> completion;
     std::unique_ptr<detail::timer_resource_t> resource;
     bool owns_cleanup = false;
     {
@@ -70,7 +70,7 @@ task_t<void> timer_t::cancel ()
             state->disposed.store (true, std::memory_order_release);
             state->pending_fire = false;
             state->pending_fire_count = 0;
-            state->cancel_completion = std::make_shared<detail::task_completion_source_t<void>> ();
+            state->cancel_completion = std::make_shared<task_completion_source_t<void>> ();
             resource = std::move (state->native_timer);
             owns_cleanup = true;
         }

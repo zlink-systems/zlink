@@ -227,7 +227,7 @@ class state_lane_t
     {
         using value_t = std::invoke_result_t<std::decay_t<Work> &>;
         throw_if_reentrant ();
-        auto completion = std::make_shared<detail::task_completion_source_t<value_t>> ();
+        auto completion = std::make_shared<task_completion_source_t<value_t>> ();
         auto task = completion->task ();
         if (!enqueue (
               [this, completion, work = std::forward<Work> (work)] () mutable {
