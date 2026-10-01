@@ -6,6 +6,8 @@ import {
 import type { RequiredZlinkStreamConnectorOptions } from '../../Contracts';
 import { connectorError, throwIfAborted } from '../ZlinkStreamSupport';
 
+const MESSAGE_QUEUE_COMPACTION_MIN_HEAD = 1024;
+
 interface BrowserWebSocketEventMap {
   open: unknown;
   close: unknown;
@@ -194,7 +196,10 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
     const message = this.messages[this.messageHead];
     this.messages[this.messageHead] = undefined;
     this.messageHead += 1;
-    if (this.messageHead >= 1024 && this.messageHead * 2 >= this.messages.length) {
+    if (
+      this.messageHead >= MESSAGE_QUEUE_COMPACTION_MIN_HEAD &&
+      this.messageHead * 2 >= this.messages.length
+    ) {
       this.messages.splice(0, this.messageHead);
       this.messageHead = 0;
     }
