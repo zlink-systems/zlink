@@ -84,7 +84,8 @@ public sealed partial class StreamConnectorTests
         legacy[encoded.Length - 1] = 6;
         "legacy"u8.CopyTo(legacy.AsSpan(encoded.Length));
 
-        Assert.Equal("legacy", codec.Decode(legacy).Name);
+        var decodeError = Assert.Throws<ZlinkStreamException>(() => codec.Decode(legacy));
+        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, decodeError.Error.Code);
     }
 
     [Fact]

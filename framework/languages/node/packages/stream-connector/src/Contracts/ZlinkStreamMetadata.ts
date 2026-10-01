@@ -1,3 +1,6 @@
+import { ZlinkStreamErrorCode } from './ZlinkStreamEnums';
+import { ZlinkStreamException } from './ZlinkStreamModels';
+
 export interface ZlinkStreamMetadata {
   readonly count: number;
   readonly values: ReadonlyMap<string, string>;
@@ -42,12 +45,9 @@ export class ZlinkStreamMetadataMap implements ZlinkStreamMetadata {
 
 export function validateMetadataKey(key: string): void {
   if (key.length === 0) {
-    throw new Error('Metadata key must not be empty.');
-  }
-  for (let index = 0; index < key.length; index++) {
-    const code = key.charCodeAt(index);
-    if (code < 0x20 || code > 0x7e || key[index] === '=') {
-      throw new Error('Metadata key must contain printable ASCII characters except "=".');
-    }
+    throw new ZlinkStreamException({
+      code: ZlinkStreamErrorCode.ValidationFailed,
+      message: 'Metadata key must not be empty.'
+    });
   }
 }

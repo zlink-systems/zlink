@@ -97,10 +97,13 @@ initialized before the call (Core fills them). When `parts_capacity_` is smaller
 part count, the record is not consumed, the needed count is written to `*part_count_out_`, and
 `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is returned; retrying with a large enough array
 receives the same record exactly once (on a ROUTER, a record of a pipe that left the selection is the
-exception in [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)). The single-consumer contract, record atomicity, and
-borrowed-RID lifetime are defined by [§2](#2-thread-safety) and the function sections below. Keep one
-receive consumer per socket; concurrent entry by another thread returns `ZLINK_RECV_BUSY`
-(`errno == EBUSY`).
+exception in [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)). This section defines the receive-consumer rule.
+Record atomicity follows [§2](#2-thread-safety), and borrowed-RID lifetime follows the function sections
+below. Data receive on a socket proceeds one call at a time. A call that enters while another
+data-receive call is in progress isn't admitted; it changes no state and returns `ZLINK_RECV_BUSY`
+(`errno == EBUSY`). The consumer is the in-progress call and is not tied to a particular thread.
+Sequential calls may come from any thread. Retrying a record preserved after insufficient buffer
+capacity follows the function-specific contracts below.
 
 `ZLINK_POLLCOMPLETION` is not payload. Poller wait does not remove completions or add operation
 payload to `zlink_poller_event_t`. For each ready socket, the caller invokes
@@ -653,9 +656,8 @@ infinite); a timeout returns `ZLINK_RECV_NO_DATA` (`errno == EAGAIN`). Context t
 `ZLINK_RECV_TERMINATED` (`errno == ETERM`) and socket shutdown returns `ZLINK_RECV_INVALID_STATE`
 (`errno == ESHUTDOWN`). Every failure leaves outputs and message contents unchanged.
 
-Keep one receive consumer per socket (single-consumer); concurrent entry by another thread returns
-`ZLINK_RECV_BUSY` (`errno == EBUSY`). A returned source-RID view remains valid until the next
-data-recv on the same socket or socket close — receive on another socket, poller wait, completion
+The receive-consumer rule follows [§3](#3-pull-receive-and-completion-model). A returned source-RID view remains valid until the next
+data-receive call admitted on the same socket, or until socket close — receive on another socket, poller wait, completion
 recv, and monitor recv do not invalidate it; copy it to owned storage right after receive to retain
 it longer. The `reply_token_out_` token is not a wire sequence; the application does not interpret,
 generate, or modify it.
@@ -1469,9 +1471,8 @@ connection, options, send/receive/completion functions, return values, and
   which releases them with `zlink_multipart_close()`; a failed receive does not transfer ownership.
   `source_rid_out_` is a Core-owned view on `STREAM` and is `NULL` on `PAIR`
   and `DEALER`.
-- Entry to the next data receive on the same socket invalidates a borrowed RID;
-  data receive on another socket, poller wait, completion receive, and monitor
-  receive do not.
+- The lifetime and invalidation conditions of the borrowed RID view follow the
+  [borrowed-RID rule](#zlink_recv-and-zlink_router_recv).
 - A NONE receive snapshots `RCVTIMEO` 0/positive/-1 on entry. Timeout returns
   `ZLINK_RECV_NO_DATA` with `EAGAIN`, context termination returns
   `ZLINK_RECV_TERMINATED` with `ETERM`, and socket shutdown returns

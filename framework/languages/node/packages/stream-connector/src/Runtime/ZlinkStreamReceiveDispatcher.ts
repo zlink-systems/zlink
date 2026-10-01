@@ -169,27 +169,24 @@ export class ZlinkStreamReceiveDispatcher {
       }
       return;
     }
-    if (header.kind === ZlinkStreamMessageKind.Error && header.requestSeq !== undefined) {
+    if (header.kind === ZlinkStreamMessageKind.Error) {
+      let error: ZlinkStreamError;
       try {
-        const remoteError = decodeRemoteError(this.decodePayload(header, payload));
-        if (!this.pendingRequests.reject(header.requestSeq, remoteError)) {
-          this.events.publishError(remoteError, signal);
-        }
+        error = decodeRemoteError(this.decodePayload(header, payload));
       } catch (cause) {
         if (cause instanceof ZlinkStreamConnectionEnd) throw cause;
-        const decodeError = toStreamError(
+        error = toStreamError(
           cause,
           ZlinkStreamErrorCode.FrameDecodeFailed,
           'Remote error payload is invalid.'
         );
-        if (!this.pendingRequests.reject(header.requestSeq, decodeError)) {
-          this.events.publishError(decodeError, signal);
-        }
       }
-      return;
-    }
-    if (header.kind === ZlinkStreamMessageKind.Error) {
-      this.events.publishError(decodeRemoteError(this.decodePayload(header, payload)), signal);
+      if (
+        header.requestSeq === undefined ||
+        !this.pendingRequests.reject(header.requestSeq, error)
+      ) {
+        this.events.publishError(error, signal);
+      }
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Control) {
