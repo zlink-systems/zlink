@@ -484,17 +484,20 @@ cannot distinguish "no replacement ran" from "the runner looked at the wrong fil
 
 - §9-8 holds only if the next intent runs after `ClosePlayerQuestMsg`. All five languages have a
   path that sends that message. Accepting `ClosePlayerQuestMsg` guarantees neither that the Close
-  started nor that it finished, so the scenario starts the next Instance intent after it observes
-  the owner entering its `OnClosing` callback. That observation only confirms entry into
-  `Closing`; it doesn't mean the Close finished. An Instance intent whose resolver observes
-  `Closing` waits until that Close releases the authority
+  started nor that it finished, so after it observes the owner entering its `OnClosing` callback
+  the scenario sends the Instance intent request `SyncQuestProgressReq` from the same client.
+  That observation only confirms entry into `Closing`; it doesn't mean the Close finished. An
+  Instance intent whose resolver observes `Closing` waits until that Close releases the authority
   ([failure handling §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)).
-  An intent that reaches the sealed owner through a cached route ends `Rejected`, and that route
-  is removed from the cache. The intent is idempotent, so the scenario then starts one new
-  operation ([error model §7](../../spec/server/00-foundation/07-framework-error-model.en.md#7-retry-judgment)).
-  The second operation observes `Closing` at the resolver and waits. The scenario verifies the
-  last intent's terminal and the event stream replay in the new generation. A fixed wait or
-  repeated resends don't stand in for Close completion.
+  A request that reaches the sealed owner through a cached route ends `Rejected`, and that route
+  is removed from the cache. The scenario then starts one new `SyncQuestProgressReq` operation from
+  the same client. Running `SyncQuestProgressReq` again on the same facts gives the same result, so
+  the new operation has no duplicate effect
+  ([error model §7](../../spec/server/00-foundation/07-framework-error-model.en.md#7-retry-judgment)).
+  The new operation's resolver waits if it observes `Closing`, and starts cold activation from
+  `Missing` if the authority is already released. The scenario verifies the last request's terminal
+  and the event stream replay in the new generation. A fixed wait or repeated resends don't stand
+  in for Close completion.
 - §9-9 holds only if the next gameplay call runs after the Ready owner process is killed. This needs
   no new endpoint or message type — the existing `KillMonsterReq` suffices — but it does require
   **runner stage control: read an owner-ready marker, identify and kill that Mission process, then

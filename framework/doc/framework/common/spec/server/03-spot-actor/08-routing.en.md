@@ -140,7 +140,7 @@ Redis) on every call; this cache reduces that cost.
 | Reason it's kept | Caching only the route and dropping the fence would mean sending to a stale owner without knowing it — this is why the owner route and the fence values needed for the acceptance judgment are kept together. |
 | Default setting | `RouteCacheMaxAge` defaults to 15 seconds. `0` means the route cache isn't used. |
 | Results not stored | `Missing`, `Creating`, and Store failure aren't cached. A previous failure alone doesn't end the next call. Caching this state would turn a brief failure into an outage lasting as long as the cache lifetime. |
-| Conditions for immediate invalidation | An entry is removed on confirming a larger `StoreVersion`, a stale-route result, a Store recovery event, owner-lease invalidation, or a **relay notification**. |
+| Conditions for immediate invalidation | An entry is removed on confirming a larger `StoreVersion`, a stale-route result, a Store recovery event, owner-lease invalidation, a reply the owner rejected because of the Close seal, or a **relay notification**. |
 | Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) forwards a message that still arrives at the previous owner after an Actor or Spot has moved to a different MeshNode to the new owner, then notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
 | Runtime setting change | The `RouteCacheMaxAge` runtime-change rule is defined by [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
