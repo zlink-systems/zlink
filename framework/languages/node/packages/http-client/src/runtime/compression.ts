@@ -9,6 +9,11 @@ import { promisify } from 'node:util';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import { responseBodySizeExceeded } from './http-client-errors';
 
+export const CONTENT_ENCODING = Object.freeze({ Gzip: 'gzip', Deflate: 'deflate' } as const);
+export const HTTP_ACCEPTED_CONTENT_ENCODINGS = `${CONTENT_ENCODING.Gzip}, ${CONTENT_ENCODING.Deflate}`;
+
+const HTTP_DECOMPRESSION_CHUNK_SIZE = 1 << 20;
+
 const gunzipAsync = promisify(gunzipCallback);
 const inflateAsync = promisify(inflateCallback);
 const inflateRawAsync = promisify(inflateRawCallback);
@@ -23,7 +28,9 @@ const inflateRawAsync = promisify(inflateRawCallback);
  * synchronous variants would block the event loop for the whole decode of a large body.
  */
 export function gunzip(input: Buffer, maxBytes: number): Promise<Buffer> {
-  return decode(() => gunzipAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 }));
+  return decode(() =>
+    gunzipAsync(input, { maxOutputLength: maxBytes, chunkSize: HTTP_DECOMPRESSION_CHUNK_SIZE })
+  );
 }
 
 export function inflateDeflate(input: Buffer, maxBytes: number): Promise<Buffer> {
@@ -32,8 +39,11 @@ export function inflateDeflate(input: Buffer, maxBytes: number): Promise<Buffer>
     input.length >= 2 && (input[0] & 0x0f) === 8 && ((input[0] << 8) | input[1]) % 31 === 0;
   return decode(() =>
     zlibWrapped
-      ? inflateAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 })
-      : inflateRawAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 })
+      ? inflateAsync(input, { maxOutputLength: maxBytes, chunkSize: HTTP_DECOMPRESSION_CHUNK_SIZE })
+      : inflateRawAsync(input, {
+          maxOutputLength: maxBytes,
+          chunkSize: HTTP_DECOMPRESSION_CHUNK_SIZE
+        })
   );
 }
 

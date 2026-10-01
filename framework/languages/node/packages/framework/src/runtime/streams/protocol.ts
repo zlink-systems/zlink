@@ -1,90 +1,52 @@
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkFlowOrigin } from '../../contracts';
-import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
+  ZlinkStreamCloseReasonCode as ZLinkStreamCloseReasonCode,
+  ZlinkStreamCodec as ZLinkStreamCodec,
+  ZlinkStreamHeaderFlags as ZLinkStreamHeaderFlags,
+  ZlinkStreamMessageKind as ZLinkStreamMessageKind,
+  ZlinkStreamControlPacket,
   decodeStreamWireFrame,
   decodeStreamWireHeader,
+  defaultMaxDecompressedPayloadSize,
+  encodeStreamWireActorBoundPayload,
+  encodeStreamWireActorUnboundPayload,
   encodeStreamWireFrame,
   encodeStreamWireHeader,
+  encodeStreamWireSessionClosingPayload,
   lz4PickleUncompressed,
   lz4UnpicklePayload,
   tryDecodeStreamWireFrame,
-  utf8Encode
+  streamCodecContentType as wireCodecContentType,
+  streamCodecForContentType as wireCodecForContentType
 } from '@zlink-systems/stream-wire';
+import type { ZLinkFlowOrigin } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
+import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { throwAlreadySubmitted } from '../messaging/submission-result';
+export {
+  ZlinkStreamMessageKind as ZLinkStreamMessageKind,
+  ZlinkStreamHeaderFlags as ZLinkStreamHeaderFlags,
+  ZlinkStreamCloseReasonCode as ZLinkStreamCloseReasonCode
+} from '@zlink-systems/stream-wire';
 
 export { utf8Decode, utf8Encode } from '@zlink-systems/stream-wire';
 
-const defaultMaxDecompressedPayloadSize = 64 * 1024;
 const actorRequestDeadlineMetadataKey = '$zlink.actor-request-deadline-unix-ms';
 //  Shared empty metadata for the dominant no-metadata frame; ReadonlyMap
 //  keeps every consumer from mutating it.
 const EMPTY_STREAM_METADATA: ReadonlyMap<string, string> = new Map();
 
-export enum ZLinkStreamCodec {
-  Raw = 0,
-  Json = 1,
-  MessagePack = 2,
-  Protobuf = 3
-}
+export { ZlinkStreamCodec as ZLinkStreamCodec } from '@zlink-systems/stream-wire';
 
 export function streamCodecContentType(codec: ZLinkStreamCodec): string {
-  switch (codec) {
-    case ZLinkStreamCodec.Json:
-      return 'application/json';
-    case ZLinkStreamCodec.MessagePack:
-      return 'application/x-msgpack';
-    case ZLinkStreamCodec.Protobuf:
-      return 'application/x-protobuf';
-    case ZLinkStreamCodec.Raw:
-      return 'application/octet-stream';
-  }
-  throw new TypeError(`Unsupported STREAM codec '${codec}'.`);
+  return wireCodecContentType(codec);
 }
 
 export function streamCodecForContentType(contentType: string): ZLinkStreamCodec {
-  switch (contentType) {
-    case 'application/json':
-      return ZLinkStreamCodec.Json;
-    case 'application/x-msgpack':
-      return ZLinkStreamCodec.MessagePack;
-    case 'application/x-protobuf':
-      return ZLinkStreamCodec.Protobuf;
-    case 'application/octet-stream':
-      return ZLinkStreamCodec.Raw;
-  }
-  throw new TypeError(`Unsupported STREAM content type '${contentType}'.`);
+  return wireCodecForContentType(contentType);
 }
 
-export enum ZLinkStreamMessageKind {
-  Send = 1,
-  Request = 2,
-  Response = 3,
-  Error = 4,
-  Control = 5
-}
-
-export enum ZLinkStreamHeaderFlags {
-  None = 0,
-  HasRequestSeq = 0x01,
-  HasMetadata = 0x02,
-  PayloadCompressed = 0x04,
-  HasCorrelationId = 0x08,
-  HasFlowId = 0x10,
-  HasActorSlot = 0x20
-}
-
-export enum ZLinkStreamCloseReasonCode {
-  ClientClose = 1,
-  IdleTimeout = 2,
-  HeartbeatTimeout = 3,
-  ServerDrain = 4,
-  ProtocolError = 5,
-  TransportError = 6
-}
-
-export const ZLINK_STREAM_HEARTBEAT_PING = '$zlink.heartbeat.ping';
-export const ZLINK_STREAM_HEARTBEAT_PONG = '$zlink.heartbeat.pong';
+export const ZLINK_STREAM_HEARTBEAT_PING = ZlinkStreamControlPacket.HeartbeatPing;
+export const ZLINK_STREAM_HEARTBEAT_PONG = ZlinkStreamControlPacket.HeartbeatPong;
 
 export interface ZLinkStreamFrameHeader {
   readonly kind: ZLinkStreamMessageKind;
@@ -142,48 +104,32 @@ export function encodeStreamControlFrame(name: string): Uint8Array {
 }
 
 export function encodeActorBoundFrame(actorSlot: number, actorId: string): Uint8Array {
-  const actorIdBytes = utf8Encode(actorId);
-  if (actorIdBytes.length < 1 || actorIdBytes.length > 0xff) {
-    throw new Error('Actor id length is invalid for a STREAM binding control packet.');
-  }
-  const payload = new Uint8Array(4 + actorIdBytes.length);
-  payload[0] = 1;
-  payload[1] = actorSlot >>> 8;
-  payload[2] = actorSlot & 0xff;
-  payload[3] = actorIdBytes.length;
-  payload.set(actorIdBytes, 4);
-  return encodeStreamFrame(controlHeader('$zlink.actor.bound'), payload);
+  return encodeStreamFrame(
+    controlHeader(ZlinkStreamControlPacket.ActorBound),
+    encodeStreamWireActorBoundPayload(actorSlot, actorId)
+  );
 }
 
 export function encodeActorUnboundFrame(actorSlot: number): Uint8Array {
-  const payload = new Uint8Array(3);
-  payload[0] = 1;
-  payload[1] = actorSlot >>> 8;
-  payload[2] = actorSlot & 0xff;
-  return encodeStreamFrame(controlHeader('$zlink.actor.unbound'), payload);
+  return encodeStreamFrame(
+    controlHeader(ZlinkStreamControlPacket.ActorUnbound),
+    encodeStreamWireActorUnboundPayload(actorSlot)
+  );
 }
 
 export function encodeSessionClosingFrame(
   diagnostic = '',
   reason = ZLinkStreamCloseReasonCode.ServerDrain
 ): Uint8Array {
-  const diagnosticBytes = utf8Encode(diagnostic);
-  if (diagnosticBytes.length > 512) throw new Error('Session-closing diagnostic is too large.');
-  const payload = new Uint8Array(4 + diagnosticBytes.length);
-  payload[0] = 1;
-  payload[1] = reason;
-  payload[2] = diagnosticBytes.length >>> 8;
-  payload[3] = diagnosticBytes.length & 0xff;
-  payload.set(diagnosticBytes, 4);
   return encodeStreamFrame(
     {
       kind: ZLinkStreamMessageKind.Control,
       codec: ZLinkStreamCodec.Raw,
       flags: ZLinkStreamHeaderFlags.None,
-      name: 'session-closing',
+      name: ZlinkStreamControlPacket.SessionClosing,
       metadata: new Map()
     },
-    payload
+    encodeStreamWireSessionClosingPayload(reason, diagnostic)
   );
 }
 

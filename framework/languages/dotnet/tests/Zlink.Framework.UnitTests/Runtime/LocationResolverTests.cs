@@ -599,6 +599,50 @@ public sealed class LocationResolverTests
         Assert.True(invalidated);
     }
 
+    [Theory]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable)]
+    public async Task Spot_Handle_Stale_Terminal_Is_Preserved_With_One_Invalidation(
+        ZLinkFrameworkErrorKind kind
+    )
+    {
+        var invalidations = 0;
+        var refreshes = 0;
+        var submissions = 0;
+        var terminal = new ZLinkFrameworkException(kind, "first terminal");
+        var handle = new ZLinkResolvedSpotHandle(
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), "spot-terminal", 1),
+            1,
+            _ =>
+            {
+                refreshes++;
+                return ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(
+                    null
+                );
+            },
+            () => invalidations++
+        );
+
+        var observed = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            ZLinkSpotHandleRequestExecution
+                .ExecuteAsync<bool>(
+                    handle,
+                    _ =>
+                    {
+                        submissions++;
+                        return ValueTask.FromException<bool>(terminal);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
+
+        Assert.Same(terminal, observed);
+        Assert.Equal(1, invalidations);
+        Assert.Equal(1, submissions);
+        Assert.Equal(0, refreshes);
+    }
+
     [Fact]
     public async Task Spot_Handle_Registry_Uses_Global_SpotId_Across_Mesh_Labels()
     {

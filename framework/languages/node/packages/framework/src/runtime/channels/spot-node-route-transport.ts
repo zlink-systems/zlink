@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import { awaitWithAbort, throwIfAborted } from '../abort';
@@ -44,7 +45,8 @@ export class ZLinkSpotNodeRouteTransport {
     if (router === undefined) {
       return undefined;
     }
-    const effectiveTimeoutMs = timeoutMs ?? this.registration.requestTimeoutMs ?? 30_000;
+    const effectiveTimeoutMs =
+      timeoutMs ?? this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     throwIfAborted(signal);
     const operation = router.requestToSpot(
       target.targetNodeRid,
@@ -74,7 +76,8 @@ export class ZLinkSpotNodeRouteTransport {
     if (router === undefined) {
       return undefined;
     }
-    const effectiveTimeoutMs = timeoutMs ?? this.registration.requestTimeoutMs ?? 30_000;
+    const effectiveTimeoutMs =
+      timeoutMs ?? this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     throwIfAborted(signal);
     const operation = router.requestToSpot(
       target.targetNodeRid,

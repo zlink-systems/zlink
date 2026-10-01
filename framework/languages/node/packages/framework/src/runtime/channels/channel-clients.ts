@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import type {
   ZLinkChannelClient,
   ZLinkChannelRequestCall,
@@ -293,7 +294,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           metadata,
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
         }),
-      this.registration.requestTimeoutMs ?? 30_000
+      this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -302,7 +303,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       this.registration.spotNodes.get(meshName)?.requestTimeoutMs ??
       this.registration.routeChannelOptions.get(meshName)?.requestTimeoutMs ??
       this.registration.requestTimeoutMs ??
-      30_000
+      DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -350,7 +351,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
         : route?.kind === 'route-mesh'
           ? route.matches[0]?.mesh.requestTimeoutMs
           : undefined;
-    return timeoutMs ?? this.registration.requestTimeoutMs ?? 30_000;
+    return timeoutMs ?? this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   private requireTransport(): ZLinkRouteClientTransport {

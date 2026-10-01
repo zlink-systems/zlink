@@ -1,52 +1,42 @@
-import type {
-  Type,
-  ZLinkActor,
-  ZLinkActorFactory,
-  ZLinkCodecExtension,
-  ZLinkCodecRegistrar,
-  ZLinkDispatchOptionsBuilder,
-  ZLinkInboundDispatchOptions,
-  ZLinkEntrySpot,
-  ZLinkLocationStore,
-  ZLinkLocationOptionValues,
-  ZLinkLocationOptions,
-  ZLinkRelocationStore,
-  ZLinkActorFactoryBuilder,
-  ZLinkActorRelocationAdapter,
-  ZLinkInstanceSpotFactoryBuilder,
-  ZLinkSpotRelocationAdapter,
-  ZLinkUserSpotFactoryBuilder,
-  ZLinkMeshNodeSocketConfig,
-  ZLinkMeshPeerConnection,
-  ZLinkMeshPeerConnections,
-  ZLinkMessageSerializer,
-  ZLinkMessageTypeSelector,
-  ZLinkNetworkOptions,
-  ZLinkSession,
-  ZLinkSessionFactory,
-  ZLinkSpot,
-  ZLinkInstanceSpot,
-  ZLinkSpotPublisherConfig,
-  ZLinkStreamCompressionBuilder
-} from '@zlink-systems/framework';
-import type {
-  ZLinkFrameworkRegistrationOptions,
-  ZLinkActorFactoryConfiguration,
-  ZLinkInstanceSpotFactoryConfiguration,
-  ZLinkRelocationConfiguration,
-  ZLinkPublisherCapabilityOptions,
-  ZLinkSpotNodeOptions,
-  ZLinkStreamNodeOptions,
-  ZLinkUserSpotFactoryConfiguration
-} from './framework-integration-contracts';
 import {
+  type Type,
+  type ZLinkActor,
+  type ZLinkActorFactory,
+  type ZLinkActorFactoryBuilder,
+  type ZLinkActorRelocationAdapter,
+  type ZLinkCodecExtension,
+  type ZLinkCodecRegistrar,
+  type ZLinkDispatchOptionsBuilder,
+  type ZLinkEntrySpot,
+  type ZLinkInboundDispatchOptions,
+  type ZLinkInstanceSpot,
+  type ZLinkInstanceSpotFactoryBuilder,
+  type ZLinkLocationOptionValues,
+  type ZLinkLocationOptions,
+  type ZLinkLocationStore,
+  type ZLinkMeshNodeSocketConfig,
+  type ZLinkMeshPeerConnection,
+  type ZLinkMeshPeerConnections,
+  type ZLinkMessageSerializer,
+  type ZLinkMessageTypeSelector,
+  type ZLinkNetworkOptions,
+  type ZLinkRelocationStore,
+  type ZLinkSession,
+  type ZLinkSessionFactory,
+  type ZLinkSpot,
+  type ZLinkSpotPublisherConfig,
+  type ZLinkSpotRelocationAdapter,
+  type ZLinkStreamCompressionBuilder,
+  type ZLinkUserSpotFactoryBuilder,
   ZLinkSpotRelocationCoordinationMode,
-  ZLinkUserSpotExecutionMode,
-  ZLinkUnhandledDispatchAction
+  ZLinkUnhandledDispatchAction,
+  ZLinkUserSpotExecutionMode
 } from '@zlink-systems/framework';
+
 import {
   ZLINK_MODULE_OPTIONS_BRAND,
   type InternalZLinkNestClientServerChannelOptions,
+  type InternalZLinkNestFanoutChannelOptions,
   type Mutable,
   type MutableCodecRegistryOptions,
   type ZLinkModuleOptions,
@@ -55,19 +45,28 @@ import {
   type ZLinkNestClientServerChannelServerBuilder,
   type ZLinkNestCodecRegistryBuilder,
   type ZLinkNestFanoutChannelBuilder,
-  type InternalZLinkNestFanoutChannelOptions,
   type ZLinkNestFrameworkAdditionalOptions,
   type ZLinkNestFrameworkOptionsBuilder,
-  type ZLinkNestModuleRegistrationOptions,
   type ZLinkNestMeshChannelBuilder,
   type ZLinkNestMeshChannelClientBuilder,
   type ZLinkNestMeshChannelServerBuilder,
+  type ZLinkNestMeshNodeBuilder,
   type ZLinkNestMeshObjectClientBuilder,
   type ZLinkNestMeshObjectRoleBuilder,
   type ZLinkNestMeshObjectServerBuilder,
-  type ZLinkNestMeshNodeBuilder,
+  type ZLinkNestModuleRegistrationOptions,
   type ZLinkNestStreamNodeBuilder
 } from './contracts';
+import type {
+  ZLinkActorFactoryConfiguration,
+  ZLinkFrameworkRegistrationOptions,
+  ZLinkInstanceSpotFactoryConfiguration,
+  ZLinkPublisherCapabilityOptions,
+  ZLinkRelocationConfiguration,
+  ZLinkSpotNodeOptions,
+  ZLinkStreamNodeOptions,
+  ZLinkUserSpotFactoryConfiguration
+} from './framework-integration-contracts';
 import { framework } from './framework-loader';
 
 type ZLinkNestBuilderAdditionalOptions = Omit<
@@ -561,9 +560,9 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   }
 
   listen(port = 0): this {
-    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    if (!framework.isValidListenerPort(port)) {
       throw new framework.ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' port must be between 0 and 65535.`
+        `ClientServer channel '${this.name}' port must be between 0 and ${framework.MAX_LISTENER_PORT}.`
       );
     }
     this.updateServer({ port });
@@ -585,9 +584,9 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   }
 
   setWeight(weight: number): this {
-    if (!Number.isInteger(weight) || weight < 0 || weight > 10_000) {
+    if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' weight must be between 0 and 10000.`
+        `ClientServer channel '${this.name}' weight must be between 0 and ${framework.ZLINK_MAX_PUBLIC_WEIGHT}.`
       );
     }
     this.updateServer({ weight });
@@ -643,17 +642,12 @@ function requireClientServerText(value: string, label: string): void {
 
 function requireListenerPort(port: number | undefined, label: string): number {
   const normalized = port ?? 0;
-  if (!Number.isInteger(normalized) || normalized < 0 || normalized > 65_535) {
-    throw new framework.ZLinkConfigurationException(`${label} port must be between 0 and 65535.`);
+  if (!framework.isValidListenerPort(normalized)) {
+    throw new framework.ZLinkConfigurationException(
+      `${label} port must be between 0 and ${framework.MAX_LISTENER_PORT}.`
+    );
   }
   return normalized;
-}
-
-function requirePublicWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new framework.ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
-  }
-  return value;
 }
 
 function rejectFixedRoutingId(routingId: string | undefined, memberName: string): void {
@@ -818,9 +812,9 @@ class DefaultZLinkNestMeshNodeBuilder
   }
 
   setPlacementWeight(weight: number): this {
-    if (!Number.isInteger(weight) || weight < 0 || weight > 10_000) {
+    if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
-        'Placement weight must be an integer in 0..10000.'
+        `Placement weight must be an integer in 0..${framework.ZLINK_MAX_PUBLIC_WEIGHT}.`
       );
     }
     this.spotOptions.placementWeight = weight;
@@ -1212,11 +1206,11 @@ function validateObjectFactory(stableType: string, label: string): string {
   if (
     typeof stableType !== 'string' ||
     Buffer.byteLength(stableType) < 1 ||
-    Buffer.byteLength(stableType) > 255 ||
+    Buffer.byteLength(stableType) > framework.ZLINK_MAX_STABLE_TYPE_BYTES ||
     stableType.includes('\0')
   ) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must contain 1..255 UTF-8 bytes and no NUL.`
+      `${label} must contain 1..${framework.ZLINK_MAX_STABLE_TYPE_BYTES} UTF-8 bytes and no NUL.`
     );
   }
   return stableType;
@@ -1261,26 +1255,26 @@ function validateUserSpotFactoryConfiguration(options: ZLinkUserSpotFactoryConfi
 }
 
 function validateStableTypeLimit(value: number | undefined): void {
-  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
+  if (value !== undefined && !framework.isValidCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      'stableTypeLimit must be an integer from 0 through 2147483647.'
+      `stableTypeLimit must be an integer from 0 through ${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
 }
 
 function requirePositiveCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
+  if (!framework.isValidPositiveCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must be an integer in 1..2147483647.`
+      `${label} must be an integer in 1..${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
   return value;
 }
 
 function requireCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 0x7fff_ffff) {
+  if (!framework.isValidCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
-      `${label} must be an integer in 0..2147483647.`
+      `${label} must be an integer in 0..${framework.ZLINK_MAX_CAPACITY}.`
     );
   }
   return value;
@@ -1355,7 +1349,7 @@ class DefaultZLinkNestMeshChannelServerBuilder
   }
 
   setWeight(weight: number): this {
-    this.channel.weight = requirePublicWeight(weight, 'Mesh channel weight');
+    this.channel.weight = framework.requirePublicWeight(weight, 'Mesh channel weight');
     return this;
   }
 

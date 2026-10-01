@@ -1,3 +1,5 @@
+import { SERVICE_WIRE_TEXT8_MAX_BYTES } from './service-wire-binary-primitives';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { crc32c } from './service-relocation-runtime';
 import { validateApplicationPayloadFrame } from './service-wire-m6a-codec';
 import type { ServiceInstanceActivationTarget } from './service-stateful-wire-codec';
@@ -199,8 +201,14 @@ function requireOperation(value: ServiceInstanceActivationRecoveryEnvelope): voi
 
 function textBytes(value: string, name: string): Buffer {
   const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength < 1 || bytes.byteLength > 255 || bytes.includes(0)) {
-    throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > SERVICE_WIRE_TEXT8_MAX_BYTES ||
+    bytes.includes(0)
+  ) {
+    throw new RangeError(
+      `${name} must contain 1..${SERVICE_WIRE_TEXT8_MAX_BYTES} UTF-8 bytes without NUL.`
+    );
   }
   return bytes;
 }
@@ -216,13 +224,13 @@ function writeText8(target: Buffer, offset: number, value: Uint8Array): number {
 }
 
 function validatePositiveU64(value: bigint, name: string): void {
-  if (value <= 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value <= 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} is out of range.`);
   }
 }
 
 function validateU64(value: bigint, name: string): void {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value < 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} is out of range.`);
   }
 }

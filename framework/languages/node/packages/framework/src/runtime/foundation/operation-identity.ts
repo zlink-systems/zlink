@@ -1,4 +1,8 @@
+import { UINT64_BYTES, UINT64_MAX } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
+export const OPERATION_IDENTITY_BYTES = 16;
+
+export const ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE = 2n;
 
 export interface ZLinkOperationIdentity128 {
   readonly high: bigint;
@@ -27,13 +31,15 @@ export function createRandomOperationIdentity(
   source: (size: number) => Buffer = randomBytes
 ): ZLinkOperationIdentity128 {
   for (;;) {
-    const bytes = source(16);
-    if (bytes.length !== 16) {
-      throw new RangeError('Operation identity entropy source must return exactly 16 bytes.');
+    const bytes = source(OPERATION_IDENTITY_BYTES);
+    if (bytes.length !== OPERATION_IDENTITY_BYTES) {
+      throw new RangeError(
+        `Operation identity entropy source must return exactly ${OPERATION_IDENTITY_BYTES} bytes.`
+      );
     }
     const operationId = {
       high: bytes.readBigUInt64BE(0),
-      low: bytes.readBigUInt64BE(8)
+      low: bytes.readBigUInt64BE(UINT64_BYTES)
     };
     if (operationId.high !== 0n || operationId.low !== 0n) {
       return operationId;
@@ -42,7 +48,7 @@ export function createRandomOperationIdentity(
 }
 
 function requireUnsigned64(value: bigint, name: string): void {
-  if (typeof value !== 'bigint' || value < 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (typeof value !== 'bigint' || value < 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} must be an unsigned 64-bit integer.`);
   }
 }

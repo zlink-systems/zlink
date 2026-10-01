@@ -1,42 +1,56 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
-} from '../framework-errors-internal';
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActorClient,
+  type ZLinkActorRequestCall,
+  type ZLinkActorSendCall,
+  type ZLinkMessageSerializer,
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import { ZLINK_MAX_ACTOR_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import type { Message } from '../../contracts/Common/Message';
+import { awaitWithAbort, throwIfAborted } from '../abort';
+import {
+  type ZLinkBackendActorRef,
+  type ZLinkBackendMeshNode,
+  type ZLinkMeshCompletionTable,
+  closeMeshCompletion
+} from '../backend';
+
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
+  isZLinkBackendResultError,
   RequestResult,
   SubmitResult,
-  isZLinkBackendResultError,
   ZLINK_BACKEND_SEND_NONE
 } from '../backend/runtime-values';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActorClient,
-  ZLinkActorRequestCall,
-  ZLinkActorSendCall,
-  ZLinkMessageSerializer
-} from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
+import { ZLinkConfigurationException } from '../configuration';
 import {
+  captureZLinkSpotSerialTurn,
+  currentZLinkSpotSerialSourceId,
+  requireZLinkYieldTurn,
+  type ZLinkSpotSerialTurn
+} from '../execution';
+import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
+import {
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
+import { resolveFrameworkPacketName } from '../messaging/packet-name';
+import { decodeFrameworkPayloadMessage, encodeFrameworkPayload } from '../messaging/payload-codec';
+import {
+  classifySubmitResult,
   requireOneWayCompletion,
   throwAlreadySubmitted,
-  classifySubmitResult,
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
-import type { Message } from '../../contracts/Common/Message';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendMeshNode,
-  ZLinkMeshCompletionTable
-} from '../backend';
-import { closeMeshCompletion } from '../backend';
-import { awaitWithAbort, throwIfAborted } from '../abort';
-import { encodeFrameworkPayload, decodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
   actorRequestDeadlineMetadata,
   decodeStreamHeader,
@@ -46,11 +60,7 @@ import {
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
-import type { ZLinkStoreLocationResolvers } from '../locations';
-import type { ZLinkResolvedActorRoute } from '../locations';
-import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { encodeRemoteActorPacketRelayPayload } from './actor-packet-relay-wire';
-import { requestRoutedJsonReply } from './actor-routed-json-request';
+import { currentZLinkActorExecution } from './actor-execution-context';
 import {
   attachActorMessageFollowContext,
   createInitialActorMessageFollowContext,
@@ -58,13 +68,11 @@ import {
   type ZLinkActorMessageFollowContext
 } from './actor-message-follow-context';
 import {
-  captureZLinkSpotSerialTurn,
-  currentZLinkSpotSerialSourceId,
-  requireZLinkYieldTurn,
-  type ZLinkSpotSerialTurn
-} from '../execution';
-import { ZLinkConfigurationException } from '../configuration';
-import { currentZLinkActorExecution } from './actor-execution-context';
+  encodeRemoteActorPacketRelayPayload,
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+} from './actor-packet-relay-wire';
+import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
+import { requestRoutedJsonReply } from './actor-routed-json-request';
 
 export interface ZLinkActorClientOptions {
   readonly nodeProvider: (meshName: string) => ZLinkBackendMeshNode | undefined;
@@ -182,7 +190,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
             returnResponse: false,
             messageFollowContext: messageFollow
           }),
-          { packetName: '__zlink.actor.packet.relay' }
+          { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
         );
         return { status: ZLinkSubmitStatus.Submitted };
       }
@@ -576,8 +584,10 @@ function remainingActorRequestTimeout(
 
 function requireActorId(actorId: string): void {
   const byteLength = Buffer.byteLength(actorId, 'utf8');
-  if (byteLength < 1 || byteLength > 255) {
-    throw new ZLinkConfigurationException('Actor ID must contain 1..255 UTF-8 bytes.');
+  if (byteLength < 1 || byteLength > ZLINK_MAX_ACTOR_ID_BYTES) {
+    throw new ZLinkConfigurationException(
+      `Actor ID must contain 1..${ZLINK_MAX_ACTOR_ID_BYTES} UTF-8 bytes.`
+    );
   }
 }
 
@@ -860,7 +870,7 @@ function decodeActorReplyPayload<TReply>(
     payload,
     serializers,
     undefined,
-    'application/json',
+    ZlinkStreamContentType.Json,
     packetName,
     'reply'
   );
@@ -887,39 +897,39 @@ function mapSubmitError(error: unknown, operationName: string): Error {
 //  (isStaleActorError) keeps working.
 function actorFailureCodeKind(failureErrno: number): ZLinkFrameworkInternalErrorKind | undefined {
   switch (failureErrno) {
-    case 3:
+    case ServiceWireFrameworkErrorCode.actorAlreadyExists:
       return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
-    case 4:
+    case ServiceWireFrameworkErrorCode.actorTypeMismatch:
       return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
-    case 7:
+    case ServiceWireFrameworkErrorCode.spotTypeMismatch:
       return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
-    case 8:
+    case ServiceWireFrameworkErrorCode.actorSessionNotBound:
       return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-    case 9:
-    case 14:
+    case ServiceWireFrameworkErrorCode.handlerNotFound:
+    case ServiceWireFrameworkErrorCode.requestTargetNotFound:
       return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
-    case 12:
-    case 16:
+    case ServiceWireFrameworkErrorCode.payloadDecodeFailed:
+    case ServiceWireFrameworkErrorCode.requestProtocolError:
       return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
     //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
-    case 13:
-    case 18:
+    case ServiceWireFrameworkErrorCode.routeNotConnected:
+    case ServiceWireFrameworkErrorCode.workerQueueFull:
       return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
-    case 15:
+    case ServiceWireFrameworkErrorCode.requestRejected:
       return ZLinkFrameworkInternalErrorKind.RequestRejected;
-    case 19:
+    case ServiceWireFrameworkErrorCode.workerTimedOut:
       return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
-    case 17:
+    case ServiceWireFrameworkErrorCode.requestFailed:
       return ZLinkFrameworkInternalErrorKind.RequestFailed;
-    case 20:
+    case ServiceWireFrameworkErrorCode.workerFailed:
       return ZLinkFrameworkInternalErrorKind.WorkerFailed;
-    case 21:
+    case ServiceWireFrameworkErrorCode.actorLocationStale:
       return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
-    case 33:
+    case ServiceWireFrameworkErrorCode.spotGenerationStale:
       return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
-    case 34:
+    case ServiceWireFrameworkErrorCode.spotMoving:
       return ZLinkFrameworkInternalErrorKind.ActorMoving;
-    case 35:
+    case ServiceWireFrameworkErrorCode.relocationDataLost:
       return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
     default:
       return undefined;

@@ -1,3 +1,4 @@
+import { shouldCompactBackingArray } from '../admission';
 import type { ZLinkObservationLoss, ZLinkObservedStatus } from '../../contracts';
 
 export const ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY = 64;
@@ -291,7 +292,7 @@ export class RuntimeEventQueue<T>
     if (this.terminalCount === 0) {
       this.terminalFifo.length = 0;
       this.terminalHead = 0;
-    } else if (this.terminalHead >= 1024 && this.terminalHead * 2 >= this.terminalFifo.length) {
+    } else if (shouldCompactBackingArray(this.terminalHead, this.terminalFifo.length)) {
       this.terminalFifo.splice(0, this.terminalHead);
       this.terminalHead = 0;
     }
@@ -333,7 +334,7 @@ export class RuntimeEventQueue<T>
     if (this.waitersCount === 0) {
       this.waiters.length = 0;
       this.waitersHead = 0;
-    } else if (this.waitersHead >= 1024 && this.waitersHead * 2 >= this.waiters.length) {
+    } else if (shouldCompactBackingArray(this.waitersHead, this.waiters.length)) {
       this.waiters.splice(0, this.waitersHead);
       this.waitersHead = 0;
     }

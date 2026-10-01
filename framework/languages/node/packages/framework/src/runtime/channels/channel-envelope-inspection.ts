@@ -1,3 +1,4 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkFlowOrigin } from '../../contracts';
 import {
@@ -80,7 +81,7 @@ export function malformedProtocolErrorRequestHeader(
     kind: ZLinkChannelMessageKind.Request,
     channelName,
     messageName: info.messageName ?? '',
-    contentType: 'application/json',
+    contentType: ZlinkStreamContentType.Json,
     correlationId: info.correlationId ?? null,
     deadline: null,
     topic: null,
