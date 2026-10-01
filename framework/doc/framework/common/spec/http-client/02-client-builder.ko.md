@@ -9,6 +9,7 @@
   제공한다(내부적으로 동일 builder).
 - client builder에도 verb 단축(`get(path)` 등 7종)이 있다. 이 경로는
   **one-shot**이다: 제출 시점에 client를 lazy build하고 완료 후 닫는다.
+  닫기가 실패하면 요청이 실패한 경우에는 요청의 실패를 결과로 내고, 요청이 성공한 경우에는 닫기 실패를 결과로 낸다.
   connection pool 재사용이 없으므로 반복 호출용이 아니다([5장](05-execution-model.ko.md) §5.4).
 
 ## 2.2 옵션과 기본값 표 (정본)

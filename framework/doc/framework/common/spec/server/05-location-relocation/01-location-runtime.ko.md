@@ -976,7 +976,7 @@ message의 target 목록이나 배치 조건으로 사용하지 않는다.
   만들지 않는다.
 - Paged list는 object kind를 필수 filter로 받고 stable type과 MeshName을 선택 filter로
   받는다.
-- 한 페이지에는 `1..1000`개를 반환한다.
+- 한 페이지에는 `1..1000`개를 반환한다. 호출자가 크기를 정하지 않으면 100개다.
 - Encoding된 한 page의 크기는 최대 4 MiB다. 다음 항목을 더하면 상한을 넘는 경우 그 항목부터
   다음 continuation page로 넘긴다. Entry field의 기존 길이 제한은 단일 항목이 이 상한 안에
   들어오도록 유지한다.
@@ -1332,7 +1332,7 @@ Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확�
 재시도한다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
-있어야 한다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
+있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
 비동기 요청이 끝난 뒤에도 입력 bytes를 보관하면 복사본을 만들어야 한다. 성공 결과로 반환한
 bytes는 이후 바뀌지 않아야 한다.
 
