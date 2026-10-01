@@ -522,16 +522,19 @@ keep being processed?
 
 Priority: `P1`
 
-A Spot where Close has started must not accept new work into the existing instance's queue.
+A Spot whose Close work item has started doesn't run later work on the existing instance. Work with
+Instance intent runs on a new generation, and work without it ends with `NotFound`.
 
-**Verification question:** Is a request sent concurrently with Close not processed by the previous
-handler?
+**Verification question:** Is a request sent after the Close work item started not processed by the
+previous handler, and does it end with the one result its intent decides?
 
 - Starting condition: Close-callback entry can be confirmed through public application evidence.
-- Procedure: Right after Close entry, a request with a unique operation ID is sent.
-- Verification: The previous instance's handler has no such operation ID, and the request ends in
-  either one failure or exactly one processing on a new instance after Close.
-- Contract basis: [Location Runtime](../spec/server/05-location-relocation/01-location-runtime.en.md)
+- Procedure: Right after Close entry, one Instance-intent request and one request without intent are
+  sent, each with a unique operation ID.
+- Verification: The previous instance's handler has neither operation ID. The Instance-intent
+  request is processed exactly once on the new generation, and the request without intent ends
+  with `NotFound`.
+- Contract basis: [Spot address messaging §7](../spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)
 
 ### Track E — Relocation Contention And Recovery
 

@@ -145,7 +145,7 @@ Local owner와 remote owner에는 같은 handler, metadata와 completion 계약�
 |---|---|---|
 | `ReadyRoute` | route와 authority·owner lease fence | Positive route cache에 저장하고 route admission으로 전달한다. |
 | `Missing` | authority record가 없다는 사실 | creation coordinator로 전달한다. |
-| `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기와 idle-cleanup route 갱신을 따른다. |
+| `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기와 idle-cleanup route 갱신을 따른다. Explicit Close 중인 authority를 확인한 Instance intent는 owner route와 fence를 보존해 그 owner node로 전달하며, owner에서의 처리는 [Spot 주소 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다. |
 | `StoreFailure` | authority 유무를 판정하지 못했다는 사실 | Store retry·reconciliation으로 전달한다. |
 
 Positive route cache에는 `ReadyRoute`만 저장하고, creation coordinator에는 `Missing`만

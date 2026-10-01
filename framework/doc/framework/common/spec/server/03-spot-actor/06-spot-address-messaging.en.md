@@ -573,19 +573,23 @@ move an Instance Spot via a separate operational lifecycle.
 
 The close procedure proceeds in the following order.
 
-1. A Close request enters the Spot's execution order as one Close work item. Messages and timers
-   accepted before the Close request run as usual on the existing generation. Messages that reach
-   this node after the Close request are placed after the Close work item.
-2. When the Close work item's turn comes, it verifies expected owner and ObjectGeneration and
+1. A Close request enters the Spot's lifecycle lane as one Close work item. Messages and timers
+   that ran before the Close work item starts run on the existing generation. Messages not yet run
+   when the Close work item starts, and messages that reach this node after it, are placed after
+   the Close work item. Timers that haven't run are cleaned up with the existing incarnation.
+2. When the Close work item starts, it verifies expected owner and ObjectGeneration and
    transitions authority to `Closing`. It invokes `OnClosing` at most once per Close, then cleans up
    the handler scope, timer, and local activation resource once. If `OnClosing` fails, the failure
    is recorded in diagnostics and cleanup continues. Resuming Close does not invoke `OnClosing`
    again if it was already invoked.
-3. If any message placed after the Close work item has Instance intent, it hands authority, with
-   the same owner/generation fence, to a new `ObjectGeneration` on the same node. The new
-   incarnation takes over the existing capacity, restores the stored state, and then runs the
-   messages placed after the Close work item in arrival order. If there is no such message, it
-   releases authority with the same fence.
+3. If Instance-intent messages are placed after the Close work item and this host isn't draining
+   or relocating, `Reincarnate` of
+   [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
+   changes the authority to a new `ObjectGeneration` on the same node. After initialization and
+   restoring the stored state, the new incarnation runs only those Instance-intent messages, in
+   arrival order. If initialization or restoration fails, that generation is `Delete`d and the
+   waiting messages end with a typed failure. Otherwise the authority is released with the same
+   fence, and remaining Instance-intent messages are placed again from `Missing`.
 
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a

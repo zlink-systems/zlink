@@ -481,17 +481,20 @@ shutdown과 `Relocate`는 별도 운영 lifecycle로 Instance Spot을 정리하�
 
 Close 절차는 다음 순서로 진행한다.
 
-1. Close 요청은 그 Spot의 실행 순서에 Close 작업 하나로 들어간다. Close 요청 전에 수락한 message와
-   timer는 기존 generation에서 평소대로 실행한다. Close 요청 뒤 이 node에 도착한 message는 Close 작업
-   뒤에 놓인다.
-2. Close 작업 차례가 오면 expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
+1. Close 요청은 그 Spot의 lifecycle lane에 Close 작업 하나로 들어간다. Close 작업이 시작되기 전에 실행된
+   message와 timer는 기존 generation에서 실행된다. Close 작업이 시작될 때 아직 실행되지 않은 message와
+   그 뒤에 이 node에 도착한 message는 Close 작업 뒤에 놓인다. 실행되지 않은 timer는 기존 incarnation과
+   함께 정리된다.
+2. Close 작업이 시작되면 expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
    `OnClosing`을 Close당 최대 한 번 호출한 뒤 handler scope, timer와 local activation resource를 한 번
    정리한다. `OnClosing` 호출이 실패하면 그 실패를 diagnostics에 기록하고 정리를 계속한다. Close를
    재개해도 이미 호출한 `OnClosing`은 다시 호출하지 않는다.
-3. Close 작업 뒤에 놓인 message 가운데 Instance intent가 있으면, 같은 owner·generation fence로
-   authority를 같은 node의 새 `ObjectGeneration`으로 넘긴다. 새 incarnation은 기존 수용 공간을 이어받고
-   저장된 상태를 복원한 뒤, Close 작업 뒤에 놓인 message를 도착 순서대로 실행한다. 그런 message가
-   없으면 같은 fence로 authority를 해제한다.
+3. Close 작업 뒤에 Instance intent message가 있고 이 host가 drain이나 relocation 중이 아니면,
+   [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
+   `Reincarnate`로 authority를 같은 node의 새 `ObjectGeneration`으로 바꾼다. 새 incarnation은 초기화와
+   저장 상태 복원이 끝난 뒤 그 Instance intent message만 도착 순서대로 실행한다. 초기화나 복원이 실패하면
+   그 generation을 `Delete`하고 기다리던 message는 typed 실패로 끝난다. 그 밖의 경우에는 같은 fence로
+   authority를 해제하고, 남은 Instance intent message는 `Missing`에서 다시 배치된다.
 
 Close 작업 뒤에 놓인 message 가운데 Instance intent가 없는 message는 [§9](#9-실패와-관측)의 결과로
 끝난다. 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면

@@ -730,13 +730,14 @@ Authority를 읽으면 record가 없는 `Missing(StoreNow)` 또는 현재 값이
 | `Preserve` | Active owner, generation과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. 일반 사용에는 target 정보가 없어야 한다. Relocation 정리에서는 같은 `RelocationId`의 target 정보를 제거할 수 있다. |
 | `NewOwner` | Active record를 target owner로 바꾼다. ObjectGeneration은 유지하고 AuthorityOwnerGeneration을 증가시킨다. 미리 확보한 target 수용 공간을 사용한다. |
 | `Delete` | Active record와 조회용 index를 제거하고 사용 중인 수용 공간을 같은 요청에서 감소시킨다. |
+| `Reincarnate` | Explicit Close 중인 Active record를 같은 owner의 새 incarnation으로 바꾼다. 새 ObjectGeneration과 첫 AuthorityOwnerGeneration을 발급하고 owner·lease와 사용 중인 수용 공간을 유지한다. [Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계) 3단계에서만 쓴다. |
 
-Reserved record에 `Preserve`, `NewOwner` 또는 `Delete`를 적용하면 `Conflict`이며 아무것도
+Reserved record에 `Preserve`, `NewOwner`, `Reincarnate` 또는 `Delete`를 적용하면 `Conflict`이며 아무것도
 변경하지 않는다. Active owner 변경은 `NewOwner` 또는 User Spot 전체 이동의 최종 변경으로만
 수행한다. 별도의 create 작업 이름은 없다.
 
 Framework는 예상 version, counter, record와 조회용 index 변경을 한 Store 요청에 넣는다.
-`Preserve`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 해당
+`Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 해당
 relocation이 미리 확보한 수용 공간을 검증한다. Record가 없거나 lease가 오래됐으면
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.

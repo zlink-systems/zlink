@@ -471,7 +471,7 @@ Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission �
   통로가 있다. `ClosePlayerQuestMsg`의 수락은 Close의 시작도 완료도 보장하지 않으므로, 시나리오는 owner의
   `OnClosing` callback 진입을 관찰한 뒤 같은 client에서 Instance intent request
   `SyncQuestProgressReq`를 보낸다. 이 관찰은 Close 요청이 이미 들어갔음을 확인하는 데만 쓴다. 그 request는
-  Close 작업 뒤에 놓여 같은 node의 새 generation에서 실행된다([Spot 주소 메시징 §7](../../spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
+  Close 작업 뒤에 놓여 새 generation에서 실행된다([Spot 주소 메시징 §7](../../spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
   시나리오는 그 request 하나의 terminal과 새 generation의 event stream replay를 검증한다. 고정 대기나
   재전송을 쓰지 않는다.
 - §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나

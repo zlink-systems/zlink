@@ -76,7 +76,7 @@ machine은 그 상태를 담당 component 한 곳에만 전달하므로, 뒤 단
 | `Unavailable` | authority와 무효 owner evidence | terminal completion adapter |
 
 Resolver의 `Unavailable`은 Ready route가 없는 authority의 상태를 보존한다. Instance intent가
-`Creating`을 보면 위의 waiter로, idle cleanup 중이면 §5의 route 갱신으로 전달한다. Instance
+`Creating`을 보면 위의 waiter로, explicit Close 중이면 owner route와 fence를 보존해 그 owner node로([Spot 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)), idle cleanup 중이면 §5의 route 갱신으로 전달한다. Instance
 intent가 없는 `Closing` direct call의 결과는 [Spot 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)가 정한다. Authority가
 없다는 `Missing`과 같은 상태로 취급하지 않는다. Explicit `Close`, `IdleEvicted` cleanup 또는
 다른 정식 lifecycle operation이 authority release를 완료한 뒤에만 resolver가 새 `Missing`

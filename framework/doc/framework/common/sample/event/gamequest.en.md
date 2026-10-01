@@ -487,7 +487,7 @@ cannot distinguish "no replacement ran" from "the runner looked at the wrong fil
   started nor that it finished, so after it observes the owner entering its `OnClosing` callback
   the scenario sends the Instance intent request `SyncQuestProgressReq` from the same client.
   That observation only confirms that the Close request is already in. The request is placed after
-  the Close work item and runs on the new generation on the same node
+  the Close work item and runs on the new generation
   ([Spot address messaging §7](../../spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
   The scenario verifies that one request's terminal and the event stream replay in the new
   generation. It uses no fixed wait and no resend.
