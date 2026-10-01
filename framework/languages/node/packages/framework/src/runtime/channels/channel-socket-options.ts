@@ -1,3 +1,7 @@
+import {
+  ZLINK_MAX_PUBLIC_WEIGHT,
+  isValidPublicWeight
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkSocketConfig } from '../../contracts';
 import type { ZLinkSocketConfig as ZLinkRuntimeSocketConfig } from '../../contracts/Configuration';
 import { ZLinkConfigurationException } from '../configuration';
@@ -139,8 +143,10 @@ function requireChannelName(channelName: string): void {
 }
 
 function validatePublicWeight(value: number): void {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException('Weight must be an integer in 0..10000.');
+  if (!isValidPublicWeight(value)) {
+    throw new ZLinkConfigurationException(
+      `Weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 

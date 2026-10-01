@@ -8,7 +8,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
 {
     private readonly object gate = new();
     private readonly ProcessSampler sampler = new();
-    private Histogram latency = new(), settleLatency = new();
+    private Histogram latency = new();
     private readonly Dictionary<string, ulong> counts = [];
     private readonly Dictionary<string, ulong> byKind = [], harness = [], language = [];
     private readonly List<object> errors = [];
@@ -16,7 +16,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     private readonly Dictionary<string, ulong> directional = [];
     private ulong inflight, maxInflight;
     private int activeHandlers;
-    private long start, end, settledAt;
+    private long start, end;
     private string? startUnix, endUnix;
     private string phase = "setup", resetSeq = "0";
     private bool sealedResults;
@@ -28,6 +28,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public string Phase { get { lock (gate) return phase; } }
     public string ResetSeq { get { lock (gate) return resetSeq; } }
     public long EndTicks { get { lock (gate) return end; } }
+    public long StartTicks { get { lock (gate) return start; } }
     public Task PhaseTask { get { lock (gate) return phaseTask; } }
     public bool CanIssue { get { lock (gate) return !sealedResults && start != 0 && PerfClock.Now < end; } }
     public bool HasErrors { get { lock (gate) return byKind.Count + harness.Count + language.Count != 0; } }
@@ -35,11 +36,12 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public ulong Connected { get; set; }
     public ulong ConnectionFailures { get; set; }
     public object[] SetupEvidence { get; set; } = [];
+    public string? CoreVersion { get; set; }
     public Func<object>? SamplePublicState { get; set; }
     // A scenario's own counters: cleared with the window at reset, and added to every snapshot (family metrics, §14).
     public Action? OnReset { get; set; }
     public Action<PerfMetricsSnapshot>? EnrichSnapshot { get; set; }
-    // True only while the runner reads the final snapshot of a phase (§4.1: the settle ends with that read).
+    // True only while the runner reads the final snapshot of a phase.
     public bool FinalSnapshot { get; set; }
     // The typed messages this scenario's measured path carries, one serializedMessageBytes row each (§15.2).
     public (string direction, string packetName)[] MessageTypes { get; set; } =
@@ -122,22 +124,17 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 if (publicState is not null) publicStateSamples.Add(publicState);
             }
         }
-        lock (gate) { sampler.End(); endUnix = PerfClock.UnixMs; phase = "settle"; }
-        try
-        {
-            var remaining = Math.Max(0, end + config.workload.settleTimeoutMs * 1_000_000L - PerfClock.Now);
-            await operations.WaitAsync(TimeSpan.FromTicks(remaining / 100)).ConfigureAwait(false);
-        }
-        catch (TimeoutException error) { RecordDiagnostic(new PerfValidationException("SettleIncomplete", error.Message)); }
-        catch (Exception error) { RecordDiagnostic(error); }
+        var warmup = Phase == "warmup";
+        // Warmup must drain before reset. A measured window seals immediately and leaves unfinished work in
+        // inflightAtEnd; the process exits after collection.
+        if (warmup)
+            try { await operations.ConfigureAwait(false); }
+            catch (Exception error) { RecordDiagnostic(error); }
         lock (gate)
         {
-            settledAt = PerfClock.Now;
-            if (primary)
-            {
-                counts["unresolved"] = inflight;
-                sealedResults = true;
-            }
+            sampler.End();
+            endUnix = PerfClock.UnixMs;
+            sealedResults = true;
             phase = "complete";
         }
     }
@@ -157,8 +154,8 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 request.resetSeq, PerfClock.UnixMs, null, reason, []);
             counts.Clear(); byKind.Clear(); harness.Clear(); language.Clear(); errors.Clear(); directional.Clear();
             publicStateSamples.Clear();
-            latency = new(); settleLatency = new(); maxInflight = 0;
-            start = end = settledAt = 0; startUnix = endUnix = null; sealedResults = false;
+            latency = new(); maxInflight = 0;
+            start = end = 0; startUnix = endUnix = null; sealedResults = false;
             OnReset?.Invoke();
             resetSeq = request.resetSeq; phase = "reset";
             var resetAt = PerfClock.UnixMs;
@@ -182,21 +179,22 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             return true;
         }
     }
-    // completedTicks: a send/send echo keeps the time it was observed even when the first send's terminal comes later (§13).
-    public void CompleteOperation(long started, Exception? error = null, long? completedTicks = null)
+    public bool CompleteOperation(long started, Exception? error = null, long? completedTicks = null)
     {
         var completed = completedTicks ?? PerfClock.Now;
         lock (gate)
         {
-            if (sealedResults) return;
+            if (sealedResults) return false;
             inflight--;
+            if (completed >= end) return false;
             if (error is null)
             {
-                var inWindow = completed < end;
-                Increment(counts, inWindow ? "completed" : "settleCompleted");
-                (inWindow ? latency : settleLatency).Record(completed - started);
+                Increment(counts, "completed");
+                latency.Record(completed - started);
+                return true;
             }
-            else RecordError(error, true);
+            RecordError(error, true);
+            return false;
         }
     }
     public void HandlerEnter() { lock (gate) activeHandlers++; }
@@ -215,7 +213,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
         var category = "failed";
         if (error is ZLinkFrameworkException framework)
         {
-            // The public enum exactly matches the common error kind names and values 0..12.
+            // The public enum carries the Framework error kind.
             Increment(byKind, framework.Kind.ToString());
             if (framework.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded) category = "timeout";
         }
@@ -249,20 +247,22 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             Dictionary<string, object?> metrics = [], histograms = [], runtime = [];
             Dictionary<string, NullReason> reasons = [];
             MetricCatalog.BaselineNulls(metrics, histograms, reasons);
+            var inflightAtEnd = counts.GetValueOrDefault("sent") - counts.GetValueOrDefault("completed") -
+                counts.GetValueOrDefault("failed") - counts.GetValueOrDefault("timeout") - counts.GetValueOrDefault("cancelled");
             foreach (var key in MetricCatalog.Outcomes)
-                if (primary) metrics["messages." + key] = DecimalText.Of(key == "unresolved" && !sealedResults ? inflight : counts.GetValueOrDefault(key));
+                if (key == "inflightAtEnd") metrics["messages." + key] = DecimalText.Of(inflightAtEnd);
+                else if (primary) metrics["messages." + key] = DecimalText.Of(counts.GetValueOrDefault(key));
                 else MetricCatalog.Null(metrics, reasons, "metrics", "messages." + key, "NOT_APPLICABLE", "Echo outcomes belong to the source process.");
             if (primary)
             {
                 latency.Export("latencyMs", "latency", metrics, histograms, reasons);
-                settleLatency.Export("settleLatencyMs", "settle.latency", metrics, histograms, reasons);
             }
             else
             {
-                foreach (var prefix in new[] { "latency", "settle.latency" })
+                foreach (var prefix in new[] { "latency" })
                     foreach (var suffix in MetricCatalog.LatencySuffixes)
                         MetricCatalog.Null(metrics, reasons, "metrics", prefix + "." + suffix, "NOT_APPLICABLE", "RTT belongs to the source process.");
-                foreach (var key in new[] { "latencyMs", "settleLatencyMs" })
+                foreach (var key in new[] { "latencyMs" })
                     MetricCatalog.Null(histograms, reasons, "histograms", key, "NOT_APPLICABLE", "RTT belongs to the source process.");
             }
             var csClient = config.role == "client" && config.workload.connections is not null;
@@ -301,11 +301,11 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             runtime["errors"] = new { name = "firstErrors", unit = "observation", type = "array", value = errors.ToArray() };
             runtime["activeHandlers"] = new { name = "application active handlers", unit = "count", type = "integer", value = DecimalText.Of((ulong)activeHandlers) };
             var window = new Window(startUnix, endUnix, start == 0 ? null : DecimalText.Of(start),
-                end == 0 ? null : DecimalText.Of(end), seconds, settledAt == 0 ? null : Math.Max(0, settledAt - end) / 1e9);
+                end == 0 ? null : DecimalText.Of(end), seconds);
             foreach (var property in new (string key, object? value)[] { ("startedAtUnixMs", window.startedAtUnixMs),
                 ("endedAtUnixMs", window.endedAtUnixMs), ("startTicks", window.startTicks), ("endTicks", window.endTicks),
-                ("measuredSeconds", window.measuredSeconds), ("settleSeconds", window.settleSeconds) })
-                if (property.value is null) reasons["/window/" + property.key] = new("PHASE_NOT_STARTED", "Window or settle has not completed.");
+                ("measuredSeconds", window.measuredSeconds) })
+                if (property.value is null) reasons["/window/" + property.key] = new("PHASE_NOT_STARTED", "Measurement window has not completed.");
             foreach (var key in new[] { "alignmentMethod", "maxErrorNs", "validFromTicks", "validThroughTicks" })
                 reasons["/clock/" + key] = new("NOT_APPLICABLE", "RTT uses the caller process clock only.");
             if (publicStatus is null) reasons["/publicStatus"] = new("NOT_APPLICABLE", "The client has no Framework host runtime.");
@@ -318,12 +318,13 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 ["messageCountScope"] = "application-call-boundaries", ["configHash"] = config.configHash,
                 ["resetAcknowledgement"] = resetAck, ["primaryEchoOwner"] = primary,
                 ["runtimeVersion"] = Environment.Version.ToString(), ["effectiveProcessorCount"] = Environment.ProcessorCount };
+            if (CoreVersion is not null) provenance["coreVersion"] = CoreVersion;
             ThreadPool.GetMaxThreads(out var maxWorkerThreads, out var maxCompletionThreads);
             ThreadPool.GetMinThreads(out var minWorkerThreads, out var minCompletionThreads);
             provenance["executor"] = new { name = ".NET ThreadPool", maxWorkerThreads, maxCompletionThreads,
                 minWorkerThreads, minCompletionThreads, currentThreadCount = ThreadPool.ThreadCount,
                 serverGc = System.Runtime.GCSettings.IsServerGC, gcLatencyMode = System.Runtime.GCSettings.LatencyMode.ToString() };
-            PerfMetricsSnapshot snapshot = new(2, config.runId, config.cellId, resetSeq, "dotnet", config.role, config.roleInstance,
+            PerfMetricsSnapshot snapshot = new(2, config.runId, config.cellId, resetSeq, config.language, config.role, config.roleInstance,
                 config.configHash, phase, window, PerfClock.Metadata, serialized, metrics, histograms,
                 reasons, publicStatus, [], runtime, provenance);
             EnrichSnapshot?.Invoke(snapshot);

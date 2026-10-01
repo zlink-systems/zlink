@@ -4,10 +4,17 @@ import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems
 import type { HttpClientOptions } from './options';
 import type { HttpRequestSpec, RawResult } from './request-performer';
 
+const INITIAL_RETRY_DELAY_MS = 50;
+const MAX_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_SHIFT = Math.ceil(Math.log2(MAX_RETRY_DELAY_MS / INITIAL_RETRY_DELAY_MS));
+
 // Exponential backoff with full jitter: base 50ms, doubling per attempt, capped at 1s.
 // Fixed delays synchronize retries from many clients against an ailing server.
 function delayMsFor(attempt: number): number {
-  const ceiling = Math.min(1000, 50 << Math.min(attempt, 5));
+  const ceiling = Math.min(
+    MAX_RETRY_DELAY_MS,
+    INITIAL_RETRY_DELAY_MS << Math.min(attempt, MAX_RETRY_DELAY_SHIFT)
+  );
   return Math.floor(Math.random() * (ceiling + 1));
 }
 

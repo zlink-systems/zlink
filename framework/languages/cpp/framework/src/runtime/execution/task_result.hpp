@@ -11,7 +11,7 @@ namespace zlink::framework::runtime
 
 template <typename T> task_t<result_t<T>> await_result (task_t<T> pending)
 {
-    auto completion = std::make_shared<detail::task_completion_source_t<result_t<T>>> ();
+    auto completion = std::make_shared<task_completion_source_t<result_t<T>>> ();
     auto task = completion->task ();
     detail::observe_task_completion (pending, [completion] (const result_t<T> &result) {
         completion->complete (result_t<result_t<T>>::success (result));

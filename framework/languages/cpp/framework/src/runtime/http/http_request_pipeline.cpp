@@ -43,12 +43,14 @@ class http_route_invoker_access_t
                                            const std::string &body)
     {
         (void) handler_executor;
+        const auto wait_owner = detail::current_wait_owner ();
         return handler_coroutine_executor ().submit<http_response_t> (
-          [&route, &services, &context, owned_request = request,
+          [&route, &services, &context, wait_owner, owned_request = request,
            owned_body = body] () mutable -> boost::asio::awaitable<result_t<http_response_t>> {
               try {
                   auto pending = [&] {
-                      const detail::ambient_context_scope_t invocation (nullptr, &route);
+                      const detail::ambient_context_scope_t invocation (nullptr, &route,
+                                                                        wait_owner);
                       return route.invoke (services, context, owned_request, owned_body);
                   }();
                   co_return co_await await_task_result (std::move (pending));

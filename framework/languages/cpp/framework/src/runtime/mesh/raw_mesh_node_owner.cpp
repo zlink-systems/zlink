@@ -1121,7 +1121,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
 
 struct raw_mesh_node_owner_t::send_completion_state_t
 {
-    std::shared_ptr<detail::task_completion_source_t<zlink::submit_result_t>> source;
+    std::shared_ptr<task_completion_source_t<zlink::submit_result_t>> source;
     std::optional<zlink::submit_result_t> result;
 };
 
@@ -1170,7 +1170,7 @@ raw_mesh_node_owner_t::start_send (std::vector<std::uint8_t> target_routing_id,
             auto completion = std::make_shared<send_completion_state_t> ();
             if (needs_public_completion) {
                 completion->source =
-                  std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
+                  std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
                 value.public_completion =
                   std::make_shared<task_t<zlink::submit_result_t>> (completion->source->task ());
             }
@@ -2043,7 +2043,7 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         throw protocol::service_wire_error_t ("invalid Actor join request");
     }
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    auto completion = std::make_shared<detail::task_completion_source_t<completion_t>> ();
+    auto completion = std::make_shared<task_completion_source_t<completion_t>> ();
     auto pending = completion->task ();
     foundation::call_id_t id{};
     {

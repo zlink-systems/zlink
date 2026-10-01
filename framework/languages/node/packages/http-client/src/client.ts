@@ -1,10 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
-import { HttpClientRuntime } from './runtime/runtime';
-import type { HttpClientOptions } from './runtime/options';
-import { basicAuthorization, requireNonBlank, requirePositiveTimeout } from './runtime/text';
+import {
+  HttpHeaderName,
+  basicAuthorization,
+  requireNonBlank,
+  requirePositiveTimeout
+} from './runtime/text';
+
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import { createZLinkHttpRequestBuilder, ZLinkHttpRequestBuilder } from './request-builder';
+import type { HttpClientOptions } from './runtime/options';
+import { HttpClientRuntime } from './runtime/runtime';
+
 import type { ZLinkHttpExecutionScheduler } from './types';
 
 /**
@@ -62,11 +69,15 @@ export class ZLinkHttpClient {
   }
 }
 
+const DEFAULT_HTTP_CLIENT_TIMEOUT_MS = 3000;
+const DEFAULT_HTTP_RESPONSE_BODY_SIZE = 16 * 1024 * 1024;
+const DEFAULT_HTTP_MAX_REDIRECTS = 5;
+
 /** Fluent builder for {@link ZLinkHttpClient}. Mirrors the C++ `client_builder_t`. */
 export class ZLinkHttpClientBuilder {
   private baseUrlValue = '';
-  private timeoutMsValue = 3000;
-  private maxResponseBodySizeValue = 16 * 1024 * 1024;
+  private timeoutMsValue: number = DEFAULT_HTTP_CLIENT_TIMEOUT_MS;
+  private maxResponseBodySizeValue: number = DEFAULT_HTTP_RESPONSE_BODY_SIZE;
   private readonly headersValue: Record<string, string> = {};
   private trustCertificateFileValue: string | undefined;
   private clientCertificateValue: { certificatePath: string; keyPath: string } | undefined;
@@ -98,13 +109,13 @@ export class ZLinkHttpClientBuilder {
 
   basicAuth(user: string, password: string): this {
     requireNonBlank(user, 'HTTP client basic auth user is required');
-    this.headersValue['authorization'] = basicAuthorization(user, password);
+    this.headersValue[HttpHeaderName.Authorization] = basicAuthorization(user, password);
     return this;
   }
 
   bearerToken(token: string): this {
     requireNonBlank(token, 'HTTP client bearer token is required');
-    this.headersValue['authorization'] = `Bearer ${token}`;
+    this.headersValue[HttpHeaderName.Authorization] = `Bearer ${token}`;
     return this;
   }
 
@@ -132,7 +143,7 @@ export class ZLinkHttpClientBuilder {
     return this;
   }
 
-  followRedirects(maxRedirects = 5): this {
+  followRedirects(maxRedirects: number = DEFAULT_HTTP_MAX_REDIRECTS): this {
     if (!(maxRedirects > 0)) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,

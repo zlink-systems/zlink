@@ -1,23 +1,29 @@
-import type {
-  Disposable,
-  ZlinkStreamActor,
-  ZlinkStreamEncodedPayload,
-  ZlinkStreamMessage,
-  ZlinkStreamRequestCall,
-  ZlinkStreamSendCall
+import {
+  ZlinkStreamControlPacket,
+  decodeStreamWireActorBoundPayload,
+  decodeStreamWireActorUnboundPayload
+} from '@zlink-systems/stream-wire';
+import {
+  type Disposable,
+  type ZlinkStreamActor,
+  type ZlinkStreamEncodedPayload,
+  type ZlinkStreamMessage,
+  type ZlinkStreamRequestCall,
+  type ZlinkStreamSendCall,
+  ZlinkStreamErrorCode
 } from '../Contracts';
-import { ZlinkStreamErrorCode } from '../Contracts';
+
+import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
+import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import {
   connectorError,
   currentRegistrations,
   registerHandler,
   type HandlerRegistration
 } from './ZlinkStreamSupport';
-import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
-import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 
-const ACTOR_BOUND = '$zlink.actor.bound';
-const ACTOR_UNBOUND = '$zlink.actor.unbound';
+const ACTOR_BOUND = ZlinkStreamControlPacket.ActorBound;
+const ACTOR_UNBOUND = ZlinkStreamControlPacket.ActorUnbound;
 export const zlinkStreamActorBinding = Symbol('zlink.stream.actorBinding');
 
 interface ActorConnector {
@@ -153,24 +159,17 @@ export class ZlinkStreamActors {
   }
 
   private bind(payload: Uint8Array, signal?: AbortSignal): void {
-    if (payload.length < 5 || payload[0] !== 1) {
-      throw invalidControl('Actor bound payload is invalid.');
-    }
-    const slot = (payload[1] << 8) | payload[2];
-    const idLength = payload[3];
-    if (slot === 0 || idLength === 0 || payload.length !== 4 + idLength) {
-      throw invalidControl('Actor bound payload is invalid.');
-    }
-    let actorId: string;
+    let binding: ReturnType<typeof decodeStreamWireActorBoundPayload>;
     try {
-      actorId = new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(4));
+      binding = decodeStreamWireActorBoundPayload(payload);
     } catch (cause) {
       throw connectorError(
         ZlinkStreamErrorCode.FrameDecodeFailed,
-        'Actor id is not valid UTF-8.',
-        cause
+        cause instanceof Error ? cause.message : 'Actor bound payload is invalid.',
+        cause instanceof Error ? cause.cause : undefined
       );
     }
+    const { slot, actorId } = binding;
     if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
       throw invalidControl('Actor bound identity is already in use.');
     }
@@ -181,10 +180,15 @@ export class ZlinkStreamActors {
   }
 
   private unbind(payload: Uint8Array, signal?: AbortSignal): void {
-    if (payload.length !== 3 || payload[0] !== 1) {
-      throw invalidControl('Actor unbound payload is invalid.');
+    let slot: number;
+    try {
+      slot = decodeStreamWireActorUnboundPayload(payload);
+    } catch (cause) {
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        cause instanceof Error ? cause.message : 'Actor unbound payload is invalid.'
+      );
     }
-    const slot = (payload[1] << 8) | payload[2];
     const actor = this.bySlot.get(slot);
     if (slot === 0 || actor === undefined) {
       throw invalidControl(`Actor slot '${slot}' is not bound.`);

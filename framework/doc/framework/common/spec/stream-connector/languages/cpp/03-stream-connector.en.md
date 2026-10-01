@@ -366,7 +366,7 @@ game engine build with exceptions disabled uses the core as is. A
 synchronous operation that can fail returns `result_t<T>` or
 `result_t<void>`. Success is confirmed with an explicit bool
 conversion, and on failure, `error_t` is read with `error()` and
-`error_code()`. The callback form also delivers the same `result_t`.
+`error_code()`. The callback form also delivers the same `result_t`. When a surface that doesn't return `result_t` (`received_count`, `on`) rejects its input, it reports a `ValidationFailed` error event, and `received_count` returns 0 while `on` returns a `subscription_t` whose `active()` is false.
 
 ```cpp
 struct error_t {

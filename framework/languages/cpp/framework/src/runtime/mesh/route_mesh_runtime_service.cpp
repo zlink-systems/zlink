@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
+#include "runtime/diagnostics/topology_projection.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
@@ -28,44 +29,25 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
 namespace
 {
 
-constexpr std::chrono::milliseconds topology_refresh_interval{100};
-constexpr std::chrono::milliseconds snapshot_wait_poll_interval{10};
+constexpr auto monitor_refresh_interval = std::chrono::milliseconds (100);
+constexpr auto monitor_pump_interval = std::chrono::milliseconds (10);
 
-mesh_node_state_t map_state (mesh::service_node_state_t state)
+topology_state_t map_state (mesh::service_node_state_t state)
 {
     switch (state) {
         case mesh::service_node_state_t::preparing:
-            return mesh_node_state_t::starting;
+            return topology_state_t::starting;
         case mesh::service_node_state_t::serving:
-            return mesh_node_state_t::ready;
+            return topology_state_t::ready;
         case mesh::service_node_state_t::draining:
         case mesh::service_node_state_t::retiring:
-            return mesh_node_state_t::stopping;
+            return topology_state_t::stopping;
         case mesh::service_node_state_t::stopped:
-            return mesh_node_state_t::stopped;
+            return topology_state_t::stopped;
         case mesh::service_node_state_t::error:
-            return mesh_node_state_t::failed;
+            return topology_state_t::failed;
     }
-    return mesh_node_state_t::failed;
-}
-
-mesh_node_state_t map_state (framework_runtime_state_t state, mesh_node_state_t transport_state)
-{
-    switch (state) {
-        case framework_runtime_state_t::preparing:
-            return mesh_node_state_t::starting;
-        case framework_runtime_state_t::serving:
-            return transport_state;
-        case framework_runtime_state_t::relocating:
-        case framework_runtime_state_t::relocated:
-        case framework_runtime_state_t::draining:
-            return mesh_node_state_t::stopping;
-        case framework_runtime_state_t::stopped:
-            return mesh_node_state_t::stopped;
-        case framework_runtime_state_t::error:
-            return mesh_node_state_t::failed;
-    }
-    return mesh_node_state_t::failed;
+    return topology_state_t::failed;
 }
 
 bool capacity_available (const capacity_usage_t &usage)
@@ -126,9 +108,7 @@ struct route_mesh_runtime_service_t::state_t
         std::optional<mesh_node_snapshot_t> last_snapshot;
         bool application_claim_active = false;
         std::uint64_t pending_application_callbacks = 0;
-        std::optional<bool> location_store_healthy;
-        std::optional<std::chrono::system_clock::time_point> location_last_success;
-        std::optional<std::chrono::system_clock::time_point> location_last_failure;
+        bool location_store_healthy = false;
         std::chrono::steady_clock::time_point next_location_poll{};
         std::chrono::steady_clock::time_point next_descriptor_poll{};
         bool descriptor_baseline_initialized = false;
@@ -177,8 +157,7 @@ struct route_mesh_runtime_service_t::state_t
 
     void retain_snapshot (hub_t &hub, const mesh_node_snapshot_t &snapshot, bool publish)
     {
-        const bool terminal = snapshot.state == mesh_node_state_t::stopped
-                              || snapshot.state == mesh_node_state_t::failed;
+        const bool terminal = detail::topology_is_terminal (snapshot.state);
         std::lock_guard lock (hub.mutex);
         if ((hub.stopped.load (std::memory_order_acquire) && publish)
             || (hub.last_snapshot && hub.last_snapshot->sequence >= snapshot.sequence))
@@ -239,41 +218,35 @@ struct route_mesh_runtime_service_t::state_t
             std::lock_guard lock (hub.mutex);
             if (now < hub.next_location_poll)
                 return;
-            hub.next_location_poll = now + topology_refresh_interval;
+            hub.next_location_poll = now + monitor_refresh_interval;
         }
-        bool store_healthy = false;
-        std::optional<std::chrono::system_clock::time_point> last_success;
         std::optional<location_runtime_status_t> status_for_log;
-        bool failed = true;
         try {
             auto query = location_runtime->get_status ();
             const auto &result = query.result ();
-            if (result) {
+            if (result)
                 status_for_log = result.value ();
-                store_healthy = status_for_log->store_healthy;
-                last_success = status_for_log->last_refresh_at;
-                failed = status_for_log->last_error.has_value ();
-            }
+            else
+                status_for_log = location_runtime_status_t{.last_error = result.error ()->what ()};
         }
-        catch (...) {
+        catch (const std::exception &error) {
+            status_for_log = location_runtime_status_t{.last_error = error.what ()};
         }
         bool changed;
         {
             std::lock_guard lock (hub.mutex);
-            changed = hub.location_store_healthy != store_healthy;
-            hub.location_store_healthy = store_healthy;
-            if (last_success)
-                hub.location_last_success = last_success;
-            if (failed)
-                hub.location_last_failure = std::chrono::system_clock::now ();
+            const bool healthy = status_for_log && status_for_log->store_healthy;
+            changed = hub.location_store_healthy != healthy;
+            hub.location_store_healthy = healthy;
         }
-        if (!changed)
-            return;
-        if (status_for_log)
+        if (status_for_log) {
+            const bool diagnostic_changed = changed || status_for_log->last_error.has_value ();
             detail::monitoring_runtime_t (monitoring)
-              .publish_location_changes (mesh_name_for (hub), std::move (*status_for_log), true,
-                                         std::nullopt, std::nullopt);
-        publish_current_snapshot (hub);
+              .publish_location_changes (mesh_name_for (hub), std::move (*status_for_log),
+                                         diagnostic_changed, std::nullopt, std::nullopt);
+        }
+        if (changed)
+            publish_current_snapshot (hub);
     }
 
     void poll_location_descriptors (hub_t &hub)
@@ -285,7 +258,7 @@ struct route_mesh_runtime_service_t::state_t
             std::lock_guard lock (hub.mutex);
             if (now < hub.next_descriptor_poll)
                 return;
-            hub.next_descriptor_poll = now + topology_refresh_interval;
+            hub.next_descriptor_poll = now + monitor_refresh_interval;
         }
 
         std::vector<mesh_node_descriptor_t> descriptors;
@@ -361,7 +334,7 @@ bool route_peer_is_ready (const std::shared_ptr<route_mesh_runtime_service_t::st
     std::lock_guard lock (hub->mutex);
     if (state->location_runtime == nullptr)
         return true;
-    if (hub->location_store_healthy != true)
+    if (!hub->location_store_healthy)
         return false;
     const auto found = std::find_if (
       hub->location_descriptors.begin (), hub->location_descriptors.end (),
@@ -455,7 +428,7 @@ void route_mesh_runtime_service_t::start ()
                 state->publish_application_claim_change (*hub);
                 state->poll_location (*hub);
                 state->poll_location_descriptors (*hub);
-                zlink::framework::runtime::wait_poll_interval (snapshot_wait_poll_interval);
+                zlink::framework::runtime::wait_poll_interval (monitor_pump_interval);
             }
         });
     }
@@ -501,7 +474,7 @@ void route_mesh_runtime_service_t::stop () noexcept
                 observer->close ();
             continue;
         }
-        terminal->state = mesh_node_state_t::stopped;
+        terminal->state = topology_state_t::stopped;
         terminal->is_ready = false;
         terminal->ready_peer_count = 0;
         for (auto &channel : terminal->channels) {
@@ -560,8 +533,7 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
         // query service is wired, the caller supplied location descriptors are
         // the complete source and must not be downgraded to degraded merely
         // because the optional health cache has no entry.
-        location_is_healthy =
-          state->location_runtime == nullptr || hub->location_store_healthy == true;
+        location_is_healthy = state->location_runtime == nullptr || hub->location_store_healthy;
     }
     peer_snapshots.reserve (peers.size () + not_required_peers.size ()
                             + location_descriptors.size ());
@@ -618,11 +590,11 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                         return candidate.rid == node_rid
                                && candidate.lifecycle_generation == descriptor.lifecycle_generation;
                     });
-    const auto mapped_state = hub->stopped.load (std::memory_order_acquire)
-                                ? mesh_node_state_t::stopped
-                              : local_location != location_descriptors.end ()
-                                ? map_state (local_location->state, transport_state)
-                                : transport_state;
+    const auto mapped_state =
+      hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
+      : local_location != location_descriptors.end ()
+        ? detail::topology_state_for_host (local_location->state, transport_state)
+        : transport_state;
     const auto local_role =
       local_location != location_descriptors.end ()                   ? local_location->object_role
       : descriptor.object_role == mesh::service_object_role_t::client ? object_role_t::client
@@ -692,7 +664,7 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
     placement.capacity.spots.active = active_spot_count;
     const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const bool placement_available =
-      placement.object_role == object_role_t::server && mapped_state == mesh_node_state_t::ready
+      placement.object_role == object_role_t::server && mapped_state == topology_state_t::ready
       && !location_unavailable && placement.placement_weight > 0
       && placement_capacity_available (placement,
                                        hub->node->activation_admission ().has_headroom ());
@@ -702,11 +674,11 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
           return peer.state == peer_state_t::connecting
                  || peer.state == peer_state_t::not_connected;
       });
-    const auto public_state = mapped_state == mesh_node_state_t::ready
-                                  && (required_peer_unavailable || location_unavailable)
-                                ? mesh_node_state_t::degraded
-                                : mapped_state;
-    if (public_state != mesh_node_state_t::ready) {
+    const auto public_state =
+      mapped_state == topology_state_t::ready && (required_peer_unavailable || location_unavailable)
+        ? topology_state_t::degraded
+        : mapped_state;
+    if (public_state != topology_state_t::ready) {
         for (auto &channel : channels)
             channel.is_ready = false;
     }
@@ -714,7 +686,7 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
     return mesh_node_snapshot_t{
       .mesh_name = std::move (mesh_name),
       .state = public_state,
-      .is_ready = public_state == mesh_node_state_t::ready,
+      .is_ready = public_state == topology_state_t::ready,
       .ready_peer_count = static_cast<std::uint32_t> (std::count_if (
         peer_snapshots.begin (), peer_snapshots.end (),
         [] (const mesh_peer_snapshot_t &peer) { return peer.state == peer_state_t::ready; })),
@@ -728,8 +700,8 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
           .unavailable_reason =
             placement_available
               ? std::nullopt
-              : std::optional<topology_reason_t>{mapped_state != mesh_node_state_t::ready
-                                                   ? mapped_state == mesh_node_state_t::stopping
+              : std::optional<topology_reason_t>{mapped_state != topology_state_t::ready
+                                                   ? mapped_state == topology_state_t::stopping
                                                        ? topology_reason_t::draining
                                                        : topology_reason_t::runtime_not_ready
                                                  : location_unavailable
@@ -798,8 +770,7 @@ std::unique_ptr<mesh_runtime_observation_t> route_mesh_runtime_service_t::observ
         hub->observers.push_back (registered);
         if (hub->last_snapshot && hub->last_snapshot->sequence > initial.sequence)
             initial = *hub->last_snapshot;
-        const bool terminal =
-          initial.state == mesh_node_state_t::stopped || initial.state == mesh_node_state_t::failed;
+        const bool terminal = detail::topology_is_terminal (initial.state);
         const auto source_key = initial.mesh_name;
         registered->enqueue (source_key, std::move (initial), terminal);
     }

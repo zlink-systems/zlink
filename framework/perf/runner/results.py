@@ -7,8 +7,12 @@ import math
 from pathlib import Path
 
 BOUNDS = json.loads((Path(__file__).resolve().parents[1] / "schema/histogram-bounds.json").read_text())
-OUTCOMES = ("sent", "completed", "settleCompleted", "failed", "timeout", "cancelled", "unresolved")
+OUTCOMES = ("sent", "completed", "failed", "timeout", "cancelled", "inflightAtEnd")
 MAX_U64 = 18446744073709551615
+NULL_REASON_CODES = {
+    "NOT_APPLICABLE", "PUBLIC_OBSERVATION_UNSUPPORTED", "RUNTIME_METRIC_UNSUPPORTED", "CLOCK_DOMAIN_UNVERIFIED",
+    "NO_SAMPLES", "HISTOGRAM_OVERFLOW", "ZERO_DENOMINATOR", "MULTIPLE_OWNERS", "PHASE_NOT_STARTED", "COLLECTION_FAILED",
+}
 
 
 def null_reason(code: str, reason: str, owner: str | None = None, lower_bound_ms: float | None = None) -> dict:
@@ -35,7 +39,7 @@ def histogram_merge(values: list[dict]) -> dict:
         raise ValueError("CollectionFailure: no histogram owners")
     result = {"unit": "ms", "ticksUnit": "ns", "bounds": BOUNDS, "counts": ["0"] * len(BOUNDS),
               "overflow": "0", "count": "0", "sumNs": "0", "maxNs": None,
-              "percentileMethod": "nearest-rank-bucket-upper-bound"}
+              "percentileMethod": "nearest-rank-bucket-upper-bound-capped-by-max"}
     for value in values:
         if any(value[key] != result[key] for key in ("unit", "ticksUnit", "bounds", "percentileMethod")):
             raise ValueError("SchemaMismatch: histogram units, bounds or percentile method differ")
@@ -71,7 +75,7 @@ def export_latency(histogram: dict, prefix: str, histogram_key: str, metrics: di
                 for bound, bucket in zip(BOUNDS, histogram["counts"]):
                     cumulative += u64(bucket)
                     if cumulative >= rank:
-                        value = bound
+                        value = min(bound, u64(histogram["maxNs"]) / 1e6)
                         break
         metrics[prefix + "." + suffix] = value
         if value is None:
@@ -120,6 +124,17 @@ def range_intersection_size(left: list[tuple[int, int]], right: list[tuple[int, 
     return total
 
 
+def ranges_are_subset(subset: list[tuple[int, int]], superset: list[tuple[int, int]]) -> bool:
+    """Return whether every inclusive sequence interval in subset is covered by superset."""
+    index = 0
+    for first, last in subset:
+        while index < len(superset) and superset[index][1] < first:
+            index += 1
+        if index == len(superset) or superset[index][0] > first or superset[index][1] < last:
+            return False
+    return True
+
+
 def read_sequences(cell: Path, name: str, config: dict, keys: tuple[str, ...]) -> tuple[dict, dict]:
     value = json.loads((cell / name).read_text())
     if (any(value.get(key) != config[key] for key in ("runId", "cellId")) or value.get("resetSeq") != "1"
@@ -128,43 +143,88 @@ def read_sequences(cell: Path, name: str, config: dict, keys: tuple[str, ...]) -
     return value, {key: sequence_ranges(value[key], f"{name}/{key}") for key in keys}
 
 
+def _json_pointer_value(document: dict, pointer: str) -> object:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise ValueError(f"SchemaMismatch: null reason key {pointer!r} is not a JSON pointer")
+    value = document
+    for raw_segment in pointer[1:].split("/"):
+        segment = ""
+        index = 0
+        while index < len(raw_segment):
+            if raw_segment[index] != "~":
+                segment += raw_segment[index]
+                index += 1
+                continue
+            if index + 1 >= len(raw_segment) or raw_segment[index + 1] not in "01":
+                raise ValueError(f"SchemaMismatch: null reason key {pointer!r} has an invalid JSON pointer escape")
+            segment += "~" if raw_segment[index + 1] == "0" else "/"
+            index += 2
+        if isinstance(value, dict) and segment in value:
+            value = value[segment]
+        elif isinstance(value, list) and segment.isascii() and segment.isdecimal() and str(int(segment)) == segment and int(segment) < len(value):
+            value = value[int(segment)]
+        else:
+            raise ValueError(f"SchemaMismatch: null reason key {pointer!r} does not resolve")
+    return value
+
+
+def _validate_null_reasons(name: str, original: dict) -> None:
+    if not isinstance(original.get("nullReasons"), dict):
+        raise ValueError(f"SchemaMismatch: {name} nullReasons is not an object")
+    for pointer, reason in original["nullReasons"].items():
+        if not isinstance(reason, dict) or "lowerBoundMs" not in reason:
+            raise ValueError(f"SchemaMismatch: {name} null reason {pointer} has no lowerBoundMs")
+        code = reason.get("code")
+        if not isinstance(code, str) or code not in NULL_REASON_CODES:
+            raise ValueError(f"SchemaMismatch: {name} null reason {pointer} has an unrecognized code")
+        if _json_pointer_value(original, pointer) is not None:
+            raise ValueError(f"SchemaMismatch: {name} null reason {pointer} does not point to null")
+
+
 def fanout_aggregate(cell: Path, config: dict, originals: dict, owners: list[str], metrics: dict, histograms: dict, reasons: dict) -> dict:
     """§15.4 PS: intersect each subscriber's first receipts with the publisher's window-success set.
     owners[0] is the publisher original (already the metrics template); the rest are the subscribers."""
     publisher_file, subscriber_files = owners[0], owners[1:]
     publisher = originals[publisher_file]
-    _, published = read_sequences(cell, "publisher-sequences.json", config, ("attemptedRanges", "windowSuccessRanges", "settleSuccessRanges"))
+    _, published = read_sequences(cell, "publisher-sequences.json", config, ("attemptedRanges", "windowSuccessRanges"))
+    attempted = published["attemptedRanges"]
     window_success = published["windowSuccessRanges"]
-    in_window, in_settle = range_size(window_success), range_size(published["settleSuccessRanges"])
+    if not ranges_are_subset(window_success, attempted):
+        raise ValueError("SchemaMismatch: publisher window-success ranges are not a subset of attempted ranges")
+    in_window = range_size(window_success)
     counts = {key: u64(publisher["metrics"]["messages." + key]) for key in
-              ("sent", "published", "publishedInWindow", "settlePublished", "failed", "timeout", "cancelled", "unresolved")}
-    if (counts["publishedInWindow"], counts["settlePublished"]) != (in_window, in_settle) or counts["published"] != in_window + in_settle:
-        raise ValueError("SchemaMismatch: publisher counters differ from its success ranges")
-    if counts["sent"] != range_size(published["attemptedRanges"]):
+              ("sent", "publishedInWindow", "failed", "timeout", "cancelled", "inflightAtEnd")}
+    if counts["publishedInWindow"] != in_window:
+        raise ValueError("SchemaMismatch: publisher window-success counter differs from its success ranges")
+    if counts["sent"] != range_size(attempted):
         raise ValueError("SchemaMismatch: publisher sent differs from its attempted range")
-    if counts["sent"] != counts["published"] + counts["failed"] + counts["timeout"] + counts["cancelled"] + counts["unresolved"]:
+    if counts["sent"] != counts["publishedInWindow"] + counts["failed"] + counts["timeout"] + counts["cancelled"] + counts["inflightAtEnd"]:
         raise ValueError("SchemaMismatch: publish cohort does not reconcile")
     if len(subscriber_files) != config["subscriberCount"]:
         raise ValueError("CollectionFailure: subscriber originals differ from the configured subscriber count")
     per_subscriber: dict[str, dict] = {}
+    subscriber_ids: set[int] = set()
     for name in subscriber_files:
         original = originals[name]
-        document, received = read_sequences(cell, f"subscriber-{original['roleInstance']}-sequences.json", config, ("windowRanges", "settleRanges"))
-        if range_intersection_size(received["windowRanges"], received["settleRanges"]):
-            raise ValueError(f"SchemaMismatch: {name} received a sequence as first in both window and settle")
+        role_instance = original.get("roleInstance")
+        if original.get("role") != "subscriber" or type(role_instance) is not int or role_instance < 0:
+            raise ValueError(f"SchemaMismatch: {name} does not identify a subscriber role instance")
+        if role_instance in subscriber_ids:
+            raise ValueError(f"SchemaMismatch: {name} duplicates subscriber roleInstance {role_instance}")
+        subscriber_ids.add(role_instance)
+        document, received = read_sequences(cell, f"subscriber-{role_instance}-sequences.json", config, ("windowRanges",))
+        if type(document.get("subscriberId")) is not int or document["subscriberId"] != role_instance:
+            raise ValueError(f"SchemaMismatch: {name} subscriberId differs from its original roleInstance")
         duplicates = u64(document["duplicateEvents"])
         if duplicates != u64(original["metrics"]["fanout.duplicateEvents"]):
             raise ValueError(f"SchemaMismatch: {name} duplicate count differs between original and sequence file")
         delivered_window = range_intersection_size(received["windowRanges"], window_success)
-        delivered_settle = range_intersection_size(received["settleRanges"], window_success)
-        received_unique = range_size(received["windowRanges"]) + range_size(received["settleRanges"])
         per_subscriber[name] = {
-            "subscriberId": original["roleInstance"], "deliveredInWindow": delivered_window, "settleDelivered": delivered_settle,
-            "uniqueDelivered": delivered_window + delivered_settle, "outOfCohortEvents": received_unique - delivered_window - delivered_settle,
+            "subscriberId": role_instance, "deliveredInWindow": delivered_window,
+            "outOfCohortEvents": range_size(received["windowRanges"]) - delivered_window,
             "duplicateEvents": duplicates, "measuredSeconds": original["window"]["measuredSeconds"]}
     total = lambda key: sum(entry[key] for entry in per_subscriber.values())  # noqa: E731
-    for key, value in (("subscriberCount", len(per_subscriber)), ("uniqueDelivered", total("uniqueDelivered")),
-                       ("deliveredInWindow", total("deliveredInWindow")), ("settleDelivered", total("settleDelivered")),
+    for key, value in (("subscriberCount", len(per_subscriber)), ("deliveredInWindow", total("deliveredInWindow")),
                        ("duplicateEvents", total("duplicateEvents")), ("outOfCohortEvents", total("outOfCohortEvents"))):
         metrics["fanout." + key] = count_text(value)
         reasons.pop("/metrics/fanout." + key, None)
@@ -173,7 +233,7 @@ def fanout_aggregate(cell: Path, config: dict, originals: dict, owners: list[str
     for key in ("publishOpsPerSec", "deliveryOpsPerSec"):
         reasons.pop("/metrics/fanout." + key, None)
     if in_window:
-        metrics["fanout.deliveryRatio"] = min(e["uniqueDelivered"] for e in per_subscriber.values()) / in_window
+        metrics["fanout.deliveryRatio"] = min(e["deliveredInWindow"] / in_window for e in per_subscriber.values())
         reasons.pop("/metrics/fanout.deliveryRatio", None)
     else:
         metrics["fanout.deliveryRatio"] = None
@@ -181,43 +241,13 @@ def fanout_aggregate(cell: Path, config: dict, originals: dict, owners: list[str
                                                                "perf/README.ko.md §15.4")
     # Delivery latency needs a verified shared clock domain; the subscribers' originals carry the reason (§15.2).
     first = originals[subscriber_files[0]]["nullReasons"]
-    for prefix in ("fanout.deliveryLatency", "fanout.settleDeliveryLatency"):
-        for suffix in ("meanMs", "p50Ms", "p95Ms", "p99Ms", "maxMs"):
-            pointer = "/metrics/" + prefix + "." + suffix
-            metrics[prefix + "." + suffix] = None
-            reasons[pointer] = first[pointer]
-    for key in ("fanoutDeliveryLatencyMs", "fanoutSettleDeliveryLatencyMs"):
-        histograms[key] = None
-        reasons["/histograms/" + key] = first["/histograms/" + key]
+    for suffix in ("meanMs", "p50Ms", "p95Ms", "p99Ms", "maxMs"):
+        pointer = "/metrics/fanout.deliveryLatency." + suffix
+        metrics["fanout.deliveryLatency." + suffix] = None
+        reasons[pointer] = first[pointer]
+    histograms["fanoutDeliveryLatencyMs"] = None
+    reasons["/histograms/fanoutDeliveryLatencyMs"] = first["/histograms/fanoutDeliveryLatencyMs"]
     return per_subscriber
-
-
-def _received_unique(stats: dict) -> int:
-    receipts = stats["runtimeMetrics"]["fanoutReceipts"]["value"]
-    return u64(receipts["uniqueInWindow"]) + u64(receipts["uniqueInSettle"])
-
-
-def _cohort_terminal_echo(stats: dict[str, dict], owners: list[str]) -> tuple[bool, dict]:
-    """Echo: the source's own settle already waits for every cohort operation, so its phase complete is the end."""
-    return True, {}
-
-
-def _cohort_terminal_fanout(stats: dict[str, dict], owners: list[str]) -> tuple[bool, dict]:
-    """Fanout (§4.1): every subscriber has received as many unique sequences as the publisher's window success count."""
-    required = u64(stats[owners[0]]["metrics"]["messages.publishedInWindow"])
-    received = {name: _received_unique(stats[name]) for name in owners[1:]}
-    return all(count >= required for count in received.values()), {"required": required, "received": received}
-
-
-# aggregation -> "is every observed cohort member terminal" (§4.1); the scenario table names the aggregation.
-COHORT_TERMINAL = {"echo": _cohort_terminal_echo, "fanout-sequences": _cohort_terminal_fanout}
-
-
-def settle_status(aggregation: str, stats: dict[str, dict], owners: list[str], elapsed: float, bound: float) -> dict:
-    """The settle of a measured phase ends when the cohort is terminal or after settleTimeoutMs (§4.1, §5.2)."""
-    terminal, progress = COHORT_TERMINAL[aggregation](stats, owners)
-    return {"done": terminal or elapsed >= bound, "boundReached": not terminal and elapsed >= bound,
-            "elapsedSeconds": elapsed, "boundSeconds": bound, "progress": progress}
 
 
 def aggregate(cell: Path, config: dict, client_files: list[str], server_files: list[str], issues: list[dict], owners: list[str],
@@ -241,9 +271,7 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                 for key, item in value[group].items():
                     if item is None and not value["nullReasons"].get(f"/{group}/{key}", {}).get("reason"):
                         raise ValueError("SchemaMismatch: null has no reason")
-            for pointer, reason in value["nullReasons"].items():
-                if not isinstance(reason, dict) or "lowerBoundMs" not in reason:
-                    raise ValueError(f"SchemaMismatch: {name} null reason {pointer} has no lowerBoundMs")
+            _validate_null_reasons(name, value)
             originals[name] = value
         except (OSError, KeyError, ValueError, TypeError) as error:
             issues.append({"code": "SchemaMismatch" if str(error).startswith("SchemaMismatch:") else "CollectionFailure",
@@ -252,8 +280,8 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
     ps = aggregation == "fanout-sequences"
     delivery: dict = {}
     for name, value in templates.items():
-        if value["resetSeq"] != "1" and any(value["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")):
-            observed_errors = {key: value["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")}
+        observed_errors = {key: value["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")}
+        if value["resetSeq"] != "1" and any(observed_errors.values()):
             issues.append({"code": "PreMeasurementFailure", "message": "Setup/warmup errors: " + json.dumps(observed_errors, sort_keys=True),
                            "sourceFile": name, "resetSeq": value["resetSeq"], "errorCounts": observed_errors})
     if len(selected) != len(owners):
@@ -279,14 +307,13 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                     counts = {key: u64(owner["metrics"]["messages." + key]) for key in OUTCOMES}
                     if counts["sent"] != sum(value for key, value in counts.items() if key != "sent"):
                         raise ValueError("SchemaMismatch: echo cohort does not reconcile")
-                    for kind, key in (("latencyMs", "completed"), ("settleLatencyMs", "settleCompleted")):
-                        if u64(owner["histograms"][kind]["count"]) != counts[key]:
-                            raise ValueError("SchemaMismatch: successful count and histogram differ")
+                    if u64(owner["histograms"]["latencyMs"]["count"]) != counts["completed"]:
+                        raise ValueError("SchemaMismatch: successful count and histogram differ")
                 for key in OUTCOMES:
                     metrics["messages." + key] = count_text(sum(u64(value["metrics"]["messages." + key]) for value in selected))
-                for key in ("latencyMs", "settleLatencyMs"):
-                    histograms[key] = histogram_merge([value["histograms"][key] for value in selected])
-                    export_latency(histograms[key], "latency" if key == "latencyMs" else "settle.latency", key, metrics, reasons)
+                key = "latencyMs"
+                histograms[key] = histogram_merge([value["histograms"][key] for value in selected])
+                export_latency(histograms[key], "latency", key, metrics, reasons)
                 metrics["throughput.kops"] = sum(u64(value["metrics"]["messages.completed"]) / value["window"]["measuredSeconds"] / 1000 for value in selected)
             participants = [value for name, value in originals.items() if name in server_files or name in owners]
             for direction in ("request", "send", "reply", "event"):
@@ -311,7 +338,7 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
             for name, original in originals.items():
                 if any(original["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")):
                     issues.append({"code": "PublicOrApplicationFailure", "message": "See original error namespaces and firstErrors evidence.", "sourceFile": name})
-            for key in ("failed", "timeout", "cancelled", "unresolved"):
+            for key in ("failed", "timeout", "cancelled"):
                 if u64(metrics["messages." + key]):
                     issues.append({"code": "EchoOutcomeFailure", "message": key + "=" + metrics["messages." + key], "sourceFile": ",".join(owners)})
             for key in ("process.cpuPercent", "process.rssMb", "process.allocatedMb", "gc.gen0", "gc.gen1", "gc.gen2"):
@@ -336,12 +363,12 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
     result = {
         "schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash", "scenario")},
         "language": config["language"], "configFile": "config.json", "endpointsFile": "endpoints.json",
-        "status": status, "baselineEligible": status == "valid" and config.get("diagnostics", "Off") == "Off", "reasons": issues,
+        "status": status, "baselineEligible": status == "valid" and config.get("diagnostics", "Off") == "Off"
+            and config.get("packageSource", "published") == "published", "reasons": issues,
         "metricOwners": owners, "ownerWindows": {name: originals[name]["window"] for name in owners if name in originals},
         "measuredSeconds": seconds, "aggregation": {"rateMethod": "sum-owner-rates" if len(owners) > 1 and not ps else "single-owner",
             "applicationRateMethod": "sum-role-rates", "fanoutDeliveryRateMethod": "sum-subscriber-rates" if ps else None},
         "metrics": metrics, "histograms": histograms, "nullReasons": reasons,
-        **({"settle": json.loads((cell / "settle.json").read_text())} if (cell / "settle.json").exists() else {}),
         "clients": client_files, "servers": server_files,
         "processes": [{"sourceFile": name, "pid": value["provenance"]["pid"], "clock": value["clock"],
                        "resources": {key: value["metrics"][key] for key in value["metrics"] if key.startswith(("process.", "gc."))},
@@ -352,12 +379,12 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
     summary = {key: result[key] for key in ("schemaVersion", "runId", "cellId", "scenario", "status", "baselineEligible", "reasons", "metricOwners", "ownerWindows")}
     summary.update({"payloadSize": config["workload"]["payloadSize"], "topology": config["topology"],
                     "diagnostics": config.get("diagnostics", "Off"),
-                    "metrics": {key: value for key, value in metrics.items() if key.startswith(("throughput.", "latency.", "settle.latency.", "messages.", "errors.", "connections.", "fanout."))},
+                    "metrics": {key: value for key, value in metrics.items() if key.startswith(("throughput.", "latency.", "messages.", "errors.", "connections.", "fanout."))},
                     "processes": [{"sourceFile": p["sourceFile"], "pid": p["pid"], "resources": p["resources"]} for p in result["processes"]],
                     "limitations": ["Percentiles are nearest-rank bucket upper-bound estimates, not exact observations.",
                         "Same-host loopback includes CPU competition. Process CPU is one-core=100%.",
                         "Unobservable internal metrics and serialized byte sizes remain null with reasons in result.json."],
-                    "nullReasons": {key: value for key, value in reasons.items() if key.startswith(("/metrics/latency.", "/metrics/settle.latency."))}})
+                    "nullReasons": {key: value for key, value in reasons.items() if key.startswith("/metrics/latency.")}})
     write_json(cell / "summary.json", summary)
     head = f"{config['scenario']} payload={config['workload']['payloadSize']} topology={config['topology']} status={status} baselineEligible={result['baselineEligible']}"
     tail = (f"publishOps/s={metrics.get('fanout.publishOpsPerSec')} deliveryOps/s={metrics.get('fanout.deliveryOpsPerSec')} deliveryRatio={metrics.get('fanout.deliveryRatio')}" if ps else

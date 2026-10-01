@@ -42,7 +42,6 @@ public final class Measurement {
     private final boolean primary;
     private final ProcessSampler sampler = new ProcessSampler();
     private Histogram latency = new Histogram();
-    private Histogram settleLatency = new Histogram();
     private final Map<String, Long> counts = new HashMap<>();
     private final Map<String, Long> byKind = new LinkedHashMap<>();
     private final Map<String, Long> harness = new LinkedHashMap<>();
@@ -50,12 +49,10 @@ public final class Measurement {
     private final List<Object> errors = new ArrayList<>();
     private final List<Object> publicStateSamples = new ArrayList<>();
     private final Map<String, Long> directional = new HashMap<>();
-    private long inflight;
     private long maxInflight;
     private int activeHandlers;
     private long start;
     private long end;
-    private long settledAt;
     private String startUnix;
     private String endUnix;
     private String phase = "setup";
@@ -118,8 +115,34 @@ public final class Measurement {
 
     public boolean canIssue() {
         synchronized (gate) {
-            return !sealedResults && start != 0 && PerfClock.now() < end;
+            return !sealedResults && containsWindowTicks(PerfClock.now());
         }
+    }
+
+    /** The owning process's measured or warmup window is half-open: {@code start <= ticks < end}. */
+    public boolean windowContainsTicks(long ticks) {
+        synchronized (gate) {
+            return containsWindowTicks(ticks);
+        }
+    }
+
+    private boolean containsWindowTicks(long ticks) {
+        return start != 0 && ticks >= start && ticks < end;
+    }
+
+    /** The connector range assigned by the runner's q/r split, shared by load and connection metrics. */
+    public record ConnectionRange(int first, int count) {}
+
+    public ConnectionRange connectionRange() {
+        RoleConfig.Workload workload = config.workload();
+        if (!"client".equals(config.role()) || workload.connections() == null) {
+            return null;
+        }
+        int quotient = workload.connections() / workload.clientCount();
+        int remainder = workload.connections() % workload.clientCount();
+        int first = config.roleInstance() * quotient + Math.min(config.roleInstance(), remainder);
+        int count = quotient + (config.roleInstance() < remainder ? 1 : 0);
+        return new ConnectionRange(first, count);
     }
 
     public boolean hasErrors() {
@@ -162,7 +185,7 @@ public final class Measurement {
         enrichSnapshot = action;
     }
 
-    /** True only while the runner reads the final snapshot of a phase (§4.1: the settle ends with that read). */
+    /** True only while the runner reads the final snapshot of a phase. */
     public boolean finalSnapshot() {
         return finalSnapshot;
     }
@@ -221,7 +244,8 @@ public final class Measurement {
             if (previous != null) {
                 return previous.withState("alreadyStarted");
             }
-            if (!phaseTask.isDone() || inflight != 0 || activeHandlers != 0
+            if (!phaseTask.isDone() || ("0".equals(resetSeq) && get(counts, "sent") != settledCount())
+                    || activeHandlers != 0
                     || ("warmup".equals(trigger.phase()) ? !"setup".equals(phase) : !"reset".equals(phase))) {
                 return ack(trigger, false, "rejected", "Previous phase has not drained and reset.");
             }
@@ -280,37 +304,35 @@ public final class Measurement {
                 }
             }
         }
-        synchronized (gate) {
-            sampler.end();
-            endUnix = PerfClock.unixMs();
-            phase = "settle";
-        }
-        try {
-            long remaining = Math.max(0, end + config.workload().settleTimeoutMs() * 1_000_000L - PerfClock.now());
-            operations.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS);
-        } catch (TimeoutException error) {
-            recordDiagnostic(new PerfValidationException("SettleIncomplete", "The settle bound elapsed with operations outstanding."));
-        } catch (ExecutionException error) {
-            recordDiagnostic(error.getCause() == null ? error : error.getCause());
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-        } catch (RuntimeException error) {
-            recordDiagnostic(error);
-        }
-        synchronized (gate) {
-            settledAt = PerfClock.now();
-            if (primary) {
-                counts.put("unresolved", inflight);
-                sealedResults = true;
+        sampler.end();
+        boolean interrupted = Thread.interrupted();
+        boolean warmup = "warmup".equals(phase());
+        if (warmup) {
+            try {
+                operations.toCompletableFuture().get();
+            } catch (ExecutionException error) {
+                recordDiagnostic(error.getCause() == null ? error : error.getCause());
+            } catch (InterruptedException waitInterrupted) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException error) {
+                recordDiagnostic(error);
             }
+        }
+        synchronized (gate) {
+            endUnix = PerfClock.unixMs();
+            sealedResults = true;
             phase = "complete";
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
     public ResetReply reset(ResetRequest request, LongSupplier resetCapacity) {
         long requested = DecimalText.u64(request.resetSeq());
         synchronized (gate) {
-            boolean drained = phaseTask.isDone() && (start == 0 || PerfClock.now() >= end) && inflight == 0 && activeHandlers == 0;
+            boolean drained = phaseTask.isDone() && (start == 0 || PerfClock.now() >= end)
+                    && activeHandlers == 0;
             if (config.runId().equals(request.runId()) && config.cellId().equals(request.cellId()) && resetAck != null
                     && resetAck.resetSeq().equals(request.resetSeq()) && drained) {
                 return resetAck;
@@ -334,11 +356,9 @@ public final class Measurement {
             directional.clear();
             publicStateSamples.clear();
             latency = new Histogram();
-            settleLatency = new Histogram();
             maxInflight = 0;
             start = 0;
             end = 0;
-            settledAt = 0;
             startUnix = null;
             endUnix = null;
             sealedResults = false;
@@ -364,12 +384,11 @@ public final class Measurement {
     public long beginOperation(String direction) {
         synchronized (gate) {
             long started = PerfClock.now();
-            if (sealedResults || start == 0 || started >= end) {
+            if (sealedResults || !containsWindowTicks(started)) {
                 return -1;
             }
             increment(counts, "sent");
-            inflight = Math.addExact(inflight, 1);
-            maxInflight = Math.max(maxInflight, inflight);
+            maxInflight = Math.max(maxInflight, get(counts, "sent") - settledCount());
             increment(directional, direction);
             return started;
         }
@@ -379,30 +398,34 @@ public final class Measurement {
         return beginOperation("request");
     }
 
-    /** A send/send echo keeps the time it was observed even when the first send's terminal comes later (§13). */
-    public void completeOperation(long started, Throwable error, Long completedTicks) {
-        long completed = completedTicks == null ? PerfClock.now() : completedTicks;
+    public boolean completeOperation(long started) {
+        return completeOperation(started, null, null);
+    }
+
+    public boolean completeOperation(long started, Throwable error) {
+        return completeOperation(started, error, null);
+    }
+
+    /** Counts a terminal before sealing and before the measured window ends. */
+    public boolean completeOperation(long started, Throwable error, Long completedTicks) {
+        long terminal = completedTicks == null ? PerfClock.now() : completedTicks;
         synchronized (gate) {
-            if (sealedResults) {
-                return;
+            if (sealedResults || terminal >= end) {
+                return false;
             }
-            inflight--;
-            if (error == null) {
-                boolean inWindow = completed < end;
-                increment(counts, inWindow ? "completed" : "settleCompleted");
-                (inWindow ? latency : settleLatency).record(completed - started);
-            } else {
+            if (error != null) {
                 recordError(error, true);
+                return false;
             }
+            increment(counts, "completed");
+            latency.record(terminal - started);
+            return true;
         }
     }
 
-    public void completeOperation(long started) {
-        completeOperation(started, null, null);
-    }
-
-    public void completeOperation(long started, Throwable error) {
-        completeOperation(started, error, null);
+    private long settledCount() {
+        return get(counts, "completed") + get(counts, "failed") + get(counts, "timeout")
+                + get(counts, "cancelled");
     }
 
     public void handlerEnter() {
@@ -424,7 +447,7 @@ public final class Measurement {
     /** A public call this process starts (send) or a typed reply it returns, counted once inside its own window. */
     public void recordApplicationCall(PerfEchoRequest request, String direction) {
         synchronized (gate) {
-            if (request.resetSeq().equals(resetSeq) && start != 0 && PerfClock.now() < end
+            if (request.resetSeq().equals(resetSeq) && containsWindowTicks(PerfClock.now())
                     && request.phase().equals("0".equals(resetSeq) ? "warmup" : "measured")) {
                 increment(directional, direction);
             }
@@ -524,7 +547,7 @@ public final class Measurement {
             MetricCatalog.baselineNulls(metrics, histograms, reasons);
             for (String key : MetricCatalog.OUTCOMES) {
                 if (primary) {
-                    metrics.put("messages." + key, DecimalText.of("unresolved".equals(key) && !sealedResults ? inflight : get(counts, key)));
+                    metrics.put("messages." + key, DecimalText.of("inflightAtEnd".equals(key) ? get(counts, "sent") - settledCount() : get(counts, key)));
                 } else {
                     MetricCatalog.nullValue(metrics, reasons, "metrics", "messages." + key, "NOT_APPLICABLE",
                             "Echo outcomes belong to the source process.");
@@ -532,15 +555,12 @@ public final class Measurement {
             }
             if (primary) {
                 latency.export("latencyMs", "latency", metrics, histograms, reasons);
-                settleLatency.export("settleLatencyMs", "settle.latency", metrics, histograms, reasons);
             } else {
-                for (String prefix : List.of("latency", "settle.latency")) {
-                    for (String suffix : MetricCatalog.LATENCY_SUFFIXES) {
-                        MetricCatalog.nullValue(metrics, reasons, "metrics", prefix + "." + suffix, "NOT_APPLICABLE",
-                                "RTT belongs to the source process.");
-                    }
+                for (String suffix : MetricCatalog.LATENCY_SUFFIXES) {
+                    MetricCatalog.nullValue(metrics, reasons, "metrics", "latency." + suffix, "NOT_APPLICABLE",
+                            "RTT belongs to the source process.");
                 }
-                for (String key : List.of("latencyMs", "settleLatencyMs")) {
+                for (String key : List.of("latencyMs")) {
                     MetricCatalog.nullValue(histograms, reasons, "histograms", key, "NOT_APPLICABLE",
                             "RTT belongs to the source process.");
                 }
@@ -550,8 +570,7 @@ public final class Measurement {
             for (String key : List.of("requested", "connected", "failed")) {
                 if (csClient) {
                     long value = switch (key) {
-                        case "requested" -> workload.connections() / workload.clientCount()
-                                + (config.roleInstance() < workload.connections() % workload.clientCount() ? 1 : 0);
+                        case "requested" -> connectionRange().count();
                         case "connected" -> connected;
                         default -> connectionFailures;
                     };
@@ -617,10 +636,9 @@ public final class Measurement {
             window.put("startTicks", start == 0 ? null : DecimalText.of(start));
             window.put("endTicks", end == 0 ? null : DecimalText.of(end));
             window.put("measuredSeconds", seconds);
-            window.put("settleSeconds", settledAt == 0 ? null : Math.max(0, settledAt - end) / 1e9);
             window.forEach((key, value) -> {
                 if (value == null) {
-                    reasons.put("/window/" + key, new NullReason("PHASE_NOT_STARTED", "Window or settle has not completed."));
+                    reasons.put("/window/" + key, new NullReason("PHASE_NOT_STARTED", "Measurement window has not completed."));
                 }
             });
             for (String key : List.of("alignmentMethod", "maxErrorNs", "validFromTicks", "validThroughTicks")) {
@@ -661,7 +679,7 @@ public final class Measurement {
             executor.put("liveThreadCount", ManagementFactory.getThreadMXBean().getThreadCount());
             executor.put("inputArguments", ManagementFactory.getRuntimeMXBean().getInputArguments());
             provenance.put("executor", executor);
-            PerfSnapshot snapshot = new PerfSnapshot(config.runId(), config.cellId(), resetSeq, config.role(),
+            PerfSnapshot snapshot = new PerfSnapshot(config.runId(), config.cellId(), resetSeq, config.language(), config.role(),
                     config.roleInstance(), config.configHash(), phase, window, PerfClock.metadata(), serialized,
                     metrics, histograms, reasons, publicStatus, runtime, provenance);
             Consumer<PerfSnapshot> enrich = enrichSnapshot;

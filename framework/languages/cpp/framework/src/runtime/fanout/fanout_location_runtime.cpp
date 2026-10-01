@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/fanout/fanout_location_runtime.hpp"
+#include "runtime/diagnostics/topology_projection.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -13,7 +14,6 @@
 #include <chrono>
 #include <limits>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -91,33 +91,6 @@ class fanout_observation_t final : public fanout_runtime_observation_t
     std::shared_ptr<fanout_location_runtime_t::observer_t> _observer;
 };
 
-fanout_publisher_connection_state_t connection_state (raw_fanout_connection_state_t state)
-{
-    switch (state) {
-        case raw_fanout_connection_state_t::connecting:
-            return fanout_publisher_connection_state_t::connecting;
-        case raw_fanout_connection_state_t::ready:
-            return fanout_publisher_connection_state_t::ready;
-        case raw_fanout_connection_state_t::disconnected:
-            return fanout_publisher_connection_state_t::disconnected;
-        case raw_fanout_connection_state_t::reconnecting:
-            return fanout_publisher_connection_state_t::reconnecting;
-    }
-    return fanout_publisher_connection_state_t::disconnected;
-}
-
-std::string fanout_location_observation_source (const std::string &channel_name)
-{
-    return "location:" + channel_name;
-}
-
-std::string
-fanout_publisher_observation_source (const fanout_publisher_connection_snapshot_t &publisher)
-{
-    return "publisher:" + publisher.publisher_rid.to_hex () + ":"
-           + std::to_string (publisher.lifecycle_generation);
-}
-
 } // namespace
 
 fanout_location_runtime_t::fanout_location_runtime_t (
@@ -173,7 +146,10 @@ void fanout_location_runtime_t::start ()
     const auto owner = _locations->current_owner_token ();
     _stop.store (false, std::memory_order_release);
     try {
-        _subscriber_poller = std::make_unique<zlink::poller_t> ();
+        {
+            std::lock_guard lock (_gate);
+            _subscriber_poller = std::make_unique<zlink::poller_t> ();
+        }
         _wake_timer.attach (*_subscriber_poller);
         _application_supply = std::make_unique<application_supply_slot_t> (
           _application_jobs, [this] { _wake_timer.signal (); });
@@ -393,13 +369,13 @@ fanout_channel_snapshot_t fanout_location_runtime_t::snapshot (std::string chann
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "automatic Fanout channel is not configured: " + channel_name);
     std::lock_guard lock (_gate);
-    return build_snapshot_locked (channel_name);
+    return publish_snapshot_locked (build_snapshot_locked (channel_name));
 }
 
 std::unique_ptr<fanout_runtime_observation_t> fanout_location_runtime_t::observe (
   std::string channel_name,
   std::size_t capacity,
-  std::function<void (const observed_status_t<fanout_runtime_event_t> &)> observer)
+  std::function<void (const observed_status_t<fanout_channel_snapshot_t> &)> observer)
 {
     if (channel_name.empty () || capacity == 0 || !observer)
         throw std::invalid_argument ("Fanout observation requires a channel and callback");
@@ -412,9 +388,7 @@ std::unique_ptr<fanout_runtime_observation_t> fanout_location_runtime_t::observe
         std::lock_guard lock (_gate);
         _observers[channel_name].push_back (value);
         const auto current = build_snapshot_locked (channel_name);
-        value->enqueue (fanout_location_observation_source (channel_name),
-                        fanout_runtime_event_t{fanout_location_changed_event_t{
-                          current.sequence, current.observed_at, channel_name, current.location}});
+        publish_snapshot_locked (current, value);
     }
     return std::make_unique<fanout_observation_t> (std::move (value));
 }
@@ -434,49 +408,40 @@ fanout_location_runtime_t::build_snapshot_locked (const std::string &channel_nam
     fanout_channel_snapshot_t result;
     result.channel_name = channel_name;
     result.observed_at = std::chrono::system_clock::now ();
-    if (_locations != nullptr) {
-        result.location.store_healthy = !_locations->last_error ().has_value ();
-        result.location.last_refresh_at = _locations->owner_lease_renewed_at ();
-        result.location.owner_lease_healthy = _locations->owner_lease_healthy ();
-        result.location.owner_lease_renewed_at = _locations->owner_lease_renewed_at ();
-    }
-
     const auto subscriber = _subscribers.find (channel_name);
     if (subscriber != _subscribers.end ()) {
         const auto raw = subscriber->second->owner->connection_snapshots ();
+        result.publishers.reserve (subscriber->second->desired.size ());
         for (const auto &intent : subscriber->second->desired) {
             const auto connected =
               std::find_if (raw.begin (), raw.end (), [&intent] (const auto &entry) {
                   return entry.publisher_routing_id == intent.publisher_routing_id
                          && entry.lifecycle_generation == intent.lifecycle_generation;
               });
-            fanout_publisher_connection_snapshot_t entry{
-              zlink::routing_id_t::from (intent.publisher_routing_id),
-              intent.lifecycle_generation,
-              false,
-              false,
-              fanout_publisher_connection_state_t::excluded_stale,
-              std::nullopt};
-            if (intent.state == mesh::service_node_state_t::draining) {
-                entry.state = fanout_publisher_connection_state_t::excluded_draining;
-            } else if (intent.state == mesh::service_node_state_t::serving) {
-                if (connected != raw.end ()) {
-                    entry.connection_intent = connected->connection_intent;
-                    entry.ready = connected->ready;
-                    entry.state = connection_state (connected->state);
-                    entry.last_failure = connected->last_failure;
-                } else {
-                    entry.connection_intent = true;
-                    entry.state = fanout_publisher_connection_state_t::connecting;
-                }
-            }
-            if (entry.connection_intent)
-                ++result.connection_intent_count;
-            if (entry.ready)
-                ++result.ready_connection_count;
-            result.publishers.push_back (std::move (entry));
+            const bool ready = connected != raw.end () && connected->ready;
+            const bool connecting =
+              connected != raw.end ()
+              && (connected->state == raw_fanout_connection_state_t::connecting
+                  || connected->state == raw_fanout_connection_state_t::reconnecting);
+            result.publishers.push_back (detail::project_topology_peer (
+              zlink::routing_id_t::from (intent.publisher_routing_id), intent.state, ready,
+              connecting, topology_reason_t::no_ready_peer));
         }
     }
+    const auto ready_count =
+      std::count_if (result.publishers.begin (), result.publishers.end (),
+                     [] (const auto &publisher) { return publisher.state == peer_state_t::ready; });
+    result.ready_publisher_count = static_cast<std::uint32_t> (
+      std::min<std::size_t> (ready_count, std::numeric_limits<std::uint32_t>::max ()));
+    auto services = _services;
+    const auto host_state = _stop.load (std::memory_order_acquire)
+                              ? (_subscriber_poller ? framework_runtime_state_t::draining
+                                                    : framework_runtime_state_t::stopped)
+                              : services.get_required<framework_runtime_t> ().status ().state;
+    result.state = detail::topology_state_for_host (host_state, result.ready_publisher_count > 0
+                                                                  ? topology_state_t::ready
+                                                                  : topology_state_t::degraded);
+    result.is_ready = result.state == topology_state_t::ready;
     const auto sequence = _snapshot_sequences.find (channel_name);
     result.sequence = sequence == _snapshot_sequences.end () ? 0 : sequence->second;
     return result;
@@ -485,98 +450,52 @@ fanout_location_runtime_t::build_snapshot_locked (const std::string &channel_nam
 bool fanout_location_runtime_t::snapshot_equivalent (
   const fanout_channel_snapshot_t &left, const fanout_channel_snapshot_t &right) noexcept
 {
-    return left.channel_name == right.channel_name
-           && left.connection_intent_count == right.connection_intent_count
-           && left.ready_connection_count == right.ready_connection_count
-           && left.publishers == right.publishers && left.location == right.location;
+    return left.channel_name == right.channel_name && left.state == right.state
+           && left.is_ready == right.is_ready
+           && left.ready_publisher_count == right.ready_publisher_count
+           && std::equal (left.publishers.begin (), left.publishers.end (),
+                          right.publishers.begin (), right.publishers.end (),
+                          [] (const auto &a, const auto &b) {
+                              return a.node_rid == b.node_rid && a.state == b.state
+                                     && a.unavailable_reason == b.unavailable_reason;
+                          });
+}
+
+fanout_channel_snapshot_t fanout_location_runtime_t::publish_snapshot_locked (
+  fanout_channel_snapshot_t current, const std::shared_ptr<observer_t> &initial_observer) const
+{
+    const auto &channel_name = current.channel_name;
+    const auto previous = _last_snapshots.find (channel_name);
+    const bool changed =
+      previous == _last_snapshots.end () || !snapshot_equivalent (previous->second, current);
+    if (changed) {
+        current.sequence = ++_snapshot_sequences[channel_name];
+        current.observed_at = std::chrono::system_clock::now ();
+        _last_snapshots.insert_or_assign (channel_name, current);
+    } else {
+        current = previous->second;
+    }
+    const bool terminal = detail::topology_is_terminal (current.state);
+    auto &registered = _observers[channel_name];
+    auto write = registered.begin ();
+    for (auto read = registered.begin (); read != registered.end (); ++read) {
+        if (auto value = read->lock ()) {
+            if (changed || value == initial_observer)
+                value->enqueue (channel_name, current, terminal);
+            *write++ = *read;
+        }
+    }
+    registered.erase (write, registered.end ());
+    return current;
 }
 
 void fanout_location_runtime_t::publish_snapshot_changes ()
 {
-    struct pending_observation_t
-    {
-        std::shared_ptr<observer_t> observer;
-        std::string source_key;
-        fanout_runtime_event_t event;
-        bool terminal = false;
-    };
-    std::vector<pending_observation_t> notifications;
-    {
-        std::lock_guard lock (_gate);
-        std::set<std::string> channel_names;
-        for (const auto &channel : _channels)
-            channel_names.insert (channel.name);
-        for (const auto &[channel_name, _] : _subscribers)
-            channel_names.insert (channel_name);
-
-        for (const auto &channel_name : channel_names) {
-            auto current = build_snapshot_locked (channel_name);
-            const auto previous = _last_snapshots.find (channel_name);
-            if (previous != _last_snapshots.end ()
-                && snapshot_equivalent (previous->second, current))
-                continue;
-            if (previous == _last_snapshots.end ()) {
-                _last_snapshots.insert_or_assign (channel_name, current);
-                continue;
-            }
-
-            const auto sequence = ++_snapshot_sequences[channel_name];
-            current.sequence = sequence;
-            current.observed_at = std::chrono::system_clock::now ();
-            const bool publishers_changed = previous->second.publishers != current.publishers;
-            const bool location_changed = previous->second.location != current.location;
-            _last_snapshots.insert_or_assign (channel_name, current);
-
-            auto &registered = _observers[channel_name];
-            auto write = registered.begin ();
-            for (auto read = registered.begin (); read != registered.end (); ++read) {
-                if (auto current_observer = read->lock ()) {
-                    if (publishers_changed) {
-                        for (const auto &publisher : previous->second.publishers) {
-                            const auto still_present = std::any_of (
-                              current.publishers.begin (), current.publishers.end (),
-                              [&publisher] (const auto &current_publisher) {
-                                  return current_publisher.publisher_rid == publisher.publisher_rid
-                                         && current_publisher.lifecycle_generation
-                                              == publisher.lifecycle_generation;
-                              });
-                            if (still_present)
-                                continue;
-                            auto removed = publisher;
-                            removed.connection_intent = false;
-                            removed.ready = false;
-                            removed.state = fanout_publisher_connection_state_t::disconnected;
-                            const auto source_key = fanout_publisher_observation_source (removed);
-                            notifications.push_back (pending_observation_t{
-                              current_observer, source_key,
-                              fanout_runtime_event_t{fanout_publisher_changed_event_t{
-                                sequence, current.observed_at, channel_name, std::move (removed)}},
-                              true});
-                        }
-                        for (const auto &publisher : current.publishers) {
-                            notifications.push_back (pending_observation_t{
-                              current_observer, fanout_publisher_observation_source (publisher),
-                              fanout_runtime_event_t{fanout_publisher_changed_event_t{
-                                sequence, current.observed_at, channel_name, publisher}},
-                              false});
-                        }
-                    }
-                    if (location_changed || !publishers_changed) {
-                        notifications.push_back (pending_observation_t{
-                          current_observer, fanout_location_observation_source (channel_name),
-                          fanout_runtime_event_t{fanout_location_changed_event_t{
-                            sequence, current.observed_at, channel_name, current.location}},
-                          false});
-                    }
-                    *write++ = *read;
-                }
-            }
-            registered.erase (write, registered.end ());
-        }
+    std::lock_guard lock (_gate);
+    for (const auto &channel : _channels) {
+        if (is_observable_channel (channel.name))
+            publish_snapshot_locked (build_snapshot_locked (channel.name));
     }
-    for (auto &notification : notifications)
-        notification.observer->enqueue (std::move (notification.source_key),
-                                        std::move (notification.event), notification.terminal);
 }
 
 void fanout_location_runtime_t::pump ()
@@ -739,7 +658,12 @@ void fanout_location_runtime_t::stop () noexcept
         catch (...) {
         }
     }
-    _subscriber_poller.reset ();
+    {
+        std::lock_guard lock (_gate);
+        _subscriber_poller.reset ();
+    }
+    if (!was_stopped || has_publishers || has_subscribers)
+        publish_snapshot_changes ();
 }
 
 void fanout_location_runtime_t::stop_subscribers () noexcept

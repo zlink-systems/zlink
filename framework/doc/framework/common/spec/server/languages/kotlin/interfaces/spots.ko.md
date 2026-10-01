@@ -395,8 +395,8 @@ User Spot factory mode의 기본값은 `SPOT_WIDE`다. 이 mode에서 suspending
 Request·worker·Actor·Spot create wrapper의 `yield()`만 gate를 반환하고 terminal completion 뒤 같은 gate를
 다시 얻어 coroutine continuation을 실행한다. `PER_ACTOR`에서는 Actor별 lane, Spot direct·lifecycle lane과 timer별 lane이
 독립적이며 suspension은 해당 lane permit만 유지한다. 서로 다른 Actor와 서로 다른 timer는 동시에 실행할 수
-있다. `SPOT_WIDE`의 Close·relocation·snapshot은 새 admission을 seal하고 모든 coroutine continuation을
-포함한 active lane이 안전한 turn 경계에 도달한 all-lane barrier 뒤에만 진행한다. Barrier 실패는 같은
+있다. `SPOT_WIDE`의 relocation·snapshot은 새 admission을 seal하고 모든 coroutine continuation을
+포함한 active lane이 안전한 turn 경계에 도달한 all-lane barrier 뒤에만 진행한다. Close의 경계는 [Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다. Barrier 실패는 같은
 generation의 seal 전체를 abort하고 application admission을 정확히 복원한다.
 
 `PER_ACTOR` User Spot은 `recreateOnRelocation()`만 허용한다. Spot adapter,

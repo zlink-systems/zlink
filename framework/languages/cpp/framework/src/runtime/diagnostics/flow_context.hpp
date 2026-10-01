@@ -14,6 +14,11 @@
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+struct ambient_context_hooks_t;
+}
+
 namespace zlink::framework::runtime
 {
 
@@ -21,6 +26,9 @@ inline constexpr char incomplete_flow_context_error[] =
   "flow id and origin must be present together";
 inline constexpr char uuid_v7_version_character = '7';
 inline constexpr char invalid_flow_context_error[] = "flow id must be UUIDv7";
+// Ambient flow and actor capture for Framework continuations; installed by
+// install_host_context_hooks().
+const framework::detail::ambient_context_hooks_t &ambient_flow_hooks () noexcept;
 
 /* flow_id wire form (flow-correlation §6): lowercase hyphenated UUIDv7,
  * 36 ASCII bytes. The generation algorithm is a framework-internal decision;

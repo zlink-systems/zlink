@@ -35,7 +35,7 @@ public sealed class S2sSendEchoSpot(IZLinkSpotContext context) : IZLinkSpot
 }
 
 // §10.4: the echo goes back as a second one-way send to the caller's own return ChannelName (in the DTO).
-public sealed class S2sSendEchoHandler(Measurement measurement) : IZLinkSpotPacketHandler<S2sSendEchoSpot, PerfEchoRequest>
+public sealed class S2sSendEchoHandler(Measurement measurement, RoleConfig config) : IZLinkSpotPacketHandler<S2sSendEchoSpot, PerfEchoRequest>
 {
     public async ValueTask HandleAsync(S2sSendEchoSpot spot, PerfEchoRequest message, CancellationToken cancellationToken)
     {
@@ -43,7 +43,7 @@ public sealed class S2sSendEchoHandler(Measurement measurement) : IZLinkSpotPack
         measurement.HandlerEnter();
         try
         {
-            measurement.ValidateRequest(message, returnChannel: message.returnChannel);
+            measurement.ValidateRequest(message, returnChannel: config.channelName);
             if (string.IsNullOrEmpty(message.returnChannel)) throw new PerfValidationException("IdentityMismatch", "No return Channel in the request.");
             var reply = PayloadPattern.Reply(message, received);
             measurement.RecordApplicationCall(message, "send");

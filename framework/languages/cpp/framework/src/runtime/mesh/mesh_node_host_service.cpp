@@ -414,8 +414,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
         protocol::actor_create_reply_t reply;
         std::optional<protocol::application_payload_t> application_reply;
     };
-    auto remote =
-      std::make_shared<detail::task_completion_source_t<remote_actor_create_completion_t>> ();
+    auto remote = std::make_shared<task_completion_source_t<remote_actor_create_completion_t>> ();
     std::optional<result_t<actor_create_result_t>> incomplete_result;
     try {
         const auto accepted = co_await source->native_node ().create_actor_remote (
@@ -1515,7 +1514,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                     std::chrono::system_clock::now ().time_since_epoch () + timeout)
                                     .count ())};
-    auto completion = std::make_shared<detail::task_completion_source_t<spot_create_result_t>> ();
+    auto completion = std::make_shared<task_completion_source_t<spot_create_result_t>> ();
     auto output = completion->task ();
     auto on_complete = [completion, target, serializers = _serializers, store = _location_store,
                         key, fence, source_created_reservation] (
@@ -1640,7 +1639,7 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
         std::chrono::duration_cast<std::chrono::milliseconds> (
           std::chrono::system_clock::now ().time_since_epoch () + std::chrono::seconds (30))
           .count ())};
-    auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+    auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto output = completion->task ();
     auto accepted = source->native_node ().close_user_spot_remote (
       zlink::routing_id_t::from (std::string (snapshot->allocation.target.node_rid.value ())),

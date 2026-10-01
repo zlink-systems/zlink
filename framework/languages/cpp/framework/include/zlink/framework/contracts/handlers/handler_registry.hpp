@@ -22,8 +22,10 @@
 namespace zlink::framework
 {
 
+class handler_registry_t;
 namespace detail
 {
+void cancel_handler_waits (handler_registry_t &) noexcept;
 class handler_registry_state_t;
 class route_handler_invoker_t;
 class channel_runtime_t;
@@ -109,7 +111,8 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_to_message_result ("handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> (
+                      "handler threw an exception"));
               }
           });
     }
@@ -137,7 +140,7 @@ class handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return detail::current_exception_to_message_result (
+                  co_return detail::current_exception_result<zlink::message_t> (
                     "handler threw an exception");
               }
           });
@@ -173,7 +176,8 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_to_message_result ("handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> (
+                      "handler threw an exception"));
               }
           });
     }
@@ -207,7 +211,7 @@ class handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return detail::current_exception_to_message_result (
+                  co_return detail::current_exception_result<zlink::message_t> (
                     "handler threw an exception");
               }
           });
@@ -415,7 +419,8 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_to_message_result ("handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> (
+                      "handler threw an exception"));
               }
           });
     }
@@ -442,7 +447,7 @@ class handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return detail::current_exception_to_message_result (
+                  co_return detail::current_exception_result<zlink::message_t> (
                     "handler threw an exception");
               }
           });
@@ -491,7 +496,8 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_to_message_result ("handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> (
+                      "handler threw an exception"));
               }
           });
     }
@@ -525,7 +531,7 @@ class handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return detail::current_exception_to_message_result (
+                  co_return detail::current_exception_result<zlink::message_t> (
                     "handler threw an exception");
               }
           });
@@ -536,6 +542,7 @@ class handler_registry_t
                        const framework_exception_t &error) const;
 
     friend class detail::route_handler_invoker_t;
+    friend void detail::cancel_handler_waits (handler_registry_t &) noexcept;
 
     std::unique_ptr<detail::handler_registry_state_t> _state;
 };

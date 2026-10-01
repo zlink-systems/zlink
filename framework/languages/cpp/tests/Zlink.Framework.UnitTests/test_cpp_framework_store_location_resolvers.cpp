@@ -412,6 +412,44 @@ class renew_failure_owner_lease_store_t final : public test_location_repository_
     std::atomic_size_t _confirmation_read_count{0};
 };
 
+class standalone_framework_runtime_t final : public zlink::framework::framework_runtime_t
+{
+  public:
+    zlink::framework::framework_runtime_status_t status () const override
+    {
+        return {.state = zlink::framework::framework_runtime_state_t::serving,
+                .is_ready = true,
+                .accepting_work = true};
+    }
+
+    void reset_capacity_metrics () override
+    {
+        ADD_FAILURE () << "unexpected standalone host capacity reset";
+    }
+
+    zlink::framework::listener_status_t listener_status (zlink::framework::listener_kind_t,
+                                                         std::string) const override
+    {
+        ADD_FAILURE () << "unexpected standalone host listener status query";
+        return {};
+    }
+
+    std::vector<zlink::framework::http_listener_status_t> http_listener_statuses () const override
+    {
+        ADD_FAILURE () << "unexpected standalone host HTTP listener status query";
+        return {};
+    }
+
+    std::unique_ptr<zlink::framework::runtime_observation_t>
+    observe (std::size_t,
+             std::function<void (const zlink::framework::observed_status_t<
+                                 zlink::framework::framework_runtime_status_t> &)>) override
+    {
+        ADD_FAILURE () << "unexpected standalone host observation";
+        return {};
+    }
+};
+
 class fake_location_runtime_query_t final : public location_runtime_query_t
 {
   public:
@@ -2542,6 +2580,12 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLoc
     events.enable_subscriber ();
 
     zlink::framework::service_collection_t services;
+    services.add_factory<zlink::framework::framework_runtime_t> (
+      [] (zlink::framework::service_provider_t &)
+        -> std::shared_ptr<zlink::framework::framework_runtime_t> {
+          return std::make_shared<standalone_framework_runtime_t> ();
+      },
+      zlink::framework::service_lifetime_t::singleton);
     services.add_factory<zlink::framework::location_repository_t> (
       [store] (zlink::framework::service_provider_t &) {
           return std::static_pointer_cast<zlink::framework::location_repository_t> (store);

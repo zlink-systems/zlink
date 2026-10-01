@@ -24,6 +24,7 @@ import { boundSessionErrorPayload } from './bound-session-response-target';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 import { ZLinkManagedStream } from './managed-stream';
 import type { ZLinkSessionBindingIdentity } from './stream-binding-runtime-ports';
+import { REMOTE_BOUND_SESSION_BIND_PACKET } from '../spots/spot-remote-codec';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -325,7 +326,7 @@ export class ZLinkBoundSessionService {
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
       flags: ZLinkStreamHeaderFlags.None,
-      name: 'zlink.framework.actor.bound_session.bind',
+      name: REMOTE_BOUND_SESSION_BIND_PACKET,
       metadata: new Map()
     });
     //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.

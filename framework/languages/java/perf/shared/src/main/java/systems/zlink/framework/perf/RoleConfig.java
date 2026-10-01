@@ -9,6 +9,7 @@ public record RoleConfig(
         String runId,
         String cellId,
         String configHash,
+        String language,
         String role,
         int roleInstance,
         String scenario,
@@ -35,6 +36,12 @@ public record RoleConfig(
         DiagnosticsConfig diagnostics,
         Map<String, Object> provenance) {
 
+    public RoleConfig {
+        if (language == null || language.isBlank()) {
+            throw new IllegalArgumentException("The runner role config must include language.");
+        }
+    }
+
     public record Workload(
             int payloadSize,
             double durationSeconds,
@@ -46,7 +53,7 @@ public record RoleConfig(
             Integer connectConcurrency,
             int requestTimeoutMs,
             int correlationExpiryMs,
-            int settleTimeoutMs,
+            int driverTimeoutMs,
             int setupTimeoutMs,
             int adminTimeoutMs,
             int socketSendTimeoutMs) {}
@@ -56,7 +63,7 @@ public record RoleConfig(
             String namespace) {}
 
     // §5.2: the public worker options and the CPU task every callback runs (§10.8).
-    public record WorkerConfig(String algorithm, int taskMillis, int minThreads, int maxThreads, int maxQueueLength,
+    public record WorkerConfig(String algorithm, int taskMillis, int minThreads, int maxThreads,
             int idleTimeoutMs, int workerTimeoutMs) {}
 
     public record DiagnosticsConfig(String level, String flowFile) {}

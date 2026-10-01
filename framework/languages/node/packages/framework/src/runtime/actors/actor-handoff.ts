@@ -1,45 +1,47 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
-} from '../framework-errors-internal';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { ActorRef, RoutingId } from '../../contracts';
-import { ZLinkFrameworkException } from '../../contracts';
+import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
+
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
   MessageFollowSuppressionRegistry,
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
-import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
-import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
-import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { requestRoutedJsonReply } from './actor-routed-json-request';
-import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
+import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import {
-  encodeMessageFollowRemoteActorPacketRelayPayload,
-  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-} from './actor-packet-relay-wire';
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
 import {
   actorMessageFollowContext,
   actorMessageFollowPayloadChecksum,
-  attachActorMessageFollowContext,
   advanceActorMessageFollowContext,
+  attachActorMessageFollowContext,
   createMessageFollowId,
   messageFollowOwnerFenceKey,
   messageFollowOwnerFencesEqual,
   messageFollowOwnerNodeRid,
   ownerFence,
   verifyActorMessageFollowPayload,
+  ZLINK_MESSAGE_FOLLOW_MAX_HOPS,
   type ZLinkActorMessageFollowContext,
   type ZLinkActorMessageFollowOwnerFence
 } from './actor-message-follow-context';
+import {
+  encodeMessageFollowRemoteActorPacketRelayPayload,
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+} from './actor-packet-relay-wire';
+import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
+import { requestRoutedJsonReply } from './actor-routed-json-request';
+import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 
-export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
-const MAX_MESSAGE_FOLLOW_HOPS = 8;
+export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
+  zlinkDefaultLocationOptions.messageFollowDurationMs;
 const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export interface ZLinkActorHandoffPacket {
@@ -1445,7 +1447,7 @@ export class ZLinkActorHandoffCoordinator {
       return duplicate.result;
     }
     const bytes = packetBytes(packet);
-    if (context.hopCount >= MAX_MESSAGE_FOLLOW_HOPS) {
+    if (context.hopCount >= ZLINK_MESSAGE_FOLLOW_MAX_HOPS) {
       this.options.onMarker?.('message_follow_rejected', actorId);
       return Promise.reject(actorLocationStale(actorId));
     }

@@ -1,11 +1,33 @@
 import type { RoutingId } from '../../contracts/Common';
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
-  ZLinkLocationKind,
+  isValidPublicWeight,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import type {
+  ZLinkActorTransferPrepareRequest,
+  ZLinkActorTransferRecord,
+  ZLinkActorTransferState,
+  ZLinkActorTransferWriteResult
+} from '../../contracts/Locations/ActorTransfer';
+import {
+  matchesActorLocation,
+  matchesPeerLocation,
+  matchesRouteLocation,
+  matchesSpotLocation
+} from '../../location-store-integration';
+import { encodeAuthorityKey } from './authority-key-codec';
+import type { ZLinkDomainLocationStore } from './domain-store-contract';
+import { ZLinkInMemoryAuthorityStore } from './in-memory-authority-store';
+import {
   ZLinkFrameworkRuntimeState,
+  ZLinkLocationKind,
   ZLinkLocationWriteIntent,
   ZLinkLocationWriteStatus,
   ZLinkObjectRole,
   type ZLinkActorLocation,
+  type ZLinkActorLocationFilter,
+  type ZLinkActorLocationKey,
   type ZLinkAggregateAbortResult,
   type ZLinkAggregateCommitResult,
   type ZLinkAggregateFence,
@@ -18,22 +40,18 @@ import {
   type ZLinkAuthorityScanCursor,
   type ZLinkAuthorityScanResult,
   type ZLinkAuthorityStoreVersion,
-  type ZLinkActorLocationFilter,
-  type ZLinkActorLocationKey,
+  type ZLinkClientServerServerDescriptor,
+  type ZLinkClientServerServerDescriptorKey,
+  type ZLinkCreationOperationIdentity,
+  type ZLinkCreationTerminalReadResult,
+  type ZLinkFanoutPublisherDescriptor,
+  type ZLinkFanoutPublisherDescriptorKey,
   type ZLinkLocationChangeStampScope,
   type ZLinkLocationOwnerToken,
   type ZLinkLocationPage,
   type ZLinkLocationWriteResult,
   type ZLinkMeshNodeDescriptor,
   type ZLinkMeshNodeDescriptorKey,
-  type ZLinkClientServerServerDescriptor,
-  type ZLinkClientServerServerDescriptorKey,
-  type ZLinkFanoutPublisherDescriptor,
-  type ZLinkFanoutPublisherDescriptorKey,
-  type ZLinkOwnerLeaseClaimResult,
-  type ZLinkOwnerLeaseReadResult,
-  type ZLinkOwnerLeaseReleaseResult,
-  type ZLinkOwnerLeaseRenewResult,
   type ZLinkObjectAbortRequest,
   type ZLinkObjectAbortResult,
   type ZLinkObjectCommitRequest,
@@ -42,8 +60,10 @@ import {
   type ZLinkObjectCreationCompleteResult,
   type ZLinkObjectReserveRequest,
   type ZLinkObjectReserveResult,
-  type ZLinkCreationOperationIdentity,
-  type ZLinkCreationTerminalReadResult,
+  type ZLinkOwnerLeaseClaimResult,
+  type ZLinkOwnerLeaseReadResult,
+  type ZLinkOwnerLeaseReleaseResult,
+  type ZLinkOwnerLeaseRenewResult,
   type ZLinkPageRequest,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
@@ -55,23 +75,11 @@ import {
   type ZLinkSpotLocationFilter,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
-import type {
-  ZLinkActorTransferPrepareRequest,
-  ZLinkActorTransferRecord,
-  ZLinkActorTransferState,
-  ZLinkActorTransferWriteResult
-} from '../../contracts/Locations/ActorTransfer';
 import type { ZLinkFanoutLocationStore } from './internal-store-contracts';
-import type { ZLinkDomainLocationStore } from './domain-store-contract';
-import { ZLinkInMemoryAuthorityStore } from './in-memory-authority-store';
-import { encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkLocationKeyCodec } from './key-codec';
-import {
-  matchesActorLocation,
-  matchesPeerLocation,
-  matchesRouteLocation,
-  matchesSpotLocation
-} from '../../location-store-integration';
+const MAX_LOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
+
+const MAX_DESCRIPTOR_OBJECT_CAPABILITIES = 1024;
 
 export class ZLinkInMemoryLocationStore
   implements ZLinkDomainLocationStore, ZLinkFanoutLocationStore
@@ -955,7 +963,7 @@ export class ZLinkInMemoryLocationStore
     if (current !== undefined && current.leaseExpiresAt.getTime() > storeNow.getTime()) {
       return { kind: 'conflict' };
     }
-    if (this.ownerLeaseGeneration >= 0x7fff_ffff_ffff_ffffn) {
+    if (this.ownerLeaseGeneration >= MAX_LOCATION_GENERATION) {
       return { kind: 'generationExhausted' };
     }
     const token = { ownerId, leaseGeneration: ++this.ownerLeaseGeneration };
@@ -1282,12 +1290,14 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
   }
   if (descriptor.objectRole === ZLinkObjectRole.Server) {
     if (descriptor.entrySpotId !== undefined && !validDescriptorText(descriptor.entrySpotId)) {
-      throw new TypeError('MeshNode Entry Spot ID must contain 1..255 UTF-8 bytes.');
+      throw new TypeError(
+        `MeshNode Entry Spot ID must contain 1..${ZLINK_MAX_IDENTITY_TEXT_BYTES} UTF-8 bytes.`
+      );
     }
   } else if (descriptor.entrySpotId !== undefined) {
     throw new TypeError('Only Object Server descriptors may publish an Entry Spot ID.');
   }
-  const maxGeneration = 0x7fff_ffff_ffff_ffffn;
+  const maxGeneration = MAX_LOCATION_GENERATION;
   if (
     descriptor.lifecycleGeneration < 1n ||
     descriptor.lifecycleGeneration > maxGeneration ||
@@ -1320,9 +1330,8 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
     !Number.isSafeInteger(descriptor.activationConcurrency.limit) ||
     descriptor.activationConcurrency.limit < 1 ||
     descriptor.activationConcurrency.active > descriptor.activationConcurrency.limit ||
-    descriptor.placementWeight < 0 ||
-    descriptor.placementWeight > 10_000 ||
-    descriptor.objectCapabilities.length > 1024 ||
+    !isValidPublicWeight(descriptor.placementWeight) ||
+    descriptor.objectCapabilities.length > MAX_DESCRIPTOR_OBJECT_CAPABILITIES ||
     (descriptor.objectRole !== ZLinkObjectRole.Server && descriptor.objectCapabilities.length !== 0)
   ) {
     throw new RangeError('MeshNode object capacity is invalid.');
@@ -1350,7 +1359,7 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
 
 function validDescriptorText(value: string): boolean {
   const size = Buffer.byteLength(value, 'utf8');
-  return size >= 1 && size <= 255 && !value.includes('\0');
+  return size >= 1 && size <= ZLINK_MAX_IDENTITY_TEXT_BYTES && !value.includes('\0');
 }
 
 function meshNodeImmutableFingerprint(descriptor: ZLinkMeshNodeDescriptor): string {
@@ -1436,7 +1445,7 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
   ) {
     throw new TypeError('ClientServer descriptor identity and endpoint are required.');
   }
-  const maxGeneration = 0x7fff_ffff_ffff_ffffn;
+  const maxGeneration = MAX_LOCATION_GENERATION;
   if (
     descriptor.lifecycleGeneration < 1n ||
     descriptor.lifecycleGeneration > maxGeneration ||
@@ -1447,8 +1456,10 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
   ) {
     throw new RangeError('ClientServer descriptor generations are invalid.');
   }
-  if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
-    throw new RangeError('ClientServer descriptor weight must be an integer in 0..10000.');
+  if (!isValidPublicWeight(descriptor.weight)) {
+    throw new RangeError(
+      `ClientServer descriptor weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 
@@ -1483,7 +1494,7 @@ function validateFanoutPublisherDescriptor(descriptor: ZLinkFanoutPublisherDescr
   ) {
     throw new TypeError('Fanout publisher descriptor identity and endpoint are required.');
   }
-  const maxGeneration = 0x7fff_ffff_ffff_ffffn;
+  const maxGeneration = MAX_LOCATION_GENERATION;
   if (
     descriptor.lifecycleGeneration < 1n ||
     descriptor.lifecycleGeneration > maxGeneration ||

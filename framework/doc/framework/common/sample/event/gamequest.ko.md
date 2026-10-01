@@ -467,10 +467,13 @@ Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission �
 
 **마지막 세 행은 그 상황을 실제로 만들어야 한다.**
 
-- §9-8은 `ClosePlayerQuestMsg` 뒤 다음 intent를 실행해야 성립한다. dotnet·java·kotlin은 이미 Mission
-  self-check endpoint로 그 message를 보낼 수 있다. node는 같은 자리에서 `ClosePlayerQuestReq/Res`를
-  사용하고 있고, cpp는 handler는 있으나 client에 노출된 통로가 없다 — 둘 다 **샘플 계약을 맞추면 되고
-  framework 변경은 필요 없다.**
+- §9-8은 `ClosePlayerQuestMsg` 뒤 다음 intent를 실행해야 성립한다. 다섯 언어 모두 그 message를 보낼
+  통로가 있다. `ClosePlayerQuestMsg`의 수락은 Close의 시작도 완료도 보장하지 않으므로, 시나리오는 owner의
+  `OnClosing` callback 진입을 관찰한 뒤 같은 client에서 Instance intent request
+  `SyncQuestProgressReq`를 보낸다. 이 관찰은 Close 요청이 이미 들어갔음을 확인하는 데만 쓴다. 그 request는
+  Close 작업 뒤에 놓여 새 generation에서 실행된다([Spot 주소 메시징 §7](../../spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
+  시나리오는 그 request 하나의 terminal과 새 generation의 event stream replay를 검증한다. 고정 대기나
+  재전송을 쓰지 않는다.
 - §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나
   message type 없이 기존 `KillMonsterReq`로 가능하지만, **runner가 owner-ready 표시를 읽어 그
   Mission process를 특정해 죽이고 client를 그 뒤에 진행시키는 단계 제어가 필요하다.** §9-9는
