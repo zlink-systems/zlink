@@ -432,7 +432,7 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | [packet name](../../../server/00-foundation/02-glossary.ko.md#packet-name) attribute를 기본 identity로 사용한다. |
 | `StreamConnectorTests.DisconnectEventCarriesTheFrozenCloseReasonContract` | disconnect event의 닫힌 종료 사유를 고정한다. |
 | `StreamConnectorTests.SessionClosingPublishesServerDrainReasonAfterDisconnectedState` | session-closing frame을 `ServerDrain` 사유로 변환한다. |
-| `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | 반복 close와 dispose가 같은 실패를 관찰한다. |
+| `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | transport close 실패는 `Disconnected` 오류 event로 한 번 전달되고, 반복 close와 dispose는 실패하지 않는다. |
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | one-way terminal은 bounded queue 수락까지 비동기로 기다리고 결과값 없이 완료한다. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | 먼저 수락된 one-way send와 뒤 request의 wire 전송 순서를 보존한다. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다. |

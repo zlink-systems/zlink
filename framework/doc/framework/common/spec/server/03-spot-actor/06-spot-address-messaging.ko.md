@@ -553,7 +553,7 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | `Closing`은 `Rejected`, `Draining`은 `ShuttingDown`이다. Owner에 도달한 신규 작업의 수락 여부는 §7 2단계의 local admission seal이 판정한다. `Closing` authority를 확인한 resolver의 terminal kind도 이 행에 따른다. |
+| `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | `Closing`은 `Rejected`, `Draining`은 `ShuttingDown`이다. Owner에 도달한 신규 작업의 수락 여부는 §7 2단계의 local admission seal이 판정한다. `Closing` authority를 확인한 resolver의 terminal kind도 이 행에 따른다. Instance intent가 있는 message는 [장애 대응 §4.4](../05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)의 `Closing` 행을 따른다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |
 | Request가 실패했다 | 다른 Spot ID, MeshName이나 owner로 우회하지 않는다. |

@@ -161,6 +161,7 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | Owner lease가 유효한 `Ready` | 현재 owner로 message를 보낸다. Cold activation을 시작하지 않는다. |
 | `Ready` owner process가 종료되었거나 owner lease가 무효임 | Authority record를 자동 해제하지 않고 다른 node에서 새 incarnation을 만들지 않는다. Operation은 `Unavailable`로 끝난다. |
 | Application의 explicit `Close`가 authority release까지 완료됨 | 이후 조회 결과는 `Missing`이다. 다음 Instance intent message는 새 `ObjectGeneration`의 cold activation을 시작할 수 있다. |
+| Application의 explicit `Close`가 진행 중인 `Closing` | 같은 Close가 authority를 해제할 때까지 기다린 뒤 위 행을 따른다. 기다리는 동안 operation deadline을 넘으면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)다. |
 | 계획된 `Relocate`가 진행 중이거나 완료됨 | Relocation 계약에 따라 같은 object와 `ObjectGeneration`을 target으로 옮긴다. Cold activation이나 crash failover로 처리하지 않는다. |
 
 따라서 "process가 종료된 뒤 lease가 만료되면 다음 message가 다른 node에서 Instance Spot을

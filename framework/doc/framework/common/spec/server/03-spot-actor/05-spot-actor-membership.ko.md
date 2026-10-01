@@ -211,8 +211,8 @@ authority를 유지한다. Caller가 명시적 leave 또는 destroy를 끝낸 �
 `JoinSpot`은 이동할 User Spot의 global Spot ID를 받는다. `JoinEntrySpot`은 target node
 RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. Actor와 target
 Spot의 owner node가 다르면 같은 Join operation 안에서 Actor relocation도 수행한다.
-Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh Join record를
-제출하지 않는다.
+Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh `actorJoin`
+요청과 그 요청을 대신하는 local control record를 제출하지 않는다.
 
 Application은 relocation 단계, target node, state adapter 또는 owner token을 직접 지정하지
 않는다. 이 값은 Framework가 현재 설정과 authority를 기준으로 결정한다.
@@ -419,11 +419,11 @@ source User Spot에서 `OnLeaveActor`를 실행한다.
 Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체 순서는
 [Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 단일 기준이다. 이 절은 그
 공통 흐름에서 Actor Join에만 필요한 target admission, membership과 lifecycle callback을
-정의한다. 이동하는 Actor가 Session에 bind되어 있을 때 target runtime이 command 44
-`sessionRelocationRoute`로 Session owner의 binding route를 갱신하는 전체 protocol도 이 절이
-소유한다 — 아래 8-step 흐름의 8번과 sequence diagram이 유일한 서술 자리이며,
-[Actor 모델 §6.1](04-actor-model.ko.md#61-factory와-relocation-policy-등록)과 이 문서의 다른 절은
-이 절만 가리킨다.
+정의한다. 이동하는 Actor가 Session에 bind되어 있으면 target runtime이 command 44
+`sessionRelocationRoute`를 제출하는 시점은 아래 8-step 흐름의 8번이 정한다. Command 44의 구성과
+Session owner의 검증·route 적용·seal 해제는
+[Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
+소유한다.
 
 다른 node로의 Actor Join에서 target이 보내는 승인 wire 응답은 target의 수락과 temporary queue·factory
 준비를 알리며, owner·membership commit을 확정하지 않는다. Target-only CAS의 실행 조건과 확정된 authority에
