@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -18,6 +19,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -316,45 +320,36 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         long start = System.nanoTime();
         String requestName = payload.packetName();
         String actorId = actor == null ? null : actor.actorId();
-        java.util.function.BiFunction<
-                        ZLinkStreamEncodedPayload, java.util.function.BooleanSupplier, Boolean>
-                onReply =
-                        (reply, complete) -> {
-                            List<ZLinkStreamReplyReceivedHandler> registered =
-                                    List.copyOf(replyReceivedHandlers);
-                            byte[] replyBytes =
-                                    reply == null || registered.isEmpty()
-                                            ? null
-                                            : reply.payload().toByteArray();
-                            Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
-                            boolean completed = complete.getAsBoolean();
-                            if (completed)
-                                publishReplyReceived(
-                                        requestName,
-                                        actorId,
-                                        elapsed,
-                                        reply,
-                                        replyBytes,
-                                        null,
-                                        registered);
-                            return completed;
-                        };
-        java.util.function.BiFunction<Throwable, java.util.function.BooleanSupplier, Boolean>
-                onFailure =
-                        (failure, complete) -> {
-                            var registered = List.copyOf(replyReceivedHandlers);
-                            boolean completed = complete.getAsBoolean();
-                            if (completed)
-                                publishReplyReceived(
-                                        requestName,
-                                        actorId,
-                                        Duration.ofNanos(System.nanoTime() - start),
-                                        null,
-                                        null,
-                                        failure,
-                                        registered);
-                            return completed;
-                        };
+        BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply =
+                (reply, complete) -> {
+                    List<ZLinkStreamReplyReceivedHandler> registered =
+                            List.copyOf(replyReceivedHandlers);
+                    byte[] replyBytes =
+                            reply == null || registered.isEmpty()
+                                    ? null
+                                    : reply.payload().toByteArray();
+                    Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+                    boolean completed = complete.getAsBoolean();
+                    if (completed)
+                        publishReplyReceived(
+                                requestName, actorId, elapsed, reply, replyBytes, null, registered);
+                    return completed;
+                };
+        BiFunction<Throwable, BooleanSupplier, Boolean> onFailure =
+                (failure, complete) -> {
+                    var registered = List.copyOf(replyReceivedHandlers);
+                    boolean completed = complete.getAsBoolean();
+                    if (completed)
+                        publishReplyReceived(
+                                requestName,
+                                actorId,
+                                Duration.ofNanos(System.nanoTime() - start),
+                                null,
+                                null,
+                                failure,
+                                registered);
+                    return completed;
+                };
         try {
             Map<String, String> metadata = new HashMap<>(payload.metadata());
             ZLinkStreamRequestSendingContext context =
@@ -386,11 +381,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             Duration timeout,
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor,
-            java.util.function.BiFunction<
-                            ZLinkStreamEncodedPayload, java.util.function.BooleanSupplier, Boolean>
-                    onReply,
-            java.util.function.BiFunction<Throwable, java.util.function.BooleanSupplier, Boolean>
-                    onFailure) {
+            BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply,
+            BiFunction<Throwable, BooleanSupplier, Boolean> onFailure) {
         Integer actorSlot = actorSlot(actor);
         long requestSeq = nextRequestSeq();
         byte[] body = payloadCodec.encode(payload, compress);
@@ -452,8 +444,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             return;
         }
         Throwable cause = failure;
-        while (cause instanceof java.util.concurrent.CompletionException
-                && cause.getCause() != null) {
+        while (cause instanceof CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
         //  Every request failure the connector decides carries its code.
@@ -515,10 +506,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private <T> CompletionStage<T> sendFrame(
             ZLinkStreamWireProtocol.Header header,
             byte[] payload,
-            java.util.function.BiFunction<
-                            java.util.function.Supplier<CompletionStage<Void>>,
-                            java.util.function.Consumer<Throwable>,
-                            CompletableFuture<T>>
+            BiFunction<Supplier<CompletionStage<Void>>, Consumer<Throwable>, CompletableFuture<T>>
                     enqueue) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection

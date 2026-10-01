@@ -1078,6 +1078,12 @@ std::optional<close_reason_t> connector_t::close_reason () const
 std::size_t connector_t::received_count (std::string_view packet_name) const
 {
     auto state = detail::state_from (_state);
+    if (zlink::detail::stream_wire::validate_packet_name (packet_name)
+        != zlink::detail::stream_wire::packet_name_error_t::none) {
+        detail::publish_error (*state,
+                               {error_code_t::validation_failed, "Packet name is invalid."});
+        return 0;
+    }
     std::lock_guard<std::mutex> lock (state->transport_mutex);
     const auto found = state->received_counts.find (packet_name);
     if (found == state->received_counts.end ()) {
@@ -1769,26 +1775,16 @@ packet_t connector_t::make_packet (std::string packet_name) const
 }
 
 subscription_t connector_t::on_packet_erased (std::string packet_name,
-                                              std::function<void (const packet_t &)> handler)
+                                              std::function<void (const packet_t &)> handler,
+                                              std::optional<std::uint16_t> actor_slot)
 {
     auto state = detail::state_from (_state);
-    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
-        state->packet_handlers[std::move (packet_name)].push_back (
-          {id, [handler = std::move (handler)] (const detail::dispatch_envelope_t &envelope) {
-               handler (envelope.packet);
-           }});
+    if (zlink::detail::stream_wire::validate_packet_name (packet_name)
+        != zlink::detail::stream_wire::packet_name_error_t::none) {
+        detail::publish_error (*state,
+                               {error_code_t::validation_failed, "Packet name is invalid."});
+        return {};
     }
-    detail::deliver_queued_to_handlers (state);
-    return subscription_t (_state, id);
-}
-
-subscription_t connector_t::on_actor_packet_erased (std::string packet_name,
-                                                    std::uint16_t actor_slot,
-                                                    std::function<void (const packet_t &)> handler)
-{
-    auto state = detail::state_from (_state);
     const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);

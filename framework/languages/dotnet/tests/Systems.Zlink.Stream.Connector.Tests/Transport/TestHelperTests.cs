@@ -194,7 +194,15 @@ public sealed partial class StreamConnectorTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ZlinkStreamAssert
                 .ExpectFailureAsync(
-                    _ => ValueTask.FromException(new TimeoutException("request timed out")),
+                    _ =>
+                        ValueTask.FromException(
+                            new ZlinkStreamException(
+                                new ZlinkStreamError(
+                                    ZlinkStreamErrorCode.RequestTimeout,
+                                    "request timed out"
+                                )
+                            )
+                        ),
                     nameof(ZlinkStreamErrorCode.ConnectTimeout)
                 )
                 .AsTask()
@@ -227,7 +235,11 @@ public sealed partial class StreamConnectorTests
         Assert.Same(wrappedTransportFailure, propagatedTransportWrapper);
 
         await ZlinkStreamAssert.ExpectTimeoutAsync(_ =>
-            ValueTask.FromException(new TimeoutException("wait timed out"))
+            ValueTask.FromException(
+                new ZlinkStreamException(
+                    new ZlinkStreamError(ZlinkStreamErrorCode.RequestTimeout, "wait timed out")
+                )
+            )
         );
         var timeoutWrapper = new InvalidOperationException(
             "HTTP request exceeded timeout",

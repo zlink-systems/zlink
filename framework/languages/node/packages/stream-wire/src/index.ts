@@ -49,6 +49,8 @@ export enum ZlinkStreamCloseReasonCode {
 
 export type ZlinkStreamCloseReason = keyof typeof ZlinkStreamCloseReasonCode;
 
+const unicodeWhiteSpaceOnly = /^\p{White_Space}*$/u;
+
 const validMessageKinds = new Set(
   Object.values(ZlinkStreamMessageKind).filter((value) => typeof value === 'number')
 );
@@ -668,7 +670,7 @@ function decodeStreamWireMetadataAt(
 /** @internal Shared packet name structure validation for the connector. */
 export function validateStreamWirePacketName(name: string): Uint8Array {
   const nameBytes = utf8Encode(name);
-  if (name.trim().length === 0 || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
+  if (unicodeWhiteSpaceOnly.test(name) || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
     throw new Error('Stream packet name is invalid.');
   }
   return nameBytes;

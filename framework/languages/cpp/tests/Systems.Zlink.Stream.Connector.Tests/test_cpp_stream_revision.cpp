@@ -9,8 +9,10 @@
 #include <boost/asio/post.hpp>
 #include <condition_variable>
 #include <future>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #ifndef _WIN32
 #include <unistd.h>
@@ -83,6 +85,75 @@ int main ()
     header.name = "valid";
     check (static_cast<bool> (detail::header_codec_t{}.encode (header)), "R06 valid packet name");
     auto named_connector = connector_factory_t::create (connector_options_t{});
+    auto fixture_actor = detail::actor_access_t::create (
+      connector_internal_handle (named_connector), "r4.fixture.actor", 1);
+    std::ifstream fixture (ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH);
+    check (fixture.is_open (), "R4 common whitespace fixture opened");
+    std::string row;
+    std::size_t fixture_rows = 0;
+    while (std::getline (fixture, row)) {
+        if (row.empty () || row.front () == '#')
+            continue;
+        const auto tab = row.find ('\t');
+        check (tab != std::string::npos, "R4 fixture delimiter");
+        if (tab == std::string::npos)
+            continue;
+        if (row.back () == '\r')
+            row.pop_back ();
+        const auto expectation = row.substr (tab + 1);
+        check (expectation == "true" || expectation == "false", "R4 fixture expectation");
+        const auto blank = row.substr (tab + 1).starts_with ("true");
+        ++fixture_rows;
+        std::string name;
+        std::istringstream points (row.substr (0, tab));
+        std::string point;
+        while (std::getline (points, point, ',') && point != "EMPTY") {
+            const auto cp = std::stoul (point, nullptr, 16);
+            if (cp < 0x80)
+                name += static_cast<char> (cp);
+            else if (cp < 0x800) {
+                name += static_cast<char> (0xc0 | (cp >> 6));
+                name += static_cast<char> (0x80 | (cp & 0x3f));
+            } else {
+                name += static_cast<char> (0xe0 | (cp >> 12));
+                name += static_cast<char> (0x80 | ((cp >> 6) & 0x3f));
+                name += static_cast<char> (0x80 | (cp & 0x3f));
+            }
+        }
+        header.name = name;
+        const auto label = "R4 fixture " + row.substr (0, tab);
+        check (static_cast<bool> (detail::header_codec_t{}.encode (header)) == !blank,
+               label.c_str ());
+        int rejected_events = 0;
+        auto error_subscription =
+          named_connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
+              rejected_events += error.code == error_code_t::validation_failed;
+          });
+        check (named_connector.received_count (name) == 0, "R4 fixture count result");
+        auto packet_subscription =
+          named_connector.on<std::string> (name, [] (const message_t<std::string> &) {});
+        check (packet_subscription.active () == !blank, "R4 fixture subscription result");
+        (void) named_connector.dispatch ();
+        check (rejected_events == (blank ? 2 : 0), "R4 fixture validation events");
+        auto actor_subscription =
+          fixture_actor->on<std::string> (name, [] (const message_t<std::string> &) {});
+        check (actor_subscription.active () == !blank, "R4 fixture actor subscription result");
+        (void) named_connector.dispatch ();
+        check (rejected_events == (blank ? 3 : 0), "R4 fixture actor validation event");
+    }
+    check (fixture_rows != 0, "R4 fixture contains cases");
+    int invalid_name_events = 0;
+    auto invalid_name_subscription =
+      named_connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
+          invalid_name_events += error.code == error_code_t::validation_failed;
+      });
+    check (named_connector.received_count ("") == 0, "R4 rejected count returns zero");
+    auto invalid_packet_subscription =
+      named_connector.on<std::string> ("", [] (const message_t<std::string> &) {});
+    check (!invalid_packet_subscription.active (), "R4 rejected subscription inactive");
+    (void) named_connector.dispatch ();
+    check (invalid_name_events == 2, "R4 rejected count and on publish ValidationFailed");
+    invalid_name_subscription.unsubscribe ();
     check (named_connector.wait_for (" \t\r\n", std::chrono::milliseconds (10)).error_code ()
              == error_code_t::validation_failed,
            "R06 named wait rejects whitespace");
@@ -126,6 +197,48 @@ int main ()
         propagated = std::string_view (error.what ()) == "action failure";
     }
     check (propagated, "assert action exception propagation");
+    propagated = false;
+    try {
+        (void) assertions::expect_timeout (
+          [] () -> result_t<void> { throw action_error_t ("connect timed out"); });
+    }
+    catch (const action_error_t &error) {
+        propagated = std::string_view (error.what ()) == "connect timed out";
+    }
+    check (propagated, "R4 uncoded timeout-like exception propagation");
+    struct coded_action_error_t : assertions::failure_t
+    {
+        using assertions::failure_t::failure_t;
+    };
+    const coded_action_error_t *original_coded_failure = nullptr;
+    propagated = false;
+    try {
+        (void) assertions::expect_timeout ([&] () -> result_t<void> {
+            try {
+                throw coded_action_error_t ({error_code_t::send_failed, "coded failure"});
+            }
+            catch (const coded_action_error_t &error) {
+                original_coded_failure = &error;
+                throw;
+            }
+        });
+    }
+    catch (const coded_action_error_t &error) {
+        propagated = &error == original_coded_failure;
+    }
+    check (propagated, "R4 coded non-timeout exception identity");
+    for (auto code : {error_code_t::request_timeout, error_code_t::connect_timeout}) {
+        check (assertions::expect_timeout ([code] {
+                   return result_t<void>::failure (code, "coded timeout");
+               }).code
+                 == code,
+               "R4 coded timeout result");
+        check (assertions::expect_timeout ([code] () -> result_t<void> {
+                   throw assertions::failure_t ({code, "coded timeout"});
+               }).code
+                 == code,
+               "R4 coded timeout exception");
+    }
     check (assertions::expect_failure ([] {
                return result_t<void>::failure (error_code_t::send_failed, "expected");
            }).code
@@ -196,7 +309,7 @@ int main ()
         // Invalidate this transport's descriptor to inject a native close failure.
         if (::close (descriptor) != 0)
             return 4;
-        (void) connector.close ();
+        check (static_cast<bool> (connector.close ()), "R4 close failure call succeeds");
         (void) detail::dispatch_pending (close_state);
         if (error_completion.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
             return 5;

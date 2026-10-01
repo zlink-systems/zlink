@@ -7,6 +7,8 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.http.HttpTimeoutException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /** Owns the HTTP client contract's mapping from failure situations to framework error kinds. */
@@ -60,8 +62,8 @@ public final class HttpClientErrors {
             Throwable current = cause;
             while ((current instanceof IOException
                             || current instanceof UncheckedIOException
-                            || current instanceof java.util.concurrent.CompletionException
-                            || current instanceof java.util.concurrent.ExecutionException)
+                            || current instanceof CompletionException
+                            || current instanceof ExecutionException)
                     && current.getCause() != null
                     && current.getCause() != current) {
                 current = current.getCause();

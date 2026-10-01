@@ -2171,6 +2171,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
+  target_compile_definitions(test_cpp_stream_revision PRIVATE
+    ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_no_exceptions.cpp)
   target_compile_features(test_cpp_stream_connector_no_exceptions PRIVATE cxx_std_20)
