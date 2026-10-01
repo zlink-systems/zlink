@@ -1,3 +1,4 @@
+export { ZlinkStreamMessageKind, ZlinkStreamHeaderFlags } from '@zlink-systems/stream-wire';
 export enum ZlinkStreamTransport {
   WebSocket = 'webSocket',
   WebSocketSecure = 'webSocketSecure'
@@ -15,31 +16,7 @@ export enum ZlinkStreamDispatchMode {
   Immediate = 'immediate'
 }
 
-export enum ZlinkStreamMessageKind {
-  Send = 1,
-  Request = 2,
-  Response = 3,
-  Error = 4,
-  Control = 5
-}
-
-export enum ZlinkStreamHeaderFlags {
-  None = 0,
-  HasRequestSeq = 0x01,
-  HasMetadata = 0x02,
-  PayloadCompressed = 0x04,
-  HasCorrelationId = 0x08,
-  HasFlowId = 0x10,
-  HasActorSlot = 0x20
-}
-
-export type ZlinkStreamCloseReason =
-  | 'ClientClose'
-  | 'IdleTimeout'
-  | 'HeartbeatTimeout'
-  | 'ServerDrain'
-  | 'ProtocolError'
-  | 'TransportError';
+export type { ZlinkStreamCloseReason } from '@zlink-systems/stream-wire';
 
 export enum ZlinkStreamErrorCode {
   Disconnected = 'disconnected',

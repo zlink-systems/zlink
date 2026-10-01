@@ -1,3 +1,4 @@
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkPeerLocationFilter } from '../../contracts/Locations/Keys';
 import type { ZLinkPeerLocationResolver } from '../../contracts/Locations/Resolvers';
@@ -10,6 +11,7 @@ import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
+import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import {
   ZLinkLocationRuntime,
   ZLinkOwnerLeaseTracker,
@@ -113,7 +115,7 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
           nodeRid: descriptor.rid,
           role: ZLinkLocationRole.Router,
           endpoint: descriptor.endpoint,
-          weight: 100,
+          weight: ZLINK_DEFAULT_PUBLIC_WEIGHT,
           draining: descriptor.state !== ZLinkFrameworkRuntimeState.Serving,
           value: descriptor.descriptorRevision,
           ownerId: descriptor.ownerId,
@@ -205,7 +207,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
           peer.endpoint === target.endpoint &&
           (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
           peer.lifecycleGeneration === target.lifecycleGeneration &&
-          peer.state === 3
+          peer.state === MeshPeerRuntimeState.Serving
       );
   }
 

@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import type { Message } from '../../contracts/Common/Message';
 import { copyMessage } from './stream-message-utils';
 
@@ -102,7 +103,7 @@ export class ZLinkSessionRequestTracker {
 
   private next(): bigint {
     do {
-      this.nextRequestSeq = (this.nextRequestSeq + 1n) & 0xffffffffffffffffn;
+      this.nextRequestSeq = (this.nextRequestSeq + 1n) & UINT64_MAX;
     } while (this.nextRequestSeq === 0n);
     return this.nextRequestSeq;
   }
