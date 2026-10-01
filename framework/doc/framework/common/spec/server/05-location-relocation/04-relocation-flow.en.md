@@ -629,7 +629,7 @@ immediately discard a server message already sent to the old address.
 On confirmed target commit, the source cleans its instance and temporary state except
 for Message Follow, then releases retained payload and records under
 [§4.4](#44-ordered-relay-and-one-way-cutover). On winning source `Preserve`, retained work
-returns to the source queue. Cleanup failure does not revert confirmed target authority.
+returns to the source queue. Cleanup failure does not revert confirmed target authority. Source cleanup runs once: when a step fails it continues with the remaining steps and removes the source instance from the registry, reports the failure once as a diagnostic, and doesn't run the cleanup again. When the same object ID comes back to this node, it is restored as a new instance.
 
 ## 11. Implementation Decision — Relocation Techniques Not Used
 

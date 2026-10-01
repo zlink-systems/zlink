@@ -681,7 +681,7 @@ renew interval + renew timeout < owner lease TTL - owner lease fencing margin
 | Renew timeout | 3초 |
 | Owner lease fencing margin | 5초 |
 
-모든 값은 양수여야 한다. 위 관계를 위반하면 startup error다. Automatic RID descriptor 등록도
+모든 값은 양수여야 한다. 위 관계를 위반하면 startup error다. 다음 갱신은 직전 갱신을 시작한 시각에서 renew interval 뒤에 시작하며, 직전 갱신이 아직 끝나지 않았으면 끝난 뒤에 시작한다. Automatic RID descriptor 등록도
 같은 host 실행 조합과 deadline을 사용한다.
 
 Framework는 성공한 등록·읽기·갱신 결과의 `StoreNow`와 `ExpiresAt`으로 남은 시간을 계산한다.
@@ -1332,7 +1332,7 @@ Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확�
 재시도한다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
-있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
+있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. 다시 읽은 결과가 없으면 같은 reference에 같은 bytes를 다시 저장하고, 다른 bytes가 있으면 그 reference를 버리고 새 reference로 저장을 다시 시작한다. 이 반복의 끝은 그 operation의 deadline 하나다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
 비동기 요청이 끝난 뒤에도 입력 bytes를 보관하면 복사본을 만들어야 한다. 성공 결과로 반환한
 bytes는 이후 바뀌지 않아야 한다.
 

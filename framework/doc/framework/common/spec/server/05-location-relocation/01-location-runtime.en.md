@@ -755,7 +755,7 @@ renew interval + renew timeout < owner lease TTL - owner lease fencing margin
 | Renew timeout | 3 seconds |
 | Owner lease fencing margin | 5 seconds |
 
-Every value must be positive. Violating the relationship above is a startup error.
+Every value must be positive. Violating the relationship above is a startup error. The next renewal starts renew interval after the previous renewal started; if the previous renewal hasn't finished yet, it starts after that renewal finishes.
 Automatic RID descriptor registration also uses the same host-run combination and
 deadline.
 
@@ -1474,7 +1474,7 @@ whether the Store changed is unknown. In this case the Framework re-reads the sa
 and expected `StoreVersion` to confirm the result, and only retries if needed.
 
 A Relocation Store write must support being read or stored again using the same reference
-the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Payload not pointed to by the Location Store is deleted
+the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. When the re-read finds nothing, the same bytes are stored again under the same reference; when it finds different bytes, that reference is abandoned and the store starts again with a new reference. The only end to this repetition is that operation's deadline. Payload not pointed to by the Location Store is deleted
 after retention ends. If a provider keeps input bytes even after an async request finishes,
 it must make a copy. Bytes returned as a success result must not change afterward.
 
