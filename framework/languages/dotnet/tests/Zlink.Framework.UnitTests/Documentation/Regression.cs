@@ -36,6 +36,7 @@ public sealed class RegressionTests
     [
         //  01은 dotnet 원문을 그대로 두고 코드와 언어별 사실만 탭으로 감쌌다.
         "01-overview.ko.md",
+        "02-tour.ko.md",
         "03-concepts.ko.md",
         "12-operations.ko.md",
         "14-samples.ko.md",
