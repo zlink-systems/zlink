@@ -1,3 +1,7 @@
+import { isValidListenerPort } from './RegistrationBuilderPolicy';
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../Common/CoreTypes';
+import { isValidPositiveCapacity, isValidCapacity } from './RegistrationBuilderPolicy';
+import { requirePublicWeight } from './RegistrationBuilderPolicy';
 import type {
   RoutingId,
   Type,
@@ -617,7 +621,7 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
   ) {}
 
   listen(port = 0): this {
-    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    if (!isValidListenerPort(port)) {
       throw new ZLinkConfigurationException(
         `ClientServer channel '${this.name}' port must be between 0 and 65535.`
       );
@@ -894,7 +898,7 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
       this.node.router.port = undefined;
       return this;
     }
-    if (!Number.isInteger(endpointOrPort) || endpointOrPort < 0 || endpointOrPort > 65_535) {
+    if (!isValidListenerPort(endpointOrPort)) {
       throw new ZLinkConfigurationException(
         `RouteMesh '${this.name}' port must be between 0 and 65535.`
       );
@@ -1431,21 +1435,21 @@ function endpointList(endpoint: string | readonly string[]): string[] {
 
 function requireStableObjectType(value: string, label: string): string {
   const byteLength = Buffer.byteLength(value, 'utf8');
-  if (byteLength < 1 || byteLength > 255 || value.includes('\0')) {
+  if (byteLength < 1 || byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES || value.includes('\0')) {
     throw new ZLinkConfigurationException(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
   }
   return value;
 }
 
 function requirePositiveCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
+  if (!isValidPositiveCapacity(value)) {
     throw new ZLinkConfigurationException(`${label} must be an integer in 1..2147483647.`);
   }
   return value;
 }
 
 function requireCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 0x7fff_ffff) {
+  if (!isValidCapacity(value)) {
     throw new ZLinkConfigurationException(`${label} must be an integer in 0..2147483647.`);
   }
   return value;
@@ -1454,13 +1458,6 @@ function requireCapacity(value: number, label: string): number {
 function requireNonNegativeSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new ZLinkConfigurationException(`${label} must be a non-negative safe integer.`);
-  }
-  return value;
-}
-
-function requirePublicWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
   }
   return value;
 }
@@ -1706,7 +1703,7 @@ function requireRegistrationName(value: string, label: string): void {
 }
 
 function requireListenerPort(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
+  if (!isValidListenerPort(value)) {
     throw new ZLinkConfigurationException(`${label} must be between 0 and 65535.`);
   }
   return value;

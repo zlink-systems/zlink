@@ -1,3 +1,12 @@
+import {
+  ZLINK_PROVIDER_MAX_KEY_BYTES,
+  ZLINK_PROVIDER_MAX_VALUE_BYTES,
+  ZLINK_PROVIDER_MAX_WRITE_KEYS,
+  ZLINK_PROVIDER_MAX_WRITE_BYTES,
+  ZLINK_PROVIDER_MAX_PAGE_SIZE
+} from '../../contracts/Locations/Stores';
+export const PROVIDER_STORAGE_NAMESPACE_PREFIX = 'zlink:v11:';
+
 import type {
   ZLinkLocationStore,
   ZLinkStoreKey,
@@ -177,7 +186,7 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
   if (
     new Set(conditionKeys).size !== conditionKeys.length ||
     new Set(mutationKeys).size !== mutationKeys.length ||
-    keys.length > 2_048
+    keys.length > ZLINK_PROVIDER_MAX_WRITE_KEYS
   ) {
     throw new RangeError('Location Store write keys must be unique and bounded to 2,048.');
   }
@@ -192,22 +201,26 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
       (sum, mutation) => sum + (mutation.kind === 'put' ? mutation.bytes.byteLength : 0),
       0
     );
-  if (encodedSize > 4 * 1024 * 1024) {
+  if (encodedSize > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
     throw new RangeError('Location Store write exceeds 4 MiB.');
   }
 }
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
-  if (Buffer.byteLength(request.prefix, 'utf8') > 1_024) {
+  if (Buffer.byteLength(request.prefix, 'utf8') > ZLINK_PROVIDER_MAX_KEY_BYTES) {
     throw new RangeError('Location Store scan prefix exceeds 1,024 UTF-8 bytes.');
   }
-  if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1_000) {
+  if (
+    !Number.isSafeInteger(request.limit) ||
+    request.limit < 1 ||
+    request.limit > ZLINK_PROVIDER_MAX_PAGE_SIZE
+  ) {
     throw new RangeError('Location Store scan limit must be in 1..1000.');
   }
 }
 
 function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
-  if (bytes.byteLength > 1024 * 1024) {
+  if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
     throw new RangeError('Location Store value exceeds 1 MiB.');
   }
   if (
@@ -223,7 +236,7 @@ function requireValue(bytes: Uint8Array, retentionMs: number | undefined): numbe
 
 function requireKey(value: string): void {
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > 1_024) {
+  if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_KEY_BYTES) {
     throw new RangeError('Location Store key must contain 1..1,024 UTF-8 bytes.');
   }
 }

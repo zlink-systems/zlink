@@ -1,3 +1,4 @@
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import { randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkRuntimeState,
@@ -346,7 +347,7 @@ export class ZLinkFanoutLocationRuntime {
     do {
       const page = await this.store.listFanoutPublishers(
         channelName,
-        { pageSize: 1000, continuationToken },
+        { pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE, continuationToken },
         signal
       );
       rows.push(...page.items);

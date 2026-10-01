@@ -1,3 +1,4 @@
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
 import {
@@ -114,7 +115,7 @@ export function wrapSocket<T extends { close(): void }>(
       );
     },
     get peerWeight(): number {
-      return socket.options?.peerWeight ?? 100;
+      return socket.options?.peerWeight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
     },
     set peerWeight(value: number) {
       requireSocketOptions(socket).peerWeight = value;
@@ -381,7 +382,7 @@ export function isEndpointCloseIgnorableError(error: unknown): boolean {
     isContextTerminatedError(error) ||
     (error instanceof Error &&
       'code' in error &&
-      ((error as { code: unknown }).code === 604 ||
+      ((error as { code: unknown }).code === zlink.ConnectResult.InternalError ||
         (error as { code: unknown }).code === zlink.ConnectResult.NotFound))
   );
 }

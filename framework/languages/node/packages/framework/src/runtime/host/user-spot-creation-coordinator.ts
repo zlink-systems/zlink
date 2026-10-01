@@ -1,3 +1,6 @@
+const DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS = 1_000;
+const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
+
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -596,7 +599,9 @@ export class ZLinkUserSpotCreationCoordinator {
       };
     } catch (error) {
       local?.publication?.abort();
-      const cleanupDeadline = createDeadline(this.options.cleanupTimeoutMs ?? 1_000);
+      const cleanupDeadline = createDeadline(
+        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
+      );
       const cleanupSignal = cleanupDeadline.signal;
       const cleanup = await Promise.allSettled([
         waitForAbort(
@@ -760,7 +765,7 @@ export class ZLinkUserSpotCreationCoordinator {
       if (current.kind === 'snapshot' && current.allocation.state === 'active') {
         return spotRef(current, request);
       }
-      await wait(this.options.pollIntervalMs ?? 10, signal);
+      await wait(this.options.pollIntervalMs ?? DEFAULT_USER_SPOT_POLL_INTERVAL_MS, signal);
     }
   }
 

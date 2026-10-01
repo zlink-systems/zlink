@@ -1,4 +1,5 @@
 import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
+import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
 import type {
   ZLinkBoundSessionSendCall,
   ZLinkSessionReplyCall,
@@ -135,7 +136,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
   }
 
   timeout(timeoutMs: number): this {
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > ZLINK_MAX_SEND_TIMEOUT_MS) {
       throw new ZLinkConfigurationException(
         'STREAM session send timeout must be an integer from 1 through 2147483647 milliseconds.'
       );

@@ -1,3 +1,17 @@
+import { ZLINK_PROVIDER_MAX_VALUE_BYTES } from '../../contracts/Locations/Stores';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+const LOCATION_STORE_WRITE_CONCURRENCY = 64;
+const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
+const MAX_REPOSITORY_RETRY_DELAY_MS = 100;
+const INITIAL_REPOSITORY_RETRY_DELAY_MS = 2;
+const MAX_REPOSITORY_RETRY_SHIFT = 5;
+
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import { PROVIDER_STORAGE_NAMESPACE_PREFIX } from './in-memory-provider-location-store';
+const LOCATION_RECORD_VERSION = 1;
+
+import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   ZLinkLocationStore,
@@ -71,6 +85,7 @@ import { ZLinkFrameworkRuntimeState, ZLinkObjectRole } from '../../contracts';
 import { ZLinkLocationWriteStatus as WriteStatus } from '../../contracts/Locations';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { storeKey } from './in-memory-provider-location-store';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import {
   creationTerminalPreimage,
   opaqueRecordPreimage,
@@ -81,7 +96,7 @@ import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
 import type { RoutingId } from '../../contracts/Common/CoreTypes';
 import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
-const PREFIX = 'zlink:v11:';
+const PREFIX = PROVIDER_STORAGE_NAMESPACE_PREFIX;
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
 // These counters are store-wide fences.  They deliberately are not derived
 // from an authority identity: deleting and recreating an authority must never
@@ -89,8 +104,8 @@ const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
 const OBJECT_COUNTER_KEY = storeKey(`${PREFIX}object-counter`);
 const AUTHORITY_OWNER_COUNTER_KEY = storeKey(`${PREFIX}authority-owner-counter`);
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
-const MAX_U64 = 0xffff_ffff_ffff_ffffn;
-const MAX_CREATION_TERMINAL_BYTES = 1024 * 1024;
+const MAX_U64 = UINT64_MAX;
+
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
 const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
@@ -142,7 +157,7 @@ interface AggregateRecord {
 }
 
 interface OwnerRecord {
-  readonly recordVersion: 1;
+  readonly recordVersion: typeof LOCATION_RECORD_VERSION;
   readonly ownerId: string;
   readonly leaseGeneration: string;
 }
@@ -153,7 +168,7 @@ interface DescriptorRecord<T> {
 }
 
 interface CanonicalDescriptorRecord<T> {
-  readonly recordVersion: 1;
+  readonly recordVersion: typeof LOCATION_RECORD_VERSION;
   /** Legacy Node-private row generation.  Canonical v1 records omit this. */
   readonly generation?: string;
   readonly ownerId: string;
@@ -215,7 +230,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     limit: number,
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityScanResult> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > ZLINK_PROVIDER_MAX_PAGE_SIZE) {
       throw new RangeError('Authority scan limit must be in 1..1000.');
     }
     const scan = await this.provider.scan(
@@ -490,26 +505,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (entries.length !== request.participants.length) {
         throw new Error('Aggregate inventory count changed after staging.');
       }
-      await parallelForEach(request.participants, 64, async (participant, index) => {
-        const entry = entries[index]!;
-        if (
-          entry.authorityKey !== participant.authorityKey.value ||
-          entry.expectedStoreVersion !== participant.expectedStoreVersion.value ||
-          entry.ownerTransition !== participant.ownerTransition
-        ) {
-          throw new Error('Aggregate inventory differs from its participant request.');
+      await parallelForEach(
+        request.participants,
+        LOCATION_STORE_WRITE_CONCURRENCY,
+        async (participant, index) => {
+          const entry = entries[index]!;
+          if (
+            entry.authorityKey !== participant.authorityKey.value ||
+            entry.expectedStoreVersion !== participant.expectedStoreVersion.value ||
+            entry.ownerTransition !== participant.ownerTransition
+          ) {
+            throw new Error('Aggregate inventory differs from its participant request.');
+          }
+          await this.putImmutable(
+            aggregateParticipantPayloadKey(fence, index),
+            participant.authorityPayload,
+            signal
+          );
+          await this.putImmutable(
+            aggregateParticipantMembershipKey(fence, index),
+            participant.membershipMutation,
+            signal
+          );
         }
-        await this.putImmutable(
-          aggregateParticipantPayloadKey(fence, index),
-          participant.authorityPayload,
-          signal
-        );
-        await this.putImmutable(
-          aggregateParticipantMembershipKey(fence, index),
-          participant.membershipMutation,
-          signal
-        );
-      });
+      );
 
       const targetDescriptorKey = meshKey(
         request.targetDescriptor.meshName,
@@ -1728,7 +1747,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? 100
+        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
       },
       signal
     );
@@ -2448,7 +2467,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? 100
+        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
       },
       signal
     );
@@ -2591,7 +2610,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     matches: (value: T) => boolean,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
-    const requested = page.pageSize ?? 100;
+    const requested = page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE;
     let cursor =
       page.continuationToken === undefined
         ? undefined
@@ -2696,7 +2715,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       Buffer.from(aggregate.inventoryDigest),
       signal
     );
-    await parallelForEach(entries, 64, async (entry, index) => {
+    await parallelForEach(entries, LOCATION_STORE_WRITE_CONCURRENCY, async (entry, index) => {
       const rowKey = authorityKey(entry.authorityKey);
       for (;;) {
         const current = await this.provider.read(rowKey, signal);
@@ -2785,7 +2804,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     bytes: Uint8Array,
     signal?: AbortSignal
   ): Promise<void> {
-    if (bytes.byteLength > 1024 * 1024) {
+    if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
       throw new RangeError('Aggregate participant staging value exceeds 1 MiB.');
     }
     const result = await this.provider.write(
@@ -2844,7 +2863,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }[],
     signal?: AbortSignal
   ): Promise<void> {
-    await parallelForEach(installed, 64, async (value) => {
+    await parallelForEach(installed, LOCATION_STORE_WRITE_CONCURRENCY, async (value) => {
       await this.clearAggregateMarker(fence, value.key, signal);
     });
   }
@@ -2874,7 +2893,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           record.aggregate.aggregateGeneration === fence.aggregateGeneration
         );
       });
-      await parallelForEach(matching, 64, async (item) => {
+      await parallelForEach(matching, LOCATION_STORE_WRITE_CONCURRENCY, async (item) => {
         await this.clearAggregateMarker(fence, item.key, signal);
       });
       if (result.value.nextCursor === undefined) return;
@@ -3022,7 +3041,7 @@ function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest)
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== 32) {
+  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
     throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
   }
   const keys = request.participants.map((value) => value.authorityKey.value);
@@ -3036,8 +3055,8 @@ function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest)
     requireText(participant.authorityKey.value, 'aggregate authority key');
     requireText(participant.expectedStoreVersion.value, 'aggregate expected Store version');
     if (
-      participant.authorityPayload.byteLength > 1024 * 1024 ||
-      participant.membershipMutation.byteLength > 1024 * 1024
+      participant.authorityPayload.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES ||
+      participant.membershipMutation.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES
     ) {
       throw new RangeError('Aggregate participant value exceeds 1 MiB.');
     }
@@ -3200,7 +3219,10 @@ async function waitForAggregateCommitRetry(
   signal?.throwIfAborted();
   const remainingMs = deadlineAtMs - performance.now();
   if (remainingMs <= 0) return;
-  const exponentialMs = Math.min(100, 2 << Math.min(retryAttempt, 5));
+  const exponentialMs = Math.min(
+    MAX_REPOSITORY_RETRY_DELAY_MS,
+    INITIAL_REPOSITORY_RETRY_DELAY_MS << Math.min(retryAttempt, MAX_REPOSITORY_RETRY_SHIFT)
+  );
   const delayMs = Math.min(
     remainingMs,
     exponentialMs + Math.floor(Math.random() * (exponentialMs + 1))
@@ -3449,7 +3471,7 @@ function requireRecordVersion(value: unknown, kind: string): void {
   if (
     value === null ||
     typeof value !== 'object' ||
-    (value as { recordVersion?: unknown }).recordVersion !== 1
+    (value as { recordVersion?: unknown }).recordVersion !== LOCATION_RECORD_VERSION
   ) {
     throw new Error(`Location Store ${kind} record has an unrecognized recordVersion.`);
   }
@@ -3500,7 +3522,7 @@ function decodeOwnerRecord(bytes: Uint8Array): OwnerRecord {
 
 function encodeOwnerRecord(ownerId: string, leaseGeneration: bigint): Uint8Array {
   return encodeJson<OwnerRecord>({
-    recordVersion: 1,
+    recordVersion: LOCATION_RECORD_VERSION,
     ownerId,
     leaseGeneration: leaseGeneration.toString()
   });
@@ -3516,7 +3538,7 @@ function encodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
   void generation;
   return Buffer.from(
     JSON.stringify({
-      recordVersion: 1,
+      recordVersion: LOCATION_RECORD_VERSION,
       ownerId: descriptor.ownerId,
       leaseGeneration: descriptor.leaseGeneration.toString(),
       descriptorRevision: descriptor.descriptorRevision.toString(),
@@ -3674,7 +3696,7 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
   const snapshot = record.snapshot;
   const allocation = snapshot.allocation;
   const envelope: Record<string, unknown> = {
-    recordVersion: 1,
+    recordVersion: LOCATION_RECORD_VERSION,
     payload: Buffer.from(snapshot.payload).toString('base64'),
     objectGeneration: snapshot.objectGeneration.toString(),
     authorityOwnerGeneration: snapshot.authorityOwnerGeneration.toString(),
@@ -3828,7 +3850,7 @@ function createTerminalRecord(
 ): ZLinkCreationTerminalRecord {
   const publication = request.completion.terminal;
   validateCreationOperation(publication.operation);
-  if (publication.terminalEnvelope.byteLength > MAX_CREATION_TERMINAL_BYTES) {
+  if (publication.terminalEnvelope.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
     throw new RangeError('Creation terminal envelope must not exceed 1 MiB.');
   }
   const deadlineMs = publication.operationDeadline.getTime();
@@ -3881,7 +3903,11 @@ function retainedCreationTerminal(
 function validateCreationOperation(operation: ZLinkCreationOperationIdentity): void {
   const sourceRid = String(operation.sourceNodeRid);
   const sourceRidBytes = Buffer.byteLength(sourceRid, 'utf8');
-  if (sourceRidBytes < 1 || sourceRidBytes > 255 || sourceRid.includes('\0')) {
+  if (
+    sourceRidBytes < 1 ||
+    sourceRidBytes > ZLINK_MAX_ROUTING_ID_BYTES ||
+    sourceRid.includes('\0')
+  ) {
     throw new TypeError(
       'Creation terminal source node RID must contain 1..255 UTF-8 bytes without NUL.'
     );
@@ -3900,7 +3926,7 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
 }
 
 function validatePayloadSize(value: Uint8Array, name: string): void {
-  if (value.byteLength > MAX_CREATION_TERMINAL_BYTES) {
+  if (value.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
     throw new RangeError(`${name} must not exceed 1 MiB.`);
   }
 }
@@ -4417,7 +4443,7 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
     'ClientServer'
   );
   validateDescriptorGenerations(descriptor, 'ClientServer');
-  if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
+  if (!isValidPublicWeight(descriptor.weight)) {
     throw new RangeError('ClientServer descriptor weight must be an integer in 0..10000.');
   }
 }

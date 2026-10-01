@@ -1,4 +1,10 @@
+export const SERVICE_WIRE_MAJOR_OFFSET = 2;
+export const SERVICE_WIRE_COMMAND_OFFSET = SERVICE_WIRE_MAJOR_OFFSET + 1;
+export const SERVICE_WIRE_FLAGS_OFFSET = SERVICE_WIRE_COMMAND_OFFSET + 1;
+export const SERVICE_WIRE_PREFIX_SIZE = SERVICE_WIRE_FLAGS_OFFSET + 1;
+
 import type { RoutingId } from '../../contracts';
+export const SERVICE_WIRE_TEXT8_MAX_BYTES = 255;
 import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 export type ServiceWireInvalid = (message: string) => never;

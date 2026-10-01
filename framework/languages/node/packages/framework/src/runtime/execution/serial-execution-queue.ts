@@ -1,3 +1,4 @@
+import { isStructuralGuardEnabled } from './state-lane';
 import {
   diagnosticWorkName,
   guardStateLaneCompletion,
@@ -448,7 +449,7 @@ export class ZLinkSerialExecutionQueue {
   }
 }
 
-if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+if (isStructuralGuardEnabled()) {
   const submit = ZLinkSerialExecutionQueue.prototype.submit;
   ZLinkSerialExecutionQueue.prototype.submit = function <T>(
     this: ZLinkSerialExecutionQueue,

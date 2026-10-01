@@ -1,4 +1,4 @@
-const MAX_METADATA_BYTES = 1024;
+import { ZLINK_STREAM_MAX_METADATA_BYTES as MAX_METADATA_BYTES } from '@zlink-systems/stream-wire';
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export function encodeServiceMetadataFrame(entries: ReadonlyMap<string, string>): Buffer {

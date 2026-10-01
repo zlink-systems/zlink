@@ -1,3 +1,5 @@
+const MESSAGE_FLOW_EVENT_ID = 'zlink.message_flow';
+const DISPATCH_ERROR_EVENT_ID = 'zlink.dispatch_error';
 import { SpanStatusCode, trace as openTelemetryTrace, type Attributes } from '@opentelemetry/api';
 import { logs as openTelemetryLogs, SeverityNumber } from '@opentelemetry/api-logs';
 import {
@@ -14,7 +16,8 @@ import {
   type ZLinkRuntimeMessageFlowEvent
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkDispatchErrorSink } from './dispatch-error-port';
-import { currentFlowContext } from './flow-context';
+import { currentFlowContext, FLOW_ORIGIN_VALUES } from './flow-context';
+import { ERROR_MESSAGE_MAX_LENGTH } from './dispatch-error-details';
 
 export interface ZLinkMessageFlowModeCell {
   mode: ZLinkMessageFlowLogMode;
@@ -34,11 +37,11 @@ export const DEFAULT_ZLINK_DIAGNOSTICS: ZLinkDiagnosticsOptions = {
 
 const telemetryLogger = openTelemetryLogs.getLogger('@zlink-systems/framework');
 const telemetryTracer = openTelemetryTrace.getTracer('@zlink-systems/framework');
-const ERROR_MESSAGE_MAX_LENGTH = 512;
+
 let diagnosticsGeneration = 0n;
 
 interface ZLinkTelemetryRecord {
-  readonly eventId: 'zlink.message_flow' | 'zlink.dispatch_error';
+  readonly eventId: typeof MESSAGE_FLOW_EVENT_ID | typeof DISPATCH_ERROR_EVENT_ID;
   readonly timestamp: Date;
   readonly phase?: string;
   readonly outcome: ZLinkRuntimeMessageFlowResult;
@@ -300,12 +303,12 @@ export class ZLinkMessageFlowTracer {
   private publishToLogger(record: ZLinkTelemetryRecord): void {
     try {
       const severityNumber =
-        record.eventId === 'zlink.dispatch_error' ? SeverityNumber.ERROR : SeverityNumber.INFO;
+        record.eventId === DISPATCH_ERROR_EVENT_ID ? SeverityNumber.ERROR : SeverityNumber.INFO;
       telemetryLogger.emit({
         eventName: record.eventId,
         timestamp: record.timestamp,
         severityNumber,
-        severityText: record.eventId === 'zlink.dispatch_error' ? 'ERROR' : 'INFO',
+        severityText: record.eventId === DISPATCH_ERROR_EVENT_ID ? 'ERROR' : 'INFO',
         body: structuredLogBody(record),
         attributes: structuredLogAttributes(record)
       });
@@ -319,7 +322,7 @@ export class ZLinkMessageFlowTracer {
       const span = telemetryTracer.startSpan(record.eventId, {
         attributes: traceAttributes(record)
       });
-      if (record.eventId === 'zlink.dispatch_error') {
+      if (record.eventId === DISPATCH_ERROR_EVENT_ID) {
         span.setStatus({ code: SpanStatusCode.ERROR, message: record.reason });
       }
       span.end();
@@ -343,12 +346,6 @@ export class ZLinkMessageFlowTracer {
  * (`inbound|timer|application|lifecycle`); every language emits these exact
  * strings so records remain comparable across runtimes (spec 26 §3.1).
  */
-const FLOW_ORIGIN_TELEMETRY_VALUES: Record<ZLinkFlowOrigin, string> = {
-  Inbound: 'inbound',
-  Timer: 'timer',
-  Application: 'application',
-  Lifecycle: 'lifecycle'
-};
 
 function toTelemetryRecord(
   flow: ZLinkRuntimeMessageFlowEvent,
@@ -358,8 +355,8 @@ function toTelemetryRecord(
   return {
     eventId:
       flow.outcome === ZLinkMessageFlowOutcome.Error
-        ? 'zlink.dispatch_error'
-        : 'zlink.message_flow',
+        ? DISPATCH_ERROR_EVENT_ID
+        : MESSAGE_FLOW_EVENT_ID,
     timestamp: new Date(),
     phase: messageFlowPhase(flow.outcome),
     outcome: flow.result ?? messageFlowOutcome(flow.outcome),
@@ -377,8 +374,7 @@ function toTelemetryRecord(
     targetRid: flow.targetRid,
     serverRid: flow.serverRid,
     flowId: flow.flowId,
-    flowOrigin:
-      flow.flowOrigin === undefined ? undefined : FLOW_ORIGIN_TELEMETRY_VALUES[flow.flowOrigin],
+    flowOrigin: flow.flowOrigin === undefined ? undefined : FLOW_ORIGIN_VALUES[flow.flowOrigin],
     spotId: flow.spotId,
     instanceSpotType: flow.instanceSpotType,
     activationState: flow.activationState,

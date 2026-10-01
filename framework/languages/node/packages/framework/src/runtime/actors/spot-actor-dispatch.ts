@@ -1,3 +1,4 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -274,7 +275,7 @@ export class ZLinkSpotActorDispatcher {
   evaluateActorJoin(
     actor: ZLinkActor,
     request: Message,
-    contentType = 'application/json'
+    contentType: string = ZlinkStreamContentType.Json
   ): Promise<ZLinkSpotActorJoinResult> {
     return this.execute(async () => {
       const payload = wrapFrameworkPayloadMessage(

@@ -1,3 +1,5 @@
+const SPOT_ROUTE_REFRESH_INTERVAL_MS = 10;
+
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -333,7 +335,10 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           // reaches this process. Refresh authority and select again under the
           // same end-to-end deadline; the old envelope was not admitted.
           this.options.resolver()?.invalidate?.(spotId);
-          await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
+          await waitForSpotRouteRefresh(
+            Math.min(SPOT_ROUTE_REFRESH_INTERVAL_MS, deadline.requireRemaining()),
+            deadline.signal
+          );
         }
       }
     } catch (error) {
@@ -609,7 +614,10 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       if (!sameSpotRouteSnapshot(current, staleRoute)) {
         return { kind: 'route', route: current };
       }
-      await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
+      await waitForSpotRouteRefresh(
+        Math.min(SPOT_ROUTE_REFRESH_INTERVAL_MS, deadline.requireRemaining()),
+        deadline.signal
+      );
     }
   }
 

@@ -1,3 +1,4 @@
+import { isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -189,7 +190,7 @@ export class ZLinkActorRuntimeState {
   private destroyTask: Promise<void> | undefined;
 
   constructor(readonly actorId: string) {
-    if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+    if (isStructuralGuardEnabled()) {
       guardBoundSessionTargetWrites(this);
     }
   }

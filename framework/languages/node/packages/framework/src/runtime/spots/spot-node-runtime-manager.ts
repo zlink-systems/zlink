@@ -1,3 +1,10 @@
+import { ZLINK_MAX_CAPACITY } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+const DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS = 1000;
+
+import {
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
 import {
@@ -325,7 +332,7 @@ export class ZLinkSpotNodeRuntimeManager {
             : Object.keys(spotNode.actorFactories ?? {}).length) > 0;
         node.configureObjectPlacement({
           role: spotNode.objectRole ?? (hasLegacyObjectFactories ? 'server' : 'none'),
-          placementWeight: spotNode.placementWeight ?? 100,
+          placementWeight: spotNode.placementWeight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT,
           activeCapacityLimit: aggregatePlacementCapacity(
             spotNode.actorLimit ?? 0,
             spotNode.spotLimit ?? 0
@@ -501,7 +508,11 @@ export class ZLinkSpotNodeRuntimeManager {
             channelName,
             state === ZLinkFrameworkRuntimeState.Draining
               ? 0
-              : this.effectiveChannelWeight(meshName, channelName, channel.weight ?? 100)
+              : this.effectiveChannelWeight(
+                  meshName,
+                  channelName,
+                  channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
+                )
           ])
         ),
         applicationVersion: this.options.registration.applicationVersion,
@@ -616,7 +627,11 @@ export class ZLinkSpotNodeRuntimeManager {
     if (registration === undefined) {
       throw new ZLinkConfigurationException(`Mesh '${meshName}' is not registered.`);
     }
-    return this.runtimePlacementWeights.get(meshName) ?? registration.placementWeight ?? 100;
+    return (
+      this.runtimePlacementWeights.get(meshName) ??
+      registration.placementWeight ??
+      ZLINK_DEFAULT_PUBLIC_WEIGHT
+    );
   }
 
   channelWeight(channelName: string): number {
@@ -701,7 +716,8 @@ export class ZLinkSpotNodeRuntimeManager {
     );
     return {
       meshName: match.meshName,
-      configuredWeight: match.mesh.meshChannels?.[channelName]?.weight ?? 100
+      configuredWeight:
+        match.mesh.meshChannels?.[channelName]?.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
     };
   }
 
@@ -820,7 +836,7 @@ export class ZLinkSpotNodeRuntimeManager {
     await settle(meshPumps.reverse().map((pump) => pump.dispose()));
     await settle(
       meshNodes.reverse().map(async (node) => {
-        node.shutdown(1000);
+        node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
         node.close();
       })
     );
@@ -1250,7 +1266,7 @@ function requireEntrySpotReply(result: number): void {
 }
 
 function requirePublicRuntimeWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
+  if (!isValidPublicWeight(value)) {
     throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
   }
   return value;
@@ -1343,7 +1359,7 @@ function objectCapability(
 }
 
 function aggregatePlacementCapacity(actorLimit: number, spotLimit: number): number {
-  const unlimited = 0x7fff_ffff;
+  const unlimited = ZLINK_MAX_CAPACITY;
   const actors = actorLimit === 0 ? unlimited : actorLimit;
   const spots = spotLimit === 0 ? unlimited : spotLimit;
   return Math.min(unlimited, actors + spots);

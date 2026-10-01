@@ -1,12 +1,11 @@
 import {
   RequiredZlinkStreamConnectorOptions,
+  ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
   ZlinkStreamCompression,
   ZlinkStreamConnectorOptions,
   ZlinkStreamDispatchMode,
   ZlinkStreamErrorCode,
-  ZlinkStreamHeartbeatOptions,
-  ZlinkStreamPacketNameResolver,
-  ZlinkStreamReconnectOptions
+  ZlinkStreamPacketNameResolver
 } from '../Contracts';
 import { connectorError } from './ZlinkStreamSupport';
 import { inferTransport } from './Transport/ZlinkStreamEndpoint';
@@ -26,13 +25,36 @@ export function normalizeOptions(
       'Configured transport conflicts with endpoint scheme.'
     );
   }
-  validatePositive(options.connectTimeoutMs ?? 5000, 'ConnectTimeout');
-  validatePositive(options.requestTimeoutMs ?? 30000, 'RequestTimeout');
-  validatePositive(options.waitTimeoutMs ?? 5000, 'WaitTimeout');
-  validatePositive(options.maxSendPayloadSize ?? 64 * 1024, 'MaxSendPayloadSize');
-  validatePositive(options.maxReceivePayloadSize ?? 64 * 1024, 'MaxReceivePayloadSize');
-  validateHeartbeat(options.heartbeat);
-  validateReconnect(options.reconnect);
+  const connectTimeoutMs = options.connectTimeoutMs ?? 5000;
+  validatePositive(connectTimeoutMs, 'ConnectTimeout');
+  const requestTimeoutMs = options.requestTimeoutMs ?? 30000;
+  validatePositive(requestTimeoutMs, 'RequestTimeout');
+  const waitTimeoutMs = options.waitTimeoutMs ?? 5000;
+  validatePositive(waitTimeoutMs, 'WaitTimeout');
+  const maxSendPayloadSize = options.maxSendPayloadSize ?? ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES;
+  validatePositive(maxSendPayloadSize, 'MaxSendPayloadSize');
+  const maxReceivePayloadSize = options.maxReceivePayloadSize ?? 64 * 1024;
+  validatePositive(maxReceivePayloadSize, 'MaxReceivePayloadSize');
+  const heartbeatOptions = options.heartbeat;
+  const heartbeatIntervalMs = heartbeatOptions?.intervalMs ?? 1000;
+  const heartbeatTimeoutMs = heartbeatOptions?.timeoutMs ?? 5000;
+  validatePositive(heartbeatIntervalMs, 'Heartbeat interval');
+  validatePositive(heartbeatTimeoutMs, 'Heartbeat timeout');
+  const reconnectOptions = options.reconnect;
+  const initialDelayMs = reconnectOptions?.initialDelayMs ?? 250;
+  validatePositive(initialDelayMs, 'Reconnect InitialDelay');
+  const maxDelayMs = reconnectOptions?.maxDelayMs ?? 5000;
+  validatePositive(maxDelayMs, 'Reconnect MaxDelay');
+  const backoffFactor = reconnectOptions?.backoffFactor ?? 2.0;
+  validatePositive(backoffFactor, 'Reconnect BackoffFactor');
+  const maxAttempts =
+    reconnectOptions?.maxAttempts === undefined ? 3 : reconnectOptions.maxAttempts;
+  if (maxAttempts !== null && !(Number.isFinite(maxAttempts) && maxAttempts > 0)) {
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Reconnect MaxAttempts must be null or positive.'
+    );
+  }
   if (options.heartbeat?.enabled !== undefined && typeof options.heartbeat.enabled !== 'boolean') {
     throw connectorError(
       ZlinkStreamErrorCode.ValidationFailed,
@@ -75,26 +97,28 @@ export function normalizeOptions(
     throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Compression is invalid.');
   }
 
+  const heartbeat = {
+    enabled: heartbeatOptions?.enabled ?? true,
+    intervalMs: heartbeatIntervalMs,
+    timeoutMs: heartbeatTimeoutMs
+  };
+  const reconnect = {
+    enabled: reconnectOptions?.enabled ?? true,
+    initialDelayMs,
+    maxDelayMs,
+    backoffFactor,
+    maxAttempts
+  };
   return {
     endpoint,
     transport: inferredTransport,
-    connectTimeoutMs: options.connectTimeoutMs ?? 5000,
-    requestTimeoutMs: options.requestTimeoutMs ?? 30000,
-    waitTimeoutMs: options.waitTimeoutMs ?? 5000,
-    heartbeat: {
-      enabled: options.heartbeat?.enabled ?? true,
-      intervalMs: options.heartbeat?.intervalMs ?? 1000,
-      timeoutMs: options.heartbeat?.timeoutMs ?? 5000
-    },
-    reconnect: {
-      enabled: options.reconnect?.enabled ?? true,
-      initialDelayMs: options.reconnect?.initialDelayMs ?? 250,
-      maxDelayMs: options.reconnect?.maxDelayMs ?? 5000,
-      backoffFactor: options.reconnect?.backoffFactor ?? 2.0,
-      maxAttempts: options.reconnect?.maxAttempts === undefined ? 3 : options.reconnect.maxAttempts
-    },
-    maxSendPayloadSize: options.maxSendPayloadSize ?? 64 * 1024,
-    maxReceivePayloadSize: options.maxReceivePayloadSize ?? 64 * 1024,
+    connectTimeoutMs,
+    requestTimeoutMs,
+    waitTimeoutMs,
+    heartbeat,
+    reconnect,
+    maxSendPayloadSize,
+    maxReceivePayloadSize,
     dispatchMode: options.dispatchMode ?? ZlinkStreamDispatchMode.Manual,
     compression: options.compression ?? ZlinkStreamCompression.Lz4,
     compressionCodec: resolveCompressionCodec(options),
@@ -151,26 +175,4 @@ function hasMethods(value: unknown, ...names: string[]): boolean {
   if (value === null || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
   return names.every((name) => typeof candidate[name] === 'function');
-}
-
-function validateHeartbeat(options: ZlinkStreamHeartbeatOptions | undefined): void {
-  const intervalMs = options?.intervalMs ?? 1000;
-  const timeoutMs = options?.timeoutMs ?? 5000;
-  validatePositive(intervalMs, 'Heartbeat interval');
-  validatePositive(timeoutMs, 'Heartbeat timeout');
-}
-
-function validateReconnect(options: ZlinkStreamReconnectOptions | undefined): void {
-  validatePositive(options?.initialDelayMs ?? 250, 'Reconnect InitialDelay');
-  validatePositive(options?.maxDelayMs ?? 5000, 'Reconnect MaxDelay');
-  validatePositive(options?.backoffFactor ?? 2.0, 'Reconnect BackoffFactor');
-  // Spec stream-connector 32 §6: `null` is how this option says "unlimited".
-  // Only a stated number is range-checked.
-  const maxAttempts = options?.maxAttempts === undefined ? 3 : options.maxAttempts;
-  if (maxAttempts !== null && !(Number.isFinite(maxAttempts) && maxAttempts > 0)) {
-    throw connectorError(
-      ZlinkStreamErrorCode.ValidationFailed,
-      'Reconnect MaxAttempts must be null or positive.'
-    );
-  }
 }

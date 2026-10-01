@@ -1,3 +1,8 @@
+const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
+const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
+
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -238,7 +243,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         this.states.delete(actor.actorId);
         this.actorMeshNames.delete(actor.actorId);
       }
-      this.options.metrics?.change('zlink.actor.count', -1);
+      this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     });
     try {
       await destroyTask;
@@ -567,7 +572,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       createRequest,
       signal,
       false,
-      30_000,
+      DEFAULT_REQUEST_TIMEOUT_MS,
       nativeActorRef
     );
   }
@@ -639,7 +644,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         this.states.delete(actor.context.actorId);
         this.actorMeshNames.delete(actor.context.actorId);
       }
-      this.options.metrics?.change('zlink.actor.count', -1);
+      this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     });
 
     try {
@@ -657,7 +662,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     request: unknown,
     signal?: AbortSignal,
     claimLocation = true,
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     nativeActorRef?: ZLinkBackendActorRef
   ): Promise<ZLinkActorLocalCreateResult> {
     const deadline = performance.now() + timeoutMs;
@@ -764,7 +769,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     if (this.states.get(actorId) === state) {
       this.states.delete(actorId);
       this.actorMeshNames.delete(actorId);
-      this.options.metrics?.change('zlink.actor.count', -1);
+      this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     }
   }
 
@@ -795,7 +800,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       state.rememberMeshName(remembered);
     }
     this.states.set(actorId, state);
-    this.options.metrics?.change('zlink.actor.count', 1);
+    this.options.metrics?.change(METRIC_NAMES.ActorCount, 1);
     return state;
   }
 
@@ -808,7 +813,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       actorId: state.actorId,
       objectGeneration: 1n,
       meshName: state.meshName ?? '',
-      nodeRid: this.options.actorCreatedNodeRidProvider?.() ?? 'local'
+      nodeRid: this.options.actorCreatedNodeRidProvider?.() ?? LOCAL_DIAGNOSTIC_NODE_RID
     };
   }
 }
@@ -828,7 +833,7 @@ class ZLinkActorCreateCallRuntime implements ZLinkActorCreateCall {
   private meshNameValue: string | undefined;
   private requestValue: unknown;
   private requestConfigured = false;
-  private timeoutMsValue = 30_000;
+  private timeoutMsValue: number = DEFAULT_REQUEST_TIMEOUT_MS;
   private timeoutConfigured = false;
   private submitted = false;
   private readonly turn: ZLinkSpotSerialTurn | undefined = captureZLinkSpotSerialTurn();
@@ -953,7 +958,7 @@ async function waitForCreationRetry(signal?: AbortSignal): Promise<void> {
       if (error === undefined) resolve();
       else reject(error);
     };
-    const timer = setTimeout(() => finish(), 5);
+    const timer = setTimeout(() => finish(), ACTOR_CREATION_RETRY_INTERVAL_MS);
     const onAbort = () => {
       finish(signal?.reason ?? new Error('Actor creation was aborted.'));
     };

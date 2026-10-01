@@ -50,7 +50,8 @@ import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from '.
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
 import { routingIdsEqual } from '../routing-id';
 import { ZLinkStateLane } from '../execution/state-lane';
-import { emitActorOwnerLeaseObservation } from '../diagnostics';
+import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;
@@ -432,12 +433,14 @@ export class ZLinkStoreLocationResolvers
         authorityGeneration: current.authorityOwnerGeneration,
         remainingLeaseMs
       };
-      emitActorOwnerLeaseObservation({
-        actorId,
-        authorityGeneration: unavailable.authorityGeneration,
-        remainingLeaseMs,
-        decision: 'owner_unavailable'
-      });
+      if (isRelocationDebugEnabled()) {
+        emitActorOwnerLeaseObservation({
+          actorId,
+          authorityGeneration: unavailable.authorityGeneration,
+          remainingLeaseMs,
+          decision: 'owner_unavailable'
+        });
+      }
       return unavailable;
     }
     if (
@@ -495,7 +498,8 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkResolvedActorRoute | undefined> {
     return await this.lane.run(() => {
       if (route === undefined) return undefined;
-      const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+      const maxAgeMs =
+        this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
       if (maxAgeMs > 0) {
         this.directActorRoutes.set(actorId, {
           row: route,
@@ -732,7 +736,8 @@ export class ZLinkStoreLocationResolvers
     ownerLeaseGeneration: bigint,
     signal?: AbortSignal
   ): Promise<boolean> {
-    const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+    const maxAgeMs =
+      this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
     const remainingLeaseMs = await this.options.leaseTracker.remainingOwnerTokenLeaseMs(
       { ownerId, leaseGeneration: ownerLeaseGeneration },
       signal
@@ -915,7 +920,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     private readonly routerChannelIdForMesh: (meshName: string) => string,
     private readonly fallback?: ZLinkSpotRouteResolver,
     private readonly leaseTracker?: ZLinkOwnerLeaseTracker,
-    private readonly routeCacheMaxAgeMs = 15000,
+    private readonly routeCacheMaxAgeMs = zlinkDefaultLocationOptions.routeCacheMaxAgeMs,
     private readonly monotonicNowMs: () => number = () => performance.now(),
     private readonly targetNodeStateResolver?: (
       meshName: string,

@@ -1,3 +1,4 @@
+import { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from '@zlink-systems/framework';
 import type {
   ZLinkBlobPutResult,
   ZLinkBlobReadResult,
@@ -7,7 +8,12 @@ import type {
 } from '@zlink-systems/framework';
 import type { ZLinkRedisRelocationOptions } from './redis-options';
 import { RedisConnection } from './redis-connection';
-import { BLOB_PUT_SCRIPT, BLOB_READ_SCRIPT, BLOB_RENEW_SCRIPT } from './opaque-redis-scripts';
+import {
+  REDIS_STORE_TOKEN,
+  BLOB_PUT_SCRIPT,
+  BLOB_READ_SCRIPT,
+  BLOB_RENEW_SCRIPT
+} from './opaque-redis-scripts';
 import { asArray, asString, toNumber } from './redis-values';
 
 const MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
@@ -44,9 +50,12 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     );
     const kind = asString(result[0]);
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (kind === 'conflict') return { kind, storeNow };
+    if (kind === REDIS_STORE_TOKEN.Conflict) return { kind, storeNow };
     return {
-      kind: kind === 'alreadyStored' ? 'alreadyStored' : 'stored',
+      kind:
+        kind === REDIS_STORE_TOKEN.AlreadyStored
+          ? REDIS_STORE_TOKEN.AlreadyStored
+          : REDIS_STORE_TOKEN.Stored,
       storeNow,
       expiresAt: fromUnixMs(toNumber(result[2]))
     };
@@ -58,7 +67,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
       await this.connection.eval(BLOB_READ_SCRIPT, [this.blobKey(referenceValue)], [], signal)
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
+    if (toNumber(result[0]) !== 1) return { kind: REDIS_STORE_TOKEN.Missing, storeNow };
     return {
       kind: 'found',
       bytes: Uint8Array.from(asBuffer(result[2])),
@@ -83,7 +92,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
       )
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
+    if (toNumber(result[0]) !== 1) return { kind: REDIS_STORE_TOKEN.Missing, storeNow };
     return {
       kind: 'renewed',
       expiresAt: fromUnixMs(toNumber(result[2])),
@@ -108,7 +117,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
 function requireReference(reference: ZLinkBlobReference): string {
   const value = reference.value;
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > 4_096) {
+  if (bytes < 1 || bytes > ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES) {
     throw new RangeError('Relocation Store reference must contain 1..4,096 UTF-8 bytes.');
   }
   return value;

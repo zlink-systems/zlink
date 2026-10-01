@@ -561,7 +561,7 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   }
 
   listen(port = 0): this {
-    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    if (!framework.isValidListenerPort(port)) {
       throw new framework.ZLinkConfigurationException(
         `ClientServer channel '${this.name}' port must be between 0 and 65535.`
       );
@@ -585,7 +585,7 @@ class DefaultZLinkNestClientServerChannelServerBuilder
   }
 
   setWeight(weight: number): this {
-    if (!Number.isInteger(weight) || weight < 0 || weight > 10_000) {
+    if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
         `ClientServer channel '${this.name}' weight must be between 0 and 10000.`
       );
@@ -643,17 +643,10 @@ function requireClientServerText(value: string, label: string): void {
 
 function requireListenerPort(port: number | undefined, label: string): number {
   const normalized = port ?? 0;
-  if (!Number.isInteger(normalized) || normalized < 0 || normalized > 65_535) {
+  if (!framework.isValidListenerPort(normalized)) {
     throw new framework.ZLinkConfigurationException(`${label} port must be between 0 and 65535.`);
   }
   return normalized;
-}
-
-function requirePublicWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new framework.ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
-  }
-  return value;
 }
 
 function rejectFixedRoutingId(routingId: string | undefined, memberName: string): void {
@@ -818,7 +811,7 @@ class DefaultZLinkNestMeshNodeBuilder
   }
 
   setPlacementWeight(weight: number): this {
-    if (!Number.isInteger(weight) || weight < 0 || weight > 10_000) {
+    if (!framework.isValidPublicWeight(weight)) {
       throw new framework.ZLinkConfigurationException(
         'Placement weight must be an integer in 0..10000.'
       );
@@ -1212,7 +1205,7 @@ function validateObjectFactory(stableType: string, label: string): string {
   if (
     typeof stableType !== 'string' ||
     Buffer.byteLength(stableType) < 1 ||
-    Buffer.byteLength(stableType) > 255 ||
+    Buffer.byteLength(stableType) > framework.ZLINK_MAX_STABLE_TYPE_BYTES ||
     stableType.includes('\0')
   ) {
     throw new framework.ZLinkConfigurationException(
@@ -1269,7 +1262,7 @@ function validateStableTypeLimit(value: number | undefined): void {
 }
 
 function requirePositiveCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
+  if (!framework.isValidPositiveCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
       `${label} must be an integer in 1..2147483647.`
     );
@@ -1278,7 +1271,7 @@ function requirePositiveCapacity(value: number, label: string): number {
 }
 
 function requireCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 0x7fff_ffff) {
+  if (!framework.isValidCapacity(value)) {
     throw new framework.ZLinkConfigurationException(
       `${label} must be an integer in 0..2147483647.`
     );
@@ -1355,7 +1348,7 @@ class DefaultZLinkNestMeshChannelServerBuilder
   }
 
   setWeight(weight: number): this {
-    this.channel.weight = requirePublicWeight(weight, 'Mesh channel weight');
+    this.channel.weight = framework.requirePublicWeight(weight, 'Mesh channel weight');
     return this;
   }
 

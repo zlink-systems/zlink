@@ -8,6 +8,11 @@ export {
 export type * from './contracts/Configuration/RegistrationTypes';
 export type * from './contracts';
 export {
+  isValidPublicWeight,
+  isValidPositiveCapacity,
+  isValidListenerPort,
+  isValidCapacity,
+  requirePublicWeight,
   registerActorFactory,
   validateRoutingIdPrefix,
   registerEntrySpot,
@@ -271,3 +276,5 @@ export function createIntegrationHttpExecutionScheduler(runtime: ZLinkNestIntegr
 function runtimeHost(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkFrameworkRuntimeHost {
   return runtime as ZLinkFrameworkRuntimeHost;
 }
+
+export { ZLINK_MAX_STABLE_TYPE_BYTES } from './contracts/Common/CoreTypes';

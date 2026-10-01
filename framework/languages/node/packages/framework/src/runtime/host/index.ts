@@ -1,3 +1,14 @@
+import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
+const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
+const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
+
+import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
+
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import { ZLinkListenerRecords } from '../foundation/listener-records';
 import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
 import {
@@ -168,7 +179,11 @@ import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-
 import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
 import { ZLinkRuntimeAdmissionGate } from '../admission';
 import { ZLinkActivationAdmission } from '../activation-admission';
-import { ZLinkRetiringRollbackError, ZLinkRouteMeshRuntimeCoordinator } from './route-mesh-runtime';
+import {
+  ZLinkDrainingStatePublishError,
+  ZLinkRetiringRollbackError,
+  ZLinkRouteMeshRuntimeCoordinator
+} from './route-mesh-runtime';
 import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
@@ -397,7 +412,7 @@ export class ZLinkFrameworkRuntimeHost
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       codecs: { serializers: options.registration.messageSerializers },
-      defaultRequestTimeoutMs: options.registration.requestTimeoutMs ?? 30_000,
+      defaultRequestTimeoutMs: options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       defaultSendTimeoutMs: defaultSpotSendTimeoutMs,
       sendTimeoutMsForMesh: sendTimeoutMsForSpotMesh,
       sendTimeoutMsForRouteChannel: sendTimeoutMsForSpotRouteChannel,
@@ -927,7 +942,7 @@ export class ZLinkFrameworkRuntimeHost
       options,
       this.options.registration.applicationVersion
     );
-    const deadlineMs = options.deadlineMs ?? 30_000;
+    const deadlineMs = options.deadlineMs ?? DEFAULT_HOST_CONTROL_TIMEOUT_MS;
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
       return Promise.reject(new RangeError('Relocation deadlineMs must be greater than zero.'));
     }
@@ -996,7 +1011,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult> {
-    const deadlineMs = options?.deadlineMs ?? 30_000;
+    const deadlineMs = options?.deadlineMs ?? DEFAULT_HOST_CONTROL_TIMEOUT_MS;
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
       return Promise.reject(new RangeError('Shutdown deadlineMs must be greater than zero.'));
     }
@@ -1191,8 +1206,9 @@ export class ZLinkFrameworkRuntimeHost
   private recordRelocationResult(result: ZLinkFrameworkRelocationResult): void {
     if (this.relocationOperationStartedAt !== undefined) {
       this.metrics.duration(
-        'zlink.host.relocation.duration',
-        Math.max(0, performance.now() - this.relocationOperationStartedAt) / 1000,
+        METRIC_NAMES.HostRelocationDuration,
+        Math.max(0, performance.now() - this.relocationOperationStartedAt) /
+          MILLISECONDS_PER_SECOND,
         {
           mode: relocationModeMetricName(result.mode),
           outcome:
@@ -1201,7 +1217,7 @@ export class ZLinkFrameworkRuntimeHost
       );
     }
     if (result.outcome === ZLinkFrameworkRelocationOutcome.Blocked) {
-      this.metrics.count('zlink.host.relocation.blocked', 1, {
+      this.metrics.count(METRIC_NAMES.HostRelocationBlocked, 1, {
         mode: relocationModeMetricName(result.mode),
         reason: relocationReasonMetricName(result.reason)
       });
@@ -1224,8 +1240,8 @@ export class ZLinkFrameworkRuntimeHost
     this.runtimeDeadline = undefined;
     if (this.shutdownOperationStartedAt !== undefined) {
       this.metrics.duration(
-        'zlink.host.shutdown.duration',
-        Math.max(0, performance.now() - this.shutdownOperationStartedAt) / 1000,
+        METRIC_NAMES.HostShutdownDuration,
+        Math.max(0, performance.now() - this.shutdownOperationStartedAt) / MILLISECONDS_PER_SECOND,
         {
           outcome:
             result.outcome === ZLinkFrameworkTerminationOutcome.Stopped
@@ -1235,7 +1251,7 @@ export class ZLinkFrameworkRuntimeHost
       );
     }
     if (result.outcome === ZLinkFrameworkTerminationOutcome.ForceStopped) {
-      this.metrics.count('zlink.host.shutdown.forced', 1, {
+      this.metrics.count(METRIC_NAMES.HostShutdownForced, 1, {
         reason: terminationReasonMetricName(result.reason)
       });
     }
@@ -1634,7 +1650,7 @@ export class ZLinkFrameworkRuntimeHost
       pollingIntervalMs:
         this.options.registration.locations.options.pollingIntervalMs ??
         zlinkDefaultLocationOptions.pollingIntervalMs,
-      pageSize: 1000,
+      pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE,
       reportError: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
           'stateful authority route reconciliation',
@@ -2363,7 +2379,7 @@ export class ZLinkFrameworkRuntimeHost
               try {
                 payload = {
                   packetName: 'ZLinkFrameworkUserSpotReply',
-                  contentType: 'application/octet-stream',
+                  contentType: ZlinkStreamContentType.Raw,
                   payload: Buffer.from(message.data())
                 };
               } finally {
@@ -2542,7 +2558,7 @@ export class ZLinkFrameworkRuntimeHost
         }
         return node.requestUserSpotClose(targetNodeRid, request, timeoutMs);
       },
-      defaultTimeoutMs: this.options.registration.requestTimeoutMs ?? 30_000,
+      defaultTimeoutMs: this.options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       messageSerializers: this.options.registration.messageSerializers
     });
   }
@@ -3243,7 +3259,7 @@ export function hasExactPeerReadiness(
           peer.routingId !== null &&
           String(peer.routingId) === String(descriptor.rid) &&
           peer.lifecycleGeneration === descriptor.lifecycleGeneration &&
-          peer.state === 3
+          peer.state === MeshPeerRuntimeState.Serving
       )
     )
   );
@@ -3253,7 +3269,11 @@ export {
   ZLinkActorTransferAuthorityRuntime,
   transferIdString
 } from './actor-transfer-authority-runtime';
-export { ZLinkRetiringRollbackError, ZLinkRouteMeshRuntimeCoordinator } from './route-mesh-runtime';
+export {
+  ZLinkDrainingStatePublishError,
+  ZLinkRetiringRollbackError,
+  ZLinkRouteMeshRuntimeCoordinator
+} from './route-mesh-runtime';
 export { ZLinkRelocationStateIncompatibleError } from './service-relocation-host-runtime';
 export {
   ZLinkHostSpotAddressTransport,
@@ -3272,7 +3292,7 @@ async function waitForForcedSessionNotification(
   if (operation === undefined) return;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
-    timeoutHandle = setTimeout(resolve, 100);
+    timeoutHandle = setTimeout(resolve, HOST_SHUTDOWN_POLL_INTERVAL_MS);
   });
   try {
     await Promise.race([operation.catch(() => undefined), timeout]);
@@ -3303,13 +3323,6 @@ async function awaitWithDrainSignal(
       }
     );
   });
-}
-
-class ZLinkDrainingStatePublishError extends Error {
-  constructor(cause: unknown) {
-    super('Failed to publish draining peer rows.', { cause });
-    this.name = 'ZLinkDrainingStatePublishError';
-  }
 }
 
 function resolveBackendAdapterFactory(internalOptions: unknown): ZLinkBackendAdapterFactory {
@@ -3470,7 +3483,7 @@ function waitForPlacementReadiness(signal?: AbortSignal): Promise<void> {
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', abort);
       resolve();
-    }, 10);
+    }, HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS);
     const abort = () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);

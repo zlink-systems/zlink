@@ -62,9 +62,18 @@ export interface ZLinkActorOwnerLeaseObservation {
   readonly decision: 'owner_unavailable';
 }
 
+export function isRelocationDebugEnabled(): boolean {
+  return process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION === '1';
+}
+
+export function relocationDebug(marker: string, detail: Record<string, unknown>): void {
+  if (!isRelocationDebugEnabled()) return;
+  console.error('[zlink.runtime.relocation]', marker, detail);
+}
+
 /** Emits high-cardinality resolver detail only on the existing relocation debug path. */
 export function emitActorOwnerLeaseObservation(observation: ZLinkActorOwnerLeaseObservation): void {
-  if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
+  if (!isRelocationDebugEnabled()) return;
   console.error('[zlink.runtime.relocation]', 'actor_route.owner_lease_observed', observation);
 }
 

@@ -1,3 +1,6 @@
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
+const LOCAL_DIAGNOSTIC_CONNECTION_ID = 'local';
+
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
@@ -266,7 +269,7 @@ export class ServiceTopologyRegistry {
       () => {
         const local: AdmittedServicePeer = {
           descriptor: cloneDescriptor(this.local),
-          connectionId: 'local'
+          connectionId: LOCAL_DIAGNOSTIC_CONNECTION_ID
         };
         return [local, ...this.peersByRid.values()]
           .map((peer) => ({
@@ -431,7 +434,7 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
   }
   if (descriptor.maintenanceWave !== undefined) {
     requireText(descriptor.maintenanceWave, 'maintenanceWave');
-    if (Buffer.byteLength(descriptor.maintenanceWave, 'utf8') > 255) {
+    if (Buffer.byteLength(descriptor.maintenanceWave, 'utf8') > ZLINK_MAX_IDENTITY_TEXT_BYTES) {
       throw new RangeError('maintenanceWave must not exceed 255 UTF-8 bytes.');
     }
   }

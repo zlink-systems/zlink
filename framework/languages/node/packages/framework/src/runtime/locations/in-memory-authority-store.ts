@@ -1,4 +1,9 @@
+import { ZLINK_PROVIDER_MAX_VALUE_BYTES } from '../../contracts/Locations/Stores';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import { randomUUID } from 'node:crypto';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import type {
   ZLinkAggregateAbortResult,
   ZLinkAggregateCommitResult,
@@ -34,9 +39,9 @@ import { encodeAuthorityKey } from './authority-key-codec';
 import { creationTerminalPreimage } from './opaque-record-key';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
-const MAX_PAYLOAD_BYTES = 1024 * 1024;
+
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
-const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const MAX_U64 = UINT64_MAX;
 
 export interface ZLinkInMemoryAuthorityValidation {
   isTargetLive(
@@ -208,7 +213,7 @@ export class ZLinkInMemoryAuthorityStore {
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityScanResult> {
     signal?.throwIfAborted();
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > ZLINK_PROVIDER_MAX_PAGE_SIZE) {
       throw new RangeError('Authority scan limit must be in 1..1000.');
     }
     const decoded =
@@ -826,9 +831,9 @@ function validateReserve(request: ZLinkObjectReserveRequest): void {
   validatePayload(request.creatingPayload);
   validateCapacityVector(request.capacity);
   if (
-    request.intent.requestSha256.byteLength !== 32 ||
+    request.intent.requestSha256.byteLength !== SHA256_DIGEST_BYTES ||
     request.intent.requestEncodedSize < 0n ||
-    request.intent.requestEncodedSize > BigInt(MAX_PAYLOAD_BYTES)
+    request.intent.requestEncodedSize > BigInt(ZLINK_PROVIDER_MAX_VALUE_BYTES)
   ) {
     throw new TypeError('Object creation content receipt is invalid.');
   }
@@ -837,7 +842,11 @@ function validateReserve(request: ZLinkObjectReserveRequest): void {
 function validateCreationOperation(operation: ZLinkCreationOperationIdentity): void {
   const sourceRid = String(operation.sourceNodeRid);
   const sourceRidBytes = Buffer.byteLength(sourceRid, 'utf8');
-  if (sourceRidBytes < 1 || sourceRidBytes > 255 || sourceRid.includes('\0')) {
+  if (
+    sourceRidBytes < 1 ||
+    sourceRidBytes > ZLINK_MAX_ROUTING_ID_BYTES ||
+    sourceRid.includes('\0')
+  ) {
     throw new TypeError(
       'Creation terminal source node RID must contain 1..255 UTF-8 bytes without NUL.'
     );
@@ -861,7 +870,7 @@ function validateTerminalForMutation(
 ): ZLinkCreationTerminalRecord | undefined {
   if (publication === undefined) return undefined;
   validateCreationOperation(publication.operation);
-  if (publication.terminalEnvelope.byteLength > MAX_PAYLOAD_BYTES) {
+  if (publication.terminalEnvelope.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
     throw new RangeError('Creation terminal envelope must not exceed 1 MiB.');
   }
   const deadlineMs = publication.operationDeadline.getTime();
@@ -915,7 +924,7 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== 32) {
+  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
     throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
   }
   validateCapacityVector(request.capacity);
@@ -927,7 +936,7 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
 }
 
 function validatePayload(payload: Uint8Array): void {
-  if (payload.byteLength > MAX_PAYLOAD_BYTES) {
+  if (payload.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
     throw new RangeError('Authority payload exceeds 1 MiB.');
   }
 }

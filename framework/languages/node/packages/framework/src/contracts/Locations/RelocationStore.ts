@@ -1,4 +1,5 @@
 declare const zlinkBlobReferenceBrand: unique symbol;
+export const ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES = 4096;
 
 export interface ZLinkBlobReference {
   readonly value: string;

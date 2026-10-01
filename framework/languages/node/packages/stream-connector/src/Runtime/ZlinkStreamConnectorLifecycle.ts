@@ -23,6 +23,8 @@ import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages'
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
 import type { ZlinkStreamActors } from './ZlinkStreamActors';
 
+const RECONNECT_JITTER_FLOOR = 0.5;
+
 /**
  * Spec stream-connector 32 §6: the wait between attempts is a value picked in
  * [50%, 100%] of the base delay. Deterministic delays make every client that
@@ -30,7 +32,9 @@ import type { ZlinkStreamActors } from './ZlinkStreamActors';
  * the server is least able to take them.
  */
 function randomizedDelay(baseDelayMs: number): number {
-  return Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
+  return Math.round(
+    baseDelayMs * (RECONNECT_JITTER_FLOOR + Math.random() * (1 - RECONNECT_JITTER_FLOOR))
+  );
 }
 
 export class ZlinkStreamConnectorLifecycle {

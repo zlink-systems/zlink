@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { HttpHeaderName } from './text';
+
 import type { Readable } from 'node:stream';
 import type { DownloadSink } from '../types';
 import type { HttpClientOptions } from './options';
-import { gunzip, inflateDeflate } from './compression';
+import { CONTENT_ENCODING, gunzip, inflateDeflate } from './compression';
 import { responseBodySizeExceeded } from './http-client-errors';
 
 /**
@@ -44,20 +46,21 @@ export class ResponseBodyReader {
     bytes: Buffer,
     headers: Record<string, string>
   ): Promise<{ body: Buffer; headers: Record<string, string> }> {
-    const encoding = Object.prototype.hasOwnProperty.call(headers, 'content-encoding')
-      ? headers['content-encoding']
+    const encoding = Object.prototype.hasOwnProperty.call(headers, HttpHeaderName.ContentEncoding)
+      ? headers[HttpHeaderName.ContentEncoding]
       : undefined;
     // An empty body (HEAD / 204 / 304) carries no payload to decode even with Content-Encoding.
     if (encoding === undefined || bytes.length === 0) {
       return { body: bytes, headers };
     }
-    if (encoding.toLowerCase() === 'gzip') {
+    const normalizedEncoding = encoding.toLowerCase();
+    if (normalizedEncoding === CONTENT_ENCODING.Gzip) {
       return {
         body: await gunzip(bytes, this.options.maxResponseBodySize),
         headers: stripEncodingHeaders(headers)
       };
     }
-    if (encoding.toLowerCase() === 'deflate') {
+    if (normalizedEncoding === CONTENT_ENCODING.Deflate) {
       return {
         body: await inflateDeflate(bytes, this.options.maxResponseBodySize),
         headers: stripEncodingHeaders(headers)
@@ -86,7 +89,7 @@ function stripEncodingHeaders(headers: Record<string, string>): Record<string, s
   const copy: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
-    if (lower !== 'content-encoding' && lower !== 'content-length') {
+    if (lower !== HttpHeaderName.ContentEncoding && lower !== HttpHeaderName.ContentLength) {
       copy[key] = value;
     }
   }

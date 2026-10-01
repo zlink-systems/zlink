@@ -1,3 +1,4 @@
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -331,7 +332,7 @@ function selectFactory(
 
 function requireText(value: string, label: string): string {
   const bytes = Buffer.byteLength(value);
-  if (bytes < 1 || bytes > 255 || value.includes('\0')) {
+  if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES || value.includes('\0')) {
     throw invalidConfiguration(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
   }
   return value;

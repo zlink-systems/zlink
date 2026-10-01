@@ -1,3 +1,14 @@
+import {
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET
+} from './service-wire-binary-primitives';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from './operation-identity';
+import { shouldCompactBackingArray } from '../admission';
+const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
+
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
+import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { awaitWithAbort } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
@@ -1486,7 +1497,7 @@ export class ServiceStatefulRuntime {
             this.nodeRid,
             sourceSpotId,
             'request',
-            { high: 2n, low: pending.id },
+            { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
             pending.id,
             metadataFrame !== undefined
           ),
@@ -3602,7 +3613,15 @@ export class ServiceStatefulRuntime {
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
-      parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
+      parts: [
+        Buffer.from([
+          SERVICE_WIRE_MAGIC[0],
+          SERVICE_WIRE_MAGIC[1],
+          SERVICE_WIRE_MAJOR,
+          M6bServiceWireCommand.boundSessionBind,
+          0
+        ])
+      ],
       sourceRoutingId: binding.sessionOwnerNodeRid,
       stateful: {
         receiveKind: ReceiveKind.ActorBinding,
@@ -3828,7 +3847,13 @@ export class ServiceStatefulRuntime {
     control: ActorControlPayload,
     onTerminalCompletion?: () => void | Promise<void>
   ): void {
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.actorJoined,
+      0
+    ]);
     let terminalAttempted = false;
     void (async () => {
       const applicationJobOwner = await this.raw.reserveLocalIngress();
@@ -3874,7 +3899,13 @@ export class ServiceStatefulRuntime {
   ): boolean {
     const actor = binding.actor;
     const sessionOwner = requireSessionOwnerIdentity(binding);
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.boundSessionBind,
+      0
+    ]);
     const applicationJob = requireApplicationJobOwner(ingress).takeInitial('infrastructure');
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
@@ -4152,7 +4183,10 @@ export class ServiceStatefulRuntime {
           stop.signal.throwIfAborted();
           if (!durableRequestCanReplay(error)) throw error;
           if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-          const retryDelayMs = Math.min(20, deadlineMs - performance.now());
+          const retryDelayMs = Math.min(
+            STATEFUL_OPERATION_RETRY_TICK_MS,
+            deadlineMs - performance.now()
+          );
           if (retryDelayMs <= 0) {
             throw durableOperationExhausted(operationKind, wasAdmitted, error);
           }
@@ -4203,8 +4237,8 @@ export class ServiceStatefulRuntime {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         try {
           const result = await this.ingress({
-            command: header[3]!,
-            flags: header[4]!,
+            command: header[SERVICE_WIRE_COMMAND_OFFSET]!,
+            flags: header[SERVICE_WIRE_FLAGS_OFFSET]!,
             sourceRoutingId: this.nodeRid,
             requestSequence,
             reply: finish,
@@ -4241,8 +4275,8 @@ export class ServiceStatefulRuntime {
         void ServiceStatefulRuntime.detachedIngressScope(async () => {
           try {
             await this.ingress({
-              command: parts[0]![3]!,
-              flags: parts[0]![4]!,
+              command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+              flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
               sourceRoutingId: this.nodeRid,
               sourceNodeGeneration: this.nodeGeneration,
               parts,
@@ -4260,8 +4294,8 @@ export class ServiceStatefulRuntime {
       }
       try {
         const result = await this.ingress({
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           sourceNodeGeneration: this.nodeGeneration,
           parts,
@@ -4305,8 +4339,8 @@ export class ServiceStatefulRuntime {
       void (async () => {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         const localIngress: RawServiceIngressRecord = {
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           requestSequence: pending.id,
           parts,
@@ -4922,7 +4956,10 @@ export class ServiceStatefulRuntime {
         }
         const current = this.peekSpotMessageFollow(state)!;
         try {
-          const metadata = (current.ingress.parts[0]![4]! & M6bServiceWireFlag.metadata) !== 0;
+          const metadata =
+            (current.ingress.parts[0]![SERVICE_WIRE_FLAGS_OFFSET]! &
+              M6bServiceWireFlag.metadata) !==
+            0;
           const parts = [
             encodeSpotHeader(
               current.wire.kind,
@@ -5061,7 +5098,7 @@ export class ServiceStatefulRuntime {
     if (state.queuedCount === 0) {
       state.queued.length = 0;
       state.queuedHead = 0;
-    } else if (state.queuedHead >= 1024 && state.queuedHead * 2 >= state.queued.length) {
+    } else if (shouldCompactBackingArray(state.queuedHead, state.queued.length)) {
       state.queued.splice(0, state.queuedHead);
       state.queuedHead = 0;
     }
@@ -5321,7 +5358,7 @@ function userSpotDeadline(deadlineUnixMs: bigint): {
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
   const timeout = setTimeout(
     () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, 0x7fff_ffff))
+    Math.max(0, Math.min(delay, ZLINK_MAX_SEND_TIMEOUT_MS))
   );
   return {
     signal: controller.signal,
@@ -5801,7 +5838,7 @@ function topicMatches(filter: string, topic: string): boolean {
 function emptyPayload(): ServiceApplicationPayload {
   return {
     packetName: 'ZLinkFrameworkEmpty',
-    contentType: 'application/octet-stream',
+    contentType: ZlinkStreamContentType.Raw,
     payload: Buffer.alloc(0)
   };
 }

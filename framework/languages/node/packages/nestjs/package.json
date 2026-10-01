@@ -23,6 +23,7 @@
     "@nestjs/common": "^10.4.22",
     "@zlink-systems/framework": "0.26.0",
     "@zlink-systems/http-client": "0.26.0",
+    "@zlink-systems/stream-wire": "0.26.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

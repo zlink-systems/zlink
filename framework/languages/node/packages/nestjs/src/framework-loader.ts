@@ -36,6 +36,7 @@ import type {
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
+  readonly ZLINK_MAX_STABLE_TYPE_BYTES: number;
   readonly ZLinkConfigurationException: new (message: string) => Error;
   createFrameworkRegistration(
     options: ZLinkFrameworkRegistrationOptions
@@ -99,6 +100,11 @@ interface FrameworkIntegrationModule {
   validateMessageFollowDuration(timeoutMs: number): number;
   validateSessionReplacementCallbackTimeout(timeoutMs: number): number;
   validateRoutingIdPrefix(prefix: string): string;
+  isValidPublicWeight(value: number): boolean;
+  requirePublicWeight(value: number, label: string): number;
+  isValidPositiveCapacity(value: number): boolean;
+  isValidListenerPort(value: number): boolean;
+  isValidCapacity(value: number): boolean;
   registerEntrySpot(
     options: { entrySpotType?: Type<ZLinkEntrySpot> },
     entrySpotType: Type<ZLinkEntrySpot>

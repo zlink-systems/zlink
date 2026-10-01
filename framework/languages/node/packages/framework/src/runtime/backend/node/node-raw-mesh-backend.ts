@@ -1,3 +1,23 @@
+import { APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES } from '../../foundation/service-wire-m6a-codec';
+import { SERVICE_WIRE_COMMAND_OFFSET } from '../../foundation/service-wire-binary-primitives';
+import { constants as osConstants } from 'node:os';
+const nativeErrnoValues = osConstants.errno;
+import {
+  MeshPeerRuntimeState,
+  StreamSessionRuntimeState
+} from '../../foundation/service-runtime-contracts';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
+import { isValidPositiveCapacity } from '../../../contracts/Configuration/RegistrationBuilderPolicy';
+const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
+const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
+
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../../contracts/Configuration/InternalDefaults';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../../contracts/Configuration/Registration';
+import { shouldCompactBackingArray } from '../../admission';
+import {
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT
+} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
 import { randomBytes } from 'node:crypto';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
 import {
@@ -55,6 +75,7 @@ import {
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
 import {
+  APPLICATION_PAYLOAD_VERSION,
   decodeApplicationPayloadView,
   encodeMultipartApplicationPayload,
   type ServiceApplicationPayload,
@@ -63,7 +84,9 @@ import {
 import {
   SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
   SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-  SERVICE_WIRE_REQUIRED_CAPABILITY
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireFrameworkErrorCode,
+  ServiceWireCommand
 } from '../../foundation/service-wire-constants.generated';
 import {
   ServiceStatefulRuntime,
@@ -168,9 +191,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private nextPeerIntent = 1n;
   private closed = false;
   private objectRole: ServiceNodeDescriptor['objectRole'] = 'none';
-  private placementWeight = 100;
-  private activeCapacityLimit = 10_000;
-  private pendingCapacityLimit = 128;
+  private placementWeight = ZLINK_DEFAULT_PUBLIC_WEIGHT;
+  private activeCapacityLimit: number = DEFAULT_NATIVE_ACTIVE_CAPACITY;
+  private pendingCapacityLimit: number = DEFAULT_ACTIVATION_CONCURRENCY_LIMIT;
   private objectCapabilities: readonly string[] = [];
   private maintenanceWave?: string;
   private mailboxRecordDropped?: (record: {
@@ -645,7 +668,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return await this.requireRuntime().requestService(
       String(targetRid),
       frames.map((frame) => Buffer.from(frame)),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -657,7 +680,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
   }
@@ -677,7 +700,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
@@ -740,7 +763,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       connectionIntentId:
         findIntent(descriptor.nodeRoutingId, descriptor.advertisedEndpoint)?.id ?? 0n,
       source: 1,
-      state: 6,
+      state: MeshPeerRuntimeState.NotRequired,
       routingId: descriptor.nodeRoutingId as RoutingId,
       lifecycleGeneration: descriptor.lifecycleGeneration,
       descriptorRevision: descriptor.descriptorRevision,
@@ -1130,7 +1153,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestInstanceSpot(
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>
   ): MeshOperationId {
@@ -1149,7 +1172,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   actorLookup(actorId: string) {
     const actor = this.requireStateful().actor(actorId);
     if (actor === undefined) {
-      throw Object.assign(new Error(`Actor '${actorId}' was not found.`), { nativeErrno: 2 });
+      throw Object.assign(new Error(`Actor '${actorId}' was not found.`), {
+        nativeErrno: nativeErrnoValues.ENOENT
+      });
     }
     return {
       actor: actor.ref,
@@ -1159,14 +1184,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
-  lookupRemoteActor(targetNodeRid: unknown, actorId: string, timeoutMs = 30_000): MeshOperationId {
+  lookupRemoteActor(
+    targetNodeRid: unknown,
+    actorId: string,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLookup,
       this.requireStateful().lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
     );
   }
 
-  destroyActor(actor: ZLinkBackendActorRef, timeoutMs = 30_000): MeshOperationId {
+  destroyActor(
+    actor: ZLinkBackendActorRef,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorDestroy,
       this.requireStateful().destroyActor(actor, timeoutMs)
@@ -1179,7 +1211,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
     request: ServiceApplicationPayload,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorJoin,
@@ -1206,7 +1238,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly ownerLeaseGeneration: bigint;
     },
     local: { readonly phase: 'admission'; readonly transferId: string },
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorJoin,
@@ -1227,7 +1259,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     request: ServiceApplicationPayload,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const target = String(targetNodeRid);
     return this.observeStateful(
@@ -1246,7 +1278,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly ownerLeaseGeneration: bigint;
     },
     local: { readonly phase: 'admission'; readonly transferId: string },
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const target = String(targetNodeRid);
     return this.observeStateful(
@@ -1286,7 +1318,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(actor.nodeRid)),
         actor.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? 30_000
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       )
     );
   }
@@ -1318,7 +1350,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(target.nodeRid)),
         target.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? 30_000,
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         source
       )
     );
@@ -1340,7 +1372,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const binding = this.requireStateful().registry.binding(actor);
     if (binding === undefined) {
@@ -1360,7 +1392,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   leaveActor(
     actor: ZLinkBackendActorRef,
     expectedMembershipEpoch: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLeave,
@@ -1444,7 +1476,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       nodeRoutingId: this.routingId,
       lifecycleGeneration: this.lifecycleGeneration,
       descriptorRevision: 1n,
-      advertisedEndpoint: this.bindEndpoint ?? 'inproc://not-started',
+      advertisedEndpoint: this.bindEndpoint ?? UNSTARTED_DIAGNOSTIC_ENDPOINT,
       channels,
       state: 'preparing',
       // Plaintext RouteMesh peers use the shared default admission identity.
@@ -1532,7 +1564,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     operationKind: number,
     pending: ServiceStatefulPendingOperation
   ): MeshOperationId {
-    const id = { high: 2n, low: pending.id };
+    const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
     void pending.promise.then(
       (result) => this.enqueueCompletion(id, operationKind, result),
       (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
@@ -1583,7 +1615,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.completionCount -= 1;
     if (this.completionCount === 0) {
       this.clearCompletions();
-    } else if (this.completionHead >= 1024 && this.completionHead * 2 >= this.completions.length) {
+    } else if (shouldCompactBackingArray(this.completionHead, this.completions.length)) {
       this.completions.splice(0, this.completionHead);
       this.completionHead = 0;
     }
@@ -1739,7 +1771,7 @@ class RawServiceSpot implements ServiceSpot {
       this.state,
       routeFence,
       parts,
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -1815,7 +1847,7 @@ function entrySpotFenceVersion(generation: bigint): string {
 }
 
 class RawStreamSessionService implements StreamSessionService {
-  private state = 1;
+  private state: StreamSessionRuntimeState = StreamSessionRuntimeState.Created;
   private closed = false;
   private readonly sessionTargets = new Map<string, RoutingId>();
 
@@ -1830,7 +1862,7 @@ class RawStreamSessionService implements StreamSessionService {
 
   start(): void {
     if (this.closed) throw new Error('STREAM session service is closed.');
-    this.state = 2;
+    this.state = StreamSessionRuntimeState.Started;
   }
 
   shutdown(_timeoutMs: number): RequestResultValue {
@@ -1841,7 +1873,7 @@ class RawStreamSessionService implements StreamSessionService {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.state = 5;
+    this.state = StreamSessionRuntimeState.Closed;
     this.sessionTargets.clear();
   }
 
@@ -1858,7 +1890,11 @@ class RawStreamSessionService implements StreamSessionService {
     };
   }
 
-  lookupActor(targetNodeRid: RoutingId, actorId: string, timeoutMs = 30_000): MeshOperationId {
+  lookupActor(
+    targetNodeRid: RoutingId,
+    actorId: string,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     this.requireStarted();
     return this.observe(
       OperationKind.ActorLookup,
@@ -1869,7 +1905,7 @@ class RawStreamSessionService implements StreamSessionService {
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     onBindingReplaced?: (
       actorId: string,
       retiredSession: ServiceRetiredBoundSessionRouteFence,
@@ -1898,7 +1934,7 @@ class RawStreamSessionService implements StreamSessionService {
     sessionRid: RoutingId,
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     this.requireStarted();
     return this.observe(
@@ -1971,7 +2007,7 @@ class RawStreamSessionService implements StreamSessionService {
   }
 
   private requireStarted(): void {
-    if (this.state !== 2 || this.closed) {
+    if (this.state !== StreamSessionRuntimeState.Started || this.closed) {
       throw new Error('STREAM session service is not started.');
     }
   }
@@ -2213,7 +2249,7 @@ function decodeMultipartRecord(
     };
   }
   const header = record.parts[0]!;
-  const command = header[3]!;
+  const command = header[SERVICE_WIRE_COMMAND_OFFSET]!;
   const payloadFrame = record.parts[1]!;
   const application = decodeApplicationEnvelope(payloadFrame);
   const channelName = record.owner.startsWith('channel:')
@@ -2224,11 +2260,11 @@ function decodeMultipartRecord(
       ? { high: 0n, low: 0n }
       : { high: 1n, low: record.correlation };
   const kind =
-    command === 16
+    command === ServiceWireCommand.nodeSend
       ? ReceiveKind.NodeSend
-      : command === 17
+      : command === ServiceWireCommand.nodeRequest
         ? ReceiveKind.NodeRequest
-        : command === 18
+        : command === ServiceWireCommand.channelSend
           ? ReceiveKind.ChannelSend
           : ReceiveKind.ChannelRequest;
   const operationKind =
@@ -2285,7 +2321,7 @@ function decodeStatefulRecord(
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }
-      : { high: 2n, low: record.correlation };
+      : { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: record.correlation };
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
@@ -2447,7 +2483,10 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   //  requestProtocolError(16): the schema terminal-failure-integrity rule
   //  forbids a typed terminal (104) with failure none.
   if (failure instanceof ServiceWireProtocolError) {
-    return { terminalResult: RequestResult.ProtocolError, failureCode: 16 };
+    return {
+      terminalResult: RequestResult.ProtocolError,
+      failureCode: ServiceWireFrameworkErrorCode.requestProtocolError
+    };
   }
   if (failure instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(failure);
@@ -2458,7 +2497,10 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   if (failure instanceof OperationCancelledError) {
     return { terminalResult: RequestResult.NotConnected, failureCode: 0 };
   }
-  return { terminalResult: RequestResult.InternalError, failureCode: 17 };
+  return {
+    terminalResult: RequestResult.InternalError,
+    failureCode: ServiceWireFrameworkErrorCode.requestFailed
+  };
 }
 
 function submitFailureTerminal(result: number): number {
@@ -2522,7 +2564,10 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
 
 function decodeApplicationEnvelope(frame: Uint8Array) {
   const bytes = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
-  if (bytes.length < 11 || bytes[0] !== 1) {
+  if (
+    bytes.length < APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES ||
+    bytes[0] !== APPLICATION_PAYLOAD_VERSION
+  ) {
     throw new ServiceWireProtocolError('Invalid application envelope.');
   }
   const bodyLength = bytes.readUInt32BE(1);
@@ -2627,15 +2672,15 @@ function stateCode(state: ServiceNodeDescriptor['state']): number {
 function peerStateCode(state: ServiceNodeDescriptor['state']): number {
   switch (state) {
     case 'preparing':
-      return 2;
+      return MeshPeerRuntimeState.Preparing;
     case 'serving':
     case 'retiring':
-      return 3;
+      return MeshPeerRuntimeState.Serving;
     case 'draining':
-      return 4;
+      return MeshPeerRuntimeState.Draining;
     case 'stopped':
     case 'error':
-      return 5;
+      return MeshPeerRuntimeState.Closed;
   }
 }
 
@@ -2648,14 +2693,14 @@ function createLifecycleGeneration(): bigint {
 }
 
 function requirePositivePlacementValue(value: number, name: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
+  if (!isValidPositiveCapacity(value)) {
     throw new RangeError(`${name} must be an integer in 1..2147483647.`);
   }
   return value;
 }
 
 function requirePublicWeight(value: number, name: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
+  if (!isValidPublicWeight(value)) {
     throw new RangeError(`${name} must be an integer in 0..10000.`);
   }
   return value;

@@ -1,3 +1,6 @@
+import { shouldCompactBackingArray } from '../admission';
+import { DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -63,7 +66,6 @@ const ZLINK_STREAM_HEARTBEAT_INTERVAL_MS = 1_000;
 const ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS = 5_000;
 const ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
-const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
 const ZLINK_STREAM_MONITOR_IDLE_MIN_DELAY_MS = 1;
 const ZLINK_STREAM_MONITOR_IDLE_MAX_DELAY_MS = 20;
@@ -389,7 +391,7 @@ export class ZLinkStreamSessionRuntime {
         }
         forcedClose = true;
         void this.close().catch((error) => this.options.onError?.(error));
-      }, this.options.replacementCallbackTimeoutMs ?? ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS);
+      }, this.options.replacementCallbackTimeoutMs ?? DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS);
 
       const callback = session.onActorBindingReplaced;
       if (callback === undefined) {
@@ -455,8 +457,8 @@ export class ZLinkStreamSessionRuntime {
     this.connected = true;
     this.lastApplicationActivityAt = this.livenessClock.now();
     this.scheduleLivenessCheck();
-    this.options.metrics?.change('zlink.stream.connections.active', 1, { transport: 'tcp' });
-    this.options.metrics?.count('zlink.stream.connections.opened', 1, { transport: 'tcp' });
+    this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, 1, { transport: 'tcp' });
+    this.options.metrics?.count(METRIC_NAMES.StreamConnectionsOpened, 1, { transport: 'tcp' });
     const session = await this.requireSession();
     await session.onConnected?.(this.context);
   }
@@ -829,8 +831,8 @@ export class ZLinkStreamSessionRuntime {
   private async cleanup(): Promise<void> {
     if (this.connected && !this.metricsClosed) {
       this.metricsClosed = true;
-      this.options.metrics?.change('zlink.stream.connections.active', -1, { transport: 'tcp' });
-      this.options.metrics?.count('zlink.stream.connections.closed', 1, {
+      this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, -1, { transport: 'tcp' });
+      this.options.metrics?.count(METRIC_NAMES.StreamConnectionsClosed, 1, {
         transport: 'tcp',
         close_reason: normalizeStreamCloseReason(this.closeReason)
       });
@@ -1350,8 +1352,10 @@ export class ZLinkStreamSessionNodeRuntime {
       this.pendingConnectionMetadata.length = 0;
       this.pendingConnectionMetadataHead = 0;
     } else if (
-      this.pendingConnectionMetadataHead >= 1024 &&
-      this.pendingConnectionMetadataHead * 2 >= this.pendingConnectionMetadata.length
+      shouldCompactBackingArray(
+        this.pendingConnectionMetadataHead,
+        this.pendingConnectionMetadata.length
+      )
     ) {
       this.pendingConnectionMetadata.splice(0, this.pendingConnectionMetadataHead);
       this.pendingConnectionMetadataHead = 0;
@@ -1379,8 +1383,10 @@ export class ZLinkStreamSessionNodeRuntime {
       this.unaddressedMonitorSessions.length = 0;
       this.unaddressedMonitorSessionHead = 0;
     } else if (
-      this.unaddressedMonitorSessionHead >= 1024 &&
-      this.unaddressedMonitorSessionHead * 2 >= this.unaddressedMonitorSessions.length
+      shouldCompactBackingArray(
+        this.unaddressedMonitorSessionHead,
+        this.unaddressedMonitorSessions.length
+      )
     ) {
       this.unaddressedMonitorSessions.splice(0, this.unaddressedMonitorSessionHead);
       this.unaddressedMonitorSessionHead = 0;

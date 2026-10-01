@@ -1,3 +1,4 @@
+import { DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS } from './bound-actor-relay-sender';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -211,7 +212,7 @@ export class ZLinkSessionActorCoordinator {
             if (context.stream instanceof ZLinkManagedStream) {
               await context.stream.unbindActor(
                 actorRef.actorId,
-                this.options.actorBindTimeoutMs ?? 2000
+                this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS
               );
             }
           } catch (cleanupError) {
@@ -474,7 +475,7 @@ export class ZLinkSessionActorCoordinator {
     try {
       await context.stream.bindActor(
         actorRef,
-        this.options.actorBindTimeoutMs ?? 2000,
+        this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS,
         signal,
         context.actorBindingReplacedHandler,
         authorityFence

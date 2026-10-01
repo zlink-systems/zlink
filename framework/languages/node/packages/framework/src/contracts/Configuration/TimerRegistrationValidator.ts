@@ -1,6 +1,8 @@
 import { ZLinkTimerOverrunPolicy, type ZLinkTimerOptions } from '../Timers';
 import { ZLinkConfigurationException } from './ConfigurationException';
 
+const MAX_TIMER_CATCH_UP_TICKS = 2_147_483_647;
+
 export function validateTimerRegistration(
   name: string,
   periodMs: number,
@@ -23,7 +25,7 @@ export function validateTimerRegistration(
     (options.maxCatchUpTicks === undefined ||
       !Number.isInteger(options.maxCatchUpTicks) ||
       options.maxCatchUpTicks < 1 ||
-      options.maxCatchUpTicks > 2_147_483_647)
+      options.maxCatchUpTicks > MAX_TIMER_CATCH_UP_TICKS)
   ) {
     throw new ZLinkConfigurationException(
       'SPOT timer MaxCatchUpTicks must be an integer from 1 through 2,147,483,647.'

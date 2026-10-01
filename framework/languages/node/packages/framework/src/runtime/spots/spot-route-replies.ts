@@ -1,3 +1,5 @@
+import { constants as osConstants } from 'node:os';
+const nativeErrnoValues = osConstants.errno;
 import type {
   ZLinkBackendMessageLike as MessageLike,
   ZLinkBackendReceived as BackendReceived
@@ -120,6 +122,6 @@ function isNativeBadAddress(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
-    Number((error as { nativeErrno?: unknown }).nativeErrno) === 14
+    Number((error as { nativeErrno?: unknown }).nativeErrno) === nativeErrnoValues.EFAULT
   );
 }

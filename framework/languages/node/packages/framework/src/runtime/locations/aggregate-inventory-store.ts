@@ -1,4 +1,6 @@
+import { PROVIDER_STORAGE_NAMESPACE_PREFIX } from './in-memory-provider-location-store';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import type { ZLinkLocationStore, ZLinkStoreKey, ZLinkStoreReadResult } from '../../contracts';
 import type {
   ZLinkAggregateFence,
@@ -6,7 +8,9 @@ import type {
 } from './internal-location-contracts';
 import { storeKey } from './in-memory-provider-location-store';
 
-const PREFIX = 'zlink:v11:aggregate-inventory:';
+const INVENTORY_PAGE_KIND = 'aggregate-inventory-page-v1';
+const INVENTORY_ROOT_KIND = 'aggregate-inventory-root-v1';
+const PREFIX = `${PROVIDER_STORAGE_NAMESPACE_PREFIX}aggregate-inventory:`;
 const MAX_PAGE_ENTRIES = 1_024;
 const MAX_PAGE_BYTES = 1_024 * 1_024;
 const MAX_TREE_LEVELS = 32;
@@ -30,7 +34,7 @@ interface InventoryReference {
 }
 
 interface InventoryPage {
-  readonly kind: 'aggregate-inventory-page-v1';
+  readonly kind: typeof INVENTORY_PAGE_KIND;
   readonly level: number;
   readonly index: number;
   readonly startIndex: number;
@@ -40,7 +44,7 @@ interface InventoryPage {
 }
 
 interface InventoryRoot {
-  readonly kind: 'aggregate-inventory-root-v1';
+  readonly kind: typeof INVENTORY_ROOT_KIND;
   readonly totalCount: number;
   readonly digest: string;
   readonly declaredDigest: string;
@@ -209,7 +213,7 @@ function buildTree(request: ZLinkAggregatePrepareRequest): InventoryTree {
   if (request.participants.length < 1) {
     throw new RangeError('Aggregate inventory requires at least one participant.');
   }
-  if (request.inventoryDigest.byteLength !== 32) {
+  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
     throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
   }
   const entries = request.participants.map((participant, index): InventoryEntry => ({
@@ -269,7 +273,7 @@ function packLeafPages(
     let bytes: Uint8Array;
     do {
       page = {
-        kind: 'aggregate-inventory-page-v1',
+        kind: INVENTORY_PAGE_KIND,
         level: 0,
         index: references.length,
         startIndex: offset,
@@ -304,7 +308,7 @@ function packIndexPages(
     do {
       const selected = children.slice(offset, offset + count);
       page = {
-        kind: 'aggregate-inventory-page-v1',
+        kind: INVENTORY_PAGE_KIND,
         level,
         index: references.length,
         startIndex: selected[0]!.startIndex,
@@ -339,7 +343,7 @@ function rootCandidate(
     if (page.level <= topLevel) pageCountsByLevel[page.level]!++;
   }
   return {
-    kind: 'aggregate-inventory-root-v1',
+    kind: INVENTORY_ROOT_KIND,
     totalCount,
     digest,
     declaredDigest,
@@ -456,7 +460,7 @@ function decodeRoot(bytes: Uint8Array): InventoryRoot {
     value === null ||
     typeof value !== 'object' ||
     !('kind' in value) ||
-    value.kind !== 'aggregate-inventory-root-v1'
+    value.kind !== INVENTORY_ROOT_KIND
   ) {
     throw new Error('Invalid inventory root.');
   }
@@ -469,7 +473,7 @@ function decodePage(bytes: Uint8Array): InventoryPage {
     value === null ||
     typeof value !== 'object' ||
     !('kind' in value) ||
-    value.kind !== 'aggregate-inventory-page-v1' ||
+    value.kind !== INVENTORY_PAGE_KIND ||
     !('entries' in value) ||
     !Array.isArray(value.entries) ||
     !('children' in value) ||
@@ -524,7 +528,7 @@ function isSha256(value: unknown): value is string {
 function sameHash(expected: string, actual: Uint8Array): boolean {
   return (
     isSha256(expected) &&
-    actual.byteLength === 32 &&
+    actual.byteLength === SHA256_DIGEST_BYTES &&
     timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(actual))
   );
 }

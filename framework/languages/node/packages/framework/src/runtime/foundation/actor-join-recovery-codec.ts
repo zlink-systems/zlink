@@ -1,3 +1,6 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+const ACTOR_ID_DIGEST_MAX_BYTES = 0xffff;
+
 import { createHash } from 'node:crypto';
 import type { RoutingId, ZLinkActorJoinOperationId } from '../../contracts';
 import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
@@ -7,14 +10,16 @@ import {
 } from '../protocol/service_wire_pilot_codec.generated';
 import { decodeServiceWireFrozenRecord } from './service-stateful-wire-codec';
 
+export const SHA256_DIGEST_BYTES = 32;
+
 const RECOVERY_PACKET_NAME = '__zlink.actor.routed_join.recovery';
 const RECOVERY_CONTENT_TYPE = 'application/x-zlink-actor-routed-join-recovery-v1';
 const MAXIMUM_METADATA_BYTES = 256 * 1024;
 const FRAMEWORK_METADATA_UPPER_BOUND_BYTES = 64 * 1024;
 const ACCEPTED_JOURNAL_UPPER_BOUND_BYTES = 16 * 1024 * 1024;
 const SNAPSHOT_APPLICATION_STATE_RESERVATION_BYTES = 64 * 1024 * 1024;
-const RECREATE_RELOCATION_CONTENT_TYPE = 'application/vnd.zlink.actor-relocation.recreate';
-const SNAPSHOT_RELOCATION_CONTENT_TYPE = 'application/vnd.zlink.actor-relocation.snapshot';
+export const RECREATE_RELOCATION_CONTENT_TYPE = 'application/vnd.zlink.actor-relocation.recreate';
+export const SNAPSHOT_RELOCATION_CONTENT_TYPE = 'application/vnd.zlink.actor-relocation.snapshot';
 
 export interface CanonicalActorJoinRecoveryRequest {
   readonly actorId: string;
@@ -87,7 +92,8 @@ export function canonicalActorJoinHandoffId(input: {
   readonly correlation: bigint;
 }): string {
   const actor = textBytes(input.actorId, 'actorId');
-  if (actor.byteLength > 0xffff) throw new RangeError('Actor id exceeds u16 bytes.');
+  if (actor.byteLength > ACTOR_ID_DIGEST_MAX_BYTES)
+    throw new RangeError('Actor id exceeds u16 bytes.');
   const digest = createHash('sha256')
     .update(
       Buffer.concat([
@@ -139,7 +145,7 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
       RelocationChecksumCrc32c: 0,
       RelocationAggregateId: canonicalUuid(input.relocationId),
       RelocationAggregateGeneration: 1n,
-      RelocationInventoryDigest: Buffer.alloc(32).toString('base64'),
+      RelocationInventoryDigest: Buffer.alloc(SHA256_DIGEST_BYTES).toString('base64'),
       RequestContentType: requireText(input.requestContentType, 'Actor Join request content type'),
       Request: '',
       HandoffFrames: [],
@@ -423,7 +429,7 @@ function requireText(value: string | undefined, name: string): string {
 }
 
 function nonZeroU64(value: bigint, name: string): bigint {
-  if (value < 1n || value > 0xffff_ffff_ffff_ffffn) throw new RangeError(`${name} is invalid.`);
+  if (value < 1n || value > UINT64_MAX) throw new RangeError(`${name} is invalid.`);
   return value;
 }
 
@@ -435,7 +441,7 @@ function u16(value: number): Buffer {
 }
 
 function u64(value: bigint): Buffer {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new RangeError('u64');
+  if (value < 0n || value > UINT64_MAX) throw new RangeError('u64');
   const result = Buffer.alloc(8);
   result.writeBigUInt64BE(value);
   return result;
@@ -461,7 +467,7 @@ function integer(value: unknown, name: string): bigint {
   if (typeof value !== 'string' || !/^\d+$/u.test(value))
     throw new TypeError(`${name} is invalid.`);
   const parsed = BigInt(value);
-  if (parsed > 0xffff_ffff_ffff_ffffn) throw new TypeError(`${name} exceeds u64.`);
+  if (parsed > UINT64_MAX) throw new TypeError(`${name} exceeds u64.`);
   return parsed;
 }
 

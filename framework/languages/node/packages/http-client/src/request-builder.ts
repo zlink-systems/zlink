@@ -1,5 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { HttpHeaderName, HttpFormContentType } from './runtime/text';
+const HTTP_FAILURE_STATUS_MIN = 400;
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { ZLinkHttpClient, ZLinkHttpClientBuilder } from './client';
 import type {
@@ -126,11 +130,11 @@ export class ZLinkHttpRequestBuilder {
       }
       requireNonBlank(contentType, 'HTTP request body content type is required');
       this.bodyValue = value;
-      this.headersValue['content-type'] = contentType;
+      this.headersValue[HttpHeaderName.ContentType] = contentType;
       return this;
     }
     this.bodyValue = JSON.stringify(value);
-    this.headersValue['content-type'] ??= 'application/json';
+    this.headersValue[HttpHeaderName.ContentType] ??= ZlinkStreamContentType.Json;
     return this;
   }
 
@@ -147,7 +151,7 @@ export class ZLinkHttpRequestBuilder {
     }
     requireNonBlank(contentType, 'HTTP request body content type is required');
     this.bodyProviderValue = provider;
-    this.headersValue['content-type'] = contentType;
+    this.headersValue[HttpHeaderName.ContentType] = contentType;
     return this;
   }
 
@@ -217,7 +221,7 @@ export class ZLinkHttpRequestBuilder {
 
   protected async executeTyped<T>(): Promise<HttpResponse<T>> {
     const raw = await this.submitRaw();
-    if (raw.status >= 400) {
+    if (raw.status >= HTTP_FAILURE_STATUS_MIN) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.InternalFailure,
         `HTTP request failed with status ${raw.status}`
@@ -293,13 +297,14 @@ export class ZLinkHttpRequestBuilder {
     }
 
     if (this.formValue.length > 0) {
-      headers['content-type'] = 'application/x-www-form-urlencoded';
+      headers[HttpHeaderName.ContentType] = HttpFormContentType.UrlEncoded;
       return { body: this.encodeFormBody(), headers };
     }
 
     if (this.multipartValue.length > 0) {
       const boundary = makeMultipartBoundary();
-      headers['content-type'] = `multipart/form-data; boundary=${boundary}`;
+      headers[HttpHeaderName.ContentType] =
+        `${HttpFormContentType.Multipart}; boundary=${boundary}`;
       return { body: this.encodeMultipartBody(boundary), headers };
     }
 

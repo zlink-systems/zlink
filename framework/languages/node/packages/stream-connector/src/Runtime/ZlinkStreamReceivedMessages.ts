@@ -1,3 +1,4 @@
+import { shouldCompactBackingArray } from './Transport/BrowserWebSocketConnection';
 import { Disposable, ZlinkStreamEncodedPayload, ZlinkStreamMessage } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
@@ -429,7 +430,7 @@ export class ZlinkStreamReceivedMessages {
       this.deliverable.length = 0;
       return;
     }
-    if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+    if (shouldCompactBackingArray(this.queueHead, this.queue.length)) {
       this.queue.splice(0, this.queueHead);
       this.queueHead = 0;
       this.deliverable.length = 0;

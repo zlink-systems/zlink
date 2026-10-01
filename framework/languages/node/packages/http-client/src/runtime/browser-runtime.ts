@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { HttpHeaderName } from './text';
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { HttpClientOptions } from './options';
 import type { HttpRequestSpec, RawResult } from './request-performer';
@@ -51,7 +54,7 @@ export class HttpClientRuntime {
         signal
       });
 
-      const location = response.headers.get('location');
+      const location = response.headers.get(HttpHeaderName.Location);
       if (
         this.options.followRedirects > 0 &&
         isRedirectStatus(response.status) &&
@@ -87,10 +90,12 @@ export class HttpClientRuntime {
     keepAuthorization: boolean,
     hasBody: boolean
   ): Record<string, string> {
-    const headers: Record<string, string> = { accept: 'application/json' };
+    const headers: Record<string, string> = {
+      [HttpHeaderName.Accept]: ZlinkStreamContentType.Json
+    };
     applyHeaders(headers, this.options.headers, keepAuthorization);
     applyHeaders(headers, spec.headers, keepAuthorization);
-    if (!hasBody) delete headers['content-type'];
+    if (!hasBody) delete headers[HttpHeaderName.ContentType];
     return headers;
   }
 }
@@ -156,6 +161,6 @@ function applyHeaders(
 ): void {
   for (const [name, value] of Object.entries(source)) {
     const lower = name.toLowerCase();
-    if (keepAuthorization || lower !== 'authorization') target[lower] = value;
+    if (keepAuthorization || lower !== HttpHeaderName.Authorization) target[lower] = value;
   }
 }

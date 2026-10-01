@@ -1,3 +1,7 @@
+const TRANSFER_RESOLUTION_TIMEOUT_MS = 5_000;
+const TRANSFER_POLL_INTERVAL_MS = 10;
+
+import { isRelocationDebugEnabled, relocationDebug } from '../diagnostics';
 import { createHash } from 'node:crypto';
 import type {
   ActorRef,
@@ -421,15 +425,19 @@ export class ZLinkActorTransferRuntime {
     }
     try {
       if (state.spotId !== undefined) {
-        relocationDebug('source_actor_move.await_spot_transfer', {
-          actorId: actor.context.actorId,
-          spotId: String(state.spotId)
-        });
+        if (isRelocationDebugEnabled()) {
+          relocationDebug('source_actor_move.await_spot_transfer', {
+            actorId: actor.context.actorId,
+            spotId: String(state.spotId)
+          });
+        }
         await this.options.spotManager()?.beginActorTransfer(state.spotId, actor.context.actorId);
-        relocationDebug('source_actor_move.spot_transfer_complete', {
-          actorId: actor.context.actorId,
-          spotId: String(state.spotId)
-        });
+        if (isRelocationDebugEnabled()) {
+          relocationDebug('source_actor_move.spot_transfer_complete', {
+            actorId: actor.context.actorId,
+            spotId: String(state.spotId)
+          });
+        }
       }
     } catch (error) {
       if (!deferredJoin) {
@@ -738,10 +746,12 @@ export class ZLinkActorTransferRuntime {
     rollback(): Promise<void>;
     discard(reason: unknown): void;
   }> {
-    relocationDebug('maintenance_session.begin', {
-      actorId: actor.context.actorId,
-      spotId: state.spotId === undefined ? undefined : String(state.spotId)
-    });
+    if (isRelocationDebugEnabled()) {
+      relocationDebug('maintenance_session.begin', {
+        actorId: actor.context.actorId,
+        spotId: state.spotId === undefined ? undefined : String(state.spotId)
+      });
+    }
     if (manageMembership) {
       await this.beginSourceActorMove(actor, state);
     } else {
@@ -751,9 +761,11 @@ export class ZLinkActorTransferRuntime {
         requireSourceObjectGeneration(actor.context.actorId, state)
       );
     }
-    relocationDebug('maintenance_session.source_move_complete', {
-      actorId: actor.context.actorId
-    });
+    if (isRelocationDebugEnabled()) {
+      relocationDebug('maintenance_session.source_move_complete', {
+        actorId: actor.context.actorId
+      });
+    }
     let sealedSession: ZLinkRemoteBoundSessionTarget | undefined;
     try {
       if (state.boundSession !== undefined) {
@@ -1485,7 +1497,7 @@ export class ZLinkActorTransferRuntime {
         `Actor '${actor.context.actorId}' Core location does not match the committed target SPOT.`
       );
     }
-    const deadline = performance.now() + 5_000;
+    const deadline = performance.now() + TRANSFER_RESOLUTION_TIMEOUT_MS;
     const ownerNodeGeneration = node.status().lifecycleGeneration;
     if (ownerNodeGeneration <= 0n) {
       throw new Error(
@@ -1523,7 +1535,7 @@ export class ZLinkActorTransferRuntime {
       if (claim.status !== 'conflict' || performance.now() >= deadline) {
         break;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => setTimeout(resolve, TRANSFER_POLL_INTERVAL_MS));
     }
     if (claim.status === 'conflict') {
       throw new Error(`Actor '${actor.context.actorId}' target location takeover was rejected.`);
@@ -1697,11 +1709,6 @@ export class ZLinkActorTransferRuntime {
   }
 }
 
-function relocationDebug(marker: string, detail: Record<string, unknown>): void {
-  if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
-  console.error('[zlink.runtime.relocation]', marker, detail);
-}
-
 function deferredJoinTerminalKey(completion: ZLinkDeferredJoinCompletion): string {
   return (
     `${completion.actor.actorId}:${completion.actor.objectGeneration.toString()}:` +
@@ -1759,7 +1766,7 @@ async function waitForActorAuthorityRetry(
     throw new Error('Actor target authority deadline expired.', { cause });
   }
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, Math.min(10, remaining));
+    const timer = setTimeout(resolve, Math.min(TRANSFER_POLL_INTERVAL_MS, remaining));
     timer.unref();
     const abort = () => {
       clearTimeout(timer);

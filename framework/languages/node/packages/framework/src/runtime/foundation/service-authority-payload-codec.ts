@@ -1,3 +1,11 @@
+import { SERVICE_WIRE_TEXT8_MAX_BYTES } from './service-wire-binary-primitives';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { ZLinkSpotKind, zlinkSpotKindToWire } from '../../contracts';
+const SPOT_AUTHORITY_OBJECT_KIND = 2;
+const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
+const INSTANCE_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Instance);
+const AUTHORITY_TEXT16_MAX_BYTES = 0xffff;
+
 import { crc32c } from './service-relocation-runtime';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
 
@@ -311,7 +319,7 @@ function decodeSpotAuthority(payload: Uint8Array):
     const operationKind = body.u8();
     const objectKind = body.u8();
     const object = body.takeReader(body.u16());
-    if (objectKind !== 2) return undefined;
+    if (objectKind !== SPOT_AUTHORITY_OBJECT_KIND) return undefined;
     const spotKind = object.u8();
     const spot = object.takeReader(object.u16());
     if (!object.done) return undefined;
@@ -320,12 +328,12 @@ function decodeSpotAuthority(payload: Uint8Array):
     let state: number;
     let stableType: string;
     let spotId: string;
-    if (spotKind === 2) {
+    if (spotKind === USER_SPOT_WIRE_KIND) {
       kind = 'user_spot';
       spotId = spot.rid();
       stableType = spot.text8();
       state = spot.u8();
-    } else if (spotKind === 3) {
+    } else if (spotKind === INSTANCE_SPOT_WIRE_KIND) {
       kind = 'instance_spot';
       state = spot.u8();
       const instance = spot.takeReader(spot.u16());
@@ -417,7 +425,7 @@ function rid(value: string, name: string): Buffer {
 
 function text16(value: string, name: string): Buffer {
   const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xffff || bytes.includes(0)) {
+  if (bytes.byteLength < 1 || bytes.byteLength > AUTHORITY_TEXT16_MAX_BYTES || bytes.includes(0)) {
     throw new RangeError(`${name} must contain 1..65535 UTF-8 bytes without NUL.`);
   }
   return concat(u16(bytes.byteLength), bytes);
@@ -432,7 +440,11 @@ function sha256(value: Uint8Array): Buffer {
 
 function sized8(value: string, name: string): Buffer {
   const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 255 || bytes.includes(0)) {
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > SERVICE_WIRE_TEXT8_MAX_BYTES ||
+    bytes.includes(0)
+  ) {
     throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
@@ -458,7 +470,7 @@ function boundedU32(value: number, name: string): Buffer {
 }
 
 function u64(value: bigint, name: string): Buffer {
-  if (value <= 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value <= 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} must be a non-zero u64.`);
   }
   const result = Buffer.alloc(8);
@@ -467,7 +479,7 @@ function u64(value: bigint, name: string): Buffer {
 }
 
 function ordinalU64(value: bigint, name: string): Buffer {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value < 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} must be a u64.`);
   }
   const result = Buffer.alloc(8);

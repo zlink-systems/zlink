@@ -7,7 +7,12 @@ import {
 } from '../../Contracts';
 import { ZlinkStreamHeaderFlags } from '../../Contracts/ZlinkStreamEnums';
 import type { ZlinkStreamHeader } from '../../Contracts/ZlinkStreamModels';
-import { decodeStreamWireHeader, encodeStreamWireHeader } from '@zlink-systems/stream-wire';
+import {
+  decodeStreamWireHeader,
+  encodeStreamWireHeader,
+  isStreamWireMessageKind,
+  isStreamWireCodec
+} from '@zlink-systems/stream-wire';
 import { connectorError } from '../ZlinkStreamSupport';
 import { validateName } from './ZlinkStreamPacketNameValidator';
 import { ZlinkStreamMetadataCodec } from './ZlinkStreamMetadataCodec';
@@ -173,10 +178,10 @@ function validateEnum(
   codec: ZlinkStreamCodec,
   flags: ZlinkStreamHeaderFlags
 ): void {
-  if (![1, 2, 3, 4, 5].includes(kind)) {
+  if (!isStreamWireMessageKind(kind)) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream message kind.');
   }
-  if (![0, 1, 2, 3].includes(codec)) {
+  if (!isStreamWireCodec(codec)) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream codec.');
   }
   const known =

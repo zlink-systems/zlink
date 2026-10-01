@@ -1,6 +1,16 @@
+const FLOW_UUID_BYTES = 16;
+const FLOW_UUID_VARIANT_BYTE = 8;
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import type { ZLinkFlowOrigin } from '../../contracts';
+
+export const FLOW_ORIGIN_VALUES: Readonly<Record<ZLinkFlowOrigin, string>> = Object.freeze({
+  Inbound: 'inbound',
+  Timer: 'timer',
+  Application: 'application',
+  Lifecycle: 'lifecycle'
+});
 
 export interface ZLinkFlowContextValue {
   readonly flowId: string;
@@ -84,12 +94,12 @@ export function createInboundFlow(
 }
 
 function createFlowId(): string {
-  const bytes = randomBytes(16);
+  const bytes = randomBytes(FLOW_UUID_BYTES);
   // Date.now() is always within 48 bits, which is exactly the UUIDv7
   // timestamp field.
   bytes.writeUIntBE(Date.now(), 0, 6);
   bytes[6] = 0x70 | (bytes[6] & 0x0f);
-  bytes[8] = 0x80 | (bytes[8] & 0x3f);
+  bytes[FLOW_UUID_VARIANT_BYTE] = 0x80 | (bytes[FLOW_UUID_VARIANT_BYTE] & 0x3f);
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

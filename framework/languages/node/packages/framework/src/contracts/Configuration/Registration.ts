@@ -1,5 +1,10 @@
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../Common/CoreTypes';
+import { AutoHwmProfile } from '@zlink-systems/zlink';
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 import type { ZLinkFrameworkOptions } from '../../contracts';
 import { ZLinkApplicationJobQueueProfile } from '../Dispatch';
+import { zlinkDefaultLocationOptions } from '../Locations/Options';
 export { ZLinkConfigurationException } from './ConfigurationException';
 import { createFrameworkOptions } from './RegistrationBuilders';
 export { createFrameworkOptions } from './RegistrationBuilders';
@@ -38,8 +43,7 @@ export {
   parseEndpointHostPort
 } from './EndpointNotation';
 
-const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
-const DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
+export const DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 
 export function createFrameworkRegistration(
   options: ZLinkFrameworkRegistrationOptions = {}
@@ -66,7 +70,7 @@ export function createFrameworkRegistration(
     messageFollowDurationMs: normalizeNonNegativeInteger(
       options.messageFollowDurationMs,
       'messageFollowDurationMs',
-      DEFAULT_MESSAGE_FOLLOW_DURATION_MS
+      zlinkDefaultLocationOptions.messageFollowDurationMs
     ),
     sessionReplacementCallbackTimeoutMs: normalizePositiveInteger(
       options.sessionReplacementCallbackTimeoutMs,
@@ -98,49 +102,66 @@ export function createFrameworkRegistration(
   return registration;
 }
 
+export const MAX_QUEUED_APPLICATION_JOBS = 2_147_483_647n;
+export const DEFAULT_PAUSE_THRESHOLD_PERCENT = 80;
+export const DEFAULT_RESUME_THRESHOLD_PERCENT = 60;
+export const APPLICATION_JOB_QUEUE_PERCENT_SCALE = 100;
+
+export function isKnownApplicationJobQueueProfile(
+  value: unknown
+): value is ZLinkApplicationJobQueueProfile {
+  return Object.values(ZLinkApplicationJobQueueProfile).includes(
+    value as ZLinkApplicationJobQueueProfile
+  );
+}
+
+export function validateApplicationJobQueueMaximum(
+  value: bigint | undefined,
+  createError: (message: string) => Error
+): void {
+  if (
+    value !== undefined &&
+    (typeof value !== 'bigint' || value < 1n || value > MAX_QUEUED_APPLICATION_JOBS)
+  ) {
+    throw createError('maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.');
+  }
+}
+
+export function validateApplicationJobQueuePressureThresholds(
+  pause: number,
+  resume: number,
+  createError: (message: string) => Error
+): void {
+  if (!Number.isInteger(pause) || pause < 1 || pause > APPLICATION_JOB_QUEUE_PERCENT_SCALE) {
+    throw createError('pauseThresholdPercent must be an integer in the range 1..100.');
+  }
+  if (!Number.isInteger(resume) || resume < 0 || resume >= APPLICATION_JOB_QUEUE_PERCENT_SCALE) {
+    throw createError('resumeThresholdPercent must be an integer in the range 0..99.');
+  }
+  if (resume >= pause) {
+    throw createError('resumeThresholdPercent must be less than pauseThresholdPercent.');
+  }
+}
+
 function normalizeApplicationJobQueue(
   value: ZLinkFrameworkRegistrationOptions['applicationJobQueue']
 ): NonNullable<ZLinkFrameworkRegistrationOptions['applicationJobQueue']> {
   const profile = value?.profile ?? ZLinkApplicationJobQueueProfile.Balanced;
-  if (!Object.values(ZLinkApplicationJobQueueProfile).includes(profile)) {
+  if (!isKnownApplicationJobQueueProfile(profile)) {
     throw new TypeError('applicationJobQueue.profile must be a supported profile.');
   }
   const maxQueuedApplicationJobs = value?.maxQueuedApplicationJobs;
-  if (
-    maxQueuedApplicationJobs !== undefined &&
-    (typeof maxQueuedApplicationJobs !== 'bigint' ||
-      maxQueuedApplicationJobs < 1n ||
-      maxQueuedApplicationJobs > 2_147_483_647n)
-  ) {
-    throw new TypeError(
-      'applicationJobQueue.maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.'
-    );
-  }
-  const pauseThresholdPercent = value?.pauseThresholdPercent ?? 80;
-  const resumeThresholdPercent = value?.resumeThresholdPercent ?? 60;
-  if (
-    !Number.isInteger(pauseThresholdPercent) ||
-    pauseThresholdPercent < 1 ||
-    pauseThresholdPercent > 100
-  ) {
-    throw new TypeError(
-      'applicationJobQueue.pauseThresholdPercent must be an integer in the range 1..100.'
-    );
-  }
-  if (
-    !Number.isInteger(resumeThresholdPercent) ||
-    resumeThresholdPercent < 0 ||
-    resumeThresholdPercent > 99
-  ) {
-    throw new TypeError(
-      'applicationJobQueue.resumeThresholdPercent must be an integer in the range 0..99.'
-    );
-  }
-  if (resumeThresholdPercent >= pauseThresholdPercent) {
-    throw new TypeError(
-      'applicationJobQueue.resumeThresholdPercent must be less than pauseThresholdPercent.'
-    );
-  }
+  validateApplicationJobQueueMaximum(
+    maxQueuedApplicationJobs,
+    (message) => new TypeError(`applicationJobQueue.${message}`)
+  );
+  const pauseThresholdPercent = value?.pauseThresholdPercent ?? DEFAULT_PAUSE_THRESHOLD_PERCENT;
+  const resumeThresholdPercent = value?.resumeThresholdPercent ?? DEFAULT_RESUME_THRESHOLD_PERCENT;
+  validateApplicationJobQueuePressureThresholds(
+    pauseThresholdPercent,
+    resumeThresholdPercent,
+    (message) => new TypeError(`applicationJobQueue.${message}`)
+  );
   return Object.freeze({
     profile,
     maxQueuedApplicationJobs,
@@ -154,7 +175,10 @@ function normalizeCoreHwm(
 ): ZLinkFrameworkRegistrationOptions['coreHwm'] {
   if (value === undefined) return undefined;
   const { profile, memoryLimitBytes, budgetBytes } = value;
-  if (profile !== undefined && (!Number.isInteger(profile) || profile < 0 || profile > 3)) {
+  if (
+    profile !== undefined &&
+    (!Number.isInteger(profile) || profile < 0 || profile > AutoHwmProfile.Throughput)
+  ) {
     throw new TypeError('coreHwm.profile must be a Core Auto HWM profile value.');
   }
   for (const [name, bytes] of [
@@ -183,7 +207,12 @@ function normalizeApplicationVersion(value: bigint | undefined): bigint {
 function normalizeMaintenanceWave(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const byteLength = typeof value === 'string' ? new TextEncoder().encode(value).byteLength : 0;
-  if (typeof value !== 'string' || byteLength === 0 || byteLength > 255 || value.includes('\0')) {
+  if (
+    typeof value !== 'string' ||
+    byteLength === 0 ||
+    byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES ||
+    value.includes('\0')
+  ) {
     throw new TypeError('maintenanceWave must be a 1..255 byte UTF-8 string without NUL.');
   }
   return value;

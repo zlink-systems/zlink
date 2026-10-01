@@ -1,3 +1,6 @@
+const DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS = 1000;
+
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type {
   ActorRef,
@@ -40,6 +43,7 @@ import {
   type ZLinkStreamReplyMessageKind
 } from './protocol';
 import {
+  DEFAULT_TERMINAL_RELOCATION_CAPACITY,
   ZLinkActorSessionBindingRegistry,
   type ZLinkActorSessionAuthorityFence
 } from './actor-session-binding-registry';
@@ -338,7 +342,7 @@ export class ZLinkStreamRuntimeManager {
     for (const node of nodes.reverse()) {
       await node.runtime?.dispose();
       for (const service of node.nativeSessionServices) {
-        service.shutdown(1000);
+        service.shutdown(DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS);
         service.close();
       }
       await node.monitor?.dispose();
@@ -428,7 +432,12 @@ export class ZLinkStreamBindingRuntime {
     this.routes = new ZLinkActorSessionBindingRegistry<
       DefaultZLinkSessionContext,
       DefaultZLinkSessionActor
-    >(4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000, runtimeOptions.errorSink);
+    >(
+      DEFAULT_TERMINAL_RELOCATION_CAPACITY,
+      runtimeOptions.sessionRelocationSealTimeoutMs ??
+        zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
+      runtimeOptions.errorSink
+    );
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
     this.boundSessions = new ZLinkBoundSessionService(

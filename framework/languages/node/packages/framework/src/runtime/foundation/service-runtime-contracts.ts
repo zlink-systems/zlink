@@ -1,3 +1,17 @@
+export enum StreamSessionRuntimeState {
+  Created = 1,
+  Started = 2,
+  Closed = 5
+}
+
+export enum MeshPeerRuntimeState {
+  Preparing = 2,
+  Serving = 3,
+  Draining = 4,
+  Closed = 5,
+  NotRequired = 6
+}
+
 import type { Message } from '../../contracts/Common/Message';
 import type {
   RequestResult,

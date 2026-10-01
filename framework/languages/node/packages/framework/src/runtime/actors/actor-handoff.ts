@@ -19,6 +19,7 @@ import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams
 import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
 import { requestRoutedJsonReply } from './actor-routed-json-request';
 import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   encodeMessageFollowRemoteActorPacketRelayPayload,
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
@@ -34,12 +35,13 @@ import {
   messageFollowOwnerNodeRid,
   ownerFence,
   verifyActorMessageFollowPayload,
+  ZLINK_MESSAGE_FOLLOW_MAX_HOPS,
   type ZLinkActorMessageFollowContext,
   type ZLinkActorMessageFollowOwnerFence
 } from './actor-message-follow-context';
 
-export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
-const MAX_MESSAGE_FOLLOW_HOPS = 8;
+export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
+  zlinkDefaultLocationOptions.messageFollowDurationMs;
 const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export interface ZLinkActorHandoffPacket {
@@ -1445,7 +1447,7 @@ export class ZLinkActorHandoffCoordinator {
       return duplicate.result;
     }
     const bytes = packetBytes(packet);
-    if (context.hopCount >= MAX_MESSAGE_FOLLOW_HOPS) {
+    if (context.hopCount >= ZLINK_MESSAGE_FOLLOW_MAX_HOPS) {
       this.options.onMarker?.('message_follow_rejected', actorId);
       return Promise.reject(actorLocationStale(actorId));
     }

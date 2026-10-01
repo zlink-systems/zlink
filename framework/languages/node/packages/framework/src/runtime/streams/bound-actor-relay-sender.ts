@@ -1,3 +1,5 @@
+export const DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS = 2000;
+
 import type { ZLinkMessage, ZLinkMessageSerializer, ZLinkSessionActor } from '../../contracts';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
@@ -269,7 +271,7 @@ export class ZLinkBoundActorRelaySender {
     ) {
       await detached.context.stream.unbindActor(
         actor.actorId,
-        this.options.actorBindTimeoutMs ?? 2000,
+        this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS,
         signal
       );
     }
@@ -278,7 +280,7 @@ export class ZLinkBoundActorRelaySender {
 
   async notifyPhysicalDisconnect(context: DefaultZLinkSessionContext): Promise<void> {
     const snapshot = [...context.boundActors];
-    const timeoutMs = this.options.actorBindTimeoutMs ?? 2000;
+    const timeoutMs = this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS;
     await Promise.allSettled(
       snapshot.map(async (actor) => {
         const detached = await this.lifecycle.run(actor.actorId, async () => {

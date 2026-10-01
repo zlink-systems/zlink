@@ -46,6 +46,7 @@ import {
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
 import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+import { SPOT_DIRECT_ENVELOPE } from '../channels/spot-direct-envelope';
 
 interface ZLinkSpotRoutePacketDispatchOptions {
   readonly packetHandlers: ReadonlyMap<string, readonly ZLinkSpotHandlerRegistration[]>;
@@ -57,8 +58,6 @@ interface ZLinkSpotRoutePacketDispatchOptions {
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly claimApplicationWork?: () => ZLinkApplicationWorkClaim;
 }
-
-const SPOT_DIRECT_ENVELOPE = 'zlink.framework.spot-direct.v1';
 
 /** D5: reply metadata attached only to framework-self-generated errors. */
 const FRAMEWORK_ORIGIN_REPLY_METADATA: Readonly<Record<string, string>> = Object.freeze({

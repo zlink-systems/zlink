@@ -1,3 +1,6 @@
+import { ZLINK_MAX_ACTOR_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -49,7 +52,10 @@ import {
 import type { ZLinkStoreLocationResolvers } from '../locations';
 import type { ZLinkResolvedActorRoute } from '../locations';
 import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { encodeRemoteActorPacketRelayPayload } from './actor-packet-relay-wire';
+import {
+  encodeRemoteActorPacketRelayPayload,
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+} from './actor-packet-relay-wire';
 import { requestRoutedJsonReply } from './actor-routed-json-request';
 import {
   attachActorMessageFollowContext,
@@ -182,7 +188,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
             returnResponse: false,
             messageFollowContext: messageFollow
           }),
-          { packetName: '__zlink.actor.packet.relay' }
+          { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
         );
         return { status: ZLinkSubmitStatus.Submitted };
       }
@@ -576,7 +582,7 @@ function remainingActorRequestTimeout(
 
 function requireActorId(actorId: string): void {
   const byteLength = Buffer.byteLength(actorId, 'utf8');
-  if (byteLength < 1 || byteLength > 255) {
+  if (byteLength < 1 || byteLength > ZLINK_MAX_ACTOR_ID_BYTES) {
     throw new ZLinkConfigurationException('Actor ID must contain 1..255 UTF-8 bytes.');
   }
 }
@@ -860,7 +866,7 @@ function decodeActorReplyPayload<TReply>(
     payload,
     serializers,
     undefined,
-    'application/json',
+    ZlinkStreamContentType.Json,
     packetName,
     'reply'
   );
@@ -887,39 +893,39 @@ function mapSubmitError(error: unknown, operationName: string): Error {
 //  (isStaleActorError) keeps working.
 function actorFailureCodeKind(failureErrno: number): ZLinkFrameworkInternalErrorKind | undefined {
   switch (failureErrno) {
-    case 3:
+    case ServiceWireFrameworkErrorCode.actorAlreadyExists:
       return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
-    case 4:
+    case ServiceWireFrameworkErrorCode.actorTypeMismatch:
       return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
-    case 7:
+    case ServiceWireFrameworkErrorCode.spotTypeMismatch:
       return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
-    case 8:
+    case ServiceWireFrameworkErrorCode.actorSessionNotBound:
       return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-    case 9:
-    case 14:
+    case ServiceWireFrameworkErrorCode.handlerNotFound:
+    case ServiceWireFrameworkErrorCode.requestTargetNotFound:
       return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
-    case 12:
-    case 16:
+    case ServiceWireFrameworkErrorCode.payloadDecodeFailed:
+    case ServiceWireFrameworkErrorCode.requestProtocolError:
       return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
     //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
-    case 13:
-    case 18:
+    case ServiceWireFrameworkErrorCode.routeNotConnected:
+    case ServiceWireFrameworkErrorCode.workerQueueFull:
       return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
-    case 15:
+    case ServiceWireFrameworkErrorCode.requestRejected:
       return ZLinkFrameworkInternalErrorKind.RequestRejected;
-    case 19:
+    case ServiceWireFrameworkErrorCode.workerTimedOut:
       return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
-    case 17:
+    case ServiceWireFrameworkErrorCode.requestFailed:
       return ZLinkFrameworkInternalErrorKind.RequestFailed;
-    case 20:
+    case ServiceWireFrameworkErrorCode.workerFailed:
       return ZLinkFrameworkInternalErrorKind.WorkerFailed;
-    case 21:
+    case ServiceWireFrameworkErrorCode.actorLocationStale:
       return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
-    case 33:
+    case ServiceWireFrameworkErrorCode.spotGenerationStale:
       return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
-    case 34:
+    case ServiceWireFrameworkErrorCode.spotMoving:
       return ZLinkFrameworkInternalErrorKind.ActorMoving;
-    case 35:
+    case ServiceWireFrameworkErrorCode.relocationDataLost:
       return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
     default:
       return undefined;

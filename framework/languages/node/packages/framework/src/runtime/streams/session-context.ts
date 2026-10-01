@@ -1,3 +1,4 @@
+import { isStructuralGuardEnabled } from '../execution/state-lane';
 import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
 import { guardStateLaneCompletion, trackDiagnosticCompletion } from '../execution/state-lane';
 import type {
@@ -654,7 +655,7 @@ function sameRetiredSession(
   );
 }
 
-if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+if (isStructuralGuardEnabled()) {
   const controlsGetter = Object.getOwnPropertyDescriptor(
     DefaultZLinkSessionContext.prototype,
     'actorSlotControls'

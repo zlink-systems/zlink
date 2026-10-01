@@ -1,3 +1,4 @@
+import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
 import type {
   RequiredZlinkStreamConnectorOptions,
   ZlinkStreamEncodedPayload,
@@ -16,8 +17,8 @@ import { compressPayload, decompressIfNeeded } from './Compression/ZlinkStreamCo
 import { splitZlinkStreamFrames, ZlinkStreamFrameCodec } from './ZlinkStreamFrameCodec';
 import { buildHeader, ZlinkStreamHeaderCodec } from './ZlinkStreamHeaderCodec';
 
-export const ZLINK_STREAM_HEARTBEAT_PING = '$zlink.heartbeat.ping';
-export const ZLINK_STREAM_HEARTBEAT_PONG = '$zlink.heartbeat.pong';
+export const ZLINK_STREAM_HEARTBEAT_PING = ZlinkStreamControlPacket.HeartbeatPing;
+export const ZLINK_STREAM_HEARTBEAT_PONG = ZlinkStreamControlPacket.HeartbeatPong;
 
 export class ZlinkStreamFrameProtocol {
   constructor(private readonly options: RequiredZlinkStreamConnectorOptions) {}

@@ -1,3 +1,5 @@
+const DEFAULT_PENDING_ADMISSION_TIMEOUT_MS = 30_000;
+
 import type {
   ZLinkActor,
   ZLinkMessage,
@@ -284,7 +286,7 @@ export class ZLinkSpotRoutedActorAdmission {
     if (pending.deadline !== undefined) clearTimeout(pending.deadline);
     pending.deadline = setTimeout(() => {
       if (this.pending.get(transferId) === pending) this.pending.delete(transferId);
-    }, this.options.pendingAdmissionTimeoutMs ?? 30_000);
+    }, this.options.pendingAdmissionTimeoutMs ?? DEFAULT_PENDING_ADMISSION_TIMEOUT_MS);
     pending.deadline.unref();
   }
 

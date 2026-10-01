@@ -1,3 +1,7 @@
+const LOCAL_JOIN_RESOLUTION_TIMEOUT_MS = 5_000;
+const LOCAL_JOIN_POLL_INTERVAL_MS = 10;
+
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -36,6 +40,7 @@ import { routingIdsEqual } from '../routing-id';
 import { operationIdentityKey } from '../foundation/operation-identity';
 import { frameworkPayloadContentType } from '../messaging/payload-codec';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
+import { ZLINK_REMOTE_ACTOR_JOIN_PACKET } from './actor-remote-wire';
 
 const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
@@ -440,7 +445,7 @@ export class ZLinkLocalNativeActorJoin {
                 ...(completionOperationId === undefined
                   ? {}
                   : {
-                      replyContentType: control.replyContentType ?? 'application/octet-stream'
+                      replyContentType: control.replyContentType ?? ZlinkStreamContentType.Raw
                     }),
                 reply:
                   completionOperationId === undefined
@@ -546,7 +551,7 @@ function legacyRemoteActorJoinPayload(
   // authority fence.
   const payload = Buffer.from(
     JSON.stringify({
-      packetName: '__zlink.actor.join_spot.request',
+      packetName: ZLINK_REMOTE_ACTOR_JOIN_PACKET,
       phase: 'admission',
       transferId,
       spotId: String(target.spotId),
@@ -562,7 +567,7 @@ function legacyRemoteActorJoinPayload(
   );
   return {
     packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
-    contentType: 'application/json',
+    contentType: ZlinkStreamContentType.Json,
     payload,
     // Older in-process MeshNode adapters consume the fallback as a Message.
     // Keep that structural view without changing the typed service payload.
@@ -601,7 +606,9 @@ async function submitJoinWhenConnected<T>(
   timeoutMs: number | undefined,
   signal: AbortSignal | undefined
 ): Promise<T> {
-  const deadline = performance.now() + Math.min(timeoutMs ?? 5_000, 5_000);
+  const deadline =
+    performance.now() +
+    Math.min(timeoutMs ?? LOCAL_JOIN_RESOLUTION_TIMEOUT_MS, LOCAL_JOIN_RESOLUTION_TIMEOUT_MS);
   for (;;) {
     throwIfAborted(signal);
     try {
@@ -610,7 +617,7 @@ async function submitJoinWhenConnected<T>(
       if (!isBackendNotConnectedError(error) || performance.now() >= deadline) {
         throw error;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => setTimeout(resolve, LOCAL_JOIN_POLL_INTERVAL_MS));
     }
   }
 }

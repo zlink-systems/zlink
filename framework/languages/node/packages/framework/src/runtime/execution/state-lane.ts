@@ -1,3 +1,5 @@
+const UNKNOWN_DIAGNOSTIC_CALLER = '<unknown caller>';
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 type ZLinkStateLaneWork<T> = () => Promise<T> | T;
@@ -7,11 +9,12 @@ interface ZLinkStateLaneTurn {
   active: boolean;
 }
 
+export function isStructuralGuardEnabled(): boolean {
+  return process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test';
+}
+
 const currentLaneStorage = new AsyncLocalStorage<ZLinkStateLane>();
-const diagnosticPending =
-  process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test'
-    ? new Map<number, string>()
-    : undefined;
+const diagnosticPending = isStructuralGuardEnabled() ? new Map<number, string>() : undefined;
 let nextDiagnosticWork = 0;
 const diagnosticTurnStorage =
   diagnosticPending === undefined ? undefined : new AsyncLocalStorage<ZLinkStateLaneTurn>();
@@ -129,7 +132,7 @@ export class ZLinkStateLane {
 
 // Install the structural check only in diagnostic processes. The release run()
 // method and its returned Promise are left untouched.
-if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+if (isStructuralGuardEnabled()) {
   Object.defineProperty(ZLinkStateLane, 'current', {
     configurable: true,
     get: () => {
@@ -244,7 +247,7 @@ function registerDiagnosticWork(name: string): () => void {
   const caller =
     frames
       .find((frame) => !frame.includes('state-lane.') && !frame.includes('serial-execution-queue.'))
-      ?.trim() ?? '<unknown caller>';
+      ?.trim() ?? UNKNOWN_DIAGNOSTIC_CALLER;
   diagnosticPending.set(id, `${name} ${caller}`);
   return () => {
     diagnosticPending.delete(id);

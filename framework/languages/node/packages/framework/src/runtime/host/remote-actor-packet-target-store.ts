@@ -1,3 +1,4 @@
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import type { ActorRef, RoutingId, SpotId, ZLinkSessionActor } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
 import type { DefaultZLinkActorManager, ZLinkRemoteActorPacketTarget } from '../actors';
@@ -243,7 +244,7 @@ function sessionActorPacketTargetTenureKeyForRef(actorId: string, actorRef: Acto
 
 function validateSpotId(value: string): SpotId {
   const byteLength = Buffer.byteLength(value, 'utf8');
-  if (byteLength < 1 || byteLength > 255) {
+  if (byteLength < 1 || byteLength > ZLINK_MAX_SPOT_ID_BYTES) {
     throw new TypeError('SpotId must contain between 1 and 255 UTF-8 bytes.');
   }
   return value;

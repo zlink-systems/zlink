@@ -1,3 +1,4 @@
+import { shouldCompactBackingArray } from '../admission';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -332,7 +333,7 @@ class ZLinkCpuWorkerPool {
     if (this.queueCount === 0) {
       this.queue.length = 0;
       this.queueHead = 0;
-    } else if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+    } else if (shouldCompactBackingArray(this.queueHead, this.queue.length)) {
       this.queue.splice(0, this.queueHead);
       this.queueHead = 0;
     }
@@ -351,7 +352,7 @@ class ZLinkCpuWorkerPool {
         while (this.queueHead < this.queue.length && this.queue[this.queueHead] === undefined) {
           this.queueHead += 1;
         }
-        if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+        if (shouldCompactBackingArray(this.queueHead, this.queue.length)) {
           this.queue.splice(0, this.queueHead);
           this.queueHead = 0;
         }

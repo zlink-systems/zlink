@@ -1,3 +1,4 @@
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import type {
   ZLinkAuthorityKey,
   ZLinkPlacementObjectKind
@@ -8,7 +9,7 @@ export function encodeAuthorityKey(
   globalId: string
 ): ZLinkAuthorityKey {
   const bytes = Buffer.from(globalId);
-  if (bytes.byteLength < 1 || bytes.byteLength > 255) {
+  if (bytes.byteLength < 1 || bytes.byteLength > ZLINK_MAX_IDENTITY_TEXT_BYTES) {
     throw new RangeError('Authority identity must contain 1..255 UTF-8 bytes.');
   }
   const discriminator = kind === 'actor' ? 'a' : 's';
@@ -27,7 +28,8 @@ export function decodeAuthorityKey(key: ZLinkAuthorityKey): {
   const match = /^zla1:([as]):([1-9][0-9]{0,2}):(.*)$/.exec(key.value);
   if (match === null) throw new TypeError('Authority key is not canonical.');
   const declaredLength = Number(match[2]);
-  if (declaredLength > 255) throw new TypeError('Authority key identity exceeds the byte limit.');
+  if (declaredLength > ZLINK_MAX_IDENTITY_TEXT_BYTES)
+    throw new TypeError('Authority key identity exceeds the byte limit.');
   const encoded = match[3]!;
   const bytes: number[] = [];
   for (let index = 0; index < encoded.length;) {

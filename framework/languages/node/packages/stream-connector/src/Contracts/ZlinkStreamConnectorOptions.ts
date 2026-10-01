@@ -1,3 +1,5 @@
+export const ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES = 64 * 1024;
+
 import type {
   ZlinkStreamCompression,
   ZlinkStreamDispatchMode,

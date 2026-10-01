@@ -24,6 +24,15 @@ export type {
 export * from './Errors';
 export * from './Eventing';
 export * from './Handlers';
+export {
+  ZLINK_PROVIDER_MAX_KEY_BYTES,
+  ZLINK_PROVIDER_MAX_VALUE_BYTES,
+  ZLINK_PROVIDER_MAX_VERSION_BYTES,
+  ZLINK_PROVIDER_MAX_WRITE_KEYS,
+  ZLINK_PROVIDER_MAX_WRITE_BYTES,
+  ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES,
+  ZLINK_PROVIDER_MAX_PAGE_SIZE
+} from './Locations/Stores';
 export type { ZLinkLocationOptions } from './Locations/Options';
 export { zlinkDefaultLocationOptions } from './Locations/Options';
 export type {

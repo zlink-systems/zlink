@@ -1,3 +1,5 @@
+const ACTOR_JOIN_POLL_INTERVAL_MS = 5;
+
 import type {
   RoutingId,
   ZLinkActor,
@@ -258,5 +260,5 @@ export class ZLinkSpotActorJoinDispatch {
 }
 
 function waitSpotDispatchIdle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 5));
+  return new Promise((resolve) => setTimeout(resolve, ACTOR_JOIN_POLL_INTERVAL_MS));
 }

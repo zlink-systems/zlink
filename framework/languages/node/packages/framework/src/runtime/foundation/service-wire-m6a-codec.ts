@@ -1,3 +1,6 @@
+import { UINT32_MAX } from '@zlink-systems/stream-wire';
+import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import {
   validateDescriptor,
   type ServiceNodeDescriptor,
@@ -17,9 +20,19 @@ import {
   encodeCanonicalServiceWireText
 } from './service-wire-binary-primitives';
 
-const PREFIX_SIZE = 5;
-const MAX_U32 = 0xffff_ffff;
-const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
+const REPLY_HEADER_MIN_BYTES = PREFIX_SIZE + 16;
+const SERVICE_ROUTE_TEXT_MAX_BYTES = 4096;
+export const APPLICATION_PAYLOAD_VERSION = 1;
+const APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES = 4;
+const APPLICATION_PAYLOAD_TEXT_LENGTH_FIELD_BYTES = 1;
+export const APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES =
+  1 +
+  APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES +
+  2 * APPLICATION_PAYLOAD_TEXT_LENGTH_FIELD_BYTES +
+  APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+const MAX_U32 = UINT32_MAX;
+const MAX_U64 = UINT64_MAX;
 export const M6A_SERVICE_WIRE_MAGIC = SERVICE_WIRE_MAGIC;
 export const M6A_SERVICE_WIRE_MAJOR = SERVICE_WIRE_MAJOR;
 export const M6A_SERVICE_WIRE_REQUIRED_CAPABILITY = SERVICE_WIRE_REQUIRED_CAPABILITY;
@@ -134,7 +147,7 @@ export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
   if (
     header.command !== M6aServiceWireCommand.reply ||
     header.flags !== 0 ||
-    frame.byteLength < 21
+    frame.byteLength < REPLY_HEADER_MIN_BYTES
   ) {
     fail('Invalid reply header.');
   }
@@ -160,7 +173,7 @@ export function encodeApplicationPayload(payload: ServiceApplicationPayload): Bu
     packetName.byteLength + contentType.byteLength + 4 + payload.payload.byteLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   const result = Buffer.alloc(5 + bodyLength);
-  result[0] = 1;
+  result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
   let offset = 5;
   offset += packetName.copy(result, offset);
@@ -197,7 +210,7 @@ export function encodeMultipartApplicationPayload(
   const bodyLength = packetNameBytes.byteLength + contentTypeBytes.byteLength + 4 + multipartLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   const result = Buffer.alloc(5 + bodyLength);
-  result[0] = 1;
+  result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
   let offset = 5;
   offset += packetNameBytes.copy(result, offset);
@@ -230,7 +243,8 @@ export function decodeApplicationPayload(frame: Uint8Array): ServiceApplicationP
  */
 export function decodeApplicationPayloadView(frame: Uint8Array): ServiceApplicationPayload {
   const reader = new Reader(frame);
-  if (reader.u8('version') !== 1) fail('Invalid application payload version.');
+  if (reader.u8('version') !== APPLICATION_PAYLOAD_VERSION)
+    fail('Invalid application payload version.');
   const bodyLength = reader.u32('bodyLength');
   if (bodyLength !== reader.remaining) fail('Application payload body length mismatch.');
   const packetName = reader.text8('packetName');
@@ -250,7 +264,8 @@ export function decodeApplicationPayloadView(frame: Uint8Array): ServiceApplicat
  */
 export function validateApplicationPayloadFrame(frame: Uint8Array): void {
   const reader = new Reader(frame);
-  if (reader.u8('version') !== 1) fail('Invalid application payload version.');
+  if (reader.u8('version') !== APPLICATION_PAYLOAD_VERSION)
+    fail('Invalid application payload version.');
   const bodyLength = reader.u32('bodyLength');
   if (bodyLength !== reader.remaining) fail('Application payload body length mismatch.');
   reader.text8('packetName');
@@ -478,7 +493,7 @@ function encodeText8(value: string, field: string): Buffer {
 }
 
 function encodeText16(value: string, field: string): Buffer {
-  const bytes = encodeCanonicalServiceWireText(value, field, 4096, fail);
+  const bytes = encodeCanonicalServiceWireText(value, field, SERVICE_ROUTE_TEXT_MAX_BYTES, fail);
   return concat(encodeU16(bytes.byteLength), bytes);
 }
 
@@ -624,7 +639,7 @@ class Reader {
 
   text16(field: string): string {
     const length = this.u16(`${field}.length`);
-    if (length === 0 || length > 4096) fail(`${field} has invalid length.`);
+    if (length === 0 || length > SERVICE_ROUTE_TEXT_MAX_BYTES) fail(`${field} has invalid length.`);
     return decodeText(this.bytes(length, field), field);
   }
 

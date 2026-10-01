@@ -1,4 +1,8 @@
 import {
+  ZLINK_MAX_STABLE_TYPE_BYTES,
+  ZLINK_MAX_MESH_NAME_BYTES
+} from '../../contracts/Common/CoreTypes';
+import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
@@ -260,13 +264,21 @@ function createAddressedSpotSendCall(
       selectOnce(options, 'instanceSpot');
       options.instanceSpot = true;
       if (instanceSpotType !== undefined) {
-        options.instanceSpotType = requireAddressValue(instanceSpotType, 'Instance Spot type', 255);
+        options.instanceSpotType = requireAddressValue(
+          instanceSpotType,
+          'Instance Spot type',
+          ZLINK_MAX_STABLE_TYPE_BYTES
+        );
       }
       return this;
     },
     inMesh(meshName: string) {
       selectOnce(options, 'inMesh');
-      options.initialMeshName = requireAddressValue(meshName, 'Mesh name', 255);
+      options.initialMeshName = requireAddressValue(
+        meshName,
+        'Mesh name',
+        ZLINK_MAX_MESH_NAME_BYTES
+      );
       return this;
     },
     async submit(signal?: AbortSignal): Promise<void> {
@@ -316,13 +328,21 @@ function createAddressedSpotRequestCall(
       selectOnce(options, 'instanceSpot');
       options.instanceSpot = true;
       if (instanceSpotType !== undefined) {
-        options.instanceSpotType = requireAddressValue(instanceSpotType, 'Instance Spot type', 255);
+        options.instanceSpotType = requireAddressValue(
+          instanceSpotType,
+          'Instance Spot type',
+          ZLINK_MAX_STABLE_TYPE_BYTES
+        );
       }
       return this;
     },
     inMesh(meshName: string) {
       selectOnce(options, 'inMesh');
-      options.initialMeshName = requireAddressValue(meshName, 'Mesh name', 255);
+      options.initialMeshName = requireAddressValue(
+        meshName,
+        'Mesh name',
+        ZLINK_MAX_MESH_NAME_BYTES
+      );
       return this;
     },
     timeout(timeoutMs: number) {

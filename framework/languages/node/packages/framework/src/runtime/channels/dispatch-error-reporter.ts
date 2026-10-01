@@ -1,3 +1,4 @@
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -49,7 +50,7 @@ export class ZLinkDispatchErrorReporter {
     const normalized = normalizeDispatchFailure(event);
     const dropReason = channelDropReason(normalized);
     if (dropReason !== undefined) {
-      this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
+      this.metrics?.count(METRIC_NAMES.MeshNodeMessagesDropped, 1, {
         surface: normalized.surface,
         message_kind: normalized.messageKind,
         reason: dropReason

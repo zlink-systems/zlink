@@ -1,3 +1,10 @@
+const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
+
+/** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
+export function shouldCompactBackingArray(head: number, length: number): boolean {
+  return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
+}
+
 import {
   ZlinkStreamConnection,
   ZlinkStreamErrorCode,
@@ -194,7 +201,7 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
     const message = this.messages[this.messageHead];
     this.messages[this.messageHead] = undefined;
     this.messageHead += 1;
-    if (this.messageHead >= 1024 && this.messageHead * 2 >= this.messages.length) {
+    if (shouldCompactBackingArray(this.messageHead, this.messages.length)) {
       this.messages.splice(0, this.messageHead);
       this.messageHead = 0;
     }

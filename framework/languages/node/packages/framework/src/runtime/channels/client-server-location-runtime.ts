@@ -1,4 +1,10 @@
 import {
+  normalizeClientServerMessageLimit,
+  DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT
+} from './client-server-service-wire';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import {
   ZLinkFrameworkRuntimeState,
   ZLinkLocationWriteIntent,
   ZLinkLocationWriteStatus,
@@ -170,7 +176,7 @@ export class ZLinkClientServerLocationRuntime {
         lifecycleGeneration: identity.lifecycleGeneration,
         descriptorRevision: 1n,
         endpoint: identity.endpoint,
-        weight: channel.server.weight ?? 100,
+        weight: channel.server.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT,
         state: ZLinkFrameworkRuntimeState.Serving,
         securityIdentity: 'default',
         ownerId: owner.ownerId,
@@ -250,7 +256,7 @@ export class ZLinkClientServerLocationRuntime {
     do {
       const page = await this.store.listClientServers(
         channelName,
-        { pageSize: 1000, continuationToken },
+        { pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE, continuationToken },
         signal
       );
       rows.push(...page.items);
@@ -517,7 +523,7 @@ function sameDescriptor(
 
 function toDiscoveryDescriptor(
   descriptor: ZLinkClientServerServerDescriptor,
-  effectiveMaxMessageBytes = 0x7fff_ffff
+  effectiveMaxMessageBytes: number = DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT
 ) {
   return {
     channelName: descriptor.channelName,
@@ -541,7 +547,7 @@ function requestAdmission(
     encodeClientServerHello({
       channelName: descriptor.channelName,
       securityIdentity: descriptor.securityIdentity,
-      normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
+      normalizedEffectiveMaxMessageBytes: normalizeClientServerMessageLimit(dealer.maxMessageSize)
     })
   );
   return dealer.request(message, timeoutMs).then(
@@ -599,8 +605,4 @@ function requireMatchingAdmission(
 
 function closeMessages(parts: readonly Message[]): void {
   for (const part of parts) part.close();
-}
-
-function normalizedMessageLimit(value: number): number {
-  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 0xffff_ffff) : 0x7fff_ffff;
 }

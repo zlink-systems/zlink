@@ -1,3 +1,5 @@
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type { RoutingId, SpotId } from '../../contracts';
 import { decodeRoutingId } from '../routing-id';
 
@@ -133,7 +135,7 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     ),
     boundSessionSpotId: optionalSpotId(payload, 'boundSessionSpotId'),
     request: (payload as { request: string }).request,
-    requestContentType: optionalString(payload, 'requestContentType') ?? 'application/json'
+    requestContentType: optionalString(payload, 'requestContentType') ?? ZlinkStreamContentType.Json
   };
 }
 
@@ -158,7 +160,7 @@ function optionalSpotId(value: object, key: string): SpotId | undefined {
 
 function requireSpotId(value: string): SpotId {
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > 255) {
+  if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES) {
     throw new Error('Remote actor SpotId must contain 1..255 UTF-8 bytes.');
   }
   return value;

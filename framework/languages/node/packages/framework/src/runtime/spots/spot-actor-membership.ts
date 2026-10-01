@@ -1,3 +1,4 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type {
   RoutingId,
   ZLinkActor,
@@ -55,7 +56,7 @@ export class ZLinkSpotActorMembership {
     commit: (spot: ZLinkSpot) => Promise<void> | void,
     signal?: AbortSignal,
     leaveSource?: () => Promise<void>,
-    contentType = 'application/json'
+    contentType: string = ZlinkStreamContentType.Json
   ): Promise<ZLinkSpotActorJoinResult> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);

@@ -1,3 +1,5 @@
+import { constants as osConstants } from 'node:os';
+const nativeErrnoValues = osConstants.errno;
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendMeshNode,
@@ -22,7 +24,7 @@ export function lookupNativeActorRef(
       generation: actor.generation
     };
   } catch (error) {
-    if (nativeErrno(error) === 2) {
+    if (nativeErrno(error) === nativeErrnoValues.ENOENT) {
       return undefined;
     }
     throw error;

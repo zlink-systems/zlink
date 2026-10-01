@@ -1,3 +1,7 @@
+const INITIAL_LOCATION_RETRY_DELAY_MS = 50;
+const LOCATION_RETRY_BACKOFF_MULTIPLIER = 2;
+const MAX_LOCATION_RETRY_DELAY_MS = 1_000;
+
 import type { ActorRef, RoutingId } from '../../contracts/Common';
 import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
 import type { ZLinkActorLocationStore, ZLinkSpotLocationStore } from './internal-store-contracts';
@@ -181,14 +185,17 @@ export class ZLinkLocationLifecycle {
   }
 
   private async retryActorRelease(actorType: string, actorId: string): Promise<void> {
-    let retryDelayMs = 50;
+    let retryDelayMs = INITIAL_LOCATION_RETRY_DELAY_MS;
     while (!this.disposed) {
       try {
         await this.actorClaims.release(actorType, actorId);
         return;
       } catch {
         await waitForRetry(retryDelayMs);
-        retryDelayMs = Math.min(retryDelayMs * 2, 1_000);
+        retryDelayMs = Math.min(
+          retryDelayMs * LOCATION_RETRY_BACKOFF_MULTIPLIER,
+          MAX_LOCATION_RETRY_DELAY_MS
+        );
       }
     }
     return;

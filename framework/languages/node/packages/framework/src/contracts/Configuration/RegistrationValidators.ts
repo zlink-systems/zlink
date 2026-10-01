@@ -1,3 +1,6 @@
+const ROUTE_CACHE_FOLLOW_MARGIN_MS = 5000;
+
+import { requirePublicWeight } from './RegistrationBuilderPolicy';
 import type { Type, ZLinkSpot } from '../../contracts';
 import { ZLinkConfigurationException } from './ConfigurationException';
 import { requirePositiveInteger } from './RegistrationNormalizers';
@@ -18,6 +21,7 @@ import { validateTimerRegistration } from './TimerRegistrationValidator';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
 import { requirePublicFanoutTopic } from './FanoutTopic';
+import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from './InternalDefaults';
 
 export function validateFrameworkRegistration(
   registration: ZLinkFrameworkRegistration,
@@ -147,7 +151,7 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
       throw new ZLinkConfigurationException(`${name} must be a positive integer.`);
     }
   }
-  if (options.relocationPayloadChunkLimitBytes > 67_108_864) {
+  if (options.relocationPayloadChunkLimitBytes > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
     throw new ZLinkConfigurationException(
       'relocationPayloadChunkLimitBytes must not exceed the 64 MiB wire chunk bound.'
     );
@@ -173,7 +177,7 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
   if (
     options.routeCacheMaxAgeMs > 0 &&
     options.messageFollowDurationMs > 0 &&
-    options.routeCacheMaxAgeMs > options.messageFollowDurationMs - 5000
+    options.routeCacheMaxAgeMs > options.messageFollowDurationMs - ROUTE_CACHE_FOLLOW_MARGIN_MS
   ) {
     throw new ZLinkConfigurationException(
       'routeCacheMaxAgeMs must be at least 5000 ms shorter than messageFollowDurationMs.'
@@ -718,9 +722,7 @@ function requirePeerWeight(label: string, value: number | undefined): void {
   if (value === undefined) {
     return;
   }
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
-  }
+  requirePublicWeight(value, label);
 }
 
 function requireSocketOptions(

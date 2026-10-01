@@ -1,3 +1,5 @@
+const DEFAULT_ACTIVE_ACTIVATION_BATCH_SIZE = 64;
+
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -102,7 +104,9 @@ export class ZLinkSpotActivationRegistry {
     return this.activations.size > 0;
   }
 
-  nextActiveActivationBatch(limit = 64): readonly ZLinkSpotActivation[] {
+  nextActiveActivationBatch(
+    limit: number = DEFAULT_ACTIVE_ACTIVATION_BATCH_SIZE
+  ): readonly ZLinkSpotActivation[] {
     if (!Number.isInteger(limit) || limit <= 0)
       throw new RangeError('Activation scan limit must be positive.');
     if (this.activations.size === 0) {

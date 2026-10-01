@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import type { RoutingId } from '../../contracts';
 import { ZLinkSpotKind, zlinkSpotKindFromWire, zlinkSpotKindToWire } from '../../contracts';
 import { crc32c } from '../foundation/service-relocation-runtime';
@@ -7,6 +8,16 @@ const AUTHORITY_MAGIC = Buffer.from([0x5a, 0x4c, 0x41, 0x55]);
 const AUTHORITY_VERSION = 1;
 const AUTHORITY_FLAGS = 0;
 const ACTOR_RELOCATION_MAGIC = Buffer.from([0x5a, 0x4c, 0x41, 0x50]);
+const AUTHORITY_MINIMUM_BYTES = 15;
+const ACTOR_RELOCATION_MINIMUM_BYTES = 32;
+const ACTOR_RELOCATION_VERSION_WITHOUT_SESSION_FENCE = 5;
+const ACTOR_RELOCATION_VERSION_WITH_SESSION_FENCE = 6;
+const ACTOR_RELOCATION_FIRST_PHASE = 1;
+const ACTOR_RELOCATION_STEADY_PHASE = 4;
+const ACTOR_TEXT8_MAX_BYTES = 255;
+const ACTOR_ROUTING_ID_MAX_BYTES = 255;
+const ENTRY_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Entry);
+const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
 const MAXIMUM_BYTES = 1024 * 1024;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -59,7 +70,10 @@ export function decodeCanonicalAuthorityPayload(
 ): ZLinkCanonicalAuthorityPayload | undefined {
   try {
     const reader = new BigEndianReader(payload);
-    if (reader.bytes.byteLength < 15 || reader.bytes.byteLength > MAXIMUM_BYTES) {
+    if (
+      reader.bytes.byteLength < AUTHORITY_MINIMUM_BYTES ||
+      reader.bytes.byteLength > MAXIMUM_BYTES
+    ) {
       return undefined;
     }
     reader.expect(AUTHORITY_MAGIC);
@@ -81,7 +95,7 @@ export function decodeCanonicalAuthorityPayload(
 /** Byte-exact Node counterpart of .NET ZLinkActorAuthorityPayloadCodec.Encode. */
 export function encodeActorAuthorityPayload(value: ZLinkActorAuthorityPayload): Buffer {
   const spotKind = zlinkSpotKindToWire(value.currentSpotKind);
-  if (spotKind !== 1 && spotKind !== 2) {
+  if (spotKind !== ENTRY_SPOT_WIRE_KIND && spotKind !== USER_SPOT_WIRE_KIND) {
     throw new RangeError('Actor currentSpotKind must be Entry or User.');
   }
   const actor = concat(
@@ -173,7 +187,7 @@ export function actorRelocationAuthorityApplicationPayload(
   const current = decodeActorRelocationEnvelope(payload);
   return current === undefined
     ? Buffer.from(payload)
-    : current.phase === 4
+    : current.phase === ACTOR_RELOCATION_STEADY_PHASE
       ? Buffer.from(current.applicationPayload)
       : undefined;
 }
@@ -205,7 +219,8 @@ export function replaceActorRelocationAuthorityApplicationPayload(
 function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnvelope | undefined {
   try {
     const bytes = Buffer.from(payload);
-    if (bytes.byteLength < 32 || bytes.byteLength > MAXIMUM_BYTES) return undefined;
+    if (bytes.byteLength < ACTOR_RELOCATION_MINIMUM_BYTES || bytes.byteLength > MAXIMUM_BYTES)
+      return undefined;
     const checksumOffset = bytes.byteLength - 4;
     if (bytes.readUInt32LE(checksumOffset) !== crc32c(bytes.subarray(0, checksumOffset))) {
       return undefined;
@@ -213,10 +228,15 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
     const reader = new LittleEndianReader(bytes.subarray(0, checksumOffset));
     reader.expect(ACTOR_RELOCATION_MAGIC);
     const version = reader.u16();
-    if (version !== 5 && version !== 6) return undefined;
+    if (
+      version !== ACTOR_RELOCATION_VERSION_WITHOUT_SESSION_FENCE &&
+      version !== ACTOR_RELOCATION_VERSION_WITH_SESSION_FENCE
+    )
+      return undefined;
     if (reader.take(16).every((byte) => byte === 0)) return undefined;
     const phase = reader.u8();
-    if (phase < 1 || phase > 4) return undefined;
+    if (phase < ACTOR_RELOCATION_FIRST_PHASE || phase > ACTOR_RELOCATION_STEADY_PHASE)
+      return undefined;
     const isBound = reader.bool();
     if (isBound) {
       reader.bytes8();
@@ -230,7 +250,7 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
       const ownerLeaseGeneration = reader.u64();
       const sessionOwnerNodeGeneration = reader.u64();
       reader.u64();
-      if (version === 6) {
+      if (version === ACTOR_RELOCATION_VERSION_WITH_SESSION_FENCE) {
         reader.text16();
         reader.u64();
       }
@@ -258,7 +278,7 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
 
 function text8(value: string, name: string): Buffer {
   const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xff || bytes.includes(0)) {
+  if (bytes.byteLength < 1 || bytes.byteLength > ACTOR_TEXT8_MAX_BYTES || bytes.includes(0)) {
     throw new RangeError(`${name} must contain 1..255 UTF-8 bytes without NUL.`);
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
@@ -266,14 +286,14 @@ function text8(value: string, name: string): Buffer {
 
 function rid(value: RoutingId, name: string): Buffer {
   const bytes = Buffer.from(encodeRoutingIdStorageHex(value), 'hex');
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xff) {
+  if (bytes.byteLength < 1 || bytes.byteLength > ACTOR_ROUTING_ID_MAX_BYTES) {
     throw new RangeError(`${name} must contain 1..255 bytes.`);
   }
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function nonzeroU64be(value: bigint, name: string): Buffer {
-  if (value === 0n || value < 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value === 0n || value < 0n || value > UINT64_MAX) {
     throw new RangeError(`${name} must be a non-zero u64.`);
   }
   const result = Buffer.alloc(8);
