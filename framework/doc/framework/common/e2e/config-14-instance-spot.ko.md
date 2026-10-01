@@ -431,14 +431,19 @@ Factory는 끝났지만 Spot을 사용 가능하게 만드는 마지막 단계�
 
 우선순위: `P1`
 
-Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서는 안 된다.
+Close 작업이 시작된 Spot은 그 뒤의 업무를 기존 instance에서 실행하지 않는다. Instance intent가 있는 업무는
+새 generation에서 실행되고, 없는 업무는 `NotFound`로 끝난다.
 
-**검증 질문:** Close와 동시에 보낸 request가 이전 handler에서 처리되지 않는가.
+**검증 질문:** Close 작업이 시작된 뒤 보낸 request가 이전 handler에서 처리되지 않고, intent 여부에 따라
+정해진 하나의 결과로 끝나는가.
 
 - 시작 조건: Close callback 진입을 public Application evidence로 확인할 수 있다.
-- 절차: Close 진입 직후 고유 operation ID request를 보낸다.
-- 검증: 이전 instance의 handler에는 operation ID가 없고 request는 하나의 failure 또는 close 뒤 새 instance의 한 번 처리로 끝난다.
-- 계약 근거: [Location runtime](../spec/server/05-location-relocation/01-location-runtime.ko.md)
+- 절차: Serving host의 `OnClosing` callback을 application signal로 보류한다. 진입을 관찰한 뒤 고유 operation
+  ID를 가진 Instance intent request 하나와 intent가 없는 request 하나를 보낸다. intent가 없는 request의
+  `NotFound`와 Instance intent request의 owner 도착 evidence를 확인한 다음 callback을 해제한다.
+- 검증: 이전 instance의 handler에는 두 operation ID가 없다. Instance intent request는 새 generation에서
+  한 번 처리되고, intent가 없는 request는 `NotFound`로 끝난다.
+- 계약 근거: [Spot 주소 메시징 §7](../spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)
 
 ### Track E — relocation 경합과 복구
 
