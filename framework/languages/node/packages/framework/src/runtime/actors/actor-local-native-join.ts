@@ -141,8 +141,8 @@ export class ZLinkLocalNativeActorJoin {
         true
       );
     }
-    const target = spotRouteTarget ?? {
-      routerChannelId: runtimeActorMeshName(actor, state, ''),
+    const target = {
+      routerChannelId: spotRouteTarget?.routerChannelId ?? runtimeActorMeshName(actor, state, ''),
       targetNodeRid,
       spotId: toFrameworkRoutingId(node.entrySpot().routingId),
       spotKind: ZLinkSpotKind.Entry,
