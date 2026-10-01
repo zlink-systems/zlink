@@ -1,14 +1,17 @@
 export {
   ZLinkConfigurationException,
   createFrameworkRegistration,
+  normalizeFrameworkRegistration,
   hasActorManager,
   hasSpotNode,
   hasSpotPublisherClient
 } from './contracts/Configuration/Registration';
 export type * from './contracts/Configuration/RegistrationTypes';
 export type * from './contracts';
+export { ZLinkSpotActorSend, ZLinkSpotActorRequest } from './contracts/Handlers/Attributes';
 export {
   registerActorFactory,
+  registerRelocationStore,
   validateRoutingIdPrefix,
   registerEntrySpot,
   registerSpotFactory,

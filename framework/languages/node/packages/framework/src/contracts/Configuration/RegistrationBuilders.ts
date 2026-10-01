@@ -72,6 +72,7 @@ import {
   isValidPositiveCapacity,
   registerActorFactory,
   registerEntrySpot,
+  registerRelocationStore,
   registerSpotFactory,
   requirePublicWeight,
   validateActorTransferTimeout,
@@ -152,7 +153,7 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
 
   addRelocationStore(store: ZLinkRelocationStore): this {
     this.options.locations ??= { options: {} };
-    this.options.locations.relocationStoreInstance = store;
+    registerRelocationStore(this.options.locations, store);
     return this;
   }
 

@@ -118,28 +118,6 @@ export function createManualSendHandlers(
   );
 }
 
-export function createManualRouteSendHandlers(
-  handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
-): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['sendHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, void>(
-    handlerTypes,
-    moduleRef,
-    () => undefined
-  );
-}
-
-export function createManualRouteRequestHandlers(
-  handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
-): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['requestHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, unknown>(
-    handlerTypes,
-    moduleRef,
-    (result) => result
-  );
-}
-
 type ManualHandlerContext =
   ZLinkMessageContext | ZLinkRouteMessageContext | ZLinkPublishMessageContext;
 

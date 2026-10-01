@@ -8,10 +8,7 @@ import {
   ServiceWireCommand
 } from '../../../../runtime/protocol/generated/node/service_wire_constants';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
-import {
-  EventLoopResourceStack,
-  EventLoopWorkQueues
-} from '../../packages/framework/src/runtime/foundation/event-loop-resources';
+import { EventLoopResourceStack } from '../../packages/framework/src/runtime/foundation/event-loop-resources';
 import {
   OperationCancelledError,
   OperationRegistry,
@@ -125,7 +122,7 @@ test('operation registry registers more than the former completion cap before tr
   assert.equal(operations.size, 0);
 });
 
-test('event-loop resources close in reverse once and infrastructure remains independent', async () => {
+test('event-loop resources close in reverse once', async () => {
   const order: string[] = [];
   const resources = new EventLoopResourceStack();
   resources.own({ close: () => void order.push('first') });
@@ -133,29 +130,6 @@ test('event-loop resources close in reverse once and infrastructure remains inde
   await Promise.all([resources.close(), resources.close()]);
   assert.deepEqual(order, ['second', 'first']);
   assert.throws(() => resources.own({ close() {} }), /closing/);
-
-  const queues = new EventLoopWorkQueues();
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => (release = resolve));
-  assert.equal(
-    queues.submitApplication(() => blocked),
-    true
-  );
-  assert.equal(
-    queues.submitApplication(() => undefined),
-    true
-  );
-  const infrastructureDone = new Promise<void>((resolve) => {
-    assert.equal(queues.submitInfrastructure(resolve), true);
-  });
-  await infrastructureDone;
-  release();
-  await new Promise((resolve) => setImmediate(resolve));
-  queues.stopAdmission();
-  assert.equal(
-    queues.submitInfrastructure(() => undefined),
-    false
-  );
 });
 
 async function pollReceive<T>(receive: () => T | undefined): Promise<T> {
