@@ -244,49 +244,22 @@ public:
 
 enum class client_server_role_t { client, server, client_and_server };
 
-enum class client_server_server_state_t {
-    configured,
-    connecting,
-    ready,
-    draining,
-    disconnected,
-    rejected
-};
-
-struct client_server_server_snapshot_t {
-    zlink::routing_id_t server_rid;
-    std::uint64_t lifecycle_generation;
+struct client_server_target_snapshot_t {
+    zlink::routing_id_t node_rid;
     int weight;
-    bool ready;
-    client_server_server_state_t state;
-    std::string descriptor_source;
-    std::optional<std::string> last_failure;
+    peer_state_t state;
+    std::optional<topology_reason_t> unavailable_reason;
 };
 
 struct client_server_channel_snapshot_t {
     std::string channel_name;
     client_server_role_t local_role;
-    bool selectable;
-    int ready_server_count;
-    int connection_intent_count;
-    int pending_request_count;
+    topology_state_t state;
+    bool is_ready;
+    std::uint32_t ready_target_count;
+    std::vector<client_server_target_snapshot_t> targets;
     std::uint64_t sequence;
     std::chrono::system_clock::time_point observed_at;
-    std::vector<client_server_server_snapshot_t> servers;
-    location_runtime_snapshot_t location;
-};
-
-struct client_server_runtime_event_t {
-    std::string identifier;
-    std::uint64_t sequence;
-    std::chrono::system_clock::time_point timestamp;
-    std::string channel_name;
-    std::optional<zlink::routing_id_t> server_rid;
-    std::optional<std::uint64_t> lifecycle_generation;
-    std::optional<int> weight;
-    std::optional<bool> ready;
-    std::optional<client_server_server_state_t> state;
-    std::optional<std::string> reason;
 };
 
 class client_server_runtime_t {
@@ -297,67 +270,19 @@ public:
       std::string channel_name,
       std::size_t capacity,
       std::function<void(
-        const observed_status_t<client_server_runtime_event_t> &)> observer) = 0;
+        const observed_status_t<client_server_channel_snapshot_t> &)> observer) = 0;
     virtual bool is_ready(std::string channel_name) const = 0;
-};
-
-enum class fanout_publisher_connection_state_t {
-    connecting,
-    ready,
-    disconnected,
-    reconnecting,
-    excluded_draining,
-    excluded_stale
-};
-
-struct fanout_publisher_connection_snapshot_t {
-    zlink::routing_id_t publisher_rid;
-    std::uint64_t lifecycle_generation;
-    bool connection_intent;
-    bool ready;
-    fanout_publisher_connection_state_t state;
-    std::optional<std::string> last_failure;
 };
 
 struct fanout_channel_snapshot_t {
     std::string channel_name;
-    std::size_t connection_intent_count;
-    std::size_t ready_connection_count;
+    topology_state_t state;
+    bool is_ready;
+    std::uint32_t ready_publisher_count;
+    std::vector<mesh_peer_snapshot_t> publishers;
     std::uint64_t sequence;
     std::chrono::system_clock::time_point observed_at;
-    std::vector<fanout_publisher_connection_snapshot_t> publishers;
-    location_runtime_snapshot_t location;
 };
-
-struct fanout_publisher_changed_event_t {
-    static constexpr std::string_view event_identifier =
-      "zlink.runtime.fanout.publisher_changed";
-    std::uint64_t sequence;
-    std::chrono::system_clock::time_point timestamp;
-    std::string channel_name;
-    fanout_publisher_connection_snapshot_t entry;
-
-    constexpr std::string_view identifier() const noexcept {
-        return event_identifier;
-    }
-};
-
-struct fanout_location_changed_event_t {
-    static constexpr std::string_view event_identifier =
-      "zlink.runtime.location.store_changed";
-    std::uint64_t sequence;
-    std::chrono::system_clock::time_point timestamp;
-    std::string channel_name;
-    location_runtime_snapshot_t location;
-
-    constexpr std::string_view identifier() const noexcept {
-        return event_identifier;
-    }
-};
-
-using fanout_runtime_event_t = std::variant<
-  fanout_publisher_changed_event_t,
-  fanout_location_changed_event_t>;
 
 class fanout_runtime_observation_t {
 public:
@@ -372,7 +297,7 @@ public:
       std::string channel_name,
       std::size_t capacity,
       std::function<void(
-        const observed_status_t<fanout_runtime_event_t> &)> observer) = 0;
+        const observed_status_t<fanout_channel_snapshot_t> &)> observer) = 0;
 };
 
 class mesh_channel_runtime_options_t {
@@ -593,40 +518,32 @@ runtime handle이다. 이 handle은 endpoint 연결, 해제와 현재 목록 조
 결과를 변경하지 않는다.
 
 Endpoint 없이 등록한 automatic subscriber는 `fanout_runtime_t`에서 ChannelName별
-`fanout_channel_snapshot_t`를 읽고 `fanout_runtime_event_t`를 관찰한다.
-`fanout_publisher_changed_event_t::entry`는 Publisher RID와 공개 연결 상태만 제공한다.
-Descriptor revision과 endpoint는 Framework 내부에서 identity와 stale 상태를 판정하는 데만
-사용한다. `fanout_location_changed_event_t::location`은 publisher가
-0개여도 store degraded·recovered 상태를 전달한다. `std::variant`의 두 대안은 서로의 payload를 optional
-field로 섞지 않는다. 각 variant의 `identifier()`는 `static constexpr event_identifier`를 반환하므로 호출자가
-identifier를 바꿀 수 없다. `state`와 event identifier는
-[Runtime monitoring](../../../06-observability/01-runtime-monitoring.ko.md)의 lowercase identifier를 그대로 사용한다. 이 runtime은
-읽기 전용이며 `subscriber_connections()`의 manual endpoint 집합을 변경하지 않는다. Manual subscriber로만
-등록한 ChannelName을 조회하면 configuration error다.
+`fanout_channel_snapshot_t`를 읽고 관찰한다. 이 runtime은 읽기 전용이며
+`subscriber_connections()`의 manual endpoint 집합을 변경하지 않는다. Manual subscriber로만 등록한
+ChannelName을 조회하면 configuration error다.
 
-`client_server_runtime_t::observe(...)`와 `fanout_runtime_t::observe(...)`가 전달하는 단위는
-[Monitoring interface](08-monitoring.ko.md)가 선언한 `observed_status_t<TStatus>`다. ClientServer와 fanout은
-[Runtime monitoring §3](../../../06-observability/01-runtime-monitoring.ko.md#6-상태-변화를-관찰한다--sequence와-완전한-status)의 source 표에서
-ChannelName을 source 키로 갖는 topology source이므로, 두 stream도 같은 envelope로 event variant를 감싸
-observer별 유실 누계를 함께 전달한다. `status` field에 들어가는 값이 snapshot이 아니라 event variant라는
-점만 다르고 `loss`의 의미와 reset·saturation 규칙은 같다.
+ClientServer와 fanout snapshot은 RouteMesh snapshot과 같은 `topology_state_t`·`peer_state_t`·
+`topology_reason_t`를 쓰며, 공개 field의 범위는 [Monitoring interface](08-monitoring.ko.md)를 따른다.
+Topology 상태·readiness·target 상태의 의미는
+[Runtime monitoring](../../../06-observability/01-runtime-monitoring.ko.md)이 소유한다.
+`client_server_runtime_t::observe(...)`와 `fanout_runtime_t::observe(...)`는 이 snapshot을
+`observed_status_t<TStatus>`의 `status`로 전달한다. 관찰 항목의 공통 의미(첫 항목, 합치기, 유실 누계)는
+[Runtime monitoring §6·§7](../../../06-observability/01-runtime-monitoring.ko.md#6-상태-변화를-관찰한다--sequence와-완전한-status)이
+소유한다.
 
 `fanout_runtime_observation_t`는 fanout observer 등록의 수명과 `close()`만 소유한다.
-`fanout_runtime_t::observe(...)` callback은 `fanout_runtime_event_t`만 받으므로 RouteMesh·ClientServer event나
-raw socket event와 섞이지 않는다.
-`close()`는 해당 observation 하나의 queue에 새 event를 넣는 작업을 멈추고 아직 소비하지 않은
-event를 폐기한다. 이미 실행 중인 callback은 반환할 수 있지만 `close()`가 반환된 뒤에 새
+`fanout_runtime_t::observe(...)` callback 인자의 `status`는 해당 ChannelName의 `fanout_channel_snapshot_t`이므로
+RouteMesh·ClientServer status나 raw socket event와 섞이지 않는다.
+`close()`는 해당 observation 하나의 queue에 새 항목을 넣는 작업을 멈추고 아직 소비하지 않은
+항목을 폐기한다. 이미 실행 중인 callback은 반환할 수 있지만 `close()`가 반환된 뒤에 새
 callback을 시작하지 않는다. Callback 안에서 자신의 observation을 close해도 deadlock을 만들지
 않는다. Close는 다른 observer, automatic connection과 `subscriber_connections()`의 manual endpoint
 집합을 바꾸지 않는다. `close()`는 여러 번 호출해도 같은 결과를 보장한다. 파생 observation handle의
 destructor는 `close()`와 같은 등록 해제를 수행하므로 명시적 `close()` 없이
 `std::unique_ptr<fanout_runtime_observation_t>`를 파괴해도 observer 등록이 남지 않는다.
 
-`connection_intent=true`는 automatic planner가 endpoint 연결을 요청했다는 뜻이고 transport readiness가
-아니다. `ready=true`, `ready_connection_count`와 publisher changed event의 `ready` state는 publisher 전용
-SUB socket의 native-ready와 같은 socket의 첫 valid application record 또는 liveness beacon 수신을 모두
-반영한다. `disconnected`는 native disconnect 또는 15초 inbound timeout을 반영한다. `connect` 반환,
-native-ready 하나와 내부 active target 수로 이 값을 먼저 바꾸지 않는다.
+Publisher의 `ready` 판정은 [transport liveness §4](../../../02-channel-transport/05-transport-liveness.ko.md#4-classic-fanout)가
+소유하며 snapshot은 그 결과를 보여 준다.
 
 따라서 `listen`, `connect`, `enable_subscriber` 같은 연결 설정은 generic channel builder가 아니라
 ClientServer server, ClientServer client와 Fanout builder에 둔다.
