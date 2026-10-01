@@ -389,18 +389,17 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 && !pair.ready) {
                 const uint64_t application_connection_id =
                   pair.application->get_transport_connection_id ();
-                // Either lane may start termination while its sibling's bind
-                // is queued. A retained object is still alive, but it is not
-                // an admissible transport; never publish a pair assembled
-                // from an inactive lane.
-                if (!pair.application->is_lifecycle_active ()
-                    || application_connection_id == 0
+                // A normal route rejection may end either connection before
+                // its sibling's bind is applied. Engine detach publishes a
+                // zero connection id before pipe termination completes. The
+                // termination owner tears down the registered sibling.
+                if (!pair.application->is_lifecycle_active () || application_connection_id == 0
                     || (pair.expected_lane_count == 2u
                         && (!pair.completion->is_lifecycle_active ()
-                            || pair.completion->get_transport_connection_id ()
-                                 == 0
-                            || !same_pair_peer_identity (pair.application,
-                                                         pair.completion)))) {
+                            || pair.completion->get_transport_connection_id () == 0)))
+                    return;
+                if (pair.expected_lane_count == 2u
+                    && !same_pair_peer_identity (pair.application, pair.completion)) {
                     reject_pipes[0] = pipe_;
                     reject_pipes[1] = pair.application;
                     reject_pipes[2] = pair.completion;
