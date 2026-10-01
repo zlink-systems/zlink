@@ -17,7 +17,17 @@ export enum StreamSessionRuntimeState {
   Closed = 5
 }
 
+export enum MeshNodeRuntimeState {
+  Preparing = 1,
+  Serving = 2,
+  Retiring = 3,
+  Draining = 4,
+  Stopped = 5,
+  Error = 6
+}
+
 export enum MeshPeerRuntimeState {
+  Connecting = 1,
   Preparing = 2,
   Serving = 3,
   Draining = 4,

@@ -170,7 +170,147 @@ public sealed class FanoutAutomaticDiscoveryTests : RegistrationValidationSuppor
     }
 
     [Fact]
-    public async Task RuntimeObserverRetainsRemovalSnapshotUntilItsSourceSlotIsDelivered()
+    public void PublisherUnavailableReasonFollowsPeerState()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Channels.Add(
+            "automatic",
+            new ZLinkChannelRegistration
+            {
+                ChannelName = "automatic",
+                AutoConnectType = ZLinkLocationAutoConnectType.Fanout,
+                Subscriber = new ZLinkChannelSubscriberCapabilityRegistration
+                {
+                    AutomaticDiscoveryEnabled = true,
+                },
+            }
+        );
+        using var runtime = new ZLinkFanoutRuntimeService(registration);
+        foreach (
+            var (state, expectedState, expectedReason) in new[]
+            {
+                (
+                    ZLinkFanoutPublisherConnectionState.Disconnected,
+                    ZLinkPeerState.NotConnected,
+                    ZLinkTopologyReason.NoReadyPeer
+                ),
+                (
+                    ZLinkFanoutPublisherConnectionState.ExcludedDraining,
+                    ZLinkPeerState.Draining,
+                    ZLinkTopologyReason.Draining
+                ),
+            }
+        )
+        {
+            runtime.RecordSnapshot(
+                "automatic",
+                [
+                    new ZLinkFanoutPublisherConnectionSnapshot(
+                        RoutingId.From("publisher-a"),
+                        1,
+                        1,
+                        "inproc://publisher-a",
+                        false,
+                        false,
+                        state,
+                        null
+                    ),
+                ],
+                new ZLinkLocationRuntimeSnapshot(
+                    ZLinkLocationRuntimeSnapshot.ReadyState,
+                    null,
+                    null
+                )
+            );
+
+            var publisher = Assert.Single(runtime.GetStatus("automatic").Publishers);
+            Assert.Equal(expectedState, publisher.State);
+            Assert.Equal(expectedReason, publisher.UnavailableReason);
+        }
+    }
+
+    [Fact]
+    public void MultiplePublisherChangesAdvanceSequenceOncePerStatus()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Channels.Add(
+            "automatic",
+            new ZLinkChannelRegistration
+            {
+                ChannelName = "automatic",
+                AutoConnectType = ZLinkLocationAutoConnectType.Fanout,
+                Subscriber = new ZLinkChannelSubscriberCapabilityRegistration
+                {
+                    AutomaticDiscoveryEnabled = true,
+                },
+            }
+        );
+        using var runtime = new ZLinkFanoutRuntimeService(registration);
+        var before = runtime.GetStatus("automatic");
+        var first = new ZLinkFanoutPublisherConnectionSnapshot(
+            RoutingId.From("publisher-a"),
+            1,
+            1,
+            "inproc://publisher-a",
+            true,
+            true,
+            ZLinkFanoutPublisherConnectionState.Ready,
+            null
+        );
+        var second = first with { PublisherRid = RoutingId.From("publisher-b") };
+        var location = new ZLinkLocationRuntimeSnapshot(
+            ZLinkLocationRuntimeSnapshot.ReadyState,
+            null,
+            null
+        );
+
+        runtime.RecordSnapshot("automatic", [first, second], location);
+        var added = runtime.GetStatus("automatic");
+        Assert.Equal(before.Sequence + 1, added.Sequence);
+        runtime.RecordSnapshot("automatic", [second, first], location);
+        Assert.Equal(added.Sequence, runtime.GetStatus("automatic").Sequence);
+        runtime.RecordSnapshot("automatic", [], location);
+        Assert.Equal(added.Sequence + 1, runtime.GetStatus("automatic").Sequence);
+    }
+
+    [Fact]
+    public async Task RuntimeObserverStartsWithCurrentStatusWithoutFurtherChanges()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Channels.Add(
+            "automatic",
+            new ZLinkChannelRegistration
+            {
+                ChannelName = "automatic",
+                AutoConnectType = ZLinkLocationAutoConnectType.Fanout,
+                Subscriber = new ZLinkChannelSubscriberCapabilityRegistration
+                {
+                    AutomaticDiscoveryEnabled = true,
+                },
+            }
+        );
+        var hostLifecycle = new ZLinkFrameworkHostLifecycleState();
+        hostLifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        using var runtime = new ZLinkFanoutRuntimeService(registration, hostLifecycle);
+        runtime.RecordSnapshot(
+            "automatic",
+            [],
+            new ZLinkLocationRuntimeSnapshot("ready", null, null)
+        );
+        var current = runtime.GetStatus("automatic");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = runtime
+            .ObserveAsync("automatic", timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(current.Sequence, observer.Current.Status.Sequence);
+        Assert.Equal(current.State, observer.Current.Status.State);
+        Assert.Equal(current.Publishers, observer.Current.Status.Publishers);
+        Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
+    }
+
+    [Fact]
+    public async Task RuntimeObserverCoalescesPeerRemovalAndReplacementWithinChannelSource()
     {
         var registration = new ZLinkFrameworkRegistration();
         registration.Channels.Add(
@@ -192,6 +332,8 @@ public sealed class FanoutAutomaticDiscoveryTests : RegistrationValidationSuppor
         await using var observer = runtime
             .ObserveAsync("automatic", timeout.Token)
             .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Empty(observer.Current.Status.Publishers);
         var pendingInitial = observer.MoveNextAsync().AsTask();
         var location = new ZLinkLocationRuntimeSnapshot("unknown", null, null);
         var source = new ZLinkFanoutPublisherConnectionSnapshot(
@@ -227,7 +369,7 @@ public sealed class FanoutAutomaticDiscoveryTests : RegistrationValidationSuppor
         );
 
         Assert.True(await observer.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Empty(observer.Current.Status.Publishers);
+        Assert.Equal(ZLinkPeerState.Ready, Assert.Single(observer.Current.Status.Publishers).State);
         Assert.Equal(1UL, observer.Current.Loss.CoalescedCount);
 
         var pendingRestart = observer.MoveNextAsync().AsTask();

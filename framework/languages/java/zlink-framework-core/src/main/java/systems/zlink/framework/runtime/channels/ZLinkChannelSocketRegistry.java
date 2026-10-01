@@ -115,6 +115,23 @@ final class ZLinkChannelSocketRegistry {
     // selection were complete before its callers returned under the monitor.
     // Do not post these turns asynchronously, or callers can observe a
     // partially registered channel.
+    private final java.util.List<Runnable> topologySignals =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    void onTopologyChanged(Runnable signal) {
+        topologySignals.add(signal);
+    }
+
+    void signalTopologyChanged() {
+        topologySignals.forEach(Runnable::run);
+    }
+
+    private <T> T inTopologyTurn(Supplier<T> work) {
+        T result = inStateLane(work);
+        signalTopologyChanged();
+        return result;
+    }
+
     private <T> T inStateLane(Supplier<T> work) {
         try {
             return stateLane.runAsync(work).toCompletableFuture().join();
@@ -144,7 +161,7 @@ final class ZLinkChannelSocketRegistry {
 
     void registerClient(String channelName, ZLinkBackendDealerSocket socket) {
         registerReceiveFlow(socket);
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     clients.put(channelName, socket);
                     ownedSockets.add(socket);
@@ -154,7 +171,7 @@ final class ZLinkChannelSocketRegistry {
 
     void registerServer(String channelName, RoutingId routingId, ZLinkBackendRouterSocket socket) {
         registerReceiveFlow(socket);
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     servers.put(channelName, socket);
                     serverRoutingIds.put(channelName, routingId);
@@ -165,7 +182,7 @@ final class ZLinkChannelSocketRegistry {
 
     void registerPublisher(
             String channelName, RoutingId routingId, ZLinkBackendPublisherSocket socket) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     publishers.put(channelName, socket);
                     publisherRoutingIds.put(channelName, routingId);
@@ -175,7 +192,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void registerSubscriber(String channelName, ZLinkBackendSubscriberSocket socket) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     subscribers.put(channelName, socket);
                     ownedSockets.add(socket);
@@ -496,7 +513,7 @@ final class ZLinkChannelSocketRegistry {
         // physical DEALER. The absolute flow-state application happens before
         // that monitor is acquired so a binding call cannot block routing.
         registerReceiveFlow(dealer);
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     clientServerConnections.put(
                             connectionId,
@@ -593,7 +610,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void clientServerTransportTerminated(String connectionId) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     ClientServerConnection current = clientServerConnections.get(connectionId);
                     clientServerTransportTerminatedCore(
@@ -603,7 +620,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void clientServerTransportTerminated(String connectionId, ZLinkBackendDealerSocket dealer) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     clientServerTransportTerminatedCore(connectionId, dealer);
                     return null;
@@ -629,7 +646,7 @@ final class ZLinkChannelSocketRegistry {
             return;
         }
         AdmissionFence next =
-                inStateLane(
+                inTopologyTurn(
                         () -> {
                             if (clientServerConnections.get(connectionId) != connection
                                     || expectedFence == null
@@ -663,7 +680,7 @@ final class ZLinkChannelSocketRegistry {
             ZLinkClientServerServerDescriptor descriptor,
             AdmissionFence fence) {
         AdmissionResult result =
-                inStateLane(
+                inTopologyTurn(
                         () -> {
                             ClientServerConnection current =
                                     clientServerConnections.get(connectionId);
@@ -708,7 +725,7 @@ final class ZLinkChannelSocketRegistry {
 
     void updateClientServerConnection(
             String connectionId, ZLinkClientServerServerDescriptor descriptor, boolean ready) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     ClientServerConnection current = clientServerConnections.get(connectionId);
                     if (current != null) {
@@ -742,7 +759,7 @@ final class ZLinkChannelSocketRegistry {
     void removeClientServerConnection(
             String connectionId, ZLinkBackendDealerSocket expectedDealer) {
         Removal removal =
-                inStateLane(
+                inTopologyTurn(
                         () -> {
                             ClientServerConnection registered =
                                     clientServerConnections.get(connectionId);
@@ -806,7 +823,10 @@ final class ZLinkChannelSocketRegistry {
             targets.put(
                     clientServerLogicalIdentity(descriptor),
                     new ClientServerTargetSnapshot(
-                            descriptor, descriptor.weight(), connection.ready()));
+                            descriptor,
+                            descriptor.weight(),
+                            connection.ready(),
+                            !connection.physicalClosed));
         }
         ZLinkClientServerServerDescriptor local = clientServerServerDescriptors.get(channelName);
         if (local != null) {
@@ -814,7 +834,7 @@ final class ZLinkChannelSocketRegistry {
             // server remains a target independently of a Client self-connection.
             targets.put(
                     clientServerLogicalIdentity(local),
-                    new ClientServerTargetSnapshot(local, local.weight(), true));
+                    new ClientServerTargetSnapshot(local, local.weight(), true, false));
         }
         return List.copyOf(targets.values());
     }
@@ -841,7 +861,7 @@ final class ZLinkChannelSocketRegistry {
 
     void setClientServerServerDescriptor(
             String channelName, ZLinkClientServerServerDescriptor descriptor) {
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     if (descriptor == null) {
                         clientServerServerDescriptors.remove(channelName);
@@ -871,7 +891,7 @@ final class ZLinkChannelSocketRegistry {
 
     void setClientServerServerWeight(String channelName, int weight) {
         ZLinkClientServerServerDescriptor changed =
-                inStateLane(
+                inTopologyTurn(
                         () -> {
                             ChannelRegistration registration = registrations.get(channelName);
                             if (registration == null || !registration.clientServerServerEnabled()) {
@@ -947,7 +967,7 @@ final class ZLinkChannelSocketRegistry {
                                     1,
                                     Instant.EPOCH)));
         }
-        inStateLane(
+        inTopologyTurn(
                 () -> {
                     for (ServerDescriptorValue descriptor : descriptors) {
                         clientServerServerDescriptors.put(
@@ -1137,6 +1157,7 @@ final class ZLinkChannelSocketRegistry {
                 }
             }
         }
+        signalTopologyChanged();
     }
 
     private void drainClientServerControls(ClientServerConnection connection) {
@@ -1811,13 +1832,23 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    record ClientServerTargetSnapshot(RoutingId nodeRid, int weight, boolean ready) {
+    record ClientServerTargetSnapshot(
+            RoutingId nodeRid,
+            int weight,
+            ZLinkFrameworkRuntimeState hostState,
+            boolean ready,
+            boolean connecting) {
         ClientServerTargetSnapshot(
-                ZLinkClientServerServerDescriptor descriptor, int weight, boolean connectionReady) {
+                ZLinkClientServerServerDescriptor descriptor,
+                int weight,
+                boolean connectionReady,
+                boolean connecting) {
             this(
                     descriptor.serverRid(),
                     weight,
-                    connectionReady && descriptor.state() == ZLinkFrameworkRuntimeState.SERVING);
+                    descriptor.state(),
+                    connectionReady && descriptor.state() == ZLinkFrameworkRuntimeState.SERVING,
+                    connecting);
         }
     }
 

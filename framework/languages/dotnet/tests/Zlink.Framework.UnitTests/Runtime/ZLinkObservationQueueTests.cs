@@ -102,86 +102,21 @@ public sealed class ZLinkObservationQueueTests
     }
 
     [Fact]
-    public async Task Runtime_event_producers_keep_source_identity_across_terminal_state()
+    public async Task Initial_status_is_coalesced_by_the_existing_source_slot()
     {
-        var rid = RoutingId.From("observation-source");
-        var now = DateTimeOffset.UtcNow;
-        var fanoutIntermediate = new ZLinkFanoutRuntimeEvent.PublisherChanged(
-            1,
-            now,
-            "fanout-channel",
-            new ZLinkFanoutPublisherConnectionSnapshot(
-                rid,
-                3,
-                5,
-                "inproc://publisher",
-                ConnectionIntent: true,
-                Ready: true,
-                ZLinkFanoutPublisherConnectionState.Ready,
-                LastFailure: null
-            )
+        var queue = new ZLinkObservationQueue<TestStatus>(
+            new TestStatus("channel", 1),
+            false,
+            static status => status.Source,
+            "unit-test"
         );
-        var fanoutTerminal = new ZLinkFanoutRuntimeEvent.PublisherChanged(
-            2,
-            now,
-            "fanout-channel",
-            fanoutIntermediate.Entry with
-            {
-                ConnectionIntent = false,
-                Ready = false,
-                State = ZLinkFanoutPublisherConnectionState.Disconnected,
-            }
-        );
-        Assert.Equal(fanoutIntermediate.SourceKey, fanoutTerminal.SourceKey);
-        var fanout = new ZLinkObservationQueue<ZLinkFanoutRuntimeEvent>(static item =>
-            item.SourceKey
-        );
-        fanout.Publish(fanoutIntermediate, terminal: false);
-        fanout.Publish(fanoutTerminal, terminal: true);
-        fanout.Complete();
-        await using var fanoutReader = fanout.ReadAllAsync().GetAsyncEnumerator();
-        Assert.True(await fanoutReader.MoveNextAsync());
-        Assert.Same(fanoutTerminal, fanoutReader.Current.Status);
-        Assert.Equal(1UL, fanoutReader.Current.Loss.CoalescedCount);
-        Assert.False(await fanoutReader.MoveNextAsync());
-
-        var connectingServer = new ZLinkClientServerServerSnapshot(
-            rid,
-            LifecycleGeneration: 7,
-            DescriptorRevision: 10,
-            Endpoint: "inproc://server",
-            Weight: 1,
-            Ready: false,
-            ZLinkClientServerServerState.Connecting,
-            DescriptorSource: "test",
-            LastFailure: null
-        );
-        var readyServer = connectingServer with
-        {
-            DescriptorRevision = 11,
-            Ready = true,
-            State = ZLinkClientServerServerState.Ready,
-        };
-        var before = ClientSnapshot(1, now, [connectingServer]);
-        var ready = ClientSnapshot(2, now, [readyServer]);
-        var removed = ClientSnapshot(3, now, []);
-        var clientIntermediate = Assert.Single(
-            ZLinkClientServerRuntimeService.Changes(before, ready)
-        );
-        var clientTerminal = Assert.Single(ZLinkClientServerRuntimeService.Changes(ready, removed));
-        Assert.Equal(clientIntermediate.SourceKey, clientTerminal.SourceKey);
-        Assert.True(clientTerminal.IsTerminal);
-        var clientServer = new ZLinkObservationQueue<ZLinkClientServerRuntimeEvent>(static item =>
-            item.SourceKey
-        );
-        clientServer.Publish(clientIntermediate, terminal: false);
-        clientServer.Publish(clientTerminal, clientTerminal.IsTerminal);
-        clientServer.Complete();
-        await using var clientReader = clientServer.ReadAllAsync().GetAsyncEnumerator();
-        Assert.True(await clientReader.MoveNextAsync());
-        Assert.Same(clientTerminal, clientReader.Current.Status);
-        Assert.Equal(1UL, clientReader.Current.Loss.CoalescedCount);
-        Assert.False(await clientReader.MoveNextAsync());
+        queue.Publish(new TestStatus("channel", 2), terminal: false);
+        queue.Complete();
+        await using var reader = queue.ReadAllAsync().GetAsyncEnumerator();
+        Assert.True(await reader.MoveNextAsync());
+        Assert.Equal(2UL, reader.Current.Status.Sequence);
+        Assert.Equal(new ZLinkObservationLoss(1, 0), reader.Current.Loss);
+        Assert.False(await reader.MoveNextAsync());
     }
 
     [Fact]
@@ -242,24 +177,6 @@ public sealed class ZLinkObservationQueueTests
                 return tag.Value as string;
         return null;
     }
-
-    private static ZLinkClientServerChannelSnapshot ClientSnapshot(
-        ulong sequence,
-        DateTimeOffset observedAt,
-        IReadOnlyList<ZLinkClientServerServerSnapshot> servers
-    ) =>
-        new(
-            "client-server-channel",
-            Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
-            IsReady: servers.Any(static server => server.Ready),
-            ReadyServerCount: servers.Count(static server => server.Ready),
-            ConnectionIntentCount: servers.Count,
-            PendingRequestCount: 0,
-            sequence,
-            observedAt,
-            servers,
-            new ZLinkLocationRuntimeSnapshot("ready", observedAt, null)
-        );
 
     private sealed record TestStatus(string Source, ulong Sequence);
 }

@@ -1214,6 +1214,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     public async ValueTask StopAsync(CancellationToken cancellationToken)
     {
         ThrowIfStopRequestedFromOwnedWork();
+        if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
+            await clientServerRuntime.StopAsync().ConfigureAwait(false);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -1258,6 +1260,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal async ValueTask ForceStopAsync(CancellationToken cancellationToken)
     {
         ThrowIfStopRequestedFromOwnedWork();
+        if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
+            await clientServerRuntime.StopAsync().ConfigureAwait(false);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

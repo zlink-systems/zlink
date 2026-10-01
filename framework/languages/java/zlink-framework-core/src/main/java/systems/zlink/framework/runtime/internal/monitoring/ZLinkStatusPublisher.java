@@ -31,6 +31,7 @@ import java.util.function.Supplier;
  * cannot grow terminal retention without a limit.
  */
 public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObservedStatus<T>> {
+    public static final int MINIMUM_CAPACITY = 1;
     private static final Object SINGLE_SOURCE = new Object();
     private final Supplier<T> snapshot;
     private final Function<T, Object> fingerprint;
@@ -56,7 +57,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
             Predicate<T> terminal,
             Predicate<T> preserve,
             Executor dispatcher) {
-        if (capacity <= 0) {
+        if (capacity < MINIMUM_CAPACITY) {
             throw new IllegalArgumentException("capacity must be positive");
         }
         this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
@@ -163,6 +164,13 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         schedule();
     }
 
+    /** Signals only when the existing subscriber list has an observer. */
+    public void signalIfSubscribed() {
+        if (!subscriptions.isEmpty()) {
+            signal();
+        }
+    }
+
     /**
      * Registers the owner callback that keeps this publisher reachable while a subscription is
      * live. It is called with {@code true} when the first subscription is accepted and with {@code
@@ -189,8 +197,17 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
 
     @Override
     public void subscribe(Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
+        subscribe(subscriber, capacity);
+    }
+
+    /** Attaches a subscriber using its own existing bounded retention capacity. */
+    public void subscribe(
+            Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber, int capacity) {
+        if (capacity < MINIMUM_CAPACITY) {
+            throw new IllegalArgumentException("capacity must be positive");
+        }
         Objects.requireNonNull(subscriber, "subscriber");
-        SnapshotSubscription subscription = new SnapshotSubscription(subscriber);
+        SnapshotSubscription subscription = new SnapshotSubscription(subscriber, capacity);
         subscriber.onSubscribe(subscription);
         if (subscription.cancelled.get()) {
             return;
@@ -263,6 +280,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
 
     private final class SnapshotSubscription implements Flow.Subscription {
         private final Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber;
+        private final int capacity;
         private final AtomicLong demand = new AtomicLong();
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean deliveryWorkPending = new AtomicBoolean();
@@ -275,8 +293,10 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         private long coalescedCount;
         private long discardedTerminalCount;
 
-        SnapshotSubscription(Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
+        SnapshotSubscription(
+                Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber, int capacity) {
             this.subscriber = subscriber;
+            this.capacity = capacity;
         }
 
         @Override
