@@ -1391,7 +1391,7 @@ test('SpotWide actor join defer yields the current Spot turn while waiting', asy
     });
   });
   const afterHeld = serial.execute(() => events.push('defer:next'));
-  await new Promise((resolve) => setImmediate(resolve));
+  await afterHeld;
   assert.deepEqual(events, ['defer:start', 'defer:end', 'defer:next']);
   releaseJoin();
   await Promise.all([held, afterHeld]);

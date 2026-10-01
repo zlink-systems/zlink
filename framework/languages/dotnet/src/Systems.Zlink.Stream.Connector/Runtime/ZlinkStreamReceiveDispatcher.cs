@@ -28,6 +28,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
+        var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
+
         if (header.Kind == ZlinkStreamMessageKind.Response)
         {
             var request = pending.TakeReply(header);
@@ -60,8 +62,6 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             }
             return;
         }
-
-        var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
 
         // The receive path decompresses every payload here, once. A payload that does not
         // decompress fails only its packet - the pending request it answers, or else the
@@ -169,13 +169,9 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         // to the dispatch mode, so a counted message is already observable to Dispatch and
         // WaitFor (spec §10). Its handlers - the connector's and, for a packet of an Actor,
         // that Actor handle's - are decided when it is dispatched (spec §5.6, §7).
-        var entry = new MessageEntry(typedHandlers, actor, receivedMessages, callbacks);
+        var entry = new MessageEntry(message, typedHandlers, actor, receivedMessages, callbacks);
         await callbacks
-            .DispatchEntriesAsync(
-                [entry],
-                cancellationToken,
-                () => entry.Node = receivedMessages.Record(message)
-            )
+            .DispatchEntriesAsync([entry], cancellationToken, () => receivedMessages.Record(entry))
             .ConfigureAwait(false);
     }
 
@@ -184,25 +180,22 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     ///     it is dispatched; with none it stays queued, and a wait may take it meanwhile.
     /// </summary>
     private sealed class MessageEntry(
+        ZlinkStreamMessage<ZlinkStreamEncodedPayload> message,
         ZlinkStreamTypedHandlerRegistry handlers,
         ZlinkStreamActor? actor,
         ZlinkStreamReceivedMessages receivedMessages,
         ZlinkStreamConnectorCallbacks callbacks
-    ) : ZlinkStreamDispatchEntry
+    ) : ZlinkStreamReceivedMessages.ReceiveEntry(message)
     {
-        public LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? Node { get; set; }
-
-        public override bool ReportErrors => false;
-
         public override int PendingCallbacks =>
             Node is { } node && receivedMessages.IsUnread(node)
-                ? Registered(node.Value.Name).Count
+                ? Registered(node.Value.Message.Name).Count
                 : 0;
 
         public override Func<CancellationToken, ValueTask>? Take(out bool keep)
         {
             var node = Node!;
-            var registered = Registered(node.Value.Name);
+            var registered = Registered(node.Value.Message.Name);
             if (registered.Count == 0)
             {
                 keep = receivedMessages.IsUnread(node);
@@ -213,7 +206,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             if (!receivedMessages.TryTake(node))
                 return null;
 
-            var message = node.Value;
+            var message = node.Value.Message;
             return async token =>
             {
                 foreach (var handler in registered)

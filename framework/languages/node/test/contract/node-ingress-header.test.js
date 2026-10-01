@@ -45,7 +45,7 @@ test('header decoding preserves omitted optional fields and unknown fields', () 
   assert.deepEqual(header.unknown, { nested: [true, 3.5] });
 });
 
-test('header decoding preserves legacy malformed JSON errors and prototype-key rejection', () => {
+test('header decoding rejects malformed JSON and preserves unknown own properties safely', () => {
   assert.throws(
     () => envelope.decodeChannelHeader(rawParts('{"formatMarker":242,"kind":1')),
     error => {
@@ -54,14 +54,15 @@ test('header decoding preserves legacy malformed JSON errors and prototype-key r
     }
   );
   for (const property of ['__proto__', 'constructor', 'prototype']) {
-    assert.throws(
-      () => envelope.decodeChannelHeader(rawParts(
-        '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
-          + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
-          + '"topic":null,"metadata":{},"' + property + '":{}}'
-      )),
-      /is not allowed/
-    );
+    const header = envelope.decodeChannelHeader(rawParts(
+      '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
+        + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
+        + '"topic":null,"metadata":{},"' + property + '":{"polluted":true}}'
+    ));
+    assert.equal(Object.hasOwn(header, property), true);
+    assert.deepEqual(header[property], {polluted: true});
+    assert.equal(Object.getPrototypeOf(header), Object.prototype);
+    assert.equal(Object.prototype.polluted, undefined);
   }
 });
 
@@ -80,3 +81,26 @@ function rawParts(value) {
   const bytes = Buffer.from(value);
   return [{ data() { return bytes; } }];
 }
+
+test('channel header rejects invalid UTF-8 before decoding metadata', () => {
+  const wire = Buffer.concat([
+    Buffer.from(
+      '{"formatMarker":242,"kind":3,"channelName":"api",'
+        + '"messageName":"Notice","contentType":"application/json",'
+        + '"correlationId":null,"metadata":{"k":"'
+    ),
+    Buffer.from([0xff]),
+    Buffer.from('"}}')
+  ]);
+  assert.throws(
+    () =>
+      envelope.decodeChannelHeader([
+        {
+          data() {
+            return wire;
+          }
+        }
+      ]),
+    /UTF-8/
+  );
+});

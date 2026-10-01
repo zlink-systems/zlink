@@ -1,3 +1,5 @@
+import type { Message } from '../../contracts/Common/Message';
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import {
   ZLinkFrameworkRuntimeState,
   ZLinkLocationWriteIntent,
@@ -5,26 +7,28 @@ import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkLocationOwnerToken
 } from '../../contracts/Locations';
-import type { ZLinkClientServerLocationStore } from '../locations/internal-store-contracts';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import type { ZLinkBackendDealerSocket } from '../backend/contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { Message } from '../../contracts/Common/Message';
+import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import { type ZLinkFrameworkRegistration, ZLinkConfigurationException } from '../configuration';
+
+import { ZLinkStateLane } from '../execution/state-lane';
+import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
+import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import type { ZLinkClientServerLocationStore } from '../locations/internal-store-contracts';
+import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import {
   decodeClientServerControl,
+  DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT,
   encodeClientServerHello,
+  normalizeClientServerMessageLimit,
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
-import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { isBackendRequestTimeoutError } from '../backend/runtime-values';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;
@@ -170,7 +174,7 @@ export class ZLinkClientServerLocationRuntime {
         lifecycleGeneration: identity.lifecycleGeneration,
         descriptorRevision: 1n,
         endpoint: identity.endpoint,
-        weight: channel.server.weight ?? 100,
+        weight: channel.server.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT,
         state: ZLinkFrameworkRuntimeState.Serving,
         securityIdentity: 'default',
         ownerId: owner.ownerId,
@@ -250,7 +254,7 @@ export class ZLinkClientServerLocationRuntime {
     do {
       const page = await this.store.listClientServers(
         channelName,
-        { pageSize: 1000, continuationToken },
+        { pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE, continuationToken },
         signal
       );
       rows.push(...page.items);
@@ -517,7 +521,7 @@ function sameDescriptor(
 
 function toDiscoveryDescriptor(
   descriptor: ZLinkClientServerServerDescriptor,
-  effectiveMaxMessageBytes = 0x7fff_ffff
+  effectiveMaxMessageBytes: number = DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT
 ) {
   return {
     channelName: descriptor.channelName,
@@ -541,7 +545,7 @@ function requestAdmission(
     encodeClientServerHello({
       channelName: descriptor.channelName,
       securityIdentity: descriptor.securityIdentity,
-      normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
+      normalizedEffectiveMaxMessageBytes: normalizeClientServerMessageLimit(dealer.maxMessageSize)
     })
   );
   return dealer.request(message, timeoutMs).then(
@@ -599,8 +603,4 @@ function requireMatchingAdmission(
 
 function closeMessages(parts: readonly Message[]): void {
   for (const part of parts) part.close();
-}
-
-function normalizedMessageLimit(value: number): number {
-  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 0xffff_ffff) : 0x7fff_ffff;
 }

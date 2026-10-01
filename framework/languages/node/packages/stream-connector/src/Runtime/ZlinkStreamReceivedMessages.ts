@@ -1,8 +1,12 @@
 import { Disposable, ZlinkStreamEncodedPayload, ZlinkStreamMessage } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
-import { subscription } from './ZlinkStreamSupport';
-import { zlinkStreamActorBinding } from './ZlinkStreamActors';
+import {
+  currentRegistrations,
+  shouldCompactBackingArray,
+  subscription
+} from './ZlinkStreamSupport';
+import { zlinkStreamActorBinding, type DefaultZlinkStreamActor } from './ZlinkStreamActors';
 
 type EncodedMessageHandler = (
   message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
@@ -39,7 +43,7 @@ type QueuedDispatch = QueuedMessage | QueuedCallback;
  */
 interface RegisteredHandler {
   readonly handle: EncodedMessageHandler;
-  readonly actor?: object;
+  readonly actor?: DefaultZlinkStreamActor;
 }
 
 /**
@@ -60,8 +64,9 @@ function receives(
 ): boolean {
   return (
     registration.actor === undefined ||
-    registration.actor ===
-      (message as { [zlinkStreamActorBinding]?: object })[zlinkStreamActorBinding]
+    (registration.actor.isBound &&
+      registration.actor ===
+        (message as { [zlinkStreamActorBinding]?: object })[zlinkStreamActorBinding])
   );
 }
 
@@ -101,7 +106,7 @@ export class ZlinkStreamReceivedMessages {
    * @param actor The Actor handle that registers the handler, if any. Its
    *   handler receives only that Actor's packets.
    */
-  on(name: string, handler: EncodedMessageHandler, actor?: object): Disposable {
+  on(name: string, handler: EncodedMessageHandler, actor?: DefaultZlinkStreamActor): Disposable {
     validateName(name);
     let set = this.handlers.get(name);
     if (set === undefined) {
@@ -297,7 +302,8 @@ export class ZlinkStreamReceivedMessages {
         }
         const { message, signal } = queued;
         const handlers = this.receiversOf(message);
-        for (const handler of handlers) {
+        for (const handler of currentRegistrations(this.handlers.get(message.name)!, handlers)) {
+          if (!receives(handler, message)) continue;
           this.events.runUserCallback(
             () => handler.handle(message, signal),
             'Typed message handler failed.',
@@ -429,8 +435,14 @@ export class ZlinkStreamReceivedMessages {
       this.deliverable.length = 0;
       return;
     }
-    if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
-      this.queue.splice(0, this.queueHead);
+    const removed = this.queue.length - this.queuedCount;
+    if (shouldCompactBackingArray(removed, this.queue.length)) {
+      let destination = 0;
+      for (let source = this.queueHead; source < this.queue.length; source += 1) {
+        const queued = this.queue[source];
+        if (queued !== undefined) this.queue[destination++] = queued;
+      }
+      this.queue.length = destination;
       this.queueHead = 0;
       this.deliverable.length = 0;
       for (let index = 0; index < this.queue.length; index += 1) {

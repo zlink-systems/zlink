@@ -906,6 +906,10 @@ function(zlink_framework_cpp_add_test)
     message(FATAL_ERROR "Invalid zlink framework CTest registration: ${ARGV}")
   endif()
 
+  list(GET ZLINK_TEST_COMMAND 0 command_target)
+  if(TARGET "${command_target}")
+    zlink_framework_cpp_enable_test_assertions("${command_target}")
+  endif()
   add_test(NAME "${ZLINK_TEST_NAME}" COMMAND ${ZLINK_TEST_COMMAND})
   set(test_environment ${ZLINK_TEST_ENVIRONMENT})
   if(WIN32)
@@ -966,7 +970,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     zlink::cpp
     Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_raw_route_port_contract)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_raw_route_port_contract
     COMMAND test_cpp_framework_raw_route_port_contract
@@ -989,6 +992,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
+    ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json"
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/bound-session-replaced-v1.json"
     ZLINK_REPLY_RELAY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/reply-relay-v1.json"
     ZLINK_RELOCATION_CONTROL_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-control-v1.json"
@@ -1005,7 +1009,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
     Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec
@@ -1021,7 +1024,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_SERVICE_WIRE_FIXTURE_INDEX_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/fixtures/index.json")
   target_link_libraries(test_cpp_framework_service_wire_codec_generated PRIVATE
     nlohmann_json::nlohmann_json)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec_generated)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_service_wire_codec_generated
     COMMAND test_cpp_framework_service_wire_codec_generated
@@ -1144,7 +1146,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework_m6a_runtime
     zlink_framework
     Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6a_runtime
     COMMAND test_cpp_framework_m6a_runtime
@@ -1186,7 +1187,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
     zlink_framework_m6a_runtime zlink_framework Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_mesh_shutdown_seal)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_mesh_shutdown_seal
     COMMAND test_cpp_framework_mesh_shutdown_seal
@@ -1205,7 +1205,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework_m6b_runtime
     zlink_framework
     Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6b_runtime)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6b_runtime
     COMMAND test_cpp_framework_m6b_runtime
@@ -1223,7 +1222,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework_m6b_runtime
     zlink_framework
     Threads::Threads)
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_reply_submit_claim)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_reply_submit_claim
     COMMAND test_cpp_framework_reply_submit_claim
@@ -1310,8 +1308,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(zlink_cpp_framework_mesh_node_vertical_test
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp)
-  zlink_framework_cpp_enable_test_assertions(
-    zlink_cpp_framework_mesh_node_vertical_test)
   target_include_directories(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
@@ -1597,6 +1593,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_client_server_runtime PRIVATE
+    ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/fixtures/client-server-metadata.json")
   set_tests_properties(test_cpp_framework_client_server_runtime PROPERTIES
     RESOURCE_LOCK "zlink_cpp_heavy_runtime")
   add_zlink_framework_test(
@@ -1878,8 +1876,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  zlink_framework_cpp_enable_test_assertions(
-    test_cpp_framework_store_location_resolvers)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_store_location_resolvers)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_store_location_resolvers
@@ -1903,7 +1899,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
     ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_spot_close_conformance)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_spot_close_conformance
     COMMAND test_cpp_framework_spot_close_conformance
@@ -2054,7 +2049,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_messaging)
   target_include_directories(test_cpp_framework_messaging PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_gtest_harness

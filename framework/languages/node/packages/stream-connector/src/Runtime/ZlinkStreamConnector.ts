@@ -43,7 +43,9 @@ import {
   connectorError,
   throwIfAborted,
   unwrapStreamError,
-  subscription
+  currentRegistrations,
+  registerHandler,
+  type HandlerRegistration
 } from './ZlinkStreamSupport';
 import { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
@@ -68,10 +70,12 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
   private readonly requestSendingHandlers = new Set<
-    (context: ZlinkStreamRequestSendingContext) => void
+    HandlerRegistration<(context: ZlinkStreamRequestSendingContext) => void>
   >();
   private readonly replyReceivedHandlers = new Set<
-    (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<
+      (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
+    >
   >();
   private readonly boundActors: ZlinkStreamActors;
 
@@ -174,8 +178,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   }
 
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable {
-    this.requestSendingHandlers.add(handler);
-    return subscription(() => this.requestSendingHandlers.delete(handler));
+    return registerHandler(this.requestSendingHandlers, handler);
   }
 
   onReplyReceived(
@@ -184,8 +187,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       signal?: AbortSignal
     ) => Promise<void> | void
   ): Disposable {
-    this.replyReceivedHandlers.add(handler);
-    return subscription(() => this.replyReceivedHandlers.delete(handler));
+    return registerHandler(this.replyReceivedHandlers, handler);
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
@@ -506,7 +508,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     let stopCancellation: (() => void) | undefined;
     try {
       throwIfAborted(signal);
-      for (const handler of Array.from(this.requestSendingHandlers)) {
+      for (const { handler } of currentRegistrations(this.requestSendingHandlers)) {
         try {
           handler(sendingContext);
         } catch (cause) {
@@ -588,7 +590,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     if (this.replyReceivedHandlers.size === 0) return;
     this.receivedMessages.enqueueCallback(
       () => {
-        for (const handler of Array.from(this.replyReceivedHandlers)) {
+        for (const { handler } of currentRegistrations(this.replyReceivedHandlers)) {
           this.events.runUserCallback(
             () => handler(context, signal),
             'Reply received hook failed.',

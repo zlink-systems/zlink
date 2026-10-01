@@ -353,20 +353,6 @@ final class ZLinkChannelCallRuntime {
                 : List.of(packet, payload, contentTypeFrame, flow);
     }
 
-    static List<Message> copyParts(
-            Optional<String> packetName, Message payload, String contentType) {
-        List<Message> source = parts(packetName, payload, contentType);
-        try {
-            return ZLinkChannelRuntime.copyMessages(source);
-        } finally {
-            for (Message part : source) {
-                if (part != payload) {
-                    part.close();
-                }
-            }
-        }
-    }
-
     /**
      * Shared cross-language envelope frame for SPOT route and route mesh calls: {@code [JSON
      * header, payload]} with content type, application metadata and the ambient flow pair carried

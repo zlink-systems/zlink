@@ -1,3 +1,8 @@
+import {
+  isValidPublicWeight,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import { SmoothWeightedSelection } from './service-weighted-selection';
 export interface ClientServerDescriptor {
   readonly channelName: string;
   readonly serverRoutingId: string;
@@ -262,8 +267,10 @@ function validateClientServer(descriptor: ClientServerDescriptor): void {
   requireText(descriptor.securityIdentity, 'securityIdentity');
   requireText(descriptor.advertisedEndpoint, 'advertisedEndpoint');
   validateRevision(descriptor.lifecycleGeneration, descriptor.descriptorRevision);
-  if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
-    throw new RangeError('ClientServer weight must be an integer in 0..10000.');
+  if (!isValidPublicWeight(descriptor.weight)) {
+    throw new RangeError(
+      `ClientServer weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
   if (
     !Number.isSafeInteger(descriptor.effectiveMaxMessageBytes) ||
@@ -291,4 +298,3 @@ function requireText(value: string, field: string): void {
     throw new TypeError(`${field} must be non-empty text without NUL.`);
   }
 }
-import { SmoothWeightedSelection } from './service-weighted-selection';

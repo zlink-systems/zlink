@@ -124,7 +124,6 @@ class perf_fanout_handler_t
 {
   public:
     using event_type = publish_event_t;
-    static constexpr const char *topic_name = fanout_topic;
     perf_fanout_handler_t (role_t &role, fanout_receipts_t &receipts) : _role (role), _receipts (receipts) {}
     fw::task_t<void> handle (const publish_event_t &message)
     {

@@ -143,10 +143,13 @@ final class ZLinkChannelRuntimeTest {
     void copiedTransportPartsPreserveTheCallerPayloadForFallback() {
         try (Message payload = Message.from("payload")) {
             List<Message> copied =
-                    ZLinkChannelCallRuntime.copyParts(
+                    ZLinkChannelCallRuntime.copyEnvelopeParts(
+                            ZLinkChannelEnvelope.KIND_COMMAND,
+                            "work",
                             Optional.of("Packet"),
                             payload,
-                            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
+                            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                            Map.of());
             try {
                 assertEquals("payload", payload.toUtf8String());
                 assertEquals("payload", copied.get(1).toUtf8String());
@@ -204,11 +207,13 @@ final class ZLinkChannelRuntimeTest {
                     .toCompletableFuture()
                     .join();
 
-            assertEquals("BaseOutbound", backend.dealer.lastSendParts.get(0).toUtf8String());
+            assertEquals(2, backend.dealer.lastSendParts.size());
+            var header =
+                    ZLinkChannelEnvelope.decodeHeader(
+                            backend.dealer.lastSendParts.getFirst(), false);
+            assertEquals("BaseOutbound", header.messageName());
             assertEquals("BASE", backend.dealer.lastSendParts.get(1).toUtf8String());
-            assertEquals(
-                    "application/x-base",
-                    ZLinkChannelContentTypeFrame.decode(backend.dealer.lastSendParts));
+            assertEquals("application/x-base", header.contentType());
         }
     }
 

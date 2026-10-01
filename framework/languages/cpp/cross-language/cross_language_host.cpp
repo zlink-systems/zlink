@@ -418,10 +418,13 @@ class profile_request_handler_t
 
     explicit profile_request_handler_t (event_sink_t &sink) : _sink (sink) {}
 
-    test_host_profile_reply_t handle (const test_host_profile_request_t &request)
+    test_host_profile_reply_t handle (const test_host_profile_request_t &request,
+                                      const fw::message_context_t &context)
     {
         _sink.append ("channel-server-request|" + request.value);
-        return test_host_profile_reply_t{request.value};
+        const auto tenant = context.metadata.find ("tenant-id");
+        return test_host_profile_reply_t{request.value
+                                         + (tenant ? ":metadata=" + std::string (*tenant) : "")};
     }
 
   private:
@@ -435,9 +438,11 @@ class profile_send_handler_t
 
     explicit profile_send_handler_t (event_sink_t &sink) : _sink (sink) {}
 
-    void handle (const test_host_profile_send_t &message)
+    void handle (const test_host_profile_send_t &message, const fw::message_context_t &context)
     {
         _sink.append ("channel-server-send|" + message.value);
+        if (const auto tenant = context.metadata.find ("tenant-id"))
+            _sink.append ("channel-server-metadata|" + std::string (*tenant));
     }
 
   private:
@@ -618,8 +623,8 @@ class raw_stream_session_t final : public fw::packet_stream_session_t
 class channel_client_service_t final : public fw::hosted_service_t
 {
   public:
-    channel_client_service_t (std::string channel, std::string value) :
-        _channel (std::move (channel)), _value (std::move (value))
+    channel_client_service_t (std::string channel, std::string value, std::string metadata) :
+        _channel (std::move (channel)), _value (std::move (value)), _metadata (std::move (metadata))
     {
     }
 
@@ -627,17 +632,21 @@ class channel_client_service_t final : public fw::hosted_service_t
     {
         auto &client = services.get_required<fw::channel_client_t> ();
         auto &sink = services.get_required<event_sink_t> ();
-        auto reply = client.request (_channel, test_host_profile_request_t{_value})
-                       .timeout (std::chrono::seconds (5))
-                       .async<test_host_profile_reply_t> ()
-                       .result ();
+        auto request = client.request (_channel, test_host_profile_request_t{_value});
+        if (!_metadata.empty ())
+            request.metadata ("tenant-id", _metadata);
+        auto reply =
+          request.timeout (std::chrono::seconds (5)).async<test_host_profile_reply_t> ().result ();
         if (!reply) {
             sink.append (std::string ("channel-client-error|")
                          + (reply.error () ? reply.error ()->what () : "request failed"));
             co_return;
         }
         sink.append ("channel-client-reply|" + reply.value ().value);
-        client.send (_channel, test_host_profile_send_t{_value + "-send"}).async ();
+        auto send = client.send (_channel, test_host_profile_send_t{_value + "-send"});
+        if (!_metadata.empty ())
+            send.metadata ("tenant-id", _metadata);
+        send.async ();
         sink.append ("channel-client-sent|" + _value + "-send");
         write_ready ();
         co_return;
@@ -648,6 +657,7 @@ class channel_client_service_t final : public fw::hosted_service_t
   private:
     std::string _channel;
     std::string _value;
+    std::string _metadata;
 };
 
 class fanout_publish_service_t final : public fw::hosted_service_t
@@ -1786,7 +1796,8 @@ int main (int argc, char **argv)
 
         if (mode == "channel-client") {
             app.add_hosted_service (std::make_unique<channel_client_service_t> (
-              require ("channel-name"), option ("value", "cpp-to-peer")));
+              require ("channel-name"), option ("value", "cpp-to-peer"),
+              option ("metadata-value")));
         }
         if (mode == "channel-publisher") {
             app.add_hosted_service (std::make_unique<fanout_publish_service_t> (

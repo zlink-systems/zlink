@@ -1,4 +1,4 @@
-const ERROR_MESSAGE_MAX_LENGTH = 512;
+export const ERROR_MESSAGE_MAX_LENGTH = 512;
 
 const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/Authorization\s*:\s*(?:(?:Bearer|Basic)\s+)?[^\s,;]+/gi, 'Authorization: <redacted>'],

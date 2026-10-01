@@ -381,6 +381,8 @@ test('spot actor leave rejoins the actor original remote Entry Spot', async () =
 
 test('spot actor leave completes inside the current owner turn without nested admission', async () => {
   const events = [];
+  let sourceNotified;
+  const sourceNotification = new Promise(resolve => { sourceNotified = resolve; });
   const localNodeRid = zlink.RoutingId.from('play-node-a');
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const actor = {
@@ -389,6 +391,8 @@ test('spot actor leave completes inside the current owner turn without nested ad
       actorId: 'player-1',
       async [ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](nodeRid) {
         events.push(`join-entry:${String(nodeRid)}`);
+        events.push('entry-commit', 'entry-joined');
+        void membership.notifyActorLeftAfterTransfer('tictactoe-room', actor).then(sourceNotified);
         return true;
       }
     }
@@ -426,19 +430,24 @@ test('spot actor leave completes inside the current owner turn without nested ad
     events.push('handler:end');
   });
 
-  assert.deepEqual(events, [
+  await sourceNotification;
+  assert.deepEqual(events.filter(event => event !== 'handler:end'), [
     'handler:start',
+    'join-entry:play-node-a',
+    'entry-commit',
+    'entry-joined',
     'begin:player-1',
     'leave:player-1',
-    'commit:player-1',
-    'clear:player-1',
-    'join-entry:play-node-a',
-    'handler:end'
+    'commit:player-1'
   ]);
+  assert.equal(events.filter(event => event === 'handler:end').length, 1);
+  assert.ok(events.indexOf('handler:end') > events.indexOf('entry-joined'));
 });
 
 test('spot actor leave yields its current turn while the Entry rejoin is pending', async () => {
   const events = [];
+  let sourceNotified;
+  const sourceNotification = new Promise(resolve => { sourceNotified = resolve; });
   const localNodeRid = zlink.RoutingId.from('play-node-a');
   let completeJoin;
   const actor = {
@@ -448,7 +457,11 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
       async [ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](nodeRid) {
         events.push(`join-entry:${String(nodeRid)}`);
         return await new Promise(resolve => {
-          completeJoin = () => resolve(true);
+          completeJoin = () => {
+            events.push('entry-commit', 'entry-joined');
+            void membership.notifyActorLeftAfterTransfer('bingo-room', actor).then(sourceNotified);
+            resolve(true);
+          };
         });
       }
     }
@@ -490,16 +503,19 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
   assert.equal(events.includes('handler:end'), false);
   completeJoin();
   await leaving;
+  await sourceNotification;
 
-  assert.deepEqual(events, [
-    'begin:player-1',
-    'leave:player-1',
-    'commit:player-1',
-    'clear:player-1',
+  assert.deepEqual(events.filter(event => event !== 'handler:end'), [
     'join-entry:play-node-a',
     'other-turn',
-    'handler:end'
+    'entry-commit',
+    'entry-joined',
+    'begin:player-1',
+    'leave:player-1',
+    'commit:player-1'
   ]);
+  assert.equal(events.filter(event => event === 'handler:end').length, 1);
+  assert.ok(events.indexOf('handler:end') > events.indexOf('entry-joined'));
 });
 
 test('ZLinkSpotManager creates lists finds and closes spots with lifecycle order', async () => {

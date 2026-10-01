@@ -2,10 +2,95 @@ using System.Net;
 using System.Net.Sockets;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Theory]
+    [InlineData(ZlinkStreamDispatchMode.Manual, false)]
+    [InlineData(ZlinkStreamDispatchMode.Immediate, false)]
+    [InlineData(ZlinkStreamDispatchMode.Manual, true)]
+    [InlineData(ZlinkStreamDispatchMode.Immediate, true)]
+    public async Task ConsumedOrRebaselinedPacketsReleaseDispatchPayload(
+        ZlinkStreamDispatchMode mode,
+        bool rebaseline
+    )
+    {
+        var options = new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") };
+        await using var connector = new ZlinkStreamConnector(options);
+        var received = new ZlinkStreamReceivedMessages();
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            new ZlinkStreamTaskRunner(CancellationToken.None),
+            mode,
+            received
+        );
+        received.ResetForConnection(1);
+        var codec = new ZlinkStreamHeaderCodec();
+        using var sendGate = new SemaphoreSlim(1, 1);
+        var dispatcher = new ZlinkStreamReceiveDispatcher(
+            codec,
+            new ZlinkStreamPendingRequests(),
+            new ZlinkStreamTypedHandlerRegistry(),
+            received,
+            new ZlinkStreamFrameSender(options, codec, null, sendGate, static () => null),
+            callbacks,
+            new ZlinkStreamActors(connector, callbacks),
+            static (_, _, _) => ValueTask.CompletedTask
+        );
+        var payload = QueueAndConsumeAuditPayload(dispatcher, codec, received, rebaseline);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Assert.False(payload.IsAlive);
+        GC.KeepAlive(callbacks);
+        GC.KeepAlive(dispatcher);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static WeakReference QueueAndConsumeAuditPayload(
+        ZlinkStreamReceiveDispatcher dispatcher,
+        ZlinkStreamHeaderCodec codec,
+        ZlinkStreamReceivedMessages received,
+        bool rebaseline
+    )
+    {
+        var payload = new byte[1024];
+        var weak = new WeakReference(payload);
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "audit-payload",
+            ZlinkStreamMetadata.Empty
+        );
+        dispatcher
+            .DispatchPacketAsync(
+                new ZlinkStreamFrame(codec.Encode(header), payload),
+                CancellationToken.None
+            )
+            .GetAwaiter()
+            .GetResult();
+        if (rebaseline)
+            received.ResetForConnection(2);
+        else
+            Assert.NotNull(
+                received
+                    .WaitForAsync(
+                        "audit-payload",
+                        null,
+                        TimeSpan.FromSeconds(1),
+                        CancellationToken.None
+                    )
+                    .GetAwaiter()
+                    .GetResult()
+            );
+        return weak;
+    }
+
     /// <summary>
     ///     Stream-connector spec §10: recording an unhandled arrival into the unread history
     ///     counts it in the same step, so the count never runs ahead of what a wait can take.

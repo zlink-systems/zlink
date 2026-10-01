@@ -303,48 +303,40 @@ class handler_registry_t
 
     template <typename TOwner, typename TEvent>
     handler_registry_t &on_event (std::string channel_name,
-                                  std::string topic,
                                   void (TOwner::*method) (const TEvent &),
                                   handler_options_t options = {})
     {
-        return add_void_member_handler<TOwner, TEvent> (std::move (channel_name), std::move (topic),
-                                                        handler_kind_t::event, method,
-                                                        std::move (options));
+        return add_void_member_handler<TOwner, TEvent> (
+          std::move (channel_name), {}, handler_kind_t::event, method, std::move (options));
     }
 
     template <typename TOwner, typename TEvent>
     handler_registry_t &on_event (std::string channel_name,
-                                  std::string topic,
                                   task_t<void> (TOwner::*method) (const TEvent &),
                                   handler_options_t options = {})
     {
-        return add_task_member_handler<TOwner, TEvent> (std::move (channel_name), std::move (topic),
-                                                        handler_kind_t::event, method,
-                                                        std::move (options));
+        return add_task_member_handler<TOwner, TEvent> (
+          std::move (channel_name), {}, handler_kind_t::event, method, std::move (options));
     }
 
     template <typename TOwner, typename TEvent>
     handler_registry_t &on_event (std::string channel_name,
-                                  std::string topic,
                                   void (TOwner::*method) (const TEvent &,
                                                           const publish_message_context_t &),
                                   handler_options_t options = {})
     {
         return add_context_void_member_handler<TOwner, TEvent, publish_message_context_t> (
-          std::move (channel_name), std::move (topic), handler_kind_t::event, method,
-          std::move (options));
+          std::move (channel_name), {}, handler_kind_t::event, method, std::move (options));
     }
 
     template <typename TOwner, typename TEvent>
     handler_registry_t &
     on_event (std::string channel_name,
-              std::string topic,
               task_t<void> (TOwner::*method) (const TEvent &, const publish_message_context_t &),
               handler_options_t options = {})
     {
         return add_context_task_member_handler<TOwner, TEvent, publish_message_context_t> (
-          std::move (channel_name), std::move (topic), handler_kind_t::event, method,
-          std::move (options));
+          std::move (channel_name), {}, handler_kind_t::event, method, std::move (options));
     }
 
     template <typename TFilter> handler_registry_t &use_filter ()
@@ -390,13 +382,6 @@ class handler_registry_t
                                                    const message_context_t &context,
                                                    terminal_invoker_t terminal) const;
 
-    task_t<zlink::message_t>
-    invoke_async (std::string_view channel_name,
-                  std::string_view packet_name,
-                  service_provider_t &services,
-                  serializer_registry_t &serializers,
-                  const zlink::message_t &message,
-                  const detail::inbound_message_context_t &inbound = {}) const;
     task_t<zlink::message_t>
     invoke_async (std::string_view channel_name,
                   std::string_view topic,
