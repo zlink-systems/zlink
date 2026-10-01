@@ -23,6 +23,7 @@ import systems.zlink.framework.perf.SendSendCorrelation
 import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.SpotSetup
 import systems.zlink.framework.perf.kotlin.completionStage
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 internal class KotlinS2sChannelToSpotSendSendEchoScenario(
@@ -35,6 +36,7 @@ internal class KotlinS2sChannelToSpotSendSendEchoScenario(
     private val correlations: ObjectProvider<SendSendCorrelation>,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -60,6 +62,7 @@ internal class KotlinS2sChannelToSpotSendSendEchoScenario(
         Polling.until({ mesh.snapshot(config.meshName()).isReady() }, 10, config.workload().setupTimeoutMs().toLong()).await()
         val found = SpotSetup.findAll(manager, config).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val observations = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true)
@@ -81,21 +84,30 @@ internal class KotlinS2sChannelToSpotSendSendEchoScenario(
                 repeat(config.workload().inflight()) {
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
-                            val spotId = config.spotIds()[stream % config.spotIds().size]
+                            val spotId = streamTargets[stream]
                             val base = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation("send")
                             if (started < 0) break
-                            val sent = base.withSentTicks(started).withReturnChannel(config.channelName())
-                            val correlation = correlations.getObject().register(sent, started)
-                            try {
-                                route.kotlin().sendToSpot(spotId, sent).await()
-                                correlations.getObject().firstSendEnded(correlation, null)
-                            } catch (error: Exception) {
-                                if (error is CancellationException) throw error
-                                correlations.getObject().firstSendEnded(correlation, error)
+                            val correlation = try {
+                                val sent = base.withSentTicks(started).withReturnChannel(config.channelName())
+                                correlations.getObject().register(sent, started)
+                            } catch (error: Throwable) {
+                                measurement.completeOperation(started, error)
+                                throw error
                             }
-                            val result = correlations.getObject().completeAsync(correlation).await()
-                            measurement.completeOperation(started, result.error(), result.completedTicks())
+                            val fatal = try {
+                                route.kotlin().sendToSpot(spotId, base.withSentTicks(started).withReturnChannel(config.channelName())).await()
+                                correlations.getObject().firstSendEnded(correlation, null)
+                                null
+                            } catch (error: Throwable) {
+                                correlations.getObject().firstSendEnded(correlation, error)
+                                error.takeIf { it is CancellationException || it !is Exception }
+                            }
+                            val accounted = correlations.getObject().completeAsync(correlation).thenAccept { result ->
+                                measurement.completeOperation(started, result.error(), result.completedTicks())
+                            }
+                            if (fatal != null) throw fatal
+                            accounted.await()
                         }
                     }
                 }

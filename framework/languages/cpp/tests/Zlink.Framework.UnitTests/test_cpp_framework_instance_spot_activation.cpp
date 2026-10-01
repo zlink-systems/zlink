@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include "runtime_context_hooks_environment.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>

@@ -17,10 +17,10 @@ namespace ZLink.Framework.Perf;
 // automatic mesh). Null: physical connections, worker, Actor, fanout; suspended/resumed turns, resume latency and
 // mailbox depth have no public observation. Yield calls are the application's calls, not proven turn suspensions.
 public sealed class S2sSpotToChannelRequestEchoScenario(IZLinkSpotClient spots, IZLinkSpotManager manager, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness, ScenarioMetrics metrics)
+    IZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness, ScenarioMetrics metrics, long[]? initialSequences = null)
 {
     private readonly RoleConfig config = measurement.Config;
-    private long[] sequences = [];
+    private long[] sequences = initialSequences ?? [];
 
     public static async Task RunAsync(RoleConfig config)
     {
@@ -54,7 +54,7 @@ public sealed class S2sSpotToChannelRequestEchoScenario(IZLinkSpotClient spots, 
             {
                 var echo = measurement.Request(target, (ulong)Interlocked.Increment(ref sequences[target % sequences.Length]), probe: true);
                 var driven = await spots.RequestToSpot(config.spotIds[target], new PerfDriveRequest(echo))
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs * 2)).Async<PerfDriveReply>();
+                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs)).Async<PerfDriveReply>();
                 if (!driven.started || driven.echo is null) throw new PerfValidationException("IdentityMismatch", "The setup probe did not reach the Channel.");
                 PayloadPattern.ValidateIdentity(echo, driven.echo);
                 measurement.Pattern.Validate(driven.echo.payload);
@@ -76,21 +76,23 @@ public sealed class S2sSpotToChannelRequestEchoScenario(IZLinkSpotClient spots, 
         while (measurement.CanIssue)
         {
             var echo = measurement.Request(stream, checked((ulong)Interlocked.Increment(ref sequences[stream])));
+            var drive = new PerfDriveRequest(echo);
             var started = PerfClock.Now;
             metrics.Count("driver.issued");
+            PerfDriveReply driven;
             try
             {
-                // The driver call must outlast the measured remote call it wraps, so it gets twice the request deadline.
-                var driven = await spots.RequestToSpot(spotId, new PerfDriveRequest(echo))
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs * 2)).Async<PerfDriveReply>();
-                if (driven.started) metrics.Record("driverLatencyMs", started, PerfClock.Now);
-                else metrics.Count("driver.notStarted");
+                driven = await spots.RequestToSpot(spotId, drive)
+                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs)).Async<PerfDriveReply>();
             }
             catch (Exception error)
             {
                 metrics.Count("driver.failed");
                 measurement.RecordDiagnostic(error);
+                continue;
             }
+            if (!driven.started) metrics.Count("driver.notStarted");
+            else if (driven.echo is not null) metrics.Record("driverLatencyMs", started, PerfClock.Now);
         }
     }
 }
@@ -118,10 +120,10 @@ public sealed class S2sRemoteRequestDriveHandler(Measurement measurement, Scenar
             var started = PerfClock.Now;
             if (!probe && !measurement.BeginOperation(out started)) return new PerfDriveReply(false, null);
             request = request with { sentTicks = DecimalText.Of(started) };
-            var call = spot.Context.Outbound.RequestToChannel(config.channelName!, request)
-                .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs));
             try
             {
+                var call = spot.Context.Outbound.RequestToChannel(config.channelName!, request)
+                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs));
                 PerfEchoReply reply;
                 if (config.terminal == "yield")
                 {

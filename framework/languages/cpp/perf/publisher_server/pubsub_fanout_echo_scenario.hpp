@@ -20,8 +20,8 @@ class pubsub_fanout_echo_scenario_t
     {
         auto &measurement = role.measurement;
         measurement.add_on_reset ([this] {
-            _measured_base = _issued.load ();
             std::atomic_store (&_sets, std::make_shared<published_sets_t> ());
+            _measured_base = _issued.load ();
         });
         measurement.set_message_types ({{"event", "PerfPublishEvent"}});
         measurement.add_enrich_snapshot ([this] (json &snapshot) { enrich (snapshot); });
@@ -42,7 +42,13 @@ class pubsub_fanout_echo_scenario_t
   private:
     struct published_sets_t
     {
-        sequence_bit_set_t window, settle;
+        std::mutex gate;
+        sequence_bit_set_t window;
+        void record_window_success (std::uint64_t sequence)
+        {
+            std::lock_guard lock (gate);
+            window.try_set (sequence);
+        }
     };
 
     fw::task_t<void> loop (int)
@@ -51,22 +57,23 @@ class pubsub_fanout_echo_scenario_t
         auto &fanout = _role.service<fw::publisher_t> ();
         const auto &config = _role.config;
         while (measurement.can_issue ()) {
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started, "event"))
-                break;
-            const auto sequence = _issued.fetch_add (1) + 1;
             const auto reset_seq = measurement.reset_seq ();
             const bool warmup = reset_seq == "0";
+            const auto sets = std::atomic_load (&_sets);
             publish_event_t message;
             message.run_id = config.run_id;
             message.cell_id = config.cell_id;
             message.reset_seq = reset_seq;
             message.phase = warmup ? "warmup" : "measured";
-            message.sequence = dec (sequence);
             message.topic = fanout_topic;
-            message.sent_ticks = dec (started);
             message.clock_domain_id = clock_domain ();
             message.payload = measurement.pattern ().base64 ();
+            std::int64_t started = 0;
+            if (!measurement.begin_operation (started, "event"))
+                break;
+            const auto sequence = _issued.fetch_add (1) + 1;
+            message.sequence = dec (sequence);
+            message.sent_ticks = dec (started);
             std::exception_ptr error;
             try {
                 co_await fanout.publish (*config.channel_name, fanout_topic, message).async ();
@@ -79,14 +86,11 @@ class pubsub_fanout_echo_scenario_t
                 continue;
             }
             const auto completed = now_ticks ();
-            measurement.complete_operation (started, nullptr, completed);
+            if (measurement.complete_operation (started, nullptr, completed))
+                sets->record_window_success (sequence);
             if (warmup) {
                 if (!measurement.has_setup_evidence ())
                     measurement.set_setup_evidence (json::array ({{{"kind", "warmupMarkerPublished"}, {"source", "publisher_t.publish.async"}, {"observedValue", message.sequence}}}));
-            }
-            else {
-                const auto sets = std::atomic_load (&_sets);
-                (completed < measurement.end_ticks () ? sets->window : sets->settle).try_set (sequence);
             }
         }
     }
@@ -95,33 +99,40 @@ class pubsub_fanout_echo_scenario_t
     {
         const auto current = std::atomic_load (&_sets);
         const auto &measurement = _role.measurement;
+        const bool final = measurement.final_snapshot () && snapshot["phase"] == "complete" && snapshot["resetSeq"] == "1";
+        std::uint64_t published_in_window;
+        json window_success;
+        {
+            std::lock_guard lock (current->gate);
+            published_in_window = current->window.count ();
+            if (final)
+                window_success = current->window.ranges ();
+        }
         fanout_metrics::apply_common (snapshot, false);
-        fanout_metrics::value (snapshot, "messages.publishedInWindow", dec (current->window.count ()));
-        fanout_metrics::value (snapshot, "messages.settlePublished", dec (current->settle.count ()));
-        fanout_metrics::value (snapshot, "messages.published", dec (current->window.count () + current->settle.count ()));
+        fanout_metrics::value (snapshot, "messages.publishedInWindow", dec (published_in_window));
         const auto &seconds = snapshot["window"]["measuredSeconds"];
         if (seconds.is_number () && seconds.get<double> () > 0)
-            fanout_metrics::value (snapshot, "fanout.publishOpsPerSec", static_cast<double> (current->window.count ()) / seconds.get<double> ());
+            fanout_metrics::value (snapshot, "fanout.publishOpsPerSec", static_cast<double> (published_in_window) / seconds.get<double> ());
         else
             fanout_metrics::null_key (snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.");
         snapshot["provenance"]["fanout"] = {{"channelName", _role.config.channel_name}, {"topic", fanout_topic}, {"noDrop", false},
                                             {"publisherSequenceScope", "one counter per run; warmup and measured ranges are disjoint"},
                                             {"sequenceOriginal", "publisher-sequences.json"}};
-        if (!measurement.final_snapshot () || snapshot["phase"] != "complete" || snapshot["resetSeq"] != "1")
+        if (!final)
             return;
-        const auto last = _issued.load ();
         json attempted = json::array ();
+        const auto last = _issued.load ();
         if (last > _measured_base)
             attempted.push_back ({{"first", dec (_measured_base + 1)}, {"last", dec (last)}});
         json original = {{"runId", _role.config.run_id}, {"cellId", _role.config.cell_id}, {"resetSeq", snapshot["resetSeq"]}, {"phase", "measured"},
-                         {"attemptedRanges", attempted}, {"windowSuccessRanges", current->window.ranges ()}, {"settleSuccessRanges", current->settle.ranges ()}};
+                         {"attemptedRanges", attempted}, {"windowSuccessRanges", window_success}};
         write_once (_sequence_file, original);
     }
 
     role_t &_role;
     std::string _sequence_file;
     std::atomic<std::uint64_t> _issued{0};  // run-wide: warmup and measured ranges never overlap
-    std::uint64_t _measured_base = 0;       // `_issued` when the measured epoch was reset
+    std::uint64_t _measured_base = 0;
     std::shared_ptr<published_sets_t> _sets;
 };
 } // namespace perf

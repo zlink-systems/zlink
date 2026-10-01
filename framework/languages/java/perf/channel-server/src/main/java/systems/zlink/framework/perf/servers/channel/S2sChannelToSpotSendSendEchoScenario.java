@@ -126,7 +126,13 @@ public final class S2sChannelToSpotSendSendEchoScenario {
                 return Optional.empty();
             }
             PerfEchoRequest sent = request.withSentTicks(started);
-            SendSendCorrelation.Entry entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            SendSendCorrelation.Entry entry;
+            try {
+                entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            } catch (RuntimeException error) {
+                measurement.completeOperation(started, error);
+                return Optional.empty();
+            }
             CompletionStage<Void> first;
             try {
                 first = spots.sendToSpot(spotId, sent).submit();
@@ -139,7 +145,8 @@ public final class S2sChannelToSpotSendSendEchoScenario {
             }).thenCompose(result -> result);
             return Optional.of(new CompletionLoop.Iteration<>(operation, (result, error) -> {
                 if (error != null) {
-                    measurement.completeOperation(started, error, null);
+                    measurement.completeOperation(started, error);
+                    measurement.recordDiagnostic(error);
                 } else {
                     measurement.completeOperation(started, result.error(), result.completedTicks());
                 }

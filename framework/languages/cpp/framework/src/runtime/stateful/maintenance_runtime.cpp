@@ -438,14 +438,14 @@ task_t<void> maintenance_runtime_t::acquire_transfer_budget (std::uint64_t bytes
         co_return;
     const auto budget = effective_in_flight_budget ();
     for (;;) {
-        std::shared_ptr<detail::task_completion_source_t<bool>> waiter;
+        std::shared_ptr<task_completion_source_t<bool>> waiter;
         {
             std::lock_guard lock (_budget_mutex);
             if (_budget_in_flight_bytes == 0 || _budget_in_flight_bytes + bytes <= budget) {
                 _budget_in_flight_bytes += bytes;
                 co_return;
             }
-            waiter = std::make_shared<detail::task_completion_source_t<bool>> ();
+            waiter = std::make_shared<task_completion_source_t<bool>> ();
             _budget_waiters.emplace_back (bytes, waiter);
         }
         (void) co_await waiter->task ();
@@ -454,7 +454,7 @@ task_t<void> maintenance_runtime_t::acquire_transfer_budget (std::uint64_t bytes
 
 void maintenance_runtime_t::release_transfer_budget (std::uint64_t bytes) noexcept
 {
-    std::vector<std::shared_ptr<detail::task_completion_source_t<bool>>> released;
+    std::vector<std::shared_ptr<task_completion_source_t<bool>>> released;
     {
         std::lock_guard lock (_budget_mutex);
         _budget_in_flight_bytes =
@@ -866,7 +866,7 @@ maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_termi
                                               state->target_owner,
                                               state->inventory_digest,
                                               state->manifest});
-    auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+    auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto output = completion->task ();
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
       state->context, {state->seal_attempt.seal.participants.front ()}, state->manifest));
@@ -1702,44 +1702,43 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     struct start_t
     {
         std::uint64_t attempt = 0;
-        std::shared_ptr<detail::task_completion_source_t<termination_result_t>> completion;
+        std::shared_ptr<task_completion_source_t<termination_result_t>> completion;
         std::optional<termination_result_t> immediate;
         bool started = false;
     };
-    auto start =
-      _lane
-        .run ([this, intent] {
-            start_t start;
-            if (_terminal)
-                start.immediate = *_terminal;
-            else if (_state == maintenance_admission_state_t::stopped) {
-                start.immediate = {intent, termination_outcome_t::stopped,
-                                   termination_reason_t::none};
-            } else if (_active) {
-                start.attempt = _active_attempt;
-                if (intent == termination_intent_t::shutdown && !_effective_intent)
-                    _shutdown_claimed = true;
-                start.completion = _active_completion;
-            } else if (intent == termination_intent_t::retire
-                       && _state != maintenance_admission_state_t::serving) {
-                start.immediate = {intent, termination_outcome_t::blocked,
-                                   termination_reason_t::runtime_not_ready};
-            } else {
-                _active = true;
-                _shutdown_claimed = false;
-                _effective_intent.reset ();
-                start.attempt = _next_attempt++;
-                _active_attempt = start.attempt;
-                if (intent == termination_intent_t::shutdown)
-                    _effective_intent = termination_intent_t::shutdown;
-                start.completion =
-                  std::make_shared<detail::task_completion_source_t<termination_result_t>> ();
-                _active_completion = start.completion;
-                start.started = true;
-            }
-            return start;
-        })
-        .get ();
+    auto start = _lane
+                   .run ([this, intent] {
+                       start_t start;
+                       if (_terminal)
+                           start.immediate = *_terminal;
+                       else if (_state == maintenance_admission_state_t::stopped) {
+                           start.immediate = {intent, termination_outcome_t::stopped,
+                                              termination_reason_t::none};
+                       } else if (_active) {
+                           start.attempt = _active_attempt;
+                           if (intent == termination_intent_t::shutdown && !_effective_intent)
+                               _shutdown_claimed = true;
+                           start.completion = _active_completion;
+                       } else if (intent == termination_intent_t::retire
+                                  && _state != maintenance_admission_state_t::serving) {
+                           start.immediate = {intent, termination_outcome_t::blocked,
+                                              termination_reason_t::runtime_not_ready};
+                       } else {
+                           _active = true;
+                           _shutdown_claimed = false;
+                           _effective_intent.reset ();
+                           start.attempt = _next_attempt++;
+                           _active_attempt = start.attempt;
+                           if (intent == termination_intent_t::shutdown)
+                               _effective_intent = termination_intent_t::shutdown;
+                           start.completion =
+                             std::make_shared<task_completion_source_t<termination_result_t>> ();
+                           _active_completion = start.completion;
+                           start.started = true;
+                       }
+                       return start;
+                   })
+                   .get ();
     if (start.immediate) {
         return task_t<termination_result_t> (
           result_t<termination_result_t>::success (*start.immediate));

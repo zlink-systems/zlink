@@ -11,13 +11,11 @@ export interface SequenceRange { first: string; last: string }
 export interface PublisherSequences extends Identity {
   attemptedRanges: SequenceRange[];
   windowSuccessRanges: SequenceRange[];
-  settleSuccessRanges: SequenceRange[];
 }
 
 export interface SubscriberSequences extends Identity {
   subscriberId: number;
   windowRanges: SequenceRange[];
-  settleRanges: SequenceRange[];
   duplicateEvents: string;
   nullReasons: Record<string, NullReason>;
   timingEvidence: unknown[] | null;
@@ -93,9 +91,9 @@ export class SequenceBitSet {
 }
 
 // Metric keys a PS role owns or hands to the runner's sequence intersection (§14, §15.4).
-const INTERSECTION_KEYS = ['fanout.subscriberCount', 'fanout.uniqueDelivered', 'fanout.deliveredInWindow', 'fanout.settleDelivered', 'fanout.outOfCohortEvents',
+const INTERSECTION_KEYS = ['fanout.subscriberCount', 'fanout.deliveredInWindow', 'fanout.outOfCohortEvents',
   'fanout.deliveryRatio', 'fanout.deliveryOpsPerSec'];
-const ECHO_KEYS = ['messages.completed', 'messages.settleCompleted', 'throughput.kops'];
+const ECHO_KEYS = ['messages.completed', 'throughput.kops'];
 
 export const FanoutMetrics = {
   topic: 'perf.echo',
@@ -113,29 +111,23 @@ export const FanoutMetrics = {
   applyCommon(snapshot: PerfMetricsSnapshot, hasDeliveryOwner: boolean): void {
     for (const key of INTERSECTION_KEYS)
       FanoutMetrics.setNull(snapshot, key, 'NOT_APPLICABLE', "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4).");
-    for (const prefix of ['latency', 'settle.latency'])
-      for (const suffix of LATENCY_SUFFIXES) FanoutMetrics.setNull(snapshot, `${prefix}.${suffix}`, 'NOT_APPLICABLE', 'A fanout cell has no echo round trip (§10.11).');
-    for (const key of ['latencyMs', 'settleLatencyMs']) {
+    for (const suffix of LATENCY_SUFFIXES) FanoutMetrics.setNull(snapshot, `latency.${suffix}`, 'NOT_APPLICABLE', 'A fanout cell has no echo round trip (§10.11).');
+    for (const key of ['latencyMs']) {
       MetricCatalog.setNull(snapshot.histograms, snapshot.nullReasons, 'histograms', key, 'NOT_APPLICABLE', 'A fanout cell has no echo round trip (§10.11).');
       delete snapshot.nullReasons[`/histograms/${key}/maxNs`];
     }
     for (const key of ECHO_KEYS) FanoutMetrics.setNull(snapshot, key, 'NOT_APPLICABLE', 'A fanout cell records publish admission, not echo completion (§10.11).');
     const code = hasDeliveryOwner ? 'CLOCK_DOMAIN_UNVERIFIED' : 'NOT_APPLICABLE';
-    for (const prefix of ['fanout.deliveryLatency', 'fanout.settleDeliveryLatency'])
-      for (const suffix of LATENCY_SUFFIXES)
-        FanoutMetrics.setNull(snapshot, `${prefix}.${suffix}`, code, hasDeliveryOwner
-          ? 'Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2).' : 'Delivery latency is observed by Subscriber processes.');
-    for (const key of ['fanoutDeliveryLatencyMs', 'fanoutSettleDeliveryLatencyMs'])
+    for (const suffix of LATENCY_SUFFIXES)
+      FanoutMetrics.setNull(snapshot, `fanout.deliveryLatency.${suffix}`, code, hasDeliveryOwner
+        ? 'Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2).' : 'Delivery latency is observed by Subscriber processes.');
+    for (const key of ['fanoutDeliveryLatencyMs'])
       MetricCatalog.setNull(snapshot.histograms, snapshot.nullReasons, 'histograms', key, code, hasDeliveryOwner
         ? 'No verified shared clock domain between Publisher and Subscriber processes (§15.2).' : 'Delivery latency is observed by Subscriber processes.');
   },
 
   // The original of this cell is written once and never replaced.
   writeOnce(path: string, original: unknown): void {
-    try {
-      fs.writeFileSync(path, JSON.stringify(original) + '\n', { flag: 'wx' });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
+    fs.writeFileSync(path, JSON.stringify(original) + '\n', { flag: 'wx' });
   }
 };
