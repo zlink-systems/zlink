@@ -1,6 +1,7 @@
 // Generated from service-wire-v1.schema.json. Do not edit.
 export const SERVICE_WIRE_MAGIC = [90, 77] as const;
 export const SERVICE_WIRE_MAJOR = 1 as const;
+export const SERVICE_WIRE_METADATA_BYTES = 1024 as const;
 export const SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v13" as const;
 export const SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart" as const;
 export const SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart" as const;

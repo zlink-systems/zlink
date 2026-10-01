@@ -1054,3 +1054,131 @@ test('IMP-ND-03 unknown channel content type in an empty reply is still a Protoc
       && /unsupported channel content type/.test(error.message)
   );
 });
+
+test('ClientServer metadata consumes the shared minimum-escape fixture on send and receive', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../../../runtime/protocol/fixtures/client-server-metadata.json'
+      ),
+      'utf8'
+    )
+  );
+  for (const scenario of fixture.cases) {
+    const header = {
+      formatMarker: 242,
+      kind: 3,
+      channelName: 'api',
+      messageName: 'Notice',
+      contentType: 'application/json',
+      correlationId: null,
+      deadline: null,
+      topic: null
+    };
+    if (Object.hasOwn(scenario, 'metadata')) header.metadata = scenario.metadata;
+    const json =
+      scenario.receivedEncoded === undefined
+        ? JSON.stringify(header)
+        : JSON.stringify(header).replace(
+            '"metadata":' + JSON.stringify(scenario.metadata),
+            '"metadata":' + scenario.receivedEncoded
+          );
+    const parts = readable([Buffer.from(json), Buffer.from('{}')]);
+    if (!scenario.valid) {
+      assert.throws(() => envelope.decodeChannelHeader(parts), undefined, scenario.name);
+      if (
+        scenario.metadata !== null
+        && typeof scenario.metadata === 'object'
+        && !Array.isArray(scenario.metadata)
+      ) {
+        assert.throws(
+          () =>
+            envelope.encodeChannelEnvelopeParts(
+              3,
+              'api',
+              'Notice',
+              {},
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              false,
+              new Map(Object.entries(scenario.metadata))
+            ),
+          undefined,
+          scenario.name
+        );
+      }
+      continue;
+    }
+    const decoded = envelope.decodeChannelHeader(parts);
+    assert.deepEqual(
+      Object.entries(decoded.metadata),
+      Object.entries(scenario.metadata ?? {}),
+      scenario.name
+    );
+    const encoded = envelope.encodeChannelEnvelopeParts(
+      3,
+      'api',
+      'Notice',
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      new Map(Object.entries(scenario.metadata ?? {}))
+    );
+    try {
+      const text = readable(encoded)[0].data().toString();
+      assert.ok(text.includes('"metadata":' + scenario.encoded), scenario.name);
+      assert.equal(Buffer.byteLength(scenario.encoded), scenario.encodedSize, scenario.name);
+      assert.deepEqual(
+        Object.entries(envelope.decodeChannelHeader(readable(encoded)).metadata),
+        Object.entries(scenario.metadata ?? {}),
+        scenario.name
+      );
+    } finally {
+      envelope.closeMessages(encoded);
+    }
+  }
+});
+
+test('ClientServer metadata rejects unpaired UTF-16 surrogates on send', () => {
+  for (const entry of [
+    ['k', '\ud800'],
+    ['\udfff', 'v']
+  ]) {
+    assert.throws(
+      () =>
+        envelope.encodeChannelEnvelopeParts(
+          3,
+          'api',
+          'Notice',
+          {},
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          false,
+          new Map([entry])
+        ),
+      /valid Unicode/
+    );
+  }
+});
+
+test('channel header rejects invalid UTF-8 as ProtocolError', () => {
+  const invalid = Buffer.concat([
+    Buffer.from('{"formatMarker":242,"kind":3,"channelName":"api","messageName":"'),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('","contentType":"application/json","metadata":{}}')
+  ]);
+  assert.throws(
+    () => envelope.decodeChannelHeader(readable([invalid, Buffer.from('{}')])),
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
+  );
+});

@@ -137,10 +137,14 @@ public sealed class MessagingHotPathWireTests
             Source = "node-a",
             FlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
             FlowOrigin = ZLinkFlowOrigin.Application,
-            Metadata = new() { ["first"] = "a\"b", ["second"] = "한글<&" },
+            Metadata = new Dictionary<string, string>()
+            {
+                ["first"] = "a\"b",
+                ["second"] = "한글<&",
+            },
         };
         const string expected =
-            """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","errorCode":null,"errorMessage":null,"source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\u0022b","second":"\uD55C\uAE00\u003C\u0026"}}""";
+            """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","errorCode":null,"errorMessage":null,"source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\"b","second":"한글<&"}}""";
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         Assert.Equal(Encoding.UTF8.GetBytes(expected), encoded.ToArray());

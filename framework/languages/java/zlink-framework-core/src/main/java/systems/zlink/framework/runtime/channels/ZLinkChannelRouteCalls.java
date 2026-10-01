@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.time.Duration;
 import java.util.List;
@@ -700,7 +701,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                     channelName,
                     null,
                     defaultTimeout,
-                    metadata != null,
                     (client, remaining) -> submitClient(client),
                     (node, timeout) -> submitMesh(node));
         } catch (RuntimeException | Error failure) {
@@ -726,7 +726,14 @@ final class ChannelSendCall implements ZLinkSendCall {
                             null,
                             null));
         }
-        List<Message> parts = ZLinkChannelCallRuntime.parts(packetName, payload, contentType);
+        List<Message> parts =
+                ZLinkChannelCallRuntime.envelopeParts(
+                        ZLinkChannelEnvelope.KIND_COMMAND,
+                        channelName,
+                        packetName,
+                        payload,
+                        contentType,
+                        metadata == null ? Map.of() : metadata.values());
         try {
             return ZLinkOneWayCalls.adaptOneWay(client.send(parts))
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
@@ -916,7 +923,6 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                 channelName,
                                 timeout,
                                 defaultTimeout,
-                                metadata != null,
                                 (client, remaining) ->
                                         submitClient(client, remaining, replyType, metric, started),
                                 (node, effectiveTimeout) ->
@@ -954,7 +960,13 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 requestResult(ZLinkDispatchErrorSurface.CHANNEL, metric, started);
         String reqPacket = packetName.orElse(null);
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.parts(packetName, payload, contentType);
+                ZLinkChannelCallRuntime.envelopeParts(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        channelName,
+                        packetName,
+                        payload,
+                        contentType,
+                        metadata == null ? Map.of() : metadata.values());
         result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
         try {
             Duration remaining = timeout;

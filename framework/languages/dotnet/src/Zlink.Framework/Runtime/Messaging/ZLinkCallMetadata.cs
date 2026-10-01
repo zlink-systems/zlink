@@ -34,13 +34,19 @@ internal sealed class ZLinkCallMetadata
     {
         if (_values is null || _values.Count == 0)
             return default;
-        return ZLinkMeshMetadataCodec.Encode(new ZLinkMessageMetadata(_values));
+        return ZLinkMeshMetadataCodec.Encode(Snapshot());
     }
 
-    internal IReadOnlyDictionary<string, string> Snapshot() =>
-        _values is null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(_values, StringComparer.Ordinal);
+    internal ZLinkMessageMetadata Snapshot() =>
+        _values is null || _values.Count == 0
+            ? ZLinkMessageMetadata.Empty
+            : new ZLinkMessageMetadata(_values);
+
+    internal (
+        IReadOnlyDictionary<string, string>? Header,
+        ReadOnlyMemory<byte> Frame
+    ) EncodeChannel(bool clientServer) =>
+        clientServer ? (Snapshot().Values, default) : (null, Encode());
 
     public ZlinkStreamMetadata ToStreamMetadata()
     {

@@ -91,6 +91,11 @@ an API call is in progress; its result (`EBUSY`) and ordering are owned by
 [Socket common §2](../socket/README.en.md#2-thread-safety). Nor does the turn replace receive's
 single-consumer constraint or the multipart-owner constraint — those follow their own contracts.
 
+One data-receive call is determined by the receive bit of the public handle's state word. It is set
+in the same CAS as the handle pin and cleared by the same `fetch_sub`. When the bit is set, entry
+returns `EBUSY` immediately without waiting — it's an admission, not a lock, so §5's retry rule
+doesn't apply.
+
 **How it is taken and released.** The turn is one bit of the public-API entry word. The word
 also carries the in-flight call count and the close state, so taking and releasing the turn are
 **read-modify-write operations that preserve the other bits**. Releasing with a plain store would
@@ -342,8 +347,9 @@ guarding state.
 
 The per-message hot-path cost is as follows. A steady public send takes no pipe mutex and uses one
 state-word CAS to acquire and one atomic to release. A steady public receive likewise takes no
-mutex in the pipe or the fair queue, and a multipart physical record keeps one turn for the whole
-record. At each message boundary the C3 ledger writer issues one sequence exchange and three
+mutex in the pipe or the fair queue. A ROUTER or DEALER multipart record keeps one turn through one
+record scope, while PAIR, SUB, and STREAM acquire the turn per frame. Either way, the receive bit
+blocks another data-receive call. At each message boundary the C3 ledger writer issues one sequence exchange and three
 release stores. A mailbox producer takes the lock once per command and signals only on the
 transition above.
 

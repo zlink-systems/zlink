@@ -471,6 +471,30 @@ internal sealed partial class ZLinkEntrySpotActivation
             );
     }
 
+    internal void SubmitActorLeft(IZLinkActor actor)
+    {
+        if (!TryResolveActorLeft(actor.GetType(), out var descriptor) || descriptor is null)
+            return;
+        var admission = QueueSerialized(
+            (activation, ct) =>
+                activation.InvokeActorLifecycleAsync(
+                    descriptor,
+                    actor,
+                    request: null,
+                    acquireActorTurn: false,
+                    ct
+                )
+        );
+        if (admission == ZLinkSerialPostAdmission.Closed)
+            ErrorSink.ReportRuntimeTaskException(
+                nameof(SubmitActorLeft),
+                new ZLinkFrameworkException(
+                    ZLinkAcceptedWorkAdmission.Closed.ErrorKind(),
+                    "The Entry Spot source leave notification queue closed before admission."
+                )
+            );
+    }
+
     public async ValueTask InvokeActorLifecycleAsync(
         ZLinkSpotActorLifecycleDescriptor descriptor,
         IZLinkActor actor,

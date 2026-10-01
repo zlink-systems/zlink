@@ -7,11 +7,34 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Theory]
+    [InlineData("tcp")]
+    [InlineData("tls")]
+    public async Task CanceledStreamConnectReportsCancellation(string scheme)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await ZlinkStreamTransportFactory.ConnectAsync(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri($"{scheme}://127.0.0.1:{endpoint.Port}"),
+                },
+                cancellation.Token
+            )
+        );
+    }
+
     [Fact]
     public async Task CanceledWebSocketCloseStillDisposesTransport()
     {

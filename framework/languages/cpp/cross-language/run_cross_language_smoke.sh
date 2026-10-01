@@ -76,7 +76,7 @@ esac
 CPP_HOST="$(resolve_executable \
   "${BUILD_DIR}/zlink_cpp_cross_language_host" \
   "${BUILD_DIR}/Release/zlink_cpp_cross_language_host")"
-DOTNET_TEST_HOST="${REPO_ROOT}/framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj"
+DOTNET_TEST_HOST="${ZLINK_DOTNET_TEST_HOST:-${REPO_ROOT}/framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj}"
 NODE_PEER_HOST="${SCRIPT_DIR}/node_peer_host.js"
 NODE_USER_SPOT_JOIN_HOST="${REPO_ROOT}/framework/languages/node/cross-language/user_spot_join_host.js"
 JAVA_CROSS_LANGUAGE_ROOT="${REPO_ROOT}/framework/languages/java/cross-language"
@@ -322,6 +322,43 @@ wait_for_canonical_actor_join() {
   echo "timed out waiting for canonical actorJoin(28) in ${file}" >&2
   [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
   return 1
+}
+
+# ClientServer send/request snapshots across the hosts that provide channel roles.
+stage_client_server_metadata() {
+  local source target port endpoint value server client server_events client_events reply_prefix
+  for source in cpp dotnet node; do
+    for target in cpp dotnet node; do
+      port="$(free_port)"
+      endpoint="tcp://127.0.0.1:${port}"
+      value="metadata-${source}-${target}"
+      server="${value}-server"
+      client="${value}-client"
+      server_events="${RUN_DIR}/${server}.events"
+      client_events="${RUN_DIR}/${client}.events"
+      local server_args=(channel-server --channel-name profiles --server-endpoint "${endpoint}"
+                         --event-file "${server_events}")
+      if [[ "${target}" == cpp ]]; then
+        server_args+=(--ready-file "${RUN_DIR}/${server}.ready")
+      fi
+      "start_${target}" "${server}" "${server_args[@]}"
+      wait_for_ready "${RUN_DIR}/${server}.ready" 180
+      local client_args=(channel-client --channel-name profiles --server-endpoint "${endpoint}"
+                         --event-file "${client_events}" --metadata-value tenant-42)
+      reply_prefix=channel-client-reply
+      if [[ "${source}" == dotnet ]]; then
+        client_args+=(--publish-value "${value}")
+        reply_prefix=channel-client
+      else
+        client_args+=(--value "${value}")
+      fi
+      "start_${source}" "${client}" "${client_args[@]}"
+      wait_for_line "${client_events}" "${reply_prefix}|${value}:metadata=tenant-42" 90
+      wait_for_line "${server_events}" "channel-server-metadata|tenant-42" 30
+      stop_all
+      RESULTS+=("ClientServer metadata: ${source} -> ${target} send/request snapshots")
+    done
+  done
 }
 
 # --- messaging: C++ client -> .NET channel server -----------------------------
@@ -2010,6 +2047,12 @@ run_java_cross_stages() {
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  client-server-metadata)
+    stage_client_server_metadata
+    for result in "${RESULTS[@]}"; do echo "ok - ${result}"; done
+    echo "cross-language smoke stage=client-server-metadata result=passed"
+    exit 0
+    ;;
   message-follow)
     stage_cpp_node_message_follow
     echo "cross-language smoke stage=message-follow result=passed"

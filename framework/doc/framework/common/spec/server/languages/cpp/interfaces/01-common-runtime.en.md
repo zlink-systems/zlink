@@ -167,6 +167,7 @@ public:
  T &value();
  const framework_exception_t *error() const noexcept;
  framework_error_kind_t error_kind() const;
+ std::exception_ptr exception() const noexcept;
 };
 
 template <>
@@ -181,6 +182,7 @@ public:
  void value() const;
  const framework_exception_t *error() const noexcept;
  framework_error_kind_t error_kind() const;
+ std::exception_ptr exception() const noexcept;
 };
 
 template <typename T>
@@ -432,11 +434,26 @@ only before host start.
 ### 7.4 Error Boundary
 
 An API that returns synchronous validation and an explicit result
-object returns failure as `result_t<T>`. An async call's `async()`
-throws `framework_exception_t` carrying the same error information on
-failure. The application's error branch uses `kind()`. `code()` adds
-diagnostic information when there's a platform cause such as timeout
-or transport, but doesn't replace the common error classification.
+object returns failure as `result_t<T>`. An asynchronous operation's failure
+is delivered through the task returned by `async()`. Awaiting that task or
+calling `value()` on its failed result rethrows the stored exception.
+
+- A Framework failure is `framework_exception_t`. The application's error
+  branch uses `kind()`. `code()` adds diagnostic information when there's a
+  platform cause such as timeout or transport, but doesn't replace the
+  common error classification.
+- The completion meaning of cancellation and shutdown follows
+  [Framework Error Model §5](../../../00-foundation/07-framework-error-model.en.md#5-request-completion-and-failure)
+  and [Cancellation and Shutdown](../../../01-execution/03-cancellation-and-shutdown.en.md).
+  C++ delivers the common contract's cancellation as `std::system_error`
+  (`std::errc::operation_canceled`).
+
+`result_t` holds the failure's original exception. `exception()` returns
+that exception on failure and an empty pointer on success. `error()` points
+to it only when it's a `framework_exception_t`, and is `nullptr` on success
+or cancellation. `error_kind()` returns the exception's `kind()` when
+`error()` is non-null; otherwise, it throws `framework_exception_t` with the
+`invalid_operation` kind.
 
 
 The same Spot's dispatch serialization and `yield()`'s allowed scope
