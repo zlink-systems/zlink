@@ -12,6 +12,7 @@ import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Unit;
 
 import java.time.Duration;
 import java.util.List;
@@ -26,9 +27,6 @@ import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
 
 final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
-    private static final String PEER_UNIT = "{peer}";
-    private static final String BYTE_UNIT = "By";
-    private static final String JOB_UNIT = "{job}";
     private static final String CORE_HWM_ACCOUNTED_NAME = "zlink.host.core_hwm.accounted";
     private static final String COMPLETION_ACCOUNTED_NAME =
             "zlink.host.core_hwm.completion_accounted";
@@ -38,13 +36,18 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
     private static final String PRESSURE_TRANSITIONS_SUFFIX = "pressure_transitions";
 
     private enum GaugeState {
-        CURRENT,
-        PEAK,
-        RESERVED,
-        QUEUED,
-        IN_USE,
-        CUMULATIVE;
-        private final String wire = name().toLowerCase(java.util.Locale.ROOT);
+        CURRENT("current"),
+        PEAK("peak"),
+        RESERVED("reserved"),
+        QUEUED("queued"),
+        IN_USE("in_use"),
+        CUMULATIVE("cumulative");
+
+        private final String wire;
+
+        GaugeState(String wire) {
+            this.wire = wire;
+        }
 
         String wire() {
             return wire;
@@ -121,17 +124,17 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                             snapshot.source());
             registerMeshTopologyGauge(
                     "zlink.mesh_node.peers.configured",
-                    PEER_UNIT,
+                    Unit.PEER.wire(),
                     peerTags,
                     value -> value.configuredPeers());
             registerMeshTopologyGauge(
                     "zlink.mesh_node.peers.connected",
-                    PEER_UNIT,
+                    Unit.PEER.wire(),
                     peerTags,
                     value -> value.connectedPeers());
             registerMeshTopologyGauge(
                     "zlink.mesh_node.peers.ready",
-                    PEER_UNIT,
+                    Unit.PEER.wire(),
                     peerTags,
                     value -> value.readyPeers());
             for (ZLinkRuntimeMetrics.MeshChannelTopologyMetrics channel : snapshot.channels()) {
@@ -141,7 +144,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                 ZLinkRuntimeMetrics.Tag.CHANNEL_NAME.wire(), channel.channelName());
                 registerMeshTopologyGauge(
                         "zlink.mesh_node.channels.ready_members",
-                        "{member}",
+                        Unit.MEMBER.wire(),
                         channelTags,
                         value ->
                                 value.channels().stream()
@@ -166,7 +169,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
             return;
         }
         Gauge.builder(ZLinkRuntimeMetrics.REQUEST_INFLIGHT_NAME, source, LongSupplier::getAsLong)
-                .baseUnit(ZLinkRuntimeMetrics.Metric.REQUEST_TIMEOUTS.unit())
+                .baseUnit(Unit.REQUEST.wire())
                 .tags(toTags(key.tags()))
                 .register(registry);
     }
@@ -176,79 +179,79 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
         hostCapacitySource.set(source);
         registerGauge(
                 "zlink.host.core_hwm.effective_budget",
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.coreHwm().effectiveBudgetBytes());
         registerGauge(
                 "zlink.host.core_hwm.applied",
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.coreHwm().totalAppliedHwmBytes());
         registerGauge(
                 CORE_HWM_ACCOUNTED_NAME,
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.CURRENT.wire()),
                 hostCapacitySource,
                 status -> status.coreHwm().currentAccountedBytes());
         registerGauge(
                 CORE_HWM_ACCOUNTED_NAME,
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.PEAK.wire()),
                 hostCapacitySource,
                 status -> status.coreHwm().peakAccountedBytes());
         registerGauge(
                 COMPLETION_ACCOUNTED_NAME,
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.CURRENT.wire()),
                 hostCapacitySource,
                 status -> status.coreHwm().completionCurrentAccountedBytes());
         registerGauge(
                 COMPLETION_ACCOUNTED_NAME,
-                BYTE_UNIT,
+                Unit.BYTES.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.PEAK.wire()),
                 hostCapacitySource,
                 status -> status.coreHwm().completionPeakAccountedBytes());
         registerGauge(
                 "zlink.host.core_hwm.blocked_ratio",
-                "{ppm}",
+                Unit.PPM.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.coreHwm().blockedRatioPpm());
         registerGauge(
                 "zlink.host.application_job_queue.limit",
-                JOB_UNIT,
+                Unit.JOB.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().effectiveMaxQueuedApplicationJobs());
         registerGauge(
                 APPLICATION_JOBS_NAME,
-                JOB_UNIT,
+                Unit.JOB.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.RESERVED.wire()),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().reservedSupplyPermits());
         registerGauge(
                 APPLICATION_JOBS_NAME,
-                JOB_UNIT,
+                Unit.JOB.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.QUEUED.wire()),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().queuedApplicationJobs());
         registerGauge(
                 APPLICATION_JOBS_NAME,
-                JOB_UNIT,
+                Unit.JOB.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.IN_USE.wire()),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().permitsInUse());
         registerGauge(
                 APPLICATION_JOBS_NAME,
-                JOB_UNIT,
+                Unit.JOB.wire(),
                 Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.PEAK.wire()),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().peakPermitsInUse());
         registerGauge(
                 "zlink.host.application_job_queue.capacity_waiters",
-                "{waiter}",
+                Unit.WAITER.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().capacityWaiters());
@@ -259,7 +262,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                 valueOrZero(
                                         value.get(),
                                         status -> status.applicationJobQueue().capacityWaitCount()))
-                .baseUnit("{wait}")
+                .baseUnit(Unit.WAIT.wire())
                 .register(registry);
         FunctionCounter.builder(
                         "zlink.host.application_job_queue.capacity_wait_duration",
@@ -272,7 +275,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                                                 .capacityWaitDuration()
                                                                 .toNanos()
                                                         / (double) TimeUnit.SECONDS.toNanos(1)))
-                .baseUnit(ZLinkRuntimeMetrics.Metric.REQUEST_DURATION.unit())
+                .baseUnit(Unit.SECONDS.wire())
                 .register(registry);
     }
 
@@ -284,7 +287,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
             applicationJobQueuePressureRegistered = true;
             registerGauge(
                     PAUSE_DURATION_NAME,
-                    ZLinkRuntimeMetrics.Metric.REQUEST_DURATION.unit(),
+                    Unit.SECONDS.wire(),
                     Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.CURRENT.wire()),
                     applicationJobQueuePressureSource,
                     pressure ->
@@ -292,7 +295,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                     / (double) TimeUnit.SECONDS.toNanos(1));
             registerGauge(
                     PAUSE_DURATION_NAME,
-                    ZLinkRuntimeMetrics.Metric.REQUEST_DURATION.unit(),
+                    Unit.SECONDS.wire(),
                     Map.of(ZLinkRuntimeMetrics.Tag.STATE.wire(), GaugeState.CUMULATIVE.wire()),
                     applicationJobQueuePressureSource,
                     pressure ->
@@ -300,15 +303,11 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                     / (double) TimeUnit.SECONDS.toNanos(1));
             registerPressureCounter(
                     PRESSURE_TRANSITIONS_SUFFIX,
-                    ZLinkApplicationJobQueuePressureState.RUNNING
-                            .name()
-                            .toLowerCase(java.util.Locale.ROOT),
+                    ZLinkApplicationJobQueuePressureState.RUNNING.wire(),
                     pressure -> pressure.runningTransitionCount());
             registerPressureCounter(
                     PRESSURE_TRANSITIONS_SUFFIX,
-                    ZLinkApplicationJobQueuePressureState.PAUSED
-                            .name()
-                            .toLowerCase(java.util.Locale.ROOT),
+                    ZLinkApplicationJobQueuePressureState.PAUSED.wire(),
                     pressure -> pressure.pausedTransitionCount());
             FunctionCounter.builder(
                             "zlink.host.application_job_queue.flow_state_config_failures",
@@ -317,7 +316,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                     valueOrZero(
                                             current.get(),
                                             pressure -> pressure.flowStateConfigFailureCount()))
-                    .baseUnit(ZLinkRuntimeMetrics.Metric.CHANNEL_SELECTION_FAILURES.unit())
+                    .baseUnit(Unit.FAILURE.wire())
                     .register(registry);
         }
         observeApplicationJobQueuePressure(applicationJobQueuePressure());
@@ -333,13 +332,13 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
         if (snapshot == null) {
             return;
         }
-        String state = snapshot.pressureState().name().toLowerCase(java.util.Locale.ROOT);
+        String state = snapshot.pressureState().wire();
         Gauge gauge =
                 Gauge.builder(
                                 "zlink.host.application_job_queue.pressure_state",
                                 applicationJobQueuePressureStateValue,
                                 AtomicLong::doubleValue)
-                        .baseUnit("{state}")
+                        .baseUnit(Unit.STATE.wire())
                         .tag(ZLinkRuntimeMetrics.Tag.STATE.wire(), state)
                         .register(registry);
         applicationJobQueuePressureStateId = gauge.getId();
@@ -353,7 +352,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                         "zlink.host.application_job_queue." + name,
                         applicationJobQueuePressureSource,
                         current -> valueOrZero(current.get(), value))
-                .baseUnit("{transition}")
+                .baseUnit(Unit.TRANSITION.wire())
                 .tags(ZLinkRuntimeMetrics.Tag.STATE.wire(), state)
                 .register(registry);
     }
@@ -478,7 +477,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
     private static String counterUnit(String name) {
         ZLinkRuntimeMetrics.Metric metric = ZLinkRuntimeMetrics.Metric.decode(name);
         return metric != null && metric.kind() == ZLinkRuntimeMetrics.Metric.Kind.COUNTER
-                ? metric.unit()
+                ? metric.unit().wire()
                 : null;
     }
 

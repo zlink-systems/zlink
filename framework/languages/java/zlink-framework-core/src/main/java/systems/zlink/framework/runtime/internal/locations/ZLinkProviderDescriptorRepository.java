@@ -92,6 +92,7 @@ final class ZLinkProviderDescriptorRepository {
     private static final String FIELD_PLACEMENT_WEIGHT = "placementWeight";
     private static final String FIELD_POLICY = "policy";
     private static final String FIELD_PUBLISHER_ROUTING_ID_HEX = "publisherRoutingIdHex";
+    private static final int DESCRIPTOR_RECORD_VERSION = 1;
     private static final String FIELD_RECORD_VERSION = "recordVersion";
     private static final String FIELD_RESERVED = "reserved";
     private static final String FIELD_ROUTING_ID_HEX = "routingIdHex";
@@ -498,7 +499,7 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeMeshNodeRecord(ZLinkMeshNodeDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put(FIELD_RECORD_VERSION, 1);
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
         root.put(FIELD_OWNER_ID, descriptor.ownerId());
         root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
@@ -600,7 +601,7 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }
@@ -775,7 +776,7 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeClientServerRecord(ZLinkClientServerServerDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put(FIELD_RECORD_VERSION, 1);
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
         root.put(FIELD_OWNER_ID, descriptor.ownerId());
         root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
@@ -812,7 +813,7 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }
@@ -842,7 +843,7 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeFanoutPublisherRecord(ZLinkFanoutPublisherDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put(FIELD_RECORD_VERSION, 1);
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
         root.put(FIELD_OWNER_ID, descriptor.ownerId());
         root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
@@ -877,7 +878,7 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }

@@ -19,12 +19,38 @@ public final class ZLinkRuntimeMetrics {
     public static final String SPOT_CLOSED_NAME = "zlink.spot.closed";
     public static final String DRAIN_ACTORS_HANDED_OFF_NAME = "zlink.drain.actors.handed_off";
 
+    public enum Unit {
+        SECONDS("s"),
+        BYTES("By"),
+        REQUEST("{request}"),
+        MESSAGE("{message}"),
+        FAILURE("{failure}"),
+        PEER("{peer}"),
+        JOB("{job}"),
+        MEMBER("{member}"),
+        PPM("{ppm}"),
+        WAITER("{waiter}"),
+        WAIT("{wait}"),
+        STATE("{state}"),
+        TRANSITION("{transition}");
+
+        private final String wire;
+
+        Unit(String wire) {
+            this.wire = wire;
+        }
+
+        public String wire() {
+            return wire;
+        }
+    }
+
     public enum Metric {
-        REQUEST_DURATION("zlink.mesh_node.request.duration", Kind.HISTOGRAM, "s"),
-        REQUEST_TIMEOUTS("zlink.mesh_node.request.timeouts", Kind.COUNTER, "{request}"),
-        MESSAGES_DROPPED("zlink.mesh_node.messages.dropped", Kind.COUNTER, "{message}"),
+        REQUEST_DURATION("zlink.mesh_node.request.duration", Kind.HISTOGRAM, Unit.SECONDS),
+        REQUEST_TIMEOUTS("zlink.mesh_node.request.timeouts", Kind.COUNTER, Unit.REQUEST),
+        MESSAGES_DROPPED("zlink.mesh_node.messages.dropped", Kind.COUNTER, Unit.MESSAGE),
         CHANNEL_SELECTION_FAILURES(
-                "zlink.mesh_node.channel.selection_failures", Kind.COUNTER, "{failure}");
+                "zlink.mesh_node.channel.selection_failures", Kind.COUNTER, Unit.FAILURE);
 
         public enum Kind {
             HISTOGRAM,
@@ -33,9 +59,9 @@ public final class ZLinkRuntimeMetrics {
 
         private final String metricName;
         private final Kind kind;
-        private final String unit;
+        private final Unit unit;
 
-        Metric(String metricName, Kind kind, String unit) {
+        Metric(String metricName, Kind kind, Unit unit) {
             this.metricName = metricName;
             this.kind = kind;
             this.unit = unit;
@@ -49,7 +75,7 @@ public final class ZLinkRuntimeMetrics {
             return kind;
         }
 
-        public String unit() {
+        public Unit unit() {
             return unit;
         }
 

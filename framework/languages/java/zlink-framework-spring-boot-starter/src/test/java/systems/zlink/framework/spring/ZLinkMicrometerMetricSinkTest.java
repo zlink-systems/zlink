@@ -27,6 +27,31 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkMicrometerMetricSinkTest {
     @Test
+    void retainsRequestAndMessageCounterUnits() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
+        sink.registerRequestInflight(Map.of("mesh_name", "mesh", "surface", "actor"), () -> 2);
+        sink.increment("zlink.mesh_node.request.timeouts", Map.of());
+        sink.increment("zlink.mesh_node.messages.dropped", Map.of());
+        sink.increment("zlink.mesh_node.channel.selection_failures", Map.of());
+        assertEquals(
+                "{request}",
+                registry.get("zlink.mesh_node.requests.inflight").gauge().getId().getBaseUnit());
+        assertEquals(
+                "{request}",
+                registry.get("zlink.mesh_node.request.timeouts").counter().getId().getBaseUnit());
+        assertEquals(
+                "{message}",
+                registry.get("zlink.mesh_node.messages.dropped").counter().getId().getBaseUnit());
+        assertEquals(
+                "{failure}",
+                registry.get("zlink.mesh_node.channel.selection_failures")
+                        .counter()
+                        .getId()
+                        .getBaseUnit());
+    }
+
+    @Test
     void recordsCatalogKindsAndRejectsHighCardinalityTags() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
@@ -197,6 +222,21 @@ final class ZLinkMicrometerMetricSinkTest {
                         .count(),
                 0.000001);
 
+        assertEquals(
+                "{ppm}",
+                registry.get("zlink.host.core_hwm.blocked_ratio").gauge().getId().getBaseUnit());
+        assertEquals(
+                "{wait}",
+                registry.get("zlink.host.application_job_queue.capacity_waits")
+                        .functionCounter()
+                        .getId()
+                        .getBaseUnit());
+        assertEquals(
+                "s",
+                registry.get("zlink.host.application_job_queue.capacity_wait_duration")
+                        .functionCounter()
+                        .getId()
+                        .getBaseUnit());
         source.set(capacity(1, 0, Duration.ZERO));
         assertEquals(
                 0.0,
@@ -255,6 +295,39 @@ final class ZLinkMicrometerMetricSinkTest {
                         .tag("state", "running")
                         .gauge()
                         .value());
+        assertEquals(
+                "s",
+                registry.get("zlink.host.application_job_queue.pause_duration")
+                        .tag("state", "current")
+                        .gauge()
+                        .getId()
+                        .getBaseUnit());
+        assertEquals(
+                "s",
+                registry.get("zlink.host.application_job_queue.pause_duration")
+                        .tag("state", "cumulative")
+                        .gauge()
+                        .getId()
+                        .getBaseUnit());
+        assertEquals(
+                "{failure}",
+                registry.get("zlink.host.application_job_queue.flow_state_config_failures")
+                        .functionCounter()
+                        .getId()
+                        .getBaseUnit());
+        assertEquals(
+                "{state}",
+                registry.get("zlink.host.application_job_queue.pressure_state")
+                        .gauge()
+                        .getId()
+                        .getBaseUnit());
+        assertEquals(
+                "{transition}",
+                registry.get("zlink.host.application_job_queue.pressure_transitions")
+                        .tag("state", "running")
+                        .functionCounter()
+                        .getId()
+                        .getBaseUnit());
         assertEquals(Set.of("running"), pressureStateSeries(registry));
         assertEquals(
                 2.0,

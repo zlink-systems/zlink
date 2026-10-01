@@ -66,25 +66,29 @@ final class ZLinkSpotLifecycle {
         this.actorOccupancy = actorOccupancy;
     }
 
+    private static void recordSpotCount(String kind, long delta) {
+        ZLinkRuntimeMetrics.add(
+                ZLinkRuntimeMetrics.SPOT_COUNT_NAME,
+                delta,
+                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
+    }
+
+    private static void recordSpotCreated(String kind) {
+        ZLinkRuntimeMetrics.increment(
+                ZLinkRuntimeMetrics.SPOT_CREATED_NAME,
+                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
+    }
+
+    private static void recordSpotClosed(String kind) {
+        ZLinkRuntimeMetrics.increment(
+                ZLinkRuntimeMetrics.SPOT_CLOSED_NAME,
+                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
+    }
+
     void addEntrySpot(EntrySpotActivation activation) {
         entrySpots.add(activation);
-        ZLinkRuntimeMetrics.add(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_COUNT_NAME,
-                1,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        ENTRY_SPOT_METRIC_KIND));
-        ZLinkRuntimeMetrics.increment(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_CREATED_NAME,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        ENTRY_SPOT_METRIC_KIND));
+        recordSpotCount(ENTRY_SPOT_METRIC_KIND, 1);
+        recordSpotCreated(ENTRY_SPOT_METRIC_KIND);
     }
 
     List<String> userSpotIds() {
@@ -106,23 +110,8 @@ final class ZLinkSpotLifecycle {
                                 locations.releaseUserSpotAsync(removed.context.nodeRid(), spotId))
                 .whenComplete(
                         (ignored, error) -> {
-                            ZLinkRuntimeMetrics.add(
-                                    systems.zlink.framework.runtime.internal.metrics
-                                            .ZLinkRuntimeMetrics.SPOT_COUNT_NAME,
-                                    -1,
-                                    Map.of(
-                                            systems.zlink.framework.runtime.internal.metrics
-                                                    .ZLinkRuntimeMetrics.Tag.KIND
-                                                    .wire(),
-                                            USER_SPOT_METRIC_KIND));
-                            ZLinkRuntimeMetrics.increment(
-                                    systems.zlink.framework.runtime.internal.metrics
-                                            .ZLinkRuntimeMetrics.SPOT_CLOSED_NAME,
-                                    Map.of(
-                                            systems.zlink.framework.runtime.internal.metrics
-                                                    .ZLinkRuntimeMetrics.Tag.KIND
-                                                    .wire(),
-                                            USER_SPOT_METRIC_KIND));
+                            recordSpotCount(USER_SPOT_METRIC_KIND, -1);
+                            recordSpotClosed(USER_SPOT_METRIC_KIND);
                         })
                 .thenApply(ignored -> true);
     }
@@ -217,23 +206,8 @@ final class ZLinkSpotLifecycle {
                     new IllegalStateException("User Spot Ready publication lost local admission"),
                     activation.closeAsync());
         }
-        ZLinkRuntimeMetrics.add(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_COUNT_NAME,
-                1,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        USER_SPOT_METRIC_KIND));
-        ZLinkRuntimeMetrics.increment(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_CREATED_NAME,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        USER_SPOT_METRIC_KIND));
+        recordSpotCount(USER_SPOT_METRIC_KIND, 1);
+        recordSpotCreated(USER_SPOT_METRIC_KIND);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -324,23 +298,8 @@ final class ZLinkSpotLifecycle {
         if (!spots.remove(spotId, current)) {
             throw new IllegalStateException("User Spot changed during Close cleanup");
         }
-        ZLinkRuntimeMetrics.add(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_COUNT_NAME,
-                -1,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        USER_SPOT_METRIC_KIND));
-        ZLinkRuntimeMetrics.increment(
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                        .SPOT_CLOSED_NAME,
-                Map.of(
-                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                .KIND
-                                .wire(),
-                        USER_SPOT_METRIC_KIND));
+        recordSpotCount(USER_SPOT_METRIC_KIND, -1);
+        recordSpotClosed(USER_SPOT_METRIC_KIND);
     }
 
     CompletionStage<Void> completeRelocationSource(
@@ -368,23 +327,8 @@ final class ZLinkSpotLifecycle {
         return current.closeAsync(ZLinkSpotCloseReason.RELOCATION_OUT, deadline)
                 .thenRun(
                         () -> {
-                            ZLinkRuntimeMetrics.add(
-                                    systems.zlink.framework.runtime.internal.metrics
-                                            .ZLinkRuntimeMetrics.SPOT_COUNT_NAME,
-                                    -1,
-                                    Map.of(
-                                            systems.zlink.framework.runtime.internal.metrics
-                                                    .ZLinkRuntimeMetrics.Tag.KIND
-                                                    .wire(),
-                                            USER_SPOT_METRIC_KIND));
-                            ZLinkRuntimeMetrics.increment(
-                                    systems.zlink.framework.runtime.internal.metrics
-                                            .ZLinkRuntimeMetrics.SPOT_CLOSED_NAME,
-                                    Map.of(
-                                            systems.zlink.framework.runtime.internal.metrics
-                                                    .ZLinkRuntimeMetrics.Tag.KIND
-                                                    .wire(),
-                                            USER_SPOT_METRIC_KIND));
+                            recordSpotCount(USER_SPOT_METRIC_KIND, -1);
+                            recordSpotClosed(USER_SPOT_METRIC_KIND);
                         });
     }
 
@@ -545,27 +489,11 @@ final class ZLinkSpotLifecycle {
                             .toCompletableFuture());
         }
         if (!entrySpots.isEmpty()) {
-            ZLinkRuntimeMetrics.add(
-                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                            .SPOT_COUNT_NAME,
-                    -entrySpots.size(),
-                    Map.of(
-                            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                    .KIND
-                                    .wire(),
-                            ENTRY_SPOT_METRIC_KIND));
+            recordSpotCount(ENTRY_SPOT_METRIC_KIND, -entrySpots.size());
         }
         entrySpots.clear();
         if (!spots.isEmpty()) {
-            ZLinkRuntimeMetrics.add(
-                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                            .SPOT_COUNT_NAME,
-                    -spots.size(),
-                    Map.of(
-                            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
-                                    .KIND
-                                    .wire(),
-                            USER_SPOT_METRIC_KIND));
+            recordSpotCount(USER_SPOT_METRIC_KIND, -spots.size());
         }
         spots.clear();
         return CompletableFuture.allOf(closedEntries.toArray(CompletableFuture[]::new))
@@ -676,25 +604,8 @@ final class ZLinkSpotLifecycle {
                             .handle(
                                     (ignored, error) -> {
                                         recordCloseFailure(firstFailure, error);
-                                        ZLinkRuntimeMetrics.add(
-                                                systems.zlink.framework.runtime.internal.metrics
-                                                        .ZLinkRuntimeMetrics.SPOT_COUNT_NAME,
-                                                -1,
-                                                Map.of(
-                                                        systems.zlink.framework.runtime.internal
-                                                                .metrics.ZLinkRuntimeMetrics.Tag
-                                                                .KIND
-                                                                .wire(),
-                                                        USER_SPOT_METRIC_KIND));
-                                        ZLinkRuntimeMetrics.increment(
-                                                systems.zlink.framework.runtime.internal.metrics
-                                                        .ZLinkRuntimeMetrics.SPOT_CLOSED_NAME,
-                                                Map.of(
-                                                        systems.zlink.framework.runtime.internal
-                                                                .metrics.ZLinkRuntimeMetrics.Tag
-                                                                .KIND
-                                                                .wire(),
-                                                        USER_SPOT_METRIC_KIND));
+                                        recordSpotCount(USER_SPOT_METRIC_KIND, -1);
+                                        recordSpotClosed(USER_SPOT_METRIC_KIND);
                                         return (Void) null;
                                     })
                             .toCompletableFuture());

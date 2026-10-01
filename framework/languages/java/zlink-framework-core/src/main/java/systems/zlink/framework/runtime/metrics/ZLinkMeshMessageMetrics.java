@@ -6,7 +6,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry.ChannelSelectionFailure;
 
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -89,7 +88,7 @@ public final class ZLinkMeshMessageMetrics {
     private Map<String, Map<String, String>> selectionTags(String channelName) {
         Map<String, Map<String, String>> tags = new HashMap<>();
         for (ChannelSelectionFailure failure : ChannelSelectionFailure.values()) {
-            String reason = failure.name().toLowerCase(Locale.ROOT);
+            String reason = failure.wire();
             tags.put(
                     reason,
                     Map.of(
