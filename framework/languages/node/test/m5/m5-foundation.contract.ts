@@ -77,18 +77,13 @@ test('codec consumes canonical and malformed shared fixtures', async () => {
 });
 
 class ManualClock implements OperationClock {
-  readonly callbacks = new Map<object, () => void>();
-  setTimeout(callback: () => void): object {
-    const handle = {};
-    this.callbacks.set(handle, callback);
-    return handle;
+  private timeMs = 0;
+  now(): number {
+    return this.timeMs;
   }
-  clearTimeout(handle: unknown): void {
-    this.callbacks.delete(handle as object);
-  }
-  fire(): void {
-    const callbacks = [...this.callbacks.values()];
-    for (const callback of callbacks) callback();
+  advance(delayMs: number): number {
+    this.timeMs += delayMs;
+    return this.timeMs;
   }
 }
 
@@ -97,12 +92,12 @@ test('Promise completion is terminal once across reply, timeout, and shutdown', 
   const operations = new OperationRegistry<string>(clock);
   const completed = operations.register(100);
   assert.equal(operations.complete(completed.id, 'reply'), true);
-  clock.fire();
+  operations.expire(clock.advance(100), clock.now() + 1);
   assert.equal(operations.complete(completed.id, 'late'), false);
   assert.equal(await completed.promise, 'reply');
 
   const timedOut = operations.register(100);
-  clock.fire();
+  operations.expire(clock.advance(100), clock.now() + 1);
   await assert.rejects(timedOut.promise, OperationTimeoutError);
   assert.equal(operations.cancel(timedOut.id), false);
 
