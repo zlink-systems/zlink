@@ -204,6 +204,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 | Admission deadline expired | `DeadlineExceeded` |
 | Runtime not accepting new admission | `ShuttingDown` |
 | Same call's terminal invoked twice | `InvalidOperation` |
+| The binding doesn't admit a one-way send (`NOT_ADMITTED`) | `Rejected` |
 
 Pending admission keeps the caller-specified Node RID, global Spot/Actor ID, and session
 binding token. A select-one Channel in a
