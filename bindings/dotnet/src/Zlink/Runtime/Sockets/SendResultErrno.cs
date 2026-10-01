@@ -9,8 +9,6 @@ internal static class SendResultErrno
         return result switch
         {
             SubmitResult.Backpressured => SendResult.Backpressured,
-            SubmitResult.NotConnected => SendResult.NotReady,
-            SubmitResult.NotFound => SendResult.NotReady,
             _ => null
         };
     }

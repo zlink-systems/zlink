@@ -60,110 +60,169 @@ public abstract sealed class ZlinkException extends RuntimeException
     }
 
     private static SubmitResult mapSubmitResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                SubmitResult.INVALID_HANDLE;
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
-                SubmitResult.BACKPRESSURED;
-            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN,
-                 NativeErrorCodes.EHOSTUNREACH,
-                 NativeErrorCodes.EHOSTUNREACH_WIN ->
-                SubmitResult.NOT_CONNECTED;
-            case NativeErrorCodes.ENOENT ->
-                SubmitResult.NOT_FOUND;
-            case NativeErrorCodes.ECONNREFUSED, NativeErrorCodes.ECONNREFUSED_WIN ->
-                SubmitResult.NOT_ADMITTED;
-            case NativeErrorCodes.ECANCELED, NativeErrorCodes.ESHUTDOWN,
-                 NativeErrorCodes.ETERM -> SubmitResult.TERMINATED;
-            case NativeErrorCodes.EINVAL -> SubmitResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.ENOTSUP -> SubmitResult.NOT_SUPPORTED;
-            case NativeErrorCodes.ENOMEM -> SubmitResult.OUT_OF_MEMORY;
-            default -> SubmitResult.INTERNAL_ERROR;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.EBADF) {
+            return SubmitResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EAGAIN) {
+            return SubmitResult.BACKPRESSURED;
+        }
+        if (errno == NativeErrorCodes.ENOTCONN || errno == NativeErrorCodes.EHOSTUNREACH) {
+            return SubmitResult.NOT_CONNECTED;
+        }
+        if (errno == NativeErrorCodes.ENOENT) {
+            return SubmitResult.NOT_FOUND;
+        }
+        if (errno == NativeErrorCodes.ECONNREFUSED) {
+            return SubmitResult.NOT_ADMITTED;
+        }
+        if (errno == NativeErrorCodes.ECANCELED
+                || errno == NativeErrorCodes.ESHUTDOWN
+                || errno == NativeErrorCodes.ETERM) {
+            return SubmitResult.TERMINATED;
+        }
+        if (errno == NativeErrorCodes.EINVAL) {
+            return SubmitResult.INVALID_ARGUMENT;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return SubmitResult.NOT_SUPPORTED;
+        }
+        if (errno == NativeErrorCodes.ENOMEM) {
+            return SubmitResult.OUT_OF_MEMORY;
+        }
+        return SubmitResult.INTERNAL_ERROR;
     }
 
     private static RecvResult mapRecvResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT -> RecvResult.INVALID_HANDLE;
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN,
-                 NativeErrorCodes.ETIMEDOUT -> RecvResult.NO_DATA;
-            case NativeErrorCodes.EBUSY -> RecvResult.BUSY;
-            case NativeErrorCodes.ETERM -> RecvResult.TERMINATED;
-            case NativeErrorCodes.ENOTSUP -> RecvResult.NOT_SUPPORTED;
-            case NativeErrorCodes.ENOBUFS -> RecvResult.BUFFER_TOO_SMALL;
-            case NativeErrorCodes.EINVAL, NativeErrorCodes.ESTALE,
-                 NativeErrorCodes.ESHUTDOWN -> RecvResult.INVALID_STATE;
-            default -> RecvResult.INTERNAL_ERROR;
-        };
+        if (errno == NativeErrorCodes.EFAULT) {
+            return RecvResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EAGAIN || errno == NativeErrorCodes.ETIMEDOUT) {
+            return RecvResult.NO_DATA;
+        }
+        if (errno == NativeErrorCodes.EBUSY) {
+            return RecvResult.BUSY;
+        }
+        if (errno == NativeErrorCodes.ETERM) {
+            return RecvResult.TERMINATED;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return RecvResult.NOT_SUPPORTED;
+        }
+        if (errno == NativeErrorCodes.ENOBUFS) {
+            return RecvResult.BUFFER_TOO_SMALL;
+        }
+        if (errno == NativeErrorCodes.EINVAL
+                || errno == NativeErrorCodes.ESTALE
+                || errno == NativeErrorCodes.ESHUTDOWN) {
+            return RecvResult.INVALID_STATE;
+        }
+        return RecvResult.INTERNAL_ERROR;
     }
 
     private static BindResult mapBindResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                BindResult.INVALID_HANDLE;
-            case NativeErrorCodes.EINVAL -> BindResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.EADDRINUSE -> BindResult.ADDR_IN_USE;
-            case NativeErrorCodes.ENOTSUP -> BindResult.NOT_SUPPORTED;
-            default -> BindResult.INVALID_ARGUMENT;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.EBADF) {
+            return BindResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EINVAL) {
+            return BindResult.INVALID_ARGUMENT;
+        }
+        if (errno == NativeErrorCodes.EADDRINUSE) {
+            return BindResult.ADDR_IN_USE;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return BindResult.NOT_SUPPORTED;
+        }
+        return BindResult.INVALID_ARGUMENT;
     }
 
     private static ConnectResult mapConnectResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                ConnectResult.INVALID_HANDLE;
-            case NativeErrorCodes.EINVAL -> ConnectResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.ENOTSUP -> ConnectResult.NOT_SUPPORTED;
-            case NativeErrorCodes.EBUSY -> ConnectResult.BUSY;
-            default -> ConnectResult.INVALID_ARGUMENT;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.EBADF) {
+            return ConnectResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EINVAL) {
+            return ConnectResult.INVALID_ARGUMENT;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return ConnectResult.NOT_SUPPORTED;
+        }
+        if (errno == NativeErrorCodes.EBUSY) {
+            return ConnectResult.BUSY;
+        }
+        return ConnectResult.INVALID_ARGUMENT;
     }
 
     private static CloseResult mapCloseResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.ESTALE ->
-                CloseResult.INVALID_HANDLE;
-            case NativeErrorCodes.EBUSY, NativeErrorCodes.EDEADLK -> CloseResult.BUSY;
-            case NativeErrorCodes.ESHUTDOWN -> CloseResult.SHUTDOWN;
-            default -> CloseResult.INTERNAL_ERROR;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.ESTALE) {
+            return CloseResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EBUSY || errno == NativeErrorCodes.EDEADLK) {
+            return CloseResult.BUSY;
+        }
+        if (errno == NativeErrorCodes.ESHUTDOWN) {
+            return CloseResult.SHUTDOWN;
+        }
+        return CloseResult.INTERNAL_ERROR;
     }
 
     private static HandlerResult mapHandlerResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                HandlerResult.INVALID_HANDLE;
-            case NativeErrorCodes.EINVAL -> HandlerResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.EBUSY -> HandlerResult.BUSY;
-            case NativeErrorCodes.ENOTSUP -> HandlerResult.NOT_SUPPORTED;
-            case NativeErrorCodes.EDEADLK -> HandlerResult.DEADLOCK;
-            default -> HandlerResult.INTERNAL_ERROR;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.EBADF) {
+            return HandlerResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EINVAL) {
+            return HandlerResult.INVALID_ARGUMENT;
+        }
+        if (errno == NativeErrorCodes.EBUSY) {
+            return HandlerResult.BUSY;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return HandlerResult.NOT_SUPPORTED;
+        }
+        if (errno == NativeErrorCodes.EDEADLK) {
+            return HandlerResult.DEADLOCK;
+        }
+        return HandlerResult.INTERNAL_ERROR;
     }
 
     private static ConfigResult mapConfigResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                ConfigResult.INVALID_HANDLE;
-            case NativeErrorCodes.EINVAL -> ConfigResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.ENOTSUP -> ConfigResult.NOT_SUPPORTED;
-            case NativeErrorCodes.EBUSY, NativeErrorCodes.ESHUTDOWN -> ConfigResult.INVALID_STATE;
-            default -> ConfigResult.INTERNAL_ERROR;
-        };
+        if (errno == NativeErrorCodes.EFAULT || errno == NativeErrorCodes.EBADF) {
+            return ConfigResult.INVALID_HANDLE;
+        }
+        if (errno == NativeErrorCodes.EINVAL) {
+            return ConfigResult.INVALID_ARGUMENT;
+        }
+        if (errno == NativeErrorCodes.ENOTSUP) {
+            return ConfigResult.NOT_SUPPORTED;
+        }
+        if (errno == NativeErrorCodes.EBUSY || errno == NativeErrorCodes.ESHUTDOWN) {
+            return ConfigResult.INVALID_STATE;
+        }
+        return ConfigResult.INTERNAL_ERROR;
     }
 
     private static RequestResult mapRequestResult(int errno) {
-        return switch (errno) {
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
-                RequestResult.TIMED_OUT;
-            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN,
-                 NativeErrorCodes.EHOSTUNREACH, NativeErrorCodes.EHOSTUNREACH_WIN,
-                 NativeErrorCodes.ENOENT ->
-                RequestResult.NOT_FOUND;
-            case NativeErrorCodes.ECANCELED, NativeErrorCodes.ESHUTDOWN,
-                 NativeErrorCodes.ETERM -> RequestResult.TERMINATED;
-            case NativeErrorCodes.EINTR -> RequestResult.PROTOCOL_ERROR;
-            default -> RequestResult.PROTOCOL_ERROR;
-        };
+        if (errno == NativeErrorCodes.ETIMEDOUT) return RequestResult.TIMED_OUT;
+        if (errno == NativeErrorCodes.ENOENT) return RequestResult.NOT_FOUND;
+        if (errno == NativeErrorCodes.ETERM || errno == NativeErrorCodes.ESHUTDOWN)
+            return RequestResult.TERMINATED;
+        if (errno == NativeErrorCodes.EPROTO || errno == NativeErrorCodes.ENOCOMPATPROTO)
+            return RequestResult.PROTOCOL_ERROR;
+        if (errno == NativeErrorCodes.EACCES
+                || errno == NativeErrorCodes.ECONNREFUSED
+                || errno == NativeErrorCodes.ECANCELED
+                || errno == NativeErrorCodes.EPROTOTYPE) return RequestResult.REJECTED;
+        if (errno == NativeErrorCodes.EEXIST || errno == NativeErrorCodes.ESTALE)
+            return RequestResult.CONFLICT;
+        if (errno == NativeErrorCodes.EBUSY) return RequestResult.BUSY;
+        if (errno == NativeErrorCodes.ENOTCONN || errno == NativeErrorCodes.EHOSTUNREACH)
+            return RequestResult.NOT_CONNECTED;
+        if (errno == NativeErrorCodes.EINVAL || errno == NativeErrorCodes.EFAULT)
+            return RequestResult.INVALID_ARGUMENT;
+        if (errno == NativeErrorCodes.EFSM || errno == NativeErrorCodes.EALREADY)
+            return RequestResult.INVALID_STATE;
+        if (errno == NativeErrorCodes.ENOTSUP || errno == NativeErrorCodes.EOPNOTSUPP)
+            return RequestResult.NOT_SUPPORTED;
+        if (errno == NativeErrorCodes.EAGAIN || errno == NativeErrorCodes.ENOBUFS)
+            return RequestResult.BACKPRESSURED;
+        return RequestResult.INTERNAL_ERROR;
     }
 }
