@@ -4,6 +4,8 @@
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/host/bound_session_send_stage_trace.hpp"
 
 #include <zlink.hpp>
 
@@ -14,11 +16,13 @@
 #include <condition_variable>
 #include <optional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace backend = zlink::framework::detail::backend;
 
@@ -57,6 +61,14 @@ namespace
 {
 using namespace std::chrono_literals;
 
+constexpr auto raw_route_fixture_timeout = 2s;
+constexpr auto raw_route_fixture_poll_interval = 10ms;
+constexpr std::size_t raw_route_backpressure_hwm_bytes = 16;
+constexpr std::size_t raw_route_backpressure_attempt_limit = 256;
+constexpr std::size_t deferred_trace_payload_size = 1024;
+constexpr char deferred_trace_actor_id[] = "deferred-raw-route-actor";
+constexpr char deferred_trace_session_id[] = "deferred-raw-route-session";
+
 bool wait_for_monitor_event (zlink::socket_monitor_t &monitor,
                              zlink::monitor_event expected,
                              std::chrono::milliseconds timeout)
@@ -80,6 +92,107 @@ bool wait_for_monitor_event (zlink::socket_monitor_t &monitor,
 backend::raw_message_t request_parts ()
 {
     return backend::raw_message_t{backend::raw_bytes_t{'r', 'e', 'q', 'u', 'e', 's', 't'}};
+}
+
+zlink::framework::task_t<zlink::submit_result_t>
+submit_with_local_bound_session_trace (backend::raw_route_port_t &port,
+                                       const backend::raw_bytes_t &target_rid,
+                                       const zlink::framework::dispatch_options_t &trace_options)
+{
+    zlink::framework::detail::actor_gateway_runtime_t gateway;
+    gateway.set_dispatch (trace_options);
+    const std::string actor_id = deferred_trace_actor_id;
+    const auto session_rid = zlink::routing_id_t::from (deferred_trace_session_id);
+    zlink::framework::detail::bound_session_send_stage_trace_context_t trace_context{
+      &gateway, actor_id, &session_rid};
+    auto trace = zlink::framework::detail::make_bound_session_send_stage_trace (trace_context);
+    return port.send_result (target_rid,
+                             backend::raw_message_t{backend::raw_bytes_t (
+                               deferred_trace_payload_size, static_cast<std::uint8_t> (0x5a))},
+                             std::move (trace));
+}
+
+void verify_deferred_send_trace_owns_its_context ()
+{
+    zlink::context_t context;
+    context.options ().auto_hwm_enabled (false);
+    zlink::router_socket_t source (context), target (context);
+    const auto source_rid = zlink::routing_id_t::from ("deferred-trace-source");
+    const auto target_rid = zlink::routing_id_t::from ("deferred-trace-target");
+    source.set_routing_id (source_rid);
+    target.set_routing_id (target_rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    source.options ().mandatory (true);
+    source.options ().send_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+    target.options ().recv_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+    target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
+    const std::string endpoint = "inproc://framework-deferred-raw-route-trace";
+    target.bind (endpoint);
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect (endpoint);
+    backend::raw_route_port_t source_port (source);
+    backend::raw_route_port_t target_port (target);
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready,
+                                    raw_route_fixture_timeout));
+    const auto pause_deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
+    while (monitor.status ().flow_paused_connections == 0
+           && std::chrono::steady_clock::now () < pause_deadline) {
+        (void) target_port.poll (raw_route_fixture_poll_interval);
+        (void) source_port.poll (raw_route_fixture_poll_interval);
+    }
+    assert (monitor.status ().flow_paused_connections == 1);
+
+    auto captured_events = std::make_shared<std::vector<zlink::framework::message_flow_event_t>> ();
+    std::mutex captured_events_mutex;
+    zlink::framework::dispatch_options_t trace_options;
+    trace_options.message_flow (zlink::framework::message_flow_log_mode_t::detailed);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      trace_options, [&] (const zlink::framework::message_flow_event_t &event) {
+          std::lock_guard lock (captured_events_mutex);
+          captured_events->push_back (event);
+      });
+
+    std::optional<zlink::framework::task_t<zlink::submit_result_t>> pending;
+    for (std::size_t attempt = 0; attempt < raw_route_backpressure_attempt_limit && !pending;
+         ++attempt) {
+        auto sent = submit_with_local_bound_session_trace (source_port, target_rid.to_bytes (),
+                                                           trace_options);
+        if (!sent.await_ready ()) {
+            pending.emplace (std::move (sent));
+        } else {
+            assert (sent.result ());
+            assert (sent.result ().value () == zlink::submit_result_t::ok);
+        }
+    }
+    assert (pending);
+
+    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
+    const auto completion_deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
+    while (!pending->await_ready () && std::chrono::steady_clock::now () < completion_deadline)
+        (void) source_port.poll (raw_route_fixture_poll_interval);
+    assert (pending->await_ready ());
+    assert (pending->result ());
+    assert (pending->result ().value () == zlink::submit_result_t::ok);
+
+    const auto expected_session_rid =
+      zlink::routing_id_t::from (deferred_trace_session_id).to_hex ();
+    bool saw_deferred_completion = false;
+    {
+        std::lock_guard lock (captured_events_mutex);
+        saw_deferred_completion =
+          std::any_of (captured_events->begin (), captured_events->end (), [&] (const auto &event) {
+              return event.detail_stage == "router_admission_complete"
+                     && event.detail_result == "ok" && event.actor_id == deferred_trace_actor_id
+                     && event.stream_session_id == expected_session_rid;
+          });
+    }
+    assert (saw_deferred_completion);
+
+    source_port.close ();
+    target_port.close ();
+    monitor.close ();
 }
 
 void verify_binding_completion_bypasses_handler_executor ()
@@ -264,15 +377,16 @@ void verify_backpressured_send_waits_for_admission ()
     source.set_routing_id (source_rid);
     source.options ().linger (0ms);
     target.options ().linger (0ms);
-    source.options ().send_timeout (2s);
-    source.options ().send_hwm (zlink::byte_count_t::bytes (16));
-    target.options ().recv_hwm (zlink::byte_count_t::bytes (16));
+    source.options ().send_timeout (raw_route_fixture_timeout);
+    source.options ().send_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+    target.options ().recv_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
     target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
     target.bind ("inproc://framework-backpressured-send-wait");
     auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
     source.connect ("inproc://framework-backpressured-send-wait");
-    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
-    const auto pause_deadline = std::chrono::steady_clock::now () + 2s;
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready,
+                                    raw_route_fixture_timeout));
+    const auto pause_deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
     while (monitor.status ().flow_paused_connections == 0
            && std::chrono::steady_clock::now () < pause_deadline)
         std::this_thread::yield ();
@@ -281,7 +395,7 @@ void verify_backpressured_send_waits_for_admission ()
     zlink::poller_t source_poller;
     backend::raw_dealer_port_t source_port (source, nullptr, &source_poller);
     std::optional<zlink::framework::task_t<zlink::submit_result_t>> waiting;
-    for (std::size_t index = 0; index < 256 && !waiting; ++index) {
+    for (std::size_t index = 0; index < raw_route_backpressure_attempt_limit && !waiting; ++index) {
         auto sent = source_port.send_result (request_parts ());
         if (!sent.await_ready ()) {
             waiting.emplace (std::move (sent));
@@ -292,10 +406,10 @@ void verify_backpressured_send_waits_for_admission ()
     assert (waiting);
 
     target.set_receive_flow_state (zlink::receive_flow_state_t::running);
-    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
     while (!waiting->await_ready () && std::chrono::steady_clock::now () < deadline) {
         zlink::poll_event_t event;
-        (void) source_poller.wait (&event, 1, 10ms);
+        (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
     }
     assert (waiting->await_ready ());
     assert (waiting->result ().value () == zlink::submit_result_t::ok);
@@ -431,6 +545,7 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 
 int main ()
 {
+    verify_deferred_send_trace_owns_its_context ();
     verify_binding_completion_bypasses_handler_executor ();
     verify_completion_only_wait_keeps_ordinary_record_unclaimed ();
     verify_ok_send_submissions_keep_unfinished_depth_at_zero ();

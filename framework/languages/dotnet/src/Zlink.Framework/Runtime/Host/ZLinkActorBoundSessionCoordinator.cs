@@ -195,14 +195,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             )
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"remote_session_reply_claim_refused actor={actorId} "
-                        + $"request_id={requestId} pending_count={_pendingRemoteRequests.Count} "
-                        + $"actor_request_match={actorRequestMatch} "
-                        + $"capability_match={capabilityMatch} claimed={claimed} "
-                        + $"flags={flags} flags_match={flagsMatch} "
-                        + $"source_node={sourceNodeRid} responder_node={responderNodeRid} "
-                        + $"responder_match={responderMatch} object_match={objectMatch} "
-                        + $"binding_match={bindingMatch} capability={replyCapability}"
+                    $"remote_session_reply_claim_refused actor={actorId} request_id={requestId} pending_count={_pendingRemoteRequests.Count} actor_request_match={actorRequestMatch} capability_match={capabilityMatch} claimed={claimed} flags={flags} flags_match={flagsMatch} source_node={sourceNodeRid} responder_node={responderNodeRid} responder_match={responderMatch} object_match={objectMatch} binding_match={bindingMatch} capability={replyCapability}"
                 );
                 return (
                     Claimed: false,
@@ -223,9 +216,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         pendingKey = claimed.Key;
 
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_session_reply_claimed actor={actorId} "
-                + $"request_id={requestId} object={pendingKey.ObjectGeneration} "
-                + $"binding={pendingKey.BindingToken}"
+            $"remote_session_reply_claimed actor={actorId} request_id={requestId} object={pendingKey.ObjectGeneration} binding={pendingKey.BindingToken}"
         );
 
         return (
@@ -443,9 +434,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             }
         });
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_session_request_tracked actor={actorId} "
-                + $"request_id={requestId} object={binding.ObjectGeneration} "
-                + $"binding={binding.BindingToken} capability={pending.ReplyCapability}"
+            $"remote_session_request_tracked actor={actorId} request_id={requestId} object={binding.ObjectGeneration} binding={binding.BindingToken} capability={pending.ReplyCapability}"
         );
         _ = ExpireRemoteSessionRequestAsync(key, pending);
         return pending.ReplyCapability;
@@ -840,9 +829,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         if (state.TryGetBoundSessionForOutbound(out var session))
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} "
-                    + $"session_rid={session.SessionRid} binding={session.BindingToken} "
-                    + $"parts={parts.Count}"
+                $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} parts={parts.Count}"
             );
             if (GetSessionActorContext(actorId, session.BindingToken) is not null)
             {
@@ -946,9 +933,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     )
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} "
-                + $"session_rid={session.SessionRid} binding={session.BindingToken} "
-                + $"binding_gen={session.BindingGeneration} parts={parts.Count}"
+            $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} binding_gen={session.BindingGeneration} parts={parts.Count}"
         );
         if (
             await GetSessionActorContextAsync(actorId, session.BindingToken).ConfigureAwait(false)
@@ -1092,9 +1077,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         //  Three outcomes below all return a bool the caller mostly ignores;
         //  name which branch a frame took so a vanished frame is traceable.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"forward_part actor={actorRef.ActorId} target_node={actorRef.NodeRid} "
-                + $"local_node={(routeNode is null ? "none" : routeNode.RoutingId.ToString())} "
-                + $"has_relay={RemoteFrameRelay is not null} has_more={hasMore}"
+            $"forward_part actor={actorRef.ActorId} target_node={actorRef.NodeRid} local_node={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(routeNode?.RoutingId)} has_relay={RemoteFrameRelay is not null} has_more={hasMore}"
         );
 
         // A bound actor that migrated to another node cannot be reached
@@ -1254,8 +1237,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         }
         var submitted = relay(actorId, session, frame);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"session_push_relay actor={actorId} source_node={localNode.RoutingId} "
-                + $"target_node={sessionNodeRid} submitted={submitted} bytes={frame.Length}"
+            $"session_push_relay actor={actorId} source_node={localNode.RoutingId} target_node={sessionNodeRid} submitted={submitted} bytes={frame.Length}"
         );
         return submitted;
     }
@@ -1411,9 +1393,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             )
         );
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"disconnect_route_prepared actor={actorRef.ActorId} "
-                + $"operation={operationId.High:x16}{operationId.Low:x16} "
-                + $"target_node={actorRef.NodeRid} source_node={sourceNodeRid}"
+            $"disconnect_route_prepared actor={actorRef.ActorId} operation={operationId.High:x16}{operationId.Low:x16} target_node={actorRef.NodeRid} source_node={sourceNodeRid}"
         );
         // The disconnect frame takes the same route as any session frame to
         // this actor: ForwardPart relays it to the actor's owner node when the

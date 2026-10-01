@@ -27,8 +27,7 @@ internal sealed class ZLinkRelocationReplyTarget(IZLinkBackendRelocationReplyRel
             cancellationToken.ThrowIfCancellationRequested();
             var completion = backend.TryCompleteRelocationReply(relay, payload);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_reply_relay_completion operation={relay.OperationId.High:x16}{relay.OperationId.Low:x16} "
-                    + $"reply_route={relay.ReplyRouteId:x16} state={completion.State}"
+                $"canonical_reply_relay_completion operation={relay.OperationId.High:x16}{relay.OperationId.Low:x16} reply_route={relay.ReplyRouteId:x16} state={completion.State}"
             );
             if (completion.State == ZLinkRelocationReplyCompletionState.NotFound)
                 return ValueTask.FromResult<ZLinkServiceWireCodec.ReplyRelayAckRecord?>(null);

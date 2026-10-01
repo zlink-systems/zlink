@@ -1,5 +1,6 @@
 import type { ActorRef, ZLinkActor, ZLinkActorMembership } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
+import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 
 export const ZLINK_ACTOR_LIFECYCLE_SNAPSHOT = Symbol('zlink.actor.lifecycle-snapshot');
 
@@ -63,7 +64,7 @@ function lifecycleSource(actor: ZLinkActor): ZLinkActorLifecycleSnapshotSource {
       : undefined;
   // A caller can hand in a value that carries no Framework context at all, so the
   // failure path reports the configuration error instead of dereferencing it.
-  const actorId = context?.actorId ?? '<unknown>';
+  const actorId = diagnosticTextOrAbsent(context?.actorId);
   const snapshot = context?.[ZLINK_ACTOR_LIFECYCLE_SNAPSHOT];
   const source = snapshot === undefined ? undefined : snapshot.call(context);
   if (source === undefined) {
