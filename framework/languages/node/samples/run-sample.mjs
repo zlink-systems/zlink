@@ -525,24 +525,12 @@ async function cleanChildren() {
   for (const state of [...active].reverse()) {
     signalChild(state, 'SIGTERM');
   }
-  // Keep the existing grace deadline; finish as soon as the owned processes close.
-  let deadline;
-  try {
-    await Promise.race([Promise.all(exited), new Promise((resolve) => {
-      deadline = setTimeout(resolve, 500);
-    })]);
-  } finally {
-    clearTimeout(deadline);
-  }
+  await Promise.all(exited);
   for (const state of active) {
     if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
       teardownFailures.set(state, state.signalCode ?? state.exitCode);
     }
-    if (!state.closed) {
-      if (signalChild(state, 'SIGKILL')) teardownFailures.set(state, 'SIGKILL');
-    }
   }
-  await Promise.all(exited);
   if (redisContainer) {
     removeRedisAttempt(redisContainer, '');
   }

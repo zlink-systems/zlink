@@ -150,11 +150,8 @@ export class ZLinkActorPacketRelay {
     await this.targets.updateFromWire(actorId, value);
   }
 
-  actorPacketTargetForState(
-    actorId: string,
-    routerChannelIdHint?: string
-  ): ZLinkRemoteActorPacketTarget | undefined {
-    return this.targets.targetForState(actorId, routerChannelIdHint);
+  actorPacketTargetForState(actorId: string): ZLinkRemoteActorPacketTarget | undefined {
+    return this.targets.targetForState(actorId);
   }
 
   async notifyActorDisconnectedById(actorId: string, signal?: AbortSignal): Promise<void> {
@@ -294,7 +291,7 @@ export class ZLinkActorPacketRelay {
         return {
           ok: true,
           actorPacketTarget: encodeRemoteActorPacketTarget(
-            this.actorPacketTargetForState(relay.actorId, relay.routerChannelId)
+            this.actorPacketTargetForState(relay.actorId)
           )
         };
       }
@@ -347,7 +344,7 @@ export class ZLinkActorPacketRelay {
         return {
           ok: true,
           actorPacketTarget: encodeRemoteActorPacketTarget(
-            this.actorPacketTargetForState(relay.actorId, relay.routerChannelId)
+            this.actorPacketTargetForState(relay.actorId)
           )
         };
       }
@@ -419,7 +416,7 @@ export class ZLinkActorPacketRelay {
           ok: true,
           deferredResponse: true,
           actorPacketTarget: encodeRemoteActorPacketTarget(
-            this.actorPacketTargetForState(relay.actorId, relay.routerChannelId)
+            this.actorPacketTargetForState(relay.actorId)
           )
         };
       }
@@ -444,7 +441,7 @@ export class ZLinkActorPacketRelay {
         ok: true,
         response,
         actorPacketTarget: encodeRemoteActorPacketTarget(
-          this.actorPacketTargetForState(relay.actorId, relay.routerChannelId)
+          this.actorPacketTargetForState(relay.actorId)
         )
       };
     } catch (error) {
