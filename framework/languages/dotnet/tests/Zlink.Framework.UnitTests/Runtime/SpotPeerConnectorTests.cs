@@ -130,6 +130,7 @@ public sealed class SpotPeerConnectorTests
             RedirectStandardError = true,
             RedirectStandardOutput = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         };
         startInfo.ArgumentList.Add("test");
         startInfo.ArgumentList.Add(projectPath);
