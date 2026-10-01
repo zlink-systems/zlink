@@ -1403,7 +1403,7 @@ void verify_public_runtime_surface ()
     const auto first = runtime->snapshot ("vertical-mesh");
     const auto second = runtime->snapshot ("vertical-mesh");
     assert (first.mesh_name == "vertical-mesh");
-    assert (first.state == zlink::framework::mesh_node_state_t::ready);
+    assert (first.state == zlink::framework::topology_state_t::ready);
     assert (first.is_ready);
     // Status counts come from this MeshNode's activation records, not from the
     // Location Store projection (runtime monitoring §5): nothing is active here.
@@ -1459,7 +1459,7 @@ void verify_public_runtime_surface ()
         std::unique_lock lock (event_mutex);
         assert (event_ready.wait_for (lock, 2s, [&] { return !received.empty (); }));
         assert (received.back ().mesh_name == "vertical-mesh");
-        assert (received.back ().state == zlink::framework::mesh_node_state_t::ready);
+        assert (received.back ().state == zlink::framework::topology_state_t::ready);
     }
 
     auto remote_location = local_descriptor;
@@ -1470,7 +1470,7 @@ void verify_public_runtime_surface ()
     remote_location.channel_weights.emplace ("client-only", 100);
     monitoring_store.set_remote (remote_location);
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::degraded && !snapshot.is_ready
+        return snapshot.state == zlink::framework::topology_state_t::degraded && !snapshot.is_ready
                && std::any_of (
                  snapshot.peers.begin (), snapshot.peers.end (), [] (const auto &peer) {
                      return peer.state == zlink::framework::peer_state_t::not_connected;
@@ -1491,7 +1491,7 @@ void verify_public_runtime_surface ()
     assert (node->native_node ().transport ().topology ().admit (remote_service, connection_id)
             == zlink::framework::runtime::mesh::peer_admission_result_t::admitted);
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+        return snapshot.state == zlink::framework::topology_state_t::ready
                && snapshot.ready_peer_count == 1;
     }));
     assert (runtime->is_ready ("vertical-mesh"));
@@ -1523,12 +1523,12 @@ void verify_public_runtime_surface ()
     assert (node->native_node ().transport ().topology ().disconnect (
       remote_service.node_routing_id, connection_id));
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::degraded;
+        return snapshot.state == zlink::framework::topology_state_t::degraded;
     }));
     assert (!runtime->is_ready ("vertical-mesh"));
     monitoring_store.set_remote (std::nullopt);
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+        return snapshot.state == zlink::framework::topology_state_t::ready
                && snapshot.peers.empty ();
     }));
     assert (runtime->is_ready ("vertical-mesh"));
@@ -1566,7 +1566,7 @@ void verify_public_runtime_surface ()
     (void) monitoring_store.update_mesh_node (unavailable,
                                               zlink::framework::location_write_intent_t::renew);
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::stopping && !snapshot.is_ready
+        return snapshot.state == zlink::framework::topology_state_t::stopping && !snapshot.is_ready
                && std::all_of (snapshot.channels.begin (), snapshot.channels.end (),
                                [] (const auto &channel) { return !channel.is_ready; })
                && std::any_of (snapshot.channels.begin (), snapshot.channels.end (),
@@ -1579,7 +1579,7 @@ void verify_public_runtime_surface ()
     (void) monitoring_store.update_mesh_node (unavailable,
                                               zlink::framework::location_write_intent_t::renew);
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::ready && snapshot.is_ready;
+        return snapshot.state == zlink::framework::topology_state_t::ready && snapshot.is_ready;
     }));
 
     bool rejected_capacity = false;
@@ -1606,7 +1606,7 @@ void verify_public_runtime_surface ()
 
     runtime->stop ();
     assert (wait_for_snapshot ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::stopped && !snapshot.is_ready
+        return snapshot.state == zlink::framework::topology_state_t::stopped && !snapshot.is_ready
                && snapshot.ready_peer_count == 0
                && std::all_of (snapshot.channels.begin (), snapshot.channels.end (),
                                [] (const auto &channel) {
@@ -1615,7 +1615,7 @@ void verify_public_runtime_surface ()
     }));
     assert (!runtime->is_ready ("vertical-mesh"));
     assert (runtime->snapshot ("vertical-mesh").state
-            == zlink::framework::mesh_node_state_t::stopped);
+            == zlink::framework::topology_state_t::stopped);
     observation->close ();
     node->stop ();
 }
@@ -1729,19 +1729,19 @@ void verify_location_store_blocks_placement ()
     };
 
     assert (wait_for ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+        return snapshot.state == zlink::framework::topology_state_t::ready
                && snapshot.placement.is_available;
     }));
     location_query.set_store_healthy (false);
     assert (wait_for ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::degraded
+        return snapshot.state == zlink::framework::topology_state_t::degraded
                && !snapshot.placement.is_available
                && snapshot.placement.unavailable_reason
                     == zlink::framework::topology_reason_t::location_unavailable;
     }));
     location_query.set_store_healthy (true);
     assert (wait_for ([] (const auto &snapshot) {
-        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+        return snapshot.state == zlink::framework::topology_state_t::ready
                && snapshot.placement.is_available;
     }));
 
@@ -1885,7 +1885,7 @@ void verify_slow_observer_does_not_block_stop ()
               changed.notify_all ();
               changed.wait (lock, [&] { return released; });
           }
-          if (snapshot.state == zlink::framework::mesh_node_state_t::stopped) {
+          if (snapshot.state == zlink::framework::topology_state_t::stopped) {
               ++stopped_count;
               changed.notify_all ();
           }

@@ -29,9 +29,10 @@ class channel_echo_handler_t
             const auto reply = payload_pattern_t::reply (request, received);
             measurement.record_reply (request);
             if (measurement.phase () == "setup")
-                measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeReply"},
-                                                               {"source", "channel_echo_handler_t (echo_request_t -> echo_reply_t)"},
-                                                               {"observedValue", request.correlation_id}}}));
+                measurement.set_setup_evidence (json::array (
+                  {{{"kind", "typedProbeReply"},
+                    {"source", "channel_echo_handler_t (echo_request_t -> echo_reply_t)"},
+                    {"observedValue", request.correlation_id}}}));
             return reply;
         }
         catch (...) {
@@ -57,28 +58,39 @@ class channel_echo_only_scenario_t
     {
         auto &measurement = _role.measurement;
         const auto &config = _role.config;
-        wait_for_public (_role, stopping, [&] {
-            if (config.topology == "routemesh") {
-                const auto status = _role.mesh.load ()->snapshot (*config.mesh_name);
-                return status.is_ready && std::any_of (status.channels.begin (), status.channels.end (), [&] (const auto &c) {
-                           return c.channel_name == config.channel_name && c.is_ready && c.ready_target_count > 0;
-                       });
-            }
-            const auto status = _role.client_server.load ()->snapshot (*config.channel_name);
-            return status.selectable && status.ready_server_count > 0;
-        }, "a ready Channel target");
+        wait_for_public (
+          _role, stopping,
+          [&] {
+              if (config.topology == "routemesh") {
+                  const auto status = _role.mesh.load ()->snapshot (*config.mesh_name);
+                  return status.is_ready
+                         && std::any_of (status.channels.begin (), status.channels.end (),
+                                         [&] (const auto &c) {
+                                             return c.channel_name == config.channel_name
+                                                    && c.is_ready && c.ready_target_count > 0;
+                                         });
+              }
+              const auto status = _role.client_server.load ()->snapshot (*config.channel_name);
+              return status.is_ready;
+          },
+          "a ready Channel target");
         auto &route = _role.service<fw::route_client_t> ();
         const auto request = measurement.request (0, _sequences.next (0), true);
-        const auto reply = route.request_to_channel (*config.channel_name, request)
-                             .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
-                             .async<echo_reply_t> ()
-                             .result ()
-                             .value ();
+        const auto reply =
+          route.request_to_channel (*config.channel_name, request)
+            .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+            .async<echo_reply_t> ()
+            .result ()
+            .value ();
         payload_pattern_t::validate_identity (request, reply);
         measurement.pattern ().validate (reply.payload);
-        measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeEcho"}, {"source", "route_client_t.request_to_channel.async<PerfEchoReply>"},
-                                                       {"observedValue", {{"correlationId", request.correlation_id}, {"receivedTicks", reply.received_ticks},
-                                                                          {"clockDomainId", reply.clock_domain_id}}}}}));
+        measurement.set_setup_evidence (
+          json::array ({{{"kind", "typedProbeEcho"},
+                         {"source", "route_client_t.request_to_channel.async<PerfEchoReply>"},
+                         {"observedValue",
+                          {{"correlationId", request.correlation_id},
+                           {"receivedTicks", reply.received_ticks},
+                           {"clockDomainId", reply.clock_domain_id}}}}}));
     }
 
     void run (const loops_t &loops)
@@ -100,9 +112,10 @@ class channel_echo_only_scenario_t
             request.sent_ticks = dec (started);
             std::exception_ptr error;
             try {
-                const auto reply = co_await route.request_to_channel (*config.channel_name, request)
-                                     .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
-                                     .async<echo_reply_t> ();
+                const auto reply =
+                  co_await route.request_to_channel (*config.channel_name, request)
+                    .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                    .async<echo_reply_t> ();
                 payload_pattern_t::validate_identity (request, reply);
                 measurement.pattern ().validate (reply.payload);
             }

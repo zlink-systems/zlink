@@ -21,7 +21,8 @@ class objects_readiness_t
 {
   public:
     objects_readiness_t (bool ready, std::string reason) :
-        _state (std::make_shared<const state_t> (state_t{ready, std::move (reason), json::array ()}))
+        _state (
+          std::make_shared<const state_t> (state_t{ready, std::move (reason), json::array ()}))
     {
     }
     bool ready () const { return std::atomic_load (&_state)->ready; }
@@ -29,7 +30,8 @@ class objects_readiness_t
     json evidence () const { return std::atomic_load (&_state)->evidence; }
     void set (bool ready, std::string reason, json evidence)
     {
-        std::atomic_store (&_state, std::make_shared<const state_t> (state_t{ready, std::move (reason), std::move (evidence)}));
+        std::atomic_store (&_state, std::make_shared<const state_t> (
+                                      state_t{ready, std::move (reason), std::move (evidence)}));
     }
 
   private:
@@ -79,44 +81,59 @@ class role_t
     {
         const auto &q = s.capacity.application_job_queue;
         const auto &h = s.capacity.core_hwm;
-        return {{"state", static_cast<int> (s.state)}, {"isReady", s.is_ready}, {"acceptingWork", s.accepting_work},
+        return {{"state", static_cast<int> (s.state)},
+                {"isReady", s.is_ready},
+                {"acceptingWork", s.accepting_work},
                 {"sequence", dec (s.sequence)},
                 {"capacity",
                  {{"measurementEpoch", dec (s.capacity.measurement_epoch)},
-                  {"coreHwm", {{"effectiveBudgetBytes", dec (h.effective_budget_bytes)},
-                               {"totalAppliedHwmBytes", dec (h.total_applied_hwm_bytes)},
-                               {"coreQueueAccountedBytes", dec (h.core_queue_accounted_bytes)},
-                               {"currentAccountedBytes", dec (h.current_accounted_bytes)},
-                               {"peakAccountedBytes", dec (h.peak_accounted_bytes)},
-                               {"blockedRatioPpm", dec (h.blocked_ratio_ppm)},
-                               {"activeDirectionalQueueCount", dec (h.active_directional_queue_count)}}},
-                  {"applicationJobQueue", {{"effectiveProcessorCount", q.effective_processor_count},
-                                           {"effectiveMaxQueuedApplicationJobs", q.effective_max_queued_application_jobs},
-                                           {"queuedApplicationJobs", q.queued_application_jobs},
-                                           {"permitsInUse", q.permits_in_use},
-                                           {"peakPermitsInUse", q.peak_permits_in_use},
-                                           {"capacityWaiters", q.capacity_waiters},
-                                           {"capacityWaitCount", dec (q.capacity_wait_count)},
-                                           {"capacityWaitDurationNs", dec (static_cast<std::int64_t> (q.capacity_wait_duration.count ()))},
-                                           {"pressureState", static_cast<int> (q.pressure_state)}}}}}};
+                  {"coreHwm",
+                   {{"effectiveBudgetBytes", dec (h.effective_budget_bytes)},
+                    {"totalAppliedHwmBytes", dec (h.total_applied_hwm_bytes)},
+                    {"coreQueueAccountedBytes", dec (h.core_queue_accounted_bytes)},
+                    {"currentAccountedBytes", dec (h.current_accounted_bytes)},
+                    {"peakAccountedBytes", dec (h.peak_accounted_bytes)},
+                    {"blockedRatioPpm", dec (h.blocked_ratio_ppm)},
+                    {"activeDirectionalQueueCount", dec (h.active_directional_queue_count)}}},
+                  {"applicationJobQueue",
+                   {{"effectiveProcessorCount", q.effective_processor_count},
+                    {"effectiveMaxQueuedApplicationJobs", q.effective_max_queued_application_jobs},
+                    {"queuedApplicationJobs", q.queued_application_jobs},
+                    {"permitsInUse", q.permits_in_use},
+                    {"peakPermitsInUse", q.peak_permits_in_use},
+                    {"capacityWaiters", q.capacity_waiters},
+                    {"capacityWaitCount", dec (q.capacity_wait_count)},
+                    {"capacityWaitDurationNs",
+                     dec (static_cast<std::int64_t> (q.capacity_wait_duration.count ()))},
+                    {"pressureState", static_cast<int> (q.pressure_state)}}}}}};
     }
     static json mesh_status (const fw::mesh_node_snapshot_t &m)
     {
         json channels = json::array ();
         for (const auto &c : m.channels)
-            channels.push_back ({{"channelName", c.channel_name}, {"isReady", c.is_ready}, {"readyTargetCount", c.ready_target_count}});
-        return {{"meshName", m.mesh_name}, {"state", static_cast<int> (m.state)}, {"isReady", m.is_ready},
-                {"readyPeerCount", m.ready_peer_count}, {"channels", channels},
+            channels.push_back ({{"channelName", c.channel_name},
+                                 {"isReady", c.is_ready},
+                                 {"readyTargetCount", c.ready_target_count}});
+        return {{"meshName", m.mesh_name},
+                {"state", static_cast<int> (m.state)},
+                {"isReady", m.is_ready},
+                {"readyPeerCount", m.ready_peer_count},
+                {"channels", channels},
                 {"peerCount", m.peers.size ()},
-                {"placement", {{"isAvailable", m.placement.is_available}, {"activeActorCount", m.placement.active_actor_count},
-                               {"activeSpotCount", m.placement.active_spot_count}}}};
+                {"placement",
+                 {{"isAvailable", m.placement.is_available},
+                  {"activeActorCount", m.placement.active_actor_count},
+                  {"activeSpotCount", m.placement.active_spot_count}}}};
     }
     static json client_server_status (const fw::client_server_channel_snapshot_t &c)
     {
         static const char *const roles[] = {"Client", "Server", "ClientAndServer"};
-        return {{"channelName", c.channel_name}, {"localRole", roles[static_cast<int> (c.local_role)]},
-                {"selectable", c.selectable}, {"readyServerCount", c.ready_server_count},
-                {"connectionIntentCount", c.connection_intent_count}, {"pendingRequestCount", c.pending_request_count}};
+        return {{"channelName", c.channel_name},
+                {"localRole", roles[static_cast<int> (c.local_role)]},
+                {"state", static_cast<int> (c.state)},
+                {"isReady", c.is_ready},
+                {"readyTargetCount", c.ready_target_count},
+                {"targetCount", c.targets.size ()}};
     }
 
     // A role that reports objects not ready has not registered this cell's mesh or channel yet, so only the host is observed.
@@ -128,12 +145,14 @@ class role_t
     }
     json public_status () const
     {
-        json status = {{"host", runtime.load () ? host_status (runtime.load ()->status ()) : json (nullptr)}};
+        json status = {
+          {"host", runtime.load () ? host_status (runtime.load ()->status ()) : json (nullptr)}};
         const auto topology = observed_topology ();
         if (topology == "routemesh" && mesh.load () && config.mesh_name)
             status["routeMesh"] = mesh_status (mesh.load ()->snapshot (*config.mesh_name));
         else if (topology == "clientserver" && client_server.load () && config.channel_name)
-            status["clientServer"] = client_server_status (client_server.load ()->snapshot (*config.channel_name));
+            status["clientServer"] =
+              client_server_status (client_server.load ()->snapshot (*config.channel_name));
         return status;
     }
     json sample_public_state () const
@@ -142,9 +161,12 @@ class role_t
         if (!host)
             return nullptr;
         const auto status = host->status ();
-        return {{"observedTicks", dec (now_ticks ())}, {"state", static_cast<int> (status.state)}, {"isReady", status.is_ready},
+        return {{"observedTicks", dec (now_ticks ())},
+                {"state", static_cast<int> (status.state)},
+                {"isReady", status.is_ready},
                 {"acceptingWork", status.accepting_work},
-                {"pressureState", static_cast<int> (status.capacity.application_job_queue.pressure_state)}};
+                {"pressureState",
+                 static_cast<int> (status.capacity.application_job_queue.pressure_state)}};
     }
 
     // §16.1 PerfReady, from public status and the role's own typed-probe / object evidence only.
@@ -160,12 +182,14 @@ class role_t
             // only Server of its return ChannelName has no remote target by design (awaitRemoteTargets=false).
             bool target = !config.source || !config.await_remote_targets;
             for (const auto &c : snapshot.channels)
-                target = target || (c.channel_name == config.channel_name && c.is_ready && c.ready_target_count > 0);
+                target = target
+                         || (c.channel_name == config.channel_name && c.is_ready
+                             && c.ready_target_count > 0);
             infrastructure = snapshot.is_ready && target;
-        }
-        else if (host_ready && topology == "clientserver" && client_server.load () && config.channel_name) {
+        } else if (host_ready && topology == "clientserver" && client_server.load ()
+                   && config.channel_name) {
             const auto snapshot = client_server.load ()->snapshot (*config.channel_name);
-            infrastructure = snapshot.ready_server_count > 0;
+            infrastructure = snapshot.is_ready;
         }
         if (config.object_role == "ObjectClient" && config.mesh_name) {
             const auto *mesh_runtime = mesh.load ();
@@ -174,11 +198,14 @@ class role_t
         }
         const bool probe = measurement.has_setup_evidence ();
         const bool objects_ready = objects ? objects->ready () : true;
-        json evidence = json::array ({{{"kind", "publicStatus"}, {"source", "public Framework runtime status"}, {"observedValue", public_status ()}}});
+        json evidence = json::array ({{{"kind", "publicStatus"},
+                                       {"source", "public Framework runtime status"},
+                                       {"observedValue", public_status ()}}});
         if (!config.transport_endpoints.empty ())
-            evidence.push_back ({{"kind", "verifiedListenerReservation"},
-                                 {"source", "role config; coordinator OS bind reservation and public host startup"},
-                                 {"observedValue", config.transport_endpoints}});
+            evidence.push_back (
+              {{"kind", "verifiedListenerReservation"},
+               {"source", "role config; coordinator OS bind reservation and public host startup"},
+               {"observedValue", config.transport_endpoints}});
         if (objects)
             for (const auto &item : objects->evidence ())
                 evidence.push_back (item);
@@ -195,10 +222,17 @@ class role_t
             reasons.push_back ("No successful typed probe echo has been observed.");
         if (measurement.has_errors ())
             reasons.push_back ("Application preparation or phase failed.");
-        return {{"runId", config.run_id}, {"cellId", config.cell_id}, {"role", config.role}, {"roleInstance", config.role_instance},
-                {"infrastructureReady", infrastructure}, {"objectsReady", objects_ready}, {"consumersReady", probe},
+        return {{"runId", config.run_id},
+                {"cellId", config.cell_id},
+                {"role", config.role},
+                {"roleInstance", config.role_instance},
+                {"infrastructureReady", infrastructure},
+                {"objectsReady", objects_ready},
+                {"consumersReady", probe},
                 {"ready", infrastructure && objects_ready && probe && !measurement.has_errors ()},
-                {"observedAtUnixMs", unix_ms ()}, {"evidence", evidence}, {"reasons", reasons}};
+                {"observedAtUnixMs", unix_ms ()},
+                {"evidence", evidence},
+                {"reasons", reasons}};
     }
 };
 
@@ -273,13 +307,14 @@ class reset_handler_t
             return json_response ({{"reason", error.what ()}}, 400);
         }
         try {
-            const auto [reply, status] = _role.measurement.reset (body, [this]() -> std::optional<std::uint64_t> {
-                auto *host = _role.runtime.load ();
-                if (!host)
-                    return std::nullopt;
-                host->reset_capacity_metrics ();
-                return host->status ().capacity.measurement_epoch;
-            });
+            const auto [reply, status] =
+              _role.measurement.reset (body, [this] () -> std::optional<std::uint64_t> {
+                  auto *host = _role.runtime.load ();
+                  if (!host)
+                      return std::nullopt;
+                  host->reset_capacity_metrics ();
+                  return host->status ().capacity.measurement_epoch;
+              });
             return json_response (reply, status);
         }
         catch (const validation_error_t &error) {
@@ -308,10 +343,12 @@ class start_handler_t
         try {
             const auto ready = _role.ready ();
             // §16.1: warmup starts after infrastructure and objects; only the measured barrier needs consumersReady (PS marker).
-            const bool ok = trigger.phase == "warmup" ? ready["infrastructureReady"].get<bool> () && ready["objectsReady"].get<bool> ()
-                                                       : ready["ready"].get<bool> ();
+            const bool ok = trigger.phase == "warmup" ? ready["infrastructureReady"].get<bool> ()
+                                                          && ready["objectsReady"].get<bool> ()
+                                                      : ready["ready"].get<bool> ();
             if (!ok)
-                return json_response ({{"reason", "Readiness evidence is incomplete."}, {"ready", ready}}, 409);
+                return json_response (
+                  {{"reason", "Readiness evidence is incomplete."}, {"ready", ready}}, 409);
             const auto reply = _role.measurement.start (trigger, _role.workload);
             return json_response (json (reply), reply.accepted ? 200 : 409);
         }
@@ -351,7 +388,8 @@ class runtime_binding_service_t final : public fw::hosted_service_t
 class prepare_service_t final : public fw::hosted_service_t
 {
   public:
-    prepare_service_t (role_t &role, std::function<void (const std::atomic<bool> &stopping)> prepare) :
+    prepare_service_t (role_t &role,
+                       std::function<void (const std::atomic<bool> &stopping)> prepare) :
         _role (role), _prepare (std::move (prepare))
     {
     }
@@ -384,14 +422,20 @@ class prepare_service_t final : public fw::hosted_service_t
 
 // Polls a public-status predicate until it holds, the setup deadline passes or the process stops (setupTimeoutMs).
 template <typename TPredicate>
-void wait_for_public (const role_t &role, const std::atomic<bool> &stopping, TPredicate &&predicate, const char *what)
+void wait_for_public (const role_t &role,
+                      const std::atomic<bool> &stopping,
+                      TPredicate &&predicate,
+                      const char *what)
 {
-    const auto deadline = now_ticks () + static_cast<std::int64_t> (role.config.workload.setup_timeout_ms) * 1'000'000;
+    const auto deadline =
+      now_ticks () + static_cast<std::int64_t> (role.config.workload.setup_timeout_ms) * 1'000'000;
     while (!predicate ()) {
         if (stopping.load ())
             throw std::runtime_error (std::string ("Stopped while waiting for ") + what);
         if (now_ticks () >= deadline)
-            throw fw::framework_exception_t (fw::framework_error_kind_t::deadline_exceeded, std::string ("Setup deadline while waiting for ") + what);
+            throw fw::framework_exception_t (fw::framework_error_kind_t::deadline_exceeded,
+                                             std::string ("Setup deadline while waiting for ")
+                                               + what);
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
 }
@@ -401,7 +445,8 @@ void wait_for_public (const role_t &role, const std::atomic<bool> &stopping, TPr
 inline void configure_base (fw::zlink_framework_options_t &options, role_t &role)
 {
     const auto &config = role.config;
-    options.set_default_request_timeout (std::chrono::milliseconds (config.workload.request_timeout_ms));
+    options.set_default_request_timeout (
+      std::chrono::milliseconds (config.workload.request_timeout_ms));
     options.configure_network ().set_bind_host ("127.0.0.1");
     options.configure_network ().set_advertise_host (std::optional<std::string> ("127.0.0.1"));
     // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store scenarios carry it.
@@ -413,7 +458,8 @@ inline void configure_base (fw::zlink_framework_options_t &options, role_t &role
     // HTTP hosting, which routes by path (the hosting exposes no per-listener routes).
     options.http ()
       .listen (config.metrics_url)
-      .listen (config.application_trigger_url.substr (0, config.application_trigger_url.find ('/', std::string ("http://").size ())))
+      .listen (config.application_trigger_url.substr (
+        0, config.application_trigger_url.find ('/', std::string ("http://").size ())))
       .map_get<ready_handler_t> ("/perf/ready")
       .map_get<stats_handler_t> ("/perf/stats")
       .map_post<reset_handler_t> ("/perf/reset")
@@ -423,7 +469,8 @@ inline void configure_base (fw::zlink_framework_options_t &options, role_t &role
 }
 
 // Runs the role: registers the singleton, applies the shared options then the scenario's, and blocks until stopped.
-template <typename TConfigure> int run_role (std::unique_ptr<role_t> role_owner, TConfigure &&configure)
+template <typename TConfigure>
+int run_role (std::unique_ptr<role_t> role_owner, TConfigure &&configure)
 {
     auto app = fw::app_t::create ();
     auto &role = *role_owner;
