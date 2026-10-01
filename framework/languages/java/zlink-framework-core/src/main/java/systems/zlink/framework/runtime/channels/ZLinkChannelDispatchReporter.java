@@ -242,15 +242,7 @@ final class ZLinkChannelDispatchReporter {
 
     static void replyAndClose(
             ZLinkBackendRouterSocket router, ZLinkBackendReceived received, Message reply) {
-        if (received.hasDirectReplyPath()) {
-            replyAndClose(received, reply);
-        } else {
-            replyAndClose(
-                    router,
-                    received.routingId().orElseThrow(),
-                    received.requestSeq().orElseThrow(),
-                    reply);
-        }
+        replyPayloadAndClose(router, received, null, reply);
     }
 
     static void replyAndClose(ZLinkBackendReceived received, Message reply) {

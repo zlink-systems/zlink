@@ -428,7 +428,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Manual
+            ZlinkStreamDispatchMode.Manual,
+            new ZlinkStreamReceivedMessages()
         );
         var order = new List<int>();
 
@@ -469,7 +470,11 @@ public sealed partial class StreamConnectorTests
     {
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
-        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, dispatchMode);
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            taskRunner,
+            dispatchMode,
+            new ZlinkStreamReceivedMessages()
+        );
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -516,7 +521,8 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Manual
+            ZlinkStreamDispatchMode.Manual,
+            new ZlinkStreamReceivedMessages()
         );
         var order = new List<string>();
         Task? secondAdmission = null;
@@ -873,11 +879,12 @@ public sealed partial class StreamConnectorTests
     {
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var received = new ZlinkStreamReceivedMessages();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Manual
+            ZlinkStreamDispatchMode.Manual,
+            received
         );
-        var received = new ZlinkStreamReceivedMessages();
         received.ResetForConnection(1);
         var queuedWhenCounted = -1;
         var handled = 0;

@@ -7,13 +7,155 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class EnvelopeCodecTests
 {
     [Fact]
+    public void Received_header_rejects_invalid_utf8_as_protocol_error()
+    {
+        var prefix = System.Text.Encoding.UTF8.GetBytes(
+            "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"api\",\"messageName\":\""
+        );
+        var suffix = System.Text.Encoding.UTF8.GetBytes(
+            "\",\"contentType\":\"application/json\",\"metadata\":{}}"
+        );
+        byte[] bytes = [.. prefix, 0xc3, 0x28, .. suffix];
+        using var wire = Message.From(bytes);
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(wire));
+    }
+
+    [Theory]
+    [InlineData((int)ZLinkMessageKind.Command)]
+    [InlineData((int)ZLinkMessageKind.Publish)]
+    public void One_way_envelope_does_not_create_reply_correlation(int kind)
+    {
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            (ZLinkMessageKind)kind,
+            "channel",
+            "message"
+        );
+        Assert.Null(header.CorrelationId);
+        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        Assert.Null(ZLinkEnvelopeCodec.DecodeHeader(encoded).CorrelationId);
+    }
+
+    [Theory]
+    [InlineData(0xd800, false)]
+    [InlineData(0xdfff, true)]
+    public void ClientServer_metadata_rejects_unpaired_surrogates_on_send(int code, bool invalidKey)
+    {
+        var invalid = new string((char)code, 1);
+        var key = invalidKey ? invalid : "k";
+        var value = invalidKey ? "v" : invalid;
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            ZLinkMessageKind.Command,
+            "work",
+            "Notice"
+        ) with
+        {
+            Metadata = new Dictionary<string, string> { [key] = value },
+        };
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.EncodeHeader(header)
+        );
+    }
+
+    [Fact]
+    public void Message_metadata_owns_an_immutable_snapshot()
+    {
+        var source = new Dictionary<string, string> { ["tenant-id"] = "tenant-42" };
+        var metadata = new ZLinkMessageMetadata(source);
+        source["tenant-id"] = "changed";
+        Assert.Equal("tenant-42", metadata.Find("tenant-id"));
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, string>)metadata.Values)["tenant-id"] = "changed"
+        );
+    }
+
+    [Fact]
+    public void ClientServer_metadata_uses_shared_minimum_escape_fixture()
+    {
+        var path = Path.Combine(
+            Zlink.Framework.Tests.Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework/runtime/protocol/fixtures/client-server-metadata.json"
+        );
+        using var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        foreach (var scenario in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var name = scenario.GetProperty("name").GetString();
+            var present = scenario.TryGetProperty("metadata", out var value);
+            var raw =
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"work\",\"messageName\":\"Notice\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null"
+                + (
+                    present
+                        ? ",\"metadata\":"
+                            + (
+                                scenario.TryGetProperty("receivedEncoded", out var received)
+                                    ? received.GetString()
+                                    : value.GetRawText()
+                            )
+                        : ""
+                )
+                + "}";
+            using var wire = Message.From(System.Text.Encoding.UTF8.GetBytes(raw));
+            if (!scenario.GetProperty("valid").GetBoolean())
+            {
+                Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                    ZLinkEnvelopeCodec.DecodeHeader(wire)
+                );
+                if (
+                    value.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && value
+                        .EnumerateObject()
+                        .All(p =>
+                            p.Value.ValueKind
+                                is System.Text.Json.JsonValueKind.String
+                                    or System.Text.Json.JsonValueKind.Null
+                        )
+                )
+                {
+                    var outbound = ZLinkClientCallCodec.CreateEnvelope(
+                        ZLinkMessageKind.Command,
+                        "work",
+                        "Notice"
+                    ) with
+                    {
+                        Metadata = value
+                            .EnumerateObject()
+                            .ToDictionary(p => p.Name, p => p.Value.GetString()!),
+                    };
+                    Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                        ZLinkEnvelopeCodec.EncodeHeader(outbound)
+                    );
+                }
+                continue;
+            }
+            var header = ZLinkEnvelopeCodec.DecodeHeader(wire);
+            var expected = present
+                ? value.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!)
+                : new Dictionary<string, string>();
+            Assert.Equal(expected, header.Metadata ?? new Dictionary<string, string>());
+            var outboundHeader = header with { Metadata = expected };
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(outboundHeader);
+            var text = System.Text.Encoding.UTF8.GetString(encoded.AsReadOnlySpan());
+            var minimum = scenario.GetProperty("encoded").GetString()!;
+            if (expected.Count > 0)
+                Assert.Contains("\"metadata\":" + minimum, text);
+            Assert.Equal(
+                scenario.GetProperty("encodedSize").GetInt32(),
+                System.Text.Encoding.UTF8.GetByteCount(minimum)
+            );
+            Assert.Equal(
+                expected,
+                ZLinkEnvelopeCodec.DecodeHeader(encoded).Metadata
+                    ?? new Dictionary<string, string>()
+            );
+        }
+    }
+
+    [Fact]
     public void Request_envelope_keeps_protocol_correlation_when_observation_is_disabled()
     {
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Request,
             "channel",
             "request",
-            includeCorrelationId: false,
             includeDeadline: false
         );
 

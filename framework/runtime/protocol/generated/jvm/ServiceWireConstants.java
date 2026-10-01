@@ -5,6 +5,7 @@ public final class ServiceWireConstants {
     public static final int MAGIC_0 = 90;
     public static final int MAGIC_1 = 77;
     public static final int WIRE_MAJOR = 1;
+    public static final int METADATA_BYTES = 1024;
     public static final String REQUIRED_CAPABILITY = "framework-service-v13";
     public static final String FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart";
     public static final String FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart";

@@ -394,7 +394,7 @@ errno listed for that result in this table.
 |---|---|---|
 | `ZLINK_RECV_OK` | - | At least one complete record was received |
 | `ZLINK_RECV_NO_DATA` | `EAGAIN`, `ETIMEDOUT` | No data under nonblocking receive or receive timeout |
-| `ZLINK_RECV_BUSY` | `EBUSY` | Another receive mode is active |
+| `ZLINK_RECV_BUSY` | `EBUSY` | Concurrent data-receive call entry conflict ([Socket common §3](socket/README.en.md#3-pull-receive-and-completion-model)) |
 | `ZLINK_RECV_TERMINATED` | `ETERM` | Context terminated |
 | `ZLINK_RECV_INVALID_HANDLE` | `EFAULT` | The handle or a required output pointer is invalid |
 | `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | The handle does not support this receive operation |
