@@ -149,15 +149,17 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        var observer = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(static _ =>
-            "framework-runtime"
-        );
-        RunState(() =>
+        var observer = RunState(() =>
         {
             ThrowIfDisposed();
-            _observers.Add(observer);
             var initial = CreateStatusUnderLock(DateTimeOffset.UtcNow);
-            observer.Publish(initial, IsTerminal(initial));
+            var subscription = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(
+                initial,
+                IsTerminal(initial),
+                static _ => "framework-runtime"
+            );
+            _observers.Add(subscription);
+            return subscription;
         });
         try
         {

@@ -3,6 +3,12 @@ using Zlink.Framework.Contracts.Locations;
 
 namespace Zlink.Framework.Contracts.Configuration;
 
+internal static class ZLinkTopologyStateExtensions
+{
+    internal static bool IsTerminal(this ZLinkTopologyState state) =>
+        state is ZLinkTopologyState.Stopped or ZLinkTopologyState.Failed;
+}
+
 internal enum ZLinkMeshNodeState
 {
     Starting = 0,
@@ -89,23 +95,3 @@ internal sealed record ZLinkMeshNodeSnapshot(
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> InstanceSpots { get; init; } =
         Array.Empty<ZLinkInstanceSpotTypeSnapshot>();
 }
-
-internal sealed record ZLinkMeshRuntimeEvent(
-    string Identifier,
-    ulong Sequence,
-    DateTimeOffset Timestamp,
-    string MeshName,
-    RoutingId SourceRid,
-    RoutingId? PeerRid,
-    ulong? LifecycleGeneration,
-    ulong? DescriptorRevision,
-    string? ChannelName,
-    string? ClaimDomain,
-    string? MessageKind,
-    string? PlacementOutcome,
-    ZLinkCapacityVector? Capacity,
-    ZLinkPlacementCapacity? PopulationCapacity,
-    ZLinkActivationConcurrency? ActivationConcurrency,
-    string? Reason,
-    ZLinkMeshNodeState? State
-);

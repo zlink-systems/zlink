@@ -21,6 +21,7 @@ import { createDeadlineExceededError } from '../abort';
 import { debugPendingWorkNames } from '../execution/state-lane';
 import {
   runtimeStateIsReady,
+  topologyObservationIsTerminal,
   topologyRuntimeIsReady
 } from '../foundation/runtime-state-projections';
 
@@ -39,6 +40,8 @@ import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkSpotNodeOptions } from '../configuration';
 import { ZLinkObjectRole, type ZLinkMeshNodeDescriptor } from '../../contracts';
+
+const PLACEMENT_OBSERVATION_INTERVAL_MS = 100;
 
 export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
   readonly meshNames: readonly string[];
@@ -232,14 +235,15 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     if (!Number.isInteger(capacity) || capacity <= 0)
       throw new RangeError('Observer capacity must be positive.');
     if (state.observers.size === 0) this.seedPlacementFingerprint(meshName);
+    const snapshot = this.snapshot(meshName);
     const queue = new RuntimeEventQueue<ZLinkRouteMeshStatus>(capacity, signal);
+    state.observers.add(queue);
+    this.startPlacementObserver();
     queue.onClose(() => {
       state.observers.delete(queue);
       this.stopPlacementObserverIfIdle();
     });
-    this.snapshot(meshName);
-    state.observers.add(queue);
-    this.startPlacementObserver();
+    this.publishStatus(meshName, queue, snapshot);
     return queue;
   }
 
@@ -311,9 +315,8 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       }
       for (const observer of [...state.observers]) {
         if (terminal === undefined) observer.close();
-        else observer.seal(terminal, meshName);
+        else this.publishStatus(meshName, observer, terminal);
       }
-      state.observers.clear();
     }
   }
 
@@ -666,7 +669,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     } catch {
       current = state.lastSnapshot;
     }
-    const terminal = next === ZLinkTopologyState.Stopped || next === ZLinkTopologyState.Failed;
+    const terminal = topologyObservationIsTerminal(next);
     if (current !== undefined) {
       if (terminal) {
         const terminalSequence =
@@ -688,17 +691,26 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           sequence: terminalSequence,
           observedAt: new Date()
         };
-        for (const observer of state.observers) observer.seal(terminalStatus, meshName);
+        for (const observer of state.observers)
+          this.publishStatus(meshName, observer, terminalStatus);
       } else if (snapshotAvailable) {
-        for (const observer of state.observers) observer.push(current, meshName);
+        for (const observer of state.observers) this.publishStatus(meshName, observer, current);
       }
     }
-    if (terminal) {
-      if (current === undefined) {
-        for (const observer of state.observers) observer.close();
-      }
-      state.observers.clear();
-      this.stopPlacementObserverIfIdle();
+    if (terminal && current === undefined) {
+      for (const observer of state.observers) observer.close();
+    }
+  }
+
+  private publishStatus(
+    meshName: string,
+    observer: RuntimeEventQueue<ZLinkRouteMeshStatus>,
+    status: ZLinkRouteMeshStatus
+  ): void {
+    if (topologyObservationIsTerminal(status.state)) {
+      observer.seal(status, meshName);
+    } else {
+      observer.push(status, meshName);
     }
   }
 
@@ -719,12 +731,17 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
 
   private startPlacementObserver(): void {
     if (this.placementObserver !== undefined) return;
-    this.placementObserver = setInterval(() => this.observePlacementChanges(), 100);
+    this.placementObserver = setInterval(
+      () => this.observePlacementChanges(),
+      PLACEMENT_OBSERVATION_INTERVAL_MS
+    );
     this.placementObserver.unref();
   }
 
   private stopPlacementObserverIfIdle(): void {
-    if ([...this.states.values()].some((state) => state.observers.size > 0)) return;
+    for (const state of this.states.values()) {
+      if (state.observers.size > 0) return;
+    }
     if (this.placementObserver !== undefined) clearInterval(this.placementObserver);
     this.placementObserver = undefined;
   }

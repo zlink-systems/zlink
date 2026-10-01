@@ -94,18 +94,19 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
     signal?: AbortSignal
   ): AsyncIterable<ZLinkObservedStatus<ZLinkClientServerStatus>> {
     const runtime = this.requireRuntime();
-    const queue = new RuntimeEventQueue<ZLinkClientServerStatus>(capacity, signal);
     let lastSnapshot = this.snapshotCore(channelName);
+    const queue = new RuntimeEventQueue<ZLinkClientServerStatus>(capacity, signal);
+    const publish = () => queue.push(lastSnapshot, channelName);
     const stop = runtime.observeClientServerTopology(channelName, () => {
       this.sequence += 1n;
       lastSnapshot = this.snapshotCore(channelName);
-      queue.push(lastSnapshot, channelName);
+      publish();
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
         lastSnapshot = this.snapshotCore(channelName);
-        queue.push(lastSnapshot, channelName);
+        publish();
       },
       stop: () => {
         this.sequence += 1n;
@@ -133,6 +134,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
       stop();
       this.hostObservers.delete(hostObserver);
     });
+    publish();
     return queue;
   }
 
@@ -228,18 +230,19 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
     signal?: AbortSignal
   ): AsyncIterable<ZLinkObservedStatus<ZLinkFanoutStatus>> {
     const runtime = this.requireRuntime();
-    const queue = new RuntimeEventQueue<ZLinkFanoutStatus>(capacity, signal);
     let lastSnapshot = this.snapshotCore(channelName);
+    const queue = new RuntimeEventQueue<ZLinkFanoutStatus>(capacity, signal);
+    const publish = () => queue.push(lastSnapshot, channelName);
     const stop = runtime.observeFanoutTopology(channelName, () => {
       this.sequence += 1n;
       lastSnapshot = this.snapshotCore(channelName);
-      queue.push(lastSnapshot, channelName);
+      publish();
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
         lastSnapshot = this.snapshotCore(channelName);
-        queue.push(lastSnapshot, channelName);
+        publish();
       },
       stop: () => {
         this.sequence += 1n;
@@ -267,6 +270,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
       stop();
       this.hostObservers.delete(hostObserver);
     });
+    publish();
     return queue;
   }
 

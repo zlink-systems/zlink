@@ -93,6 +93,7 @@ test('deadline uses the closed snake_case force reason and terminal event exactl
   });
   runtime.markServing();
   const observed = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await observed.next()).value.status.state, framework.ZLinkTopologyState.Ready);
   assert.deepEqual(await runtime.drain('game', 10), {
     kind: 'forceStopped',
     reason: 'deadline_exceeded'
@@ -205,6 +206,7 @@ test('RouteMesh observer reports a complete status after placement capacity chan
   });
   runtime.markServing();
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.placement.activeActorCount, 1);
 
   counts = { activeActorCount: 2, activeSpotCount: 1 };
   descriptor = {
@@ -378,6 +380,7 @@ test('RouteMesh status follows local channel and placement weight overrides', as
   assert.equal(initial.placement.isAvailable, true);
 
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.placement.isAvailable, true);
   descriptor = {
     ...descriptor,
     placementWeight: 0,
@@ -459,6 +462,7 @@ test('RouteMesh observer reports Location Store degradation and recovery', async
   });
   runtime.markServing();
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.state, framework.ZLinkTopologyState.Ready);
 
   storeHealthy = false;
   const degraded = await nextObserved(

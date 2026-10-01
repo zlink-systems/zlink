@@ -1039,6 +1039,42 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
     }
 
+    [Fact]
+    public async Task ObserverStartsWithCurrentStatusAfterLocalWeightChanged()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        provider
+            .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+            .TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
+            var current = monitoring.GetStatus("work");
+            Assert.Equal(0, Assert.Single(current.Targets).Weight);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.True(observer.Current.Status.Sequence >= current.Sequence);
+            Assert.Equal(0, Assert.Single(observer.Current.Status.Targets).Weight);
+            Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task<bool> WaitForTargetStateAsync(
         IAsyncEnumerator<ZLinkObservedStatus<ZLinkClientServerStatus>> observer,
         ZLinkPeerState expected

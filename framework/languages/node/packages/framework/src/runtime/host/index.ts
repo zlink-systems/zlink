@@ -19,7 +19,11 @@ import {
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
-import { runtimeAcceptsWork, runtimeStateIsReady } from '../foundation/runtime-state-projections';
+import {
+  runtimeAcceptsWork,
+  runtimeObservationIsTerminal,
+  runtimeStateIsReady
+} from '../foundation/runtime-state-projections';
 import { createDeadlineExceededError, isDeadlineExceededError } from '../abort';
 import { meshActorSessionNodeAdapter, ZLinkNodeBackendAdapterFactory } from '../backend';
 import type {
@@ -911,6 +915,7 @@ export class ZLinkFrameworkRuntimeHost
     const queue = new RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>(undefined, signal);
     this.runtimeObservers.add(queue);
     queue.onClose(() => this.runtimeObservers.delete(queue));
+    this.publishRuntimeStatus(queue, this.status);
     return queue;
   }
 
@@ -1257,14 +1262,18 @@ export class ZLinkFrameworkRuntimeHost
     this.notifyTopologyHostStateChanged();
     const status = this.status;
     for (const observer of this.runtimeObservers) {
-      if (state === ZLinkFrameworkRuntimeState.Stopped) {
-        observer.seal(status, this.runtimeObservationSource);
-      } else {
-        observer.push(status, this.runtimeObservationSource);
-      }
+      this.publishRuntimeStatus(observer, status);
     }
-    if (state === ZLinkFrameworkRuntimeState.Stopped) {
-      this.runtimeObservers.clear();
+  }
+
+  private publishRuntimeStatus(
+    observer: RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>,
+    status: ZLinkFrameworkRuntimeStatus
+  ): void {
+    if (runtimeObservationIsTerminal(status.state)) {
+      observer.complete(status, this.runtimeObservationSource);
+    } else {
+      observer.push(status, this.runtimeObservationSource);
     }
   }
 

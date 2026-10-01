@@ -402,70 +402,18 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         );
     }
 
-    private IReadOnlyList<ZLinkMeshRuntimeEvent> MapMonitorEvents(
-        string meshName,
-        RoutingId sourceRid,
-        MeshMonitorEvent nativeEvent
-    )
-    {
-        RoutingId? peerRid = nativeEvent.PeerRid.IsEmpty ? null : nativeEvent.PeerRid;
-        var identifier = nativeEvent.Kind switch
-        {
-            MeshMonitorEventKind.StateChanged => "zlink.runtime.mesh_node.state_changed",
-            MeshMonitorEventKind.ChannelChanged => "zlink.runtime.mesh_node.channel_changed",
-            MeshMonitorEventKind.ClaimRevoked => "zlink.runtime.mesh_node.claim_changed",
-            MeshMonitorEventKind.PeerConnecting
-            or MeshMonitorEventKind.PeerAdmitted
-            or MeshMonitorEventKind.PeerDraining
-            or MeshMonitorEventKind.PeerClosed
-            or MeshMonitorEventKind.PeerNotRequired
-            or MeshMonitorEventKind.PeerRejected
-            or MeshMonitorEventKind.ProtocolError => "zlink.runtime.mesh_node.peer_changed",
-            _ => null,
-        };
-        if (identifier is null)
-            return [];
-
-        var reason = nativeEvent.Kind switch
-        {
-            MeshMonitorEventKind.PeerConnecting => "connecting",
-            MeshMonitorEventKind.PeerAdmitted => "ready",
-            MeshMonitorEventKind.PeerDraining => "draining",
-            MeshMonitorEventKind.PeerClosed => "disconnected",
-            MeshMonitorEventKind.PeerNotRequired => "not_required",
-            MeshMonitorEventKind.PeerRejected => "HandshakeFailed",
-            MeshMonitorEventKind.ProtocolError => "rejected",
-            MeshMonitorEventKind.Backpressured => "backpressure",
-            _ => null,
-        };
-        var mapped = new ZLinkMeshRuntimeEvent(
-            identifier,
-            NextSequence(meshName),
-            DateTimeOffset.UtcNow,
-            meshName,
-            sourceRid,
-            peerRid,
-            nativeEvent.PeerLifecycleGeneration == 0 ? null : nativeEvent.PeerLifecycleGeneration,
-            nativeEvent.PeerDescriptorRevision == 0 ? null : nativeEvent.PeerDescriptorRevision,
-            string.IsNullOrEmpty(nativeEvent.ChannelName) ? null : nativeEvent.ChannelName,
-            ClaimDomain: nativeEvent.Kind == MeshMonitorEventKind.ClaimRevoked
-                ? "application"
-                : null,
-            MessageKind: null,
-            PlacementOutcome: null,
-            Capacity: null,
-            PopulationCapacity: null,
-            ActivationConcurrency: null,
-            reason,
-            nativeEvent.Kind == MeshMonitorEventKind.StateChanged
-                ? MapNodeState(nativeEvent.MeshState)
-                : null
-        );
-        if (nativeEvent.Kind != MeshMonitorEventKind.StateChanged)
-            return [mapped];
-
-        return [mapped];
-    }
+    private static bool UpdatesStatus(MeshMonitorEventKind kind) =>
+        kind
+            is MeshMonitorEventKind.StateChanged
+                or MeshMonitorEventKind.ChannelChanged
+                or MeshMonitorEventKind.ClaimRevoked
+                or MeshMonitorEventKind.PeerConnecting
+                or MeshMonitorEventKind.PeerAdmitted
+                or MeshMonitorEventKind.PeerDraining
+                or MeshMonitorEventKind.PeerClosed
+                or MeshMonitorEventKind.PeerNotRequired
+                or MeshMonitorEventKind.PeerRejected
+                or MeshMonitorEventKind.ProtocolError;
 
     private ulong NextSequence(string meshName) =>
         NextSequence(ZLinkMeshName.FromBoundary(meshName, nameof(meshName)));
@@ -488,43 +436,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
-
-    private ZLinkMeshRuntimeEvent Event(
-        string identifier,
-        string meshName,
-        RoutingId sourceRid,
-        RoutingId? peerRid = null,
-        ulong? lifecycleGeneration = null,
-        ulong? descriptorRevision = null,
-        string? channelName = null,
-        string? placementOutcome = null,
-        ZLinkCapacityVector? capacity = null,
-        ZLinkPlacementCapacity? populationCapacity = null,
-        ZLinkActivationConcurrency? activationConcurrency = null,
-        string? reason = null,
-        ZLinkMeshNodeState? state = null
-    )
-    {
-        return new ZLinkMeshRuntimeEvent(
-            identifier,
-            NextSequence(meshName),
-            DateTimeOffset.UtcNow,
-            meshName,
-            sourceRid,
-            peerRid,
-            lifecycleGeneration,
-            descriptorRevision,
-            channelName,
-            ClaimDomain: null,
-            MessageKind: null,
-            placementOutcome,
-            capacity,
-            populationCapacity,
-            activationConcurrency,
-            reason,
-            state
-        );
-    }
 
     private static IReadOnlyList<string> DescriptorSources(ZLinkSpotNodeRuntime nodeRuntime)
     {
@@ -759,7 +670,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         private readonly List<ZLinkObservationQueue<ZLinkRouteMeshStatus>> _observers = [];
         private readonly Dictionary<RoutingId, ZLinkMeshNodeDescriptor> _descriptors = [];
         private TimeSpan _nextDescriptorPoll;
-        private string? _lastLocationState;
+        private bool? _lastLocationHealthy;
         private ZLinkRouteMeshStatus? _lastStatus;
 
         public MonitorHub(
@@ -805,20 +716,21 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
 
         public ZLinkObservationQueue<ZLinkRouteMeshStatus> Subscribe()
         {
-            var observer = new ZLinkObservationQueue<ZLinkRouteMeshStatus>(
-                static status => status.MeshName,
-                eventName: "route_mesh"
-            );
             var status = _owner.GetStatus(_meshName.Value);
-            AwaitStateLane(
+            return AwaitStateLane(
                 _lane.RunAsync(() =>
                 {
                     status = RetainNewestStatusOnLane(status);
+                    var observer = new ZLinkObservationQueue<ZLinkRouteMeshStatus>(
+                        status,
+                        status.State.IsTerminal(),
+                        static status => status.MeshName,
+                        eventName: "route_mesh"
+                    );
                     _observers.Add(observer);
-                    observer.Publish(status, IsTerminalStatus(status));
+                    return observer;
                 })
             );
-            return observer;
         }
 
         public void Unsubscribe(ZLinkObservationQueue<ZLinkRouteMeshStatus> observer)
@@ -893,14 +805,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                             continue;
                         }
 
-                        var sourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
-                        var mapped = _owner.MapMonitorEvents(
-                            _meshName.Value,
-                            sourceRid,
-                            nativeEvent
-                        );
-                        foreach (var runtimeEvent in mapped)
-                            Publish(runtimeEvent);
+                        if (UpdatesStatus(nativeEvent.Kind))
+                            PublishCurrentStatus();
                     }
                     catch (OperationCanceledException) when (_stop.IsCancellationRequested)
                     {
@@ -972,18 +878,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                             _descriptors[descriptor.Rid] = descriptor;
                     })
                     .ConfigureAwait(false);
-                var initialSourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
-                foreach (var descriptor in current.Items)
-                {
-                    if (descriptor.Rid == initialSourceRid)
-                    {
-                        PublishPlacementChange(initialSourceRid, descriptor);
-                    }
-                    else
-                    {
-                        PublishPeerDescriptorChange(initialSourceRid, descriptor, "discovered");
-                    }
-                }
+                foreach (var _ in current.Items)
+                    PublishCurrentStatus();
                 return;
             }
 
@@ -1003,7 +899,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                         .RunAsync(() => _descriptors[descriptor.Rid] = descriptor)
                         .ConfigureAwait(false);
                     if (descriptor.Rid != sourceRid)
-                        PublishPeerDescriptorChange(sourceRid, descriptor, "discovered");
+                        PublishCurrentStatus();
                     continue;
                 }
                 var capacityChanged =
@@ -1017,9 +913,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                     .RunAsync(() => _descriptors[descriptor.Rid] = descriptor)
                     .ConfigureAwait(false);
                 if (previous.ObjectRole != descriptor.ObjectRole)
-                    PublishPeerDescriptorChange(sourceRid, descriptor, "role_changed");
+                    PublishCurrentStatus();
                 if (placementChanged && descriptor.Rid == sourceRid)
-                    PublishPlacementChange(sourceRid, descriptor);
+                    PublishCurrentStatus();
                 if (
                     previous.DescriptorRevision == descriptor.DescriptorRevision
                     && previous.ChannelWeights.Count == descriptor.ChannelWeights.Count
@@ -1040,17 +936,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                     descriptor.ChannelWeights.TryGetValue(channelName, out var newWeight);
                     if (oldWeight == newWeight)
                         continue;
-                    Publish(
-                        _owner.Event(
-                            "zlink.runtime.mesh_node.channel_changed",
-                            _meshName.Value,
-                            sourceRid,
-                            peerRid: descriptor.Rid,
-                            descriptorRevision: descriptor.DescriptorRevision,
-                            channelName: channelName,
-                            reason: "admission_changed"
-                        )
-                    );
+                    PublishCurrentStatus();
                 }
             }
             var currentIds = current.Items.Select(static descriptor => descriptor.Rid).ToHashSet();
@@ -1068,60 +954,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
             foreach (var removed in removedDescriptors)
             {
                 if (removed != sourceRid)
-                    Publish(
-                        _owner.Event(
-                            "zlink.runtime.mesh_node.peer_changed",
-                            _meshName.Value,
-                            sourceRid,
-                            peerRid: removed,
-                            reason: "removed"
-                        )
-                    );
+                    PublishCurrentStatus();
             }
         }
-
-        private void PublishPeerDescriptorChange(
-            RoutingId sourceRid,
-            ZLinkMeshNodeDescriptor descriptor,
-            string change
-        )
-        {
-            var notRequired = ZLinkRouteMeshConnectionPolicy.IsNotRequired(
-                _nodeRuntime.Registration.ObjectRole,
-                _nodeRuntime.Registration.ChannelMemberships.Any(static membership =>
-                    membership.IsServer
-                ),
-                descriptor.ObjectRole,
-                descriptor.ChannelWeights.Count != 0
-            );
-            Publish(
-                _owner.Event(
-                    "zlink.runtime.mesh_node.peer_changed",
-                    _meshName.Value,
-                    sourceRid,
-                    peerRid: descriptor.Rid,
-                    descriptorRevision: descriptor.DescriptorRevision,
-                    reason: notRequired ? $"not_required:{change}" : $"not_connected:{change}"
-                )
-            );
-        }
-
-        private void PublishPlacementChange(
-            RoutingId sourceRid,
-            ZLinkMeshNodeDescriptor descriptor
-        ) =>
-            Publish(
-                _owner.Event(
-                    "zlink.runtime.object.placement_changed",
-                    _meshName.Value,
-                    sourceRid,
-                    peerRid: descriptor.Rid,
-                    descriptorRevision: descriptor.DescriptorRevision,
-                    placementOutcome: "updated",
-                    populationCapacity: descriptor.Capacity,
-                    activationConcurrency: descriptor.ActivationConcurrency
-                )
-            );
 
         private static bool SameCapacity(
             ZLinkPlacementCapacity left,
@@ -1135,37 +970,23 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         {
             if (_owner._storeHealth is null)
                 return;
-            var state = _owner._storeHealth.GetSnapshot().Healthy ? "ready" : "degraded";
+            var healthy = _owner._storeHealth.GetSnapshot().Healthy;
             var changed = AwaitStateLane(
                 _lane.RunAsync(() =>
                 {
-                    if (_lastLocationState is null)
+                    if (_lastLocationHealthy is null)
                     {
-                        _lastLocationState = state;
+                        _lastLocationHealthy = healthy;
                         return false;
                     }
-                    if (string.Equals(_lastLocationState, state, StringComparison.Ordinal))
+                    if (_lastLocationHealthy == healthy)
                         return false;
-                    _lastLocationState = state;
+                    _lastLocationHealthy = healthy;
                     return true;
                 })
             );
             if (!changed)
                 return;
-            var sourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
-            Publish(
-                _owner.Event(
-                    "zlink.runtime.location.store_changed",
-                    _meshName.Value,
-                    sourceRid,
-                    reason: state
-                )
-            );
-        }
-
-        private void Publish(ZLinkMeshRuntimeEvent runtimeEvent)
-        {
-            _ = runtimeEvent;
             PublishCurrentStatus();
         }
 
@@ -1179,7 +1000,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                         return;
                     _lastStatus = status;
                     foreach (var observer in _observers)
-                        observer.Publish(status, IsTerminalStatus(status));
+                        observer.Publish(status, status.State.IsTerminal());
                 })
             );
         }
@@ -1191,9 +1012,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
             _lastStatus = status;
             return status;
         }
-
-        private static bool IsTerminalStatus(ZLinkRouteMeshStatus status) =>
-            status.State is ZLinkTopologyState.Stopped or ZLinkTopologyState.Failed;
 
         private static T AwaitStateLane<T>(ValueTask<T> operation) =>
             operation.GetAwaiter().GetResult();

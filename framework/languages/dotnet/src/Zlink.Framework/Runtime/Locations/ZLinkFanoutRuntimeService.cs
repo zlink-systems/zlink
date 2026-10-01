@@ -12,7 +12,7 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
     private readonly Dictionary<ZLinkChannelName, ChannelState> _states = [];
     private readonly Dictionary<
         ZLinkChannelName,
-        List<ZLinkObservationQueue<RetainedObservation>>
+        List<ZLinkObservationQueue<ZLinkFanoutStatus>>
     > _observers = [];
     private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle;
 
@@ -82,17 +82,20 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
     )
     {
         var channel = Channel(channelName);
-        var observer = new ZLinkObservationQueue<RetainedObservation>(
-            static item => item.SourceKey,
-            eventName: "fanout"
-        );
-        await _lane
+        var observer = await _lane
             .RunAsync(() =>
             {
-                _ = RequireState(channel);
+                var initial = Project(RequireState(channel).Snapshot, _hostLifecycle.State);
+                var subscription = new ZLinkObservationQueue<ZLinkFanoutStatus>(
+                    initial,
+                    initial.State.IsTerminal(),
+                    static status => status.ChannelName,
+                    eventName: "fanout"
+                );
                 if (!_observers.TryGetValue(channel, out var observers))
                     _observers[channel] = observers = [];
-                observers.Add(observer);
+                observers.Add(subscription);
+                return subscription;
             })
             .ConfigureAwait(false);
 
@@ -101,10 +104,7 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
             await foreach (
                 var item in observer.ReadAllAsync(cancellationToken).ConfigureAwait(false)
             )
-                yield return new ZLinkObservedStatus<ZLinkFanoutStatus>(
-                    item.Status.Status,
-                    item.Loss
-                );
+                yield return item;
         }
         finally
         {
@@ -143,47 +143,16 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
         var now = DateTimeOffset.UtcNow;
         var nextSequence = previous.Snapshot.Sequence;
         var previousByIdentity = previous.Snapshot.Publishers.ToDictionary(IdentityKey);
-        var changes = new List<ZLinkFanoutRuntimeEvent>();
-
         foreach (var entry in publishers)
         {
             var key = IdentityKey(entry);
             if (previousByIdentity.Remove(key, out var old) && old == entry)
                 continue;
-            changes.Add(
-                new ZLinkFanoutRuntimeEvent.PublisherChanged(
-                    ++nextSequence,
-                    now,
-                    channel.Value,
-                    entry
-                )
-            );
+            nextSequence = checked(nextSequence + 1);
         }
-
-        foreach (var removed in previousByIdentity.Values)
-            changes.Add(
-                new ZLinkFanoutRuntimeEvent.PublisherChanged(
-                    ++nextSequence,
-                    now,
-                    channel.Value,
-                    removed with
-                    {
-                        ConnectionIntent = false,
-                        Ready = false,
-                        State = ZLinkFanoutPublisherConnectionState.Disconnected,
-                    }
-                )
-            );
-
+        nextSequence = checked(nextSequence + (ulong)previousByIdentity.Count);
         if (previous.Snapshot.Location != location)
-            changes.Add(
-                new ZLinkFanoutRuntimeEvent.LocationChanged(
-                    ++nextSequence,
-                    now,
-                    channel.Value,
-                    location
-                )
-            );
+            nextSequence = checked(nextSequence + 1);
 
         var ordered = publishers
             .OrderBy(static entry => entry.PublisherRid, ZLinkRoutingIdOrder.Instance)
@@ -199,13 +168,8 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
             location
         );
         _states[channel] = new ChannelState(next);
-        if (changes.Count != 0)
-        {
-            var hostState = _hostLifecycle.State;
-            var retained = Project(next, hostState);
-            foreach (var change in changes)
-                Emit(channel, change, retained, hostState);
-        }
+        if (nextSequence != previous.Snapshot.Sequence)
+            Emit(channel, Project(next, _hostLifecycle.State));
     }
 
     internal void RecordLocationFailure(
@@ -240,23 +204,12 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
         return state;
     }
 
-    private void Emit(
-        ZLinkChannelName channelName,
-        ZLinkFanoutRuntimeEvent item,
-        ZLinkFanoutStatus status,
-        ZLinkFrameworkRuntimeState hostState
-    )
+    private void Emit(ZLinkChannelName channelName, ZLinkFanoutStatus status)
     {
         if (!_observers.TryGetValue(channelName, out var observers))
             return;
-        foreach (var observer in observers.ToArray())
-            observer.Publish(
-                new RetainedObservation(item.SourceKey, status),
-                item.IsTerminal
-                    || hostState
-                        is ZLinkFrameworkRuntimeState.Stopped
-                            or ZLinkFrameworkRuntimeState.Error
-            );
+        foreach (var observer in observers)
+            observer.Publish(status, status.State.IsTerminal());
     }
 
     private void OnHostStateChanged(ZLinkFrameworkRuntimeState hostState)
@@ -270,16 +223,7 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
                     var sequence = checked(state.Snapshot.Sequence + 1);
                     var next = state.Snapshot with { Sequence = sequence, ObservedAt = now };
                     _states[channelName] = new ChannelState(next);
-                    Emit(
-                        channelName,
-                        new ZLinkFanoutRuntimeEvent.RuntimeChanged(
-                            sequence,
-                            now,
-                            channelName.Value
-                        ),
-                        Project(next, hostState),
-                        hostState
-                    );
+                    Emit(channelName, Project(next, hostState));
                 }
             })
         );
@@ -354,6 +298,4 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
             );
         }
     }
-
-    private sealed record RetainedObservation(string SourceKey, ZLinkFanoutStatus Status);
 }

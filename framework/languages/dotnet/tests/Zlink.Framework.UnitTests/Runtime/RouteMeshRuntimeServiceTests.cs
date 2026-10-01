@@ -638,6 +638,33 @@ public sealed class RouteMeshRuntimeServiceTests
     }
 
     [Fact]
+    public async Task ObserverStartsWithPlacementWeightChangedBeforeSubscription()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using (
+            var convergence = fixture
+                .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+                .GetAsyncEnumerator(timeout.Token)
+        )
+        {
+            Assert.True(await convergence.MoveNextAsync());
+            fixture.RuntimeOptions.Mesh(RuntimeFixture.MeshName).PlacementWeight = 0;
+            await MoveUntilAsync(convergence, status => !status.Status.Placement.IsAvailable);
+        }
+        await using var observer = fixture
+            .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.False(observer.Current.Status.Placement.IsAvailable);
+        Assert.Equal(
+            ZLinkTopologyReason.CapacityExceeded,
+            observer.Current.Status.Placement.UnavailableReason
+        );
+        Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
+    }
+
+    [Fact]
     public async Task Placement_Weight_Change_And_Recovery_Wake_Status_Stream()
     {
         await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);

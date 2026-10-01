@@ -240,6 +240,43 @@ final class ZLinkRouteMeshRuntimeViewTest {
     }
 
     @Test
+    void observationStartsWithWeightChangedBeforeSubscription() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setPlacementWeight(100)
+                .objects()
+                .server();
+        try (var runtime = start(options)) {
+            awaitSnapshot(runtime, status -> status.placement().isAvailable());
+            ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime())
+                    .mesh(MESH)
+                    .setPlacementWeight(0);
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> first =
+                    new AtomicReference<>();
+            runtime.routeMeshRuntime()
+                    .observe(MESH, 1)
+                    .subscribe(
+                            subscriber(
+                                    observed -> {
+                                        first.set(observed);
+                                        received.countDown();
+                                    },
+                                    1));
+
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertFalse(first.get().status().placement().isAvailable());
+            assertEquals(
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    first.get().status().placement().unavailableReason().orElseThrow());
+            assertEquals(0, first.get().loss().coalescedCount());
+            assertEquals(0, first.get().loss().discardedTerminalCount());
+        }
+    }
+
+    @Test
     void placementEventsProjectCapacityAndWeightChanges() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
