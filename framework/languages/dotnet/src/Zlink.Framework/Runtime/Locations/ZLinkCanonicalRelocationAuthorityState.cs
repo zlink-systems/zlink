@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -121,7 +122,14 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
 
 internal static class ZLinkCanonicalRelocationAuthorityStateCodec
 {
-    private static ReadOnlySpan<byte> Magic => "ZLAU"u8;
+    internal static ReadOnlySpan<byte> AuthorityMagic => "ZLAU"u8;
+    internal const byte AuthorityVersion = 1;
+    internal const int MaximumPayloadBytes = (int)ServiceWireConstants.AuthorityEnvelopeBytes;
+    internal static readonly int MagicBytes = AuthorityMagic.Length;
+    internal static readonly int HeaderPrefixBytes =
+        MagicBytes + sizeof(byte) + sizeof(ushort) + sizeof(uint);
+    internal const int ChecksumBytes = sizeof(uint);
+    internal static readonly int MinimumEnvelopeBytes = HeaderPrefixBytes + ChecksumBytes;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     internal static bool TryRead(
@@ -133,7 +141,10 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         try
         {
             var source = new Reader(authorityPayload);
-            if (!source.Bytes(4).SequenceEqual(Magic) || source.U8() != 1)
+            if (
+                !source.Bytes(MagicBytes).SequenceEqual(AuthorityMagic)
+                || source.U8() != AuthorityVersion
+            )
                 return false;
             var flags = source.U16();
             var body = source.Bytes(source.U32AsInt()).ToArray();
@@ -172,8 +183,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             WriteU32(steadyBody, 0);
             steadyBody.Write(body.AsSpan(slotEnd));
             using var steady = new MemoryStream();
-            steady.Write(Magic);
-            steady.WriteByte(1);
+            steady.Write(AuthorityMagic);
+            steady.WriteByte(AuthorityVersion);
             WriteU16(steady, flags);
             WriteU32(steady, checked((uint)steadyBody.Length));
             steadyBody.Position = 0;
@@ -220,7 +231,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         try
         {
             var reader = new Reader(slot);
-            if (reader.U8() != 1)
+            if (reader.U8() != (byte)ServiceWireCodec.Bool8.True)
                 return false;
             var body = reader.Bytes(reader.U32AsInt());
             return reader.End
@@ -328,7 +339,10 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 );
         }
         var source = new Reader(authorityPayload);
-        if (!source.Bytes(4).SequenceEqual(Magic) || source.U8() != 1)
+        if (
+            !source.Bytes(MagicBytes).SequenceEqual(AuthorityMagic)
+            || source.U8() != AuthorityVersion
+        )
             throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
         var flags = source.U16();
         var body = source.Bytes(source.U32AsInt()).ToArray();
@@ -358,8 +372,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         replacedBody.Write(slot);
         replacedBody.Write(body.AsSpan(relocationEnd));
         using var result = new MemoryStream();
-        result.Write(Magic);
-        result.WriteByte(1);
+        result.Write(AuthorityMagic);
+        result.WriteByte(AuthorityVersion);
         WriteU16(result, flags);
         WriteU32(result, checked((uint)replacedBody.Length));
         replacedBody.Position = 0;
@@ -387,8 +401,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         body.Write(original.Body.AsSpan(originalSlot.Start, originalSlot.End - originalSlot.Start));
         body.Write(steady.Body.AsSpan(steadySlot.End));
         using var result = new MemoryStream();
-        result.Write(Magic);
-        result.WriteByte(1);
+        result.Write(AuthorityMagic);
+        result.WriteByte(AuthorityVersion);
         WriteU16(result, steady.Flags);
         WriteU32(result, checked((uint)body.Length));
         body.Position = 0;
@@ -400,7 +414,10 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     private static (ushort Flags, byte[] Body) ReadEnvelope(ReadOnlySpan<byte> payload)
     {
         var reader = new Reader(payload);
-        if (!reader.Bytes(4).SequenceEqual(Magic) || reader.U8() != 1)
+        if (
+            !reader.Bytes(MagicBytes).SequenceEqual(AuthorityMagic)
+            || reader.U8() != AuthorityVersion
+        )
             throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
         var flags = reader.U16();
         var body = reader.Bytes(reader.U32AsInt()).ToArray();
@@ -462,7 +479,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteI64(body, value.ApplicationVersion);
         body.WriteByte(value.SourceCleanupState);
         using var slot = new MemoryStream();
-        slot.WriteByte(1);
+        slot.WriteByte((byte)ServiceWireCodec.Bool8.True);
         WriteU32(slot, checked((uint)body.Length));
         body.Position = 0;
         body.CopyTo(slot);
@@ -568,7 +585,10 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     private static void WriteText16(Stream stream, string value)
     {
         var bytes = StrictUtf8.GetBytes(value);
-        if (bytes.Length is < 1 or > 4096 || bytes.AsSpan().Contains((byte)0))
+        if (
+            bytes.Length is < 1 or > (int)ServiceWireConstants.RelocationReferenceBytes
+            || bytes.AsSpan().Contains((byte)0)
+        )
             throw new ArgumentOutOfRangeException(nameof(value));
         WriteU16(stream, checked((ushort)bytes.Length));
         stream.Write(bytes);

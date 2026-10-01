@@ -15,7 +15,7 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
 
     public IZLinkStreamNodeBuilder Bind(int port = 0)
     {
-        if (port is < 0 or > 65535)
+        if (port is < 0 or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException("STREAM bind port must be between 0 and 65535.");
         registration.ListenPort = port;
         registration.BindEndpoint = null;

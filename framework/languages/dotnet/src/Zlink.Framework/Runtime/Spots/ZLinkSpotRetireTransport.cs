@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -958,7 +959,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.Target.OwnerLeaseGeneration,
             prepare.Object.ObjectId,
             stableType,
-            prepare.Object.Kind == 3,
+            prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot,
             string.Empty,
             prepare.PayloadChecksumCrc32c,
             actors,
@@ -1065,7 +1066,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return;
         ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=spot");
         ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
-            prepare.Object.Kind == 3 ? "instance_spot" : "user_spot"
+            prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
+                : ZLinkRuntimeMetrics.NormalizedUserSpotKind
         );
         //  Location runtime §10: from here the target also reads its source
         //  fence. Only a confirmed source Preserve (the fence moved to another
@@ -1246,7 +1249,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordRelocationTargetResume(
             System.Diagnostics.Stopwatch.GetElapsedTime(resumeStartedTimestamp),
-            cutover.Object.Kind == 3 ? "instance_spot" : "user_spot"
+            cutover.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
+                : ZLinkRuntimeMetrics.NormalizedUserSpotKind
         );
         runtime.ScheduleRelocationSessionRouteConvergence(stage);
     }

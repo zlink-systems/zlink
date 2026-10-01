@@ -49,7 +49,7 @@ internal sealed class ZLinkClientServerChannelServerBuilder(
 {
     public IZLinkClientServerChannelServerBuilder Listen(int port = 0)
     {
-        if (port is < 0 or > 65535)
+        if (port is < 0 or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException(
                 "ClientServer listen port must be between 0 and 65535."
             );
@@ -129,7 +129,7 @@ internal sealed class ZLinkFanoutChannelBuilder(ZLinkChannelRegistration registr
 
     public IZLinkFanoutChannelBuilder EnablePublisher(int port = 0)
     {
-        if (port is < 0 or > 65535)
+        if (port is < 0 or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException(
                 "Fanout publisher port must be between 0 and 65535."
             );

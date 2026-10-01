@@ -39,7 +39,7 @@ internal static partial class ZLinkRelocationTreeStore
                         FileMode.Truncate,
                         FileAccess.Write,
                         FileShare.None,
-                        1024 * 1024,
+                        StreamBufferBytes,
                         FileOptions.Asynchronous | FileOptions.SequentialScan
                     )
                 )
@@ -309,7 +309,7 @@ internal static partial class ZLinkRelocationTreeStore
                     FileMode.Truncate,
                     FileAccess.Write,
                     FileShare.None,
-                    1024 * 1024,
+                    StreamBufferBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan
                 )
             )
@@ -359,7 +359,7 @@ internal static partial class ZLinkRelocationTreeStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                1024 * 1024,
+                StreamBufferBytes,
                 FileOptions.SequentialScan
             );
             long componentOffset = 0;
@@ -731,7 +731,7 @@ internal static partial class ZLinkRelocationTreeStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                1024 * 1024,
+                StreamBufferBytes,
                 FileOptions.Asynchronous | FileOptions.SequentialScan
             );
             input.Position = _offset;

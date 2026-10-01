@@ -64,7 +64,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
             if (value is not null)
             {
                 var size = System.Text.Encoding.UTF8.GetByteCount(value);
-                if (size is < 1 or > 255 || value.Contains('\0'))
+                if (size is < 1 or > byte.MaxValue || value.Contains('\0'))
                     throw new ZLinkConfigurationException(
                         "MaintenanceWave must be 1 to 255 UTF-8 bytes without NUL."
                     );

@@ -14,6 +14,8 @@ public sealed class ZLinkProtobufCodec
 {
     private static readonly ConcurrentDictionary<Type, Func<IMessage>> Factories = new();
 
+    private const string CodecContentType = "application/x-protobuf";
+
     private ZLinkProtobufCodec() { }
 
     public static ZLinkProtobufCodec Default { get; } = new();
@@ -22,13 +24,13 @@ public sealed class ZLinkProtobufCodec
     {
         ArgumentNullException.ThrowIfNull(codecs);
         codecs.AddSerializer(
-            "application/x-protobuf",
+            CodecContentType,
             ProtobufSerializer.Instance,
             type => typeof(IMessage).IsAssignableFrom(type)
         );
     }
 
-    string IZlinkStreamCodecRegistration.ContentType => "application/x-protobuf";
+    string IZlinkStreamCodecRegistration.ContentType => CodecContentType;
 
     ZlinkStreamCodec IZlinkStreamCodecRegistration.Codec => ZlinkStreamCodec.Protobuf;
 

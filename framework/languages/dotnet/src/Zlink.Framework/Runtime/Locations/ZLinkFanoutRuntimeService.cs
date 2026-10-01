@@ -222,7 +222,11 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
                 RecordSnapshotOnLane(
                     channel,
                     current.Snapshot.Publishers,
-                    new ZLinkLocationRuntimeSnapshot("degraded", lastSuccessAt, failureAt)
+                    new ZLinkLocationRuntimeSnapshot(
+                        ZLinkLocationRuntimeSnapshot.DegradedState,
+                        lastSuccessAt,
+                        failureAt
+                    )
                 );
             })
         );
@@ -349,7 +353,11 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
                     0,
                     now,
                     Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>(),
-                    new ZLinkLocationRuntimeSnapshot("unknown", null, null)
+                    new ZLinkLocationRuntimeSnapshot(
+                        ZLinkLocationRuntimeSnapshot.UnknownState,
+                        null,
+                        null
+                    )
                 )
             );
         }

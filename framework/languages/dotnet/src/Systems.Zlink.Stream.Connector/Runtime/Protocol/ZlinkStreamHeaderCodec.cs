@@ -6,6 +6,15 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Protocol;
 internal sealed class ZlinkStreamHeaderCodec
 {
     // Keep byte-compatible with Zlink.Framework stream headers; StreamWireInteropTests is the drift gate.
+    private const byte InboundWire = 1;
+    private const byte TimerWire = 2;
+    private const byte ApplicationWire = 3;
+    private const byte LifecycleWire = 4;
+
+    private const int FixedPrefixSize = 4 * sizeof(byte);
+    private const int KindOffset = sizeof(byte);
+    private const int CodecOffset = KindOffset + sizeof(byte);
+    private const int FlagsOffset = CodecOffset + sizeof(byte);
     private const int MaxMetadataPayloadSize = 1024;
 
     private const ZlinkStreamHeaderFlags KnownFlags =
@@ -95,14 +104,14 @@ internal sealed class ZlinkStreamHeaderCodec
             );
 
         var size =
-            4
-            + (hasRequestSeq ? 8 : 0)
-            + 1
+            FixedPrefixSize
+            + (hasRequestSeq ? sizeof(ulong) : 0)
+            + sizeof(byte)
             + nameLength
-            + (hasMetadata ? 2 + metadataSize : 0)
-            + (hasCorrelationId ? 1 + correlationLength : 0)
-            + (hasFlowId ? ZlinkStreamFlowId.EncodedLength + 1 : 0)
-            + (hasActorSlot ? 2 : 0);
+            + (hasMetadata ? sizeof(ushort) + metadataSize : 0)
+            + (hasCorrelationId ? sizeof(byte) + correlationLength : 0)
+            + (hasFlowId ? ZlinkStreamFlowId.EncodedLength + sizeof(byte) : 0)
+            + (hasActorSlot ? sizeof(ushort) : 0);
         var buffer = new byte[size];
         var offset = 0;
         buffer[offset++] = ZlinkStreamFlowId.FormatMarker;
@@ -119,10 +128,10 @@ internal sealed class ZlinkStreamHeaderCodec
                 );
 
             BinaryPrimitives.WriteUInt64BigEndian(
-                buffer.AsSpan(offset, 8),
+                buffer.AsSpan(offset, sizeof(ulong)),
                 header.RequestSeq.Value.Value
             );
-            offset += 8;
+            offset += sizeof(ulong);
         }
 
         buffer[offset++] = (byte)nameLength;
@@ -132,10 +141,10 @@ internal sealed class ZlinkStreamHeaderCodec
         if (hasMetadata)
         {
             BinaryPrimitives.WriteUInt16BigEndian(
-                buffer.AsSpan(offset, 2),
+                buffer.AsSpan(offset, sizeof(ushort)),
                 checked((ushort)metadataSize)
             );
-            offset += 2;
+            offset += sizeof(ushort);
             ZlinkStreamMetadataCodec.Write(header.Metadata, buffer.AsSpan(offset, metadataSize));
             offset += metadataSize;
         }
@@ -160,10 +169,10 @@ internal sealed class ZlinkStreamHeaderCodec
         if (hasActorSlot)
         {
             BinaryPrimitives.WriteUInt16BigEndian(
-                buffer.AsSpan(offset, 2),
+                buffer.AsSpan(offset, sizeof(ushort)),
                 header.ActorSlot!.Value
             );
-            offset += 2;
+            offset += sizeof(ushort);
         }
 
         return buffer;
@@ -172,7 +181,7 @@ internal sealed class ZlinkStreamHeaderCodec
     public ZlinkStreamHeader Decode(ReadOnlyMemory<byte> header, bool captureFlow = true)
     {
         var span = header.Span;
-        if (span.Length < 5)
+        if (span.Length < FixedPrefixSize + sizeof(byte))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 "Helper header is too short."
@@ -183,22 +192,24 @@ internal sealed class ZlinkStreamHeaderCodec
                 "Stream format marker is invalid."
             );
 
-        var kind = (ZlinkStreamMessageKind)span[1];
-        var codec = (ZlinkStreamCodec)span[2];
-        var flags = (ZlinkStreamHeaderFlags)span[3];
+        var kind = (ZlinkStreamMessageKind)span[KindOffset];
+        var codec = (ZlinkStreamCodec)span[CodecOffset];
+        var flags = (ZlinkStreamHeaderFlags)span[FlagsOffset];
         ValidateEnum(kind, codec, flags);
 
-        var offset = 4;
+        var offset = FixedPrefixSize;
         ZlinkStreamRequestSeq? requestSeq = null;
         if (flags.HasFlag(ZlinkStreamHeaderFlags.HasRequestSeq))
         {
-            if (span.Length - offset < 8)
+            if (span.Length - offset < sizeof(ulong))
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Helper header request sequence is incomplete."
                 );
 
-            var requestSeqValue = BinaryPrimitives.ReadUInt64BigEndian(span.Slice(offset, 8));
+            var requestSeqValue = BinaryPrimitives.ReadUInt64BigEndian(
+                span.Slice(offset, sizeof(ulong))
+            );
             if (requestSeqValue == 0)
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -206,10 +217,10 @@ internal sealed class ZlinkStreamHeaderCodec
                 );
 
             requestSeq = new ZlinkStreamRequestSeq(requestSeqValue);
-            offset += 8;
+            offset += sizeof(ulong);
         }
 
-        if (span.Length - offset < 1)
+        if (span.Length - offset < sizeof(byte))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 "Helper header name length is missing."
@@ -228,14 +239,16 @@ internal sealed class ZlinkStreamHeaderCodec
         var metadata = ZlinkStreamMetadata.Empty;
         if (flags.HasFlag(ZlinkStreamHeaderFlags.HasMetadata))
         {
-            if (span.Length - offset < 2)
+            if (span.Length - offset < sizeof(ushort))
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Helper header metadata length is missing."
                 );
 
-            var metadataLength = BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, 2));
-            offset += 2;
+            var metadataLength = BinaryPrimitives.ReadUInt16BigEndian(
+                span.Slice(offset, sizeof(ushort))
+            );
+            offset += sizeof(ushort);
             if (span.Length - offset < metadataLength)
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -249,7 +262,7 @@ internal sealed class ZlinkStreamHeaderCodec
         string? correlationId = null;
         if (flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId))
         {
-            if (span.Length - offset < 1)
+            if (span.Length - offset < sizeof(byte))
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Helper header correlation id length is missing."
@@ -270,7 +283,7 @@ internal sealed class ZlinkStreamHeaderCodec
         ZlinkStreamFlowOrigin? flowOrigin = null;
         if (flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId))
         {
-            if (span.Length - offset < ZlinkStreamFlowId.EncodedLength + 1)
+            if (span.Length - offset < ZlinkStreamFlowId.EncodedLength + sizeof(byte))
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Helper header flow fields are incomplete."
@@ -293,20 +306,20 @@ internal sealed class ZlinkStreamHeaderCodec
             {
                 // At Off the pair is framing only: advance over it without
                 // allocating, validating, or retaining observation state.
-                offset += ZlinkStreamFlowId.EncodedLength + 1;
+                offset += ZlinkStreamFlowId.EncodedLength + sizeof(byte);
             }
         }
 
         ushort? actorSlot = null;
         if (flags.HasFlag(ZlinkStreamHeaderFlags.HasActorSlot))
         {
-            if (span.Length - offset < 2)
+            if (span.Length - offset < sizeof(ushort))
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Actor slot field is truncated."
                 );
-            actorSlot = BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, 2));
-            offset += 2;
+            actorSlot = BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, sizeof(ushort)));
+            offset += sizeof(ushort);
             if (actorSlot == 0)
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -358,10 +371,10 @@ internal sealed class ZlinkStreamHeaderCodec
     internal static byte? FlowOriginToWire(ZlinkStreamFlowOrigin origin) =>
         origin switch
         {
-            ZlinkStreamFlowOrigin.Inbound => (byte)1,
-            ZlinkStreamFlowOrigin.Timer => (byte)2,
-            ZlinkStreamFlowOrigin.Application => (byte)3,
-            ZlinkStreamFlowOrigin.Lifecycle => (byte)4,
+            ZlinkStreamFlowOrigin.Inbound => InboundWire,
+            ZlinkStreamFlowOrigin.Timer => TimerWire,
+            ZlinkStreamFlowOrigin.Application => ApplicationWire,
+            ZlinkStreamFlowOrigin.Lifecycle => LifecycleWire,
             _ => null,
         };
 
@@ -372,10 +385,10 @@ internal sealed class ZlinkStreamHeaderCodec
     internal static ZlinkStreamFlowOrigin? FlowOriginFromWire(byte wire) =>
         wire switch
         {
-            1 => ZlinkStreamFlowOrigin.Inbound,
-            2 => ZlinkStreamFlowOrigin.Timer,
-            3 => ZlinkStreamFlowOrigin.Application,
-            4 => ZlinkStreamFlowOrigin.Lifecycle,
+            InboundWire => ZlinkStreamFlowOrigin.Inbound,
+            TimerWire => ZlinkStreamFlowOrigin.Timer,
+            ApplicationWire => ZlinkStreamFlowOrigin.Application,
+            LifecycleWire => ZlinkStreamFlowOrigin.Lifecycle,
             _ => null,
         };
 

@@ -5,6 +5,8 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 {
+    private const string ApplicationAdmissionOperationName = "spot-application-admission";
+
     private readonly ZLinkSpotActivation _activation;
     private readonly Func<bool> _isDisposed;
     private readonly Func<bool> _flowCaptureEnabled;
@@ -513,7 +515,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             onSkipped?.Invoke();
             var claimAdmission = ZLinkSerialPostAdmission.Closed;
             ReportApplicationAdmissionIfUnobserved(
-                "spot-application-admission",
+                ApplicationAdmissionOperationName,
                 claimAdmission,
                 reportUnobservedAdmission
             );
@@ -539,7 +541,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         claim.Release();
         onSkipped?.Invoke();
         ReportApplicationAdmissionIfUnobserved(
-            "spot-application-admission",
+            ApplicationAdmissionOperationName,
             admission,
             reportUnobservedAdmission
         );
@@ -586,7 +588,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             onSkipped?.Invoke();
             var claimAdmission = ZLinkSerialPostAdmission.Closed;
             ReportApplicationAdmissionIfUnobserved(
-                "spot-application-admission",
+                ApplicationAdmissionOperationName,
                 claimAdmission,
                 reportUnobservedAdmission
             );
@@ -612,7 +614,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         claim.Release();
         onSkipped?.Invoke();
         ReportApplicationAdmissionIfUnobserved(
-            "spot-application-admission",
+            ApplicationAdmissionOperationName,
             admission,
             reportUnobservedAdmission
         );

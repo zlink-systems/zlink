@@ -19,7 +19,7 @@ internal sealed record ZLinkActorCreationCompletion(
 
 internal static class ZLinkActorCreationTerminalCodec
 {
-    private const int MaximumBytes = 1024 * 1024;
+    private const int MaximumBytes = (int)ServiceWireConstants.CreationTerminalEnvelopeBytes;
 
     internal static byte[] Encode(
         ActorCreateOperationTerminal terminal,

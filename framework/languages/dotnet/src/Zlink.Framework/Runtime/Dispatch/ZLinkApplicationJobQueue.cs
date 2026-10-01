@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Dispatch;
@@ -7,8 +8,10 @@ internal readonly record struct ZLinkApplicationJobQueueCapacity(
     ulong? ConfiguredManualMax,
     ulong EffectiveProcessorCount,
     ulong EffectiveMaxQueuedApplicationJobs,
-    uint ConfiguredPauseThresholdPercent = 80,
-    uint ConfiguredResumeThresholdPercent = 60
+    uint ConfiguredPauseThresholdPercent =
+        ZLinkInboundDispatchOptionsModel.DefaultPauseThresholdPercent,
+    uint ConfiguredResumeThresholdPercent =
+        ZLinkInboundDispatchOptionsModel.DefaultResumeThresholdPercent
 )
 {
     internal ulong PausePermitCount =>
@@ -43,8 +46,8 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
         ZLinkApplicationJobQueueProfile profile,
         ulong? configuredManualMax,
         ulong effectiveProcessorCount,
-        uint pauseThresholdPercent = 80,
-        uint resumeThresholdPercent = 60
+        uint pauseThresholdPercent = ZLinkInboundDispatchOptionsModel.DefaultPauseThresholdPercent,
+        uint resumeThresholdPercent = ZLinkInboundDispatchOptionsModel.DefaultResumeThresholdPercent
     )
     {
         if (!Enum.IsDefined(profile))

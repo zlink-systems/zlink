@@ -25,9 +25,10 @@ internal sealed record ZLinkRelocationTreeRead(
 /// </summary>
 internal static partial class ZLinkRelocationTreeStore
 {
-    internal const int ChunkBytes = 64 * 1024 * 1024;
-    internal const int MaxChunks = 4096;
-    internal const ulong MaxLogicalBytes = 256UL * 1024 * 1024 * 1024;
+    private const int StreamBufferBytes = 1024 * 1024;
+    internal const int ChunkBytes = (int)ZLinkServiceWireCodec.RelocationChunkBytesBound;
+    internal const int MaxChunks = (int)ZLinkServiceWireCodec.RelocationChunkCountBound;
+    internal const ulong MaxLogicalBytes = ZLinkServiceWireCodec.RelocationLogicalBytesBound;
 
     // Component concurrency and its encoded byte budget stay private so
     // applications and providers do not need to coordinate I/O scheduling.
@@ -72,7 +73,7 @@ internal static partial class ZLinkRelocationTreeStore
                     FileMode.Truncate,
                     FileAccess.Write,
                     FileShare.None,
-                    1024 * 1024,
+                    StreamBufferBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan
                 )
             )
@@ -95,7 +96,7 @@ internal static partial class ZLinkRelocationTreeStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                1024 * 1024,
+                StreamBufferBytes,
                 FileOptions.Asynchronous | FileOptions.SequentialScan
             );
             for (var firstOrder = 0; firstOrder < chunkCount; )
@@ -229,7 +230,7 @@ internal static partial class ZLinkRelocationTreeStore
                     FileMode.Truncate,
                     FileAccess.Write,
                     FileShare.None,
-                    1024 * 1024,
+                    StreamBufferBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan
                 )
             )
@@ -271,7 +272,7 @@ internal static partial class ZLinkRelocationTreeStore
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.Read,
-                    1024 * 1024,
+                    StreamBufferBytes,
                     FileOptions.SequentialScan
                 )
             )

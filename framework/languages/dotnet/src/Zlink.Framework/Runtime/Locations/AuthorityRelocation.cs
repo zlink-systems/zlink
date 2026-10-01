@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Internal;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Contracts.Locations;
@@ -86,7 +87,7 @@ internal readonly record struct ZLinkAuthorityScanCursor
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(encoded);
         var size = System.Text.Encoding.UTF8.GetByteCount(encoded);
-        if (size is < 1 or > 4096)
+        if (size is < 1 or > ZLinkLocationStoreLimits.MaximumCursorBytes)
             throw new ArgumentOutOfRangeException(
                 nameof(encoded),
                 "Authority scan cursors must be 1 to 4096 UTF-8 bytes."

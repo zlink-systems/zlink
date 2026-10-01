@@ -2,11 +2,16 @@ using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 {
+    private const string ManualConnectionPrefix = "manual:";
+    private const string LocalConnectionPrefix = "local:";
+    private const string AutomaticConnectionPrefix = "auto:";
+    private const string ProcessLocalOwner = "process-local";
     private static readonly TimeSpan ControlReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
@@ -56,18 +61,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     }
 
     internal void AddManual(string endpoint) =>
-        AddOrReplaceAsync($"manual:{endpoint}", endpoint, expected: null)
+        AddOrReplaceAsync($"{ManualConnectionPrefix}{endpoint}", endpoint, expected: null)
             .AsTask()
             .GetAwaiter()
             .GetResult();
 
-    internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
+    internal void RemoveManual(string endpoint) => Remove($"{ManualConnectionPrefix}{endpoint}");
 
     internal async ValueTask AddLocalAsync(ZLinkClientServerServerIdentity identity)
     {
         var endpoint = identity.AdvertisedEndpoint;
         var snapshot = await identity.ReadAsync().ConfigureAwait(false);
-        var key = $"local:{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
+        var key =
+            $"{LocalConnectionPrefix}{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
         await AddOrReplaceAsync(key, endpoint, LocalDescriptor(identity, endpoint, snapshot))
             .ConfigureAwait(false);
         identity.SnapshotChanged += changed =>
@@ -94,7 +100,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             snapshot.Weight,
             snapshot.State,
             identity.SecurityIdentity,
-            "process-local",
+            ProcessLocalOwner,
             1,
             default
         );
@@ -104,17 +110,21 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     )
     {
         var desired = descriptors.ToDictionary(
-            static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}",
+            static row =>
+                $"{AutomaticConnectionPrefix}{row.ServerRid.ToHex()}:{row.LifecycleGeneration}",
             StringComparer.Ordinal
         );
         var successors = descriptors.ToDictionary(
             static row => row.ServerRid,
-            static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}"
+            static row =>
+                $"{AutomaticConnectionPrefix}{row.ServerRid.ToHex()}:{row.LifecycleGeneration}"
         );
         string[] obsolete;
         obsolete = RunState(() =>
             _connections
-                .Keys.Where(static key => key.StartsWith("auto:", StringComparison.Ordinal))
+                .Keys.Where(static key =>
+                    key.StartsWith(AutomaticConnectionPrefix, StringComparison.Ordinal)
+                )
                 .Where(key => !desired.ContainsKey(key))
                 .ToArray()
         );
@@ -885,7 +895,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     _weight,
                     _ready,
                     state,
-                    expected?.OwnerId == "process-local" ? "manual"
+                    expected?.OwnerId == ProcessLocalOwner ? "manual"
                         : expected is null ? "manual"
                         : "redis",
                     _ready ? null : _diagnostics
@@ -1497,13 +1507,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), _time, cancellationToken)
+                await Task.Delay(ZLinkServiceLiveness.ProbeInterval, _time, cancellationToken)
                     .ConfigureAwait(false);
                 var timedOut = RunState(() =>
                 {
                     if (_disposed || _currentAdmission is null)
                         return false;
-                    if (_time.GetElapsedTime(_lastPeerActivity) >= TimeSpan.FromSeconds(15))
+                    if (_time.GetElapsedTime(_lastPeerActivity) >= ZLinkServiceLiveness.PeerTimeout)
                         return true;
 
                     _outstandingProbeId ??= AllocateProbeId();
@@ -1540,7 +1550,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 var request = Socket
                     .Request()
                     .Message(probe)
-                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Timeout(ZLinkServiceLiveness.PeerTimeout)
                     .Async(cancellationToken)
                     .Reply;
                 Interlocked.Increment(ref _sentLivenessProbeCount);

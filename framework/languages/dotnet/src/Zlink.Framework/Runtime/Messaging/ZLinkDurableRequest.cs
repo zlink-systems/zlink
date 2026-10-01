@@ -5,6 +5,8 @@ namespace Zlink.Framework.Runtime.Messaging;
 // replay before decoding, including rejected and malformed terminal replies.
 internal static class ZLinkDurableRequest
 {
+    private static readonly TimeSpan AdmissionPollInterval = TimeSpan.FromMilliseconds(10);
+
     internal static async ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
@@ -42,9 +44,7 @@ internal static class ZLinkDurableRequest
             if (remaining <= TimeSpan.Zero)
                 throw Exhausted(admitted, lastFailure);
             await Task.Delay(
-                    remaining < TimeSpan.FromMilliseconds(10)
-                        ? remaining
-                        : TimeSpan.FromMilliseconds(10),
+                    remaining < AdmissionPollInterval ? remaining : AdmissionPollInterval,
                     timeProvider,
                     cancellationToken
                 )

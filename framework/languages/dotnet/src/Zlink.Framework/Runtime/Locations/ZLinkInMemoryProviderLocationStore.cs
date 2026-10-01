@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Zlink.Framework.Internal;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -11,8 +12,6 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvider = null)
     : IZLinkLocationStore
 {
-    private const int MaximumEncodedBatchBytes = 4 * 1024 * 1024;
-    private const int MaximumEncodedPageBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan ScanRetention = TimeSpan.FromMinutes(1);
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
@@ -114,12 +113,12 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
     )
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Limit is < 1 or > 1000)
+        if (request.Limit is < 1 or > ZLinkLocationStoreLimits.MaximumPageItems)
             throw new ArgumentOutOfRangeException(nameof(request));
         var prefix =
             request.Prefix
             ?? throw new ArgumentException("The scan prefix cannot be null.", nameof(request));
-        if (Encoding.UTF8.GetByteCount(prefix) > 1024)
+        if (Encoding.UTF8.GetByteCount(prefix) > ZLinkLocationStoreLimits.MaximumKeyBytes)
             throw new ArgumentException(
                 "The scan prefix exceeds 1024 UTF-8 bytes.",
                 nameof(request)
@@ -137,7 +136,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
             {
                 var cursorValue = cursor.Value ?? string.Empty;
                 var cursorBytes = Encoding.UTF8.GetByteCount(cursorValue);
-                if (cursorBytes is < 1 or > 4096)
+                if (cursorBytes is < 1 or > ZLinkLocationStoreLimits.MaximumCursorBytes)
                     throw new ArgumentException(
                         "Store scan cursors must contain 1..4096 UTF-8 bytes.",
                         nameof(request)
@@ -184,7 +183,10 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                     Encoding.UTF8.GetByteCount(item.Key.Value)
                     + Encoding.UTF8.GetByteCount(item.Value.Version.Value)
                     + item.Value.Bytes.Length;
-                if (items.Count != 0 && encodedBytes + itemBytes > MaximumEncodedPageBytes)
+                if (
+                    items.Count != 0
+                    && encodedBytes + itemBytes > ZLinkLocationStoreLimits.MaximumEncodedPageBytes
+                )
                     break;
                 items.Add(item);
                 encodedBytes += itemBytes;
@@ -268,7 +270,8 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
         if (
             conditionKeys.Distinct().Count() != conditionKeys.Length
             || mutationKeys.Distinct().Count() != mutationKeys.Length
-            || conditionKeys.Concat(mutationKeys).Distinct().Count() > 2048
+            || conditionKeys.Concat(mutationKeys).Distinct().Count()
+                > ZLinkLocationStoreLimits.MaximumUniqueKeys
         )
         {
             throw new ArgumentException(
@@ -284,7 +287,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
         foreach (var condition in request.Conditions.OfType<ZLinkStoreCondition.Version>())
         {
             var length = Encoding.UTF8.GetByteCount(condition.Expected.Value ?? string.Empty);
-            if (length is < 1 or > 4096)
+            if (length is < 1 or > ZLinkLocationStoreLimits.MaximumVersionBytes)
                 throw new ArgumentException(
                     "Store versions must contain 1..4096 UTF-8 bytes.",
                     nameof(request)
@@ -293,7 +296,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
         }
         foreach (var condition in request.Conditions.OfType<ZLinkStoreCondition.Value>())
         {
-            if (condition.Expected.Length > 2 * 1024 * 1024)
+            if (condition.Expected.Length > ZLinkLocationStoreLimits.MaximumValueBytes)
                 throw new ArgumentException(
                     "The Store value condition exceeds its value bound.",
                     nameof(request)
@@ -308,7 +311,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
             // old 1 MiB to still admit a maximum-size (1 MiB, spec §6)
             // creation/authority payload once base64-inflated.
             if (
-                put.Bytes.Length > 2 * 1024 * 1024
+                put.Bytes.Length > ZLinkLocationStoreLimits.MaximumValueBytes
                 || put.Retention is { } retention && retention <= TimeSpan.Zero
             )
             {
@@ -319,14 +322,14 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
             }
             encodedBytes += put.Bytes.Length;
         }
-        if (encodedBytes > MaximumEncodedBatchBytes)
+        if (encodedBytes > ZLinkLocationStoreLimits.MaximumEncodedBatchBytes)
             throw new ArgumentException("The encoded Store batch exceeds 4 MiB.", nameof(request));
     }
 
     private static void ValidateKey(ZLinkStoreKey key)
     {
         var length = Encoding.UTF8.GetByteCount(key.Value ?? string.Empty);
-        if (length is < 1 or > 1024)
+        if (length is < 1 or > ZLinkLocationStoreLimits.MaximumKeyBytes)
             throw new ArgumentException(
                 "Store keys must contain 1..1024 UTF-8 bytes.",
                 nameof(key)

@@ -18,6 +18,14 @@ namespace Zlink.Framework.Runtime.Host;
 /// </summary>
 internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAsyncDisposable
 {
+    private const string AdmissionConfigured = "configured";
+    private const string AdmissionConnecting = "connecting";
+    private const string AdmissionReady = "ready";
+    private const string AdmissionDraining = "draining";
+    private const string AdmissionNotRequired = "not_required";
+    private const string AdmissionDisconnected = "disconnected";
+    private const string AdmissionRejected = "rejected";
+
     private static readonly TimeSpan MonitorIdleDelay = TimeSpan.FromMilliseconds(10);
 
     // The public RouteMesh stream projects topology changes, not per-message
@@ -263,7 +271,10 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                     source,
                     snapshot.Peers.Count,
                     snapshot.Peers.Count(static peer =>
-                        peer.AdmissionState is "connecting" or "ready" or "draining"
+                        peer.AdmissionState
+                            is AdmissionConnecting
+                                or AdmissionReady
+                                or AdmissionDraining
                     ),
                     snapshot.Peers.Count(static peer => peer.Ready),
                     snapshot
@@ -574,11 +585,17 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     private ZLinkLocationRuntimeSnapshot LocationSnapshot()
     {
         if (_storeHealth is null)
-            return new ZLinkLocationRuntimeSnapshot("not_configured", null, null);
+            return new ZLinkLocationRuntimeSnapshot(
+                ZLinkLocationRuntimeSnapshot.NotConfiguredState,
+                null,
+                null
+            );
 
         var snapshot = _storeHealth.GetSnapshot();
         return new ZLinkLocationRuntimeSnapshot(
-            snapshot.Healthy ? "ready" : "degraded",
+            snapshot.Healthy
+                ? ZLinkLocationRuntimeSnapshot.ReadyState
+                : ZLinkLocationRuntimeSnapshot.DegradedState,
             snapshot.LastSuccessAt,
             snapshot.LastFailureAt
         );
@@ -629,13 +646,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     {
         return peer.State switch
         {
-            MeshPeerState.Configured => ("configured", false, "serving"),
-            MeshPeerState.Connecting => ("connecting", false, "serving"),
-            MeshPeerState.Admitted => ("ready", true, "serving"),
-            MeshPeerState.Draining => ("draining", false, "draining"),
-            MeshPeerState.NotRequired => ("not_required", false, "serving"),
-            MeshPeerState.Closed => ("disconnected", false, "serving"),
-            _ => ("rejected", false, "serving"),
+            MeshPeerState.Configured => (AdmissionConfigured, false, "serving"),
+            MeshPeerState.Connecting => (AdmissionConnecting, false, "serving"),
+            MeshPeerState.Admitted => (AdmissionReady, true, "serving"),
+            MeshPeerState.Draining => (AdmissionDraining, false, "draining"),
+            MeshPeerState.NotRequired => (AdmissionNotRequired, false, "serving"),
+            MeshPeerState.Closed => (AdmissionDisconnected, false, "serving"),
+            _ => (AdmissionRejected, false, "serving"),
         };
     }
 
@@ -725,10 +742,10 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     private static ZLinkPeerState MapPeerStatus(ZLinkMeshPeerSnapshot peer) =>
         peer.AdmissionState switch
         {
-            "ready" => ZLinkPeerState.Ready,
-            "draining" => ZLinkPeerState.Draining,
-            "not_required" => ZLinkPeerState.NotRequired,
-            "configured" or "connecting" => ZLinkPeerState.Connecting,
+            AdmissionReady => ZLinkPeerState.Ready,
+            AdmissionDraining => ZLinkPeerState.Draining,
+            AdmissionNotRequired => ZLinkPeerState.NotRequired,
+            AdmissionConfigured or AdmissionConnecting => ZLinkPeerState.Connecting,
             _ => ZLinkPeerState.NotConnected,
         };
 
@@ -1135,7 +1152,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         {
             if (_owner._storeHealth is null)
                 return;
-            var state = _owner._storeHealth.GetSnapshot().Healthy ? "ready" : "degraded";
+            var state = _owner._storeHealth.GetSnapshot().Healthy
+                ? ZLinkLocationRuntimeSnapshot.ReadyState
+                : ZLinkLocationRuntimeSnapshot.DegradedState;
             var changed = AwaitStateLane(
                 _lane.RunAsync(() =>
                 {

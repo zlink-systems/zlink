@@ -5,6 +5,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Protocol;
 
 internal static class ZlinkStreamMetadataCodec
 {
+    private const string KeyDiagnosticName = "key";
+    private const string ValueDiagnosticName = "value";
+
     public static int GetPayloadSize(ZlinkStreamMetadata metadata)
     {
         return metadata.Count == 0 ? 0 : CalculatePayloadSize(metadata);
@@ -22,10 +25,10 @@ internal static class ZlinkStreamMetadataCodec
             offset += keyLength;
 
             var valueLengthOffset = offset;
-            offset += 2;
+            offset += sizeof(ushort);
             var valueLength = Encoding.UTF8.GetBytes(value, destination[offset..]);
             BinaryPrimitives.WriteUInt16BigEndian(
-                destination.Slice(valueLengthOffset, 2),
+                destination.Slice(valueLengthOffset, sizeof(ushort)),
                 checked((ushort)valueLength)
             );
             offset += valueLength;
@@ -45,8 +48,14 @@ internal static class ZlinkStreamMetadataCodec
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
-            var key = DecodeString(metadata, ref offset, true, "key");
-            var value = DecodeString(metadata, ref offset, false, "value", allowEmpty: true);
+            var key = DecodeString(metadata, ref offset, true, KeyDiagnosticName);
+            var value = DecodeString(
+                metadata,
+                ref offset,
+                false,
+                ValueDiagnosticName,
+                allowEmpty: true
+            );
 
             if (!values.TryAdd(key, value))
                 throw ZlinkStreamConnector.Error(
@@ -72,7 +81,7 @@ internal static class ZlinkStreamMetadataCodec
                 "Metadata entry count must not exceed 255."
             );
 
-        var size = 1;
+        var size = sizeof(byte);
         foreach (var (key, value) in metadata.Values)
         {
             var keyLength = Encoding.UTF8.GetByteCount(key);
@@ -89,7 +98,7 @@ internal static class ZlinkStreamMetadataCodec
                     "Metadata value is too large."
                 );
 
-            size = checked(size + 1 + keyLength + 2 + valueLength);
+            size = checked(size + sizeof(byte) + keyLength + sizeof(ushort) + valueLength);
         }
 
         return size;
@@ -119,7 +128,7 @@ internal static class ZlinkStreamMetadataCodec
 
     private static int ReadByteLength(ReadOnlySpan<byte> metadata, ref int offset, string name)
     {
-        if (metadata.Length - offset < 1)
+        if (metadata.Length - offset < sizeof(byte))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 $"Metadata {name} length is missing."
@@ -130,14 +139,14 @@ internal static class ZlinkStreamMetadataCodec
 
     private static int ReadUInt16Length(ReadOnlySpan<byte> metadata, ref int offset, string name)
     {
-        if (metadata.Length - offset < 2)
+        if (metadata.Length - offset < sizeof(ushort))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 $"Metadata {name} length is missing."
             );
 
-        var length = BinaryPrimitives.ReadUInt16BigEndian(metadata.Slice(offset, 2));
-        offset += 2;
+        var length = BinaryPrimitives.ReadUInt16BigEndian(metadata.Slice(offset, sizeof(ushort)));
+        offset += sizeof(ushort);
         return length;
     }
 }

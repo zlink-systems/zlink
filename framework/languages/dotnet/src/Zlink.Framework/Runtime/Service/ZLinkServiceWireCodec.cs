@@ -2247,22 +2247,40 @@ internal static partial class ZLinkServiceWireCodec
     private static byte[] EncodeDescriptorExtension(byte objectRole, byte runtimeState)
     {
         var fields = new WireWriter();
-        fields.Tlv(1, [runtimeState]); // runtime-state
+        fields.Tlv(
+            (byte)ServiceWireConstants.DescriptorExtensionField.RuntimeState,
+            [runtimeState]
+        ); // runtime-state
 
         var applicationVersion = new byte[sizeof(long)];
         BinaryPrimitives.WriteInt64BigEndian(applicationVersion, 0);
-        fields.Tlv(2, applicationVersion);
+        fields.Tlv(
+            (byte)ServiceWireConstants.DescriptorExtensionField.ApplicationVersion,
+            applicationVersion
+        );
 
         var capabilities = new WireWriter();
         capabilities.U16(1);
         capabilities.Text8(ServiceWireConstants.RequiredCapability);
-        fields.Tlv(6, capabilities.ToArray());
-        fields.Tlv(7, [objectRole]);
-        fields.TlvU32(8, 100);
-        fields.TlvU32(9, 10_000);
-        fields.TlvU32(10, 128);
-        fields.TlvU32(11, 0);
-        fields.TlvU32(12, 0);
+        fields.Tlv(
+            (byte)ServiceWireConstants.DescriptorExtensionField.ProtocolCapabilities,
+            capabilities.ToArray()
+        );
+        fields.Tlv((byte)ServiceWireConstants.DescriptorExtensionField.ObjectRole, [objectRole]);
+        fields.TlvU32(
+            (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight,
+            ZLinkSpotNodeRegistration.DefaultPlacementWeight
+        );
+        fields.TlvU32(
+            (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityLimit,
+            (uint)ServiceWireConstants.NodeActiveCapacityDefault
+        );
+        fields.TlvU32(
+            (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityLimit,
+            (uint)ServiceWireConstants.NodePendingCapacityDefault
+        );
+        fields.TlvU32((byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityUsed, 0);
+        fields.TlvU32((byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityUsed, 0);
 
         var result = new WireWriter();
         result.U32(checked((uint)fields.Count));
@@ -2314,16 +2332,31 @@ internal static partial class ZLinkServiceWireCodec
                 return false;
             previousId = id;
             preserved.Add(id, field.ToArray());
-            if (id is 1 or 2 or 6 or 7 or 8 or 9 or 10 or 11 or 12)
+            if (
+                id
+                is (byte)ServiceWireConstants.DescriptorExtensionField.RuntimeState
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.ApplicationVersion
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.ProtocolCapabilities
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.ObjectRole
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityLimit
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityLimit
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityUsed
+                    or (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityUsed
+            )
                 required.Add(id);
             var value = new WireReader(field);
             switch (id)
             {
-                case 1:
-                    if (!value.TryU8(out runtimeState) || runtimeState > 4 || value.Remaining != 0)
+                case (byte)ServiceWireConstants.DescriptorExtensionField.RuntimeState:
+                    if (
+                        !value.TryU8(out runtimeState)
+                        || runtimeState > (byte)ServiceWireCodec.RuntimeState.Error
+                        || value.Remaining != 0
+                    )
                         return false;
                     break;
-                case 2:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.ApplicationVersion:
                 {
                     if (
                         !value.TryU64(out var encodedVersion)
@@ -2334,21 +2367,24 @@ internal static partial class ZLinkServiceWireCodec
                     applicationVersion = checked((long)encodedVersion);
                     break;
                 }
-                case 3:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.SpotTypes:
                     if (!TryDecodeSortedText8Vector(ref value) || value.Remaining != 0)
                         return false;
                     break;
-                case 4:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.StatefulCapabilities:
                     if (!TryDecodeStatefulCapabilities(ref value) || value.Remaining != 0)
                         return false;
                     break;
-                case 5:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.MaintenanceWave:
                     if (!value.TryOptionalText8(out _) || value.Remaining != 0)
                         return false;
                     break;
-                case 6:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.ProtocolCapabilities:
                 {
-                    if (!value.TryU16(out var count) || count > 1024)
+                    if (
+                        !value.TryU16(out var count)
+                        || count > ServiceWireConstants.SortedText8VectorMaximumItems
+                    )
                         return false;
                     byte[]? previousCapability = null;
                     for (var index = 0; index < count; index++)
@@ -2372,11 +2408,15 @@ internal static partial class ZLinkServiceWireCodec
                         return false;
                     break;
                 }
-                case 7:
-                    if (!value.TryU8(out objectRole) || objectRole > 2 || value.Remaining != 0)
+                case (byte)ServiceWireConstants.DescriptorExtensionField.ObjectRole:
+                    if (
+                        !value.TryU8(out objectRole)
+                        || objectRole > (byte)ServiceWireCodec.ObjectRole.Server
+                        || value.Remaining != 0
+                    )
                         return false;
                     break;
-                case 8:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight:
                     if (
                         !value.TryU32(out placementWeight)
                         || placementWeight > ZLinkSocketConfig.MaximumPeerWeight
@@ -2384,7 +2424,7 @@ internal static partial class ZLinkServiceWireCodec
                     )
                         return false;
                     break;
-                case 9:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityLimit:
                     if (
                         !value.TryU32(out activeCapacityLimit)
                         || activeCapacityLimit == 0
@@ -2392,15 +2432,15 @@ internal static partial class ZLinkServiceWireCodec
                     )
                         return false;
                     break;
-                case 10:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityLimit:
                     if (!value.TryU32(out pendingCapacityLimit) || value.Remaining != 0)
                         return false;
                     break;
-                case 11:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityUsed:
                     if (!value.TryU32(out activeCapacityUsed) || value.Remaining != 0)
                         return false;
                     break;
-                case 12:
+                case (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityUsed:
                     if (!value.TryU32(out pendingCapacityUsed) || value.Remaining != 0)
                         return false;
                     break;
@@ -2409,7 +2449,20 @@ internal static partial class ZLinkServiceWireCodec
 
         if (
             !hasCapability
-            || !required.SetEquals(new byte[] { 1, 2, 6, 7, 8, 9, 10, 11, 12 })
+            || !required.SetEquals(
+                new byte[]
+                {
+                    (byte)ServiceWireConstants.DescriptorExtensionField.RuntimeState,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.ApplicationVersion,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.ProtocolCapabilities,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.ObjectRole,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityLimit,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityLimit,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityUsed,
+                    (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityUsed,
+                }
+            )
             || activeCapacityUsed > activeCapacityLimit
             || pendingCapacityUsed > pendingCapacityLimit
         )
@@ -2420,7 +2473,10 @@ internal static partial class ZLinkServiceWireCodec
 
     private static bool TryDecodeSortedText8Vector(ref WireReader reader)
     {
-        if (!reader.TryU16(out var count) || count > 1024)
+        if (
+            !reader.TryU16(out var count)
+            || count > ServiceWireConstants.SortedText8VectorMaximumItems
+        )
             return false;
         byte[]? previous = null;
         for (var index = 0; index < count; index++)
@@ -2437,7 +2493,10 @@ internal static partial class ZLinkServiceWireCodec
 
     private static bool TryDecodeStatefulCapabilities(ref WireReader reader)
     {
-        if (!reader.TryU16(out var count) || count > 1024)
+        if (
+            !reader.TryU16(out var count)
+            || count > ServiceWireConstants.StatefulCapabilityVectorMaximumItems
+        )
             return false;
         byte previousKind = 0;
         byte[]? previousType = null;
@@ -2445,10 +2504,12 @@ internal static partial class ZLinkServiceWireCodec
         {
             if (
                 !reader.TryU8(out var objectKind)
-                || objectKind is < 1 or > 3
+                || objectKind
+                    is < (byte)ServiceWireCodec.StatefulObjectKind.Actor
+                        or > (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
                 || !reader.TryText8(out var type)
                 || !reader.TryU8(out var relocationPolicy)
-                || relocationPolicy > 2
+                || relocationPolicy > (byte)ServiceWireCodec.RelocationPolicyKind.Snapshot
                 || !TryDecodeSortedText8Vector(ref reader)
                 || !reader.TryU32(out var activeCapacityLimit)
                 || activeCapacityLimit == 0

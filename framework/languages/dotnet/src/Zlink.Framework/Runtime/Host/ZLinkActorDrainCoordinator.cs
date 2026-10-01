@@ -35,7 +35,10 @@ internal sealed class ZLinkActorDrainCoordinator(
                 var sourceNode = registration.SpotNodes.Values.Single(node =>
                     node.ActorFactories.ContainsKey(actorType!)
                 );
-                if (sourceNode.ActorRelocations[actorType!].PolicyKind == 0)
+                if (
+                    sourceNode.ActorRelocations[actorType!].PolicyKind
+                    == ZLinkObjectRelocationRegistration.DisabledPolicy
+                )
                     return ZLinkFrameworkRelocationReason.RelocationDisabled;
                 var targets = await ResolveTargetCandidatesAsync(
                         actorType!,
@@ -392,9 +395,12 @@ internal sealed class ZLinkActorDrainCoordinator(
         var sourcePolicy = sourceNode.ActorRelocations[actorType];
         var requiredPolicy = sourcePolicy.PolicyKind switch
         {
-            0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-            1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-            2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
+            ZLinkObjectRelocationRegistration.DisabledPolicy =>
+                ZLinkObjectMaintenancePolicyKind.Disabled,
+            ZLinkObjectRelocationRegistration.RecreatePolicy =>
+                ZLinkObjectMaintenancePolicyKind.Recreate,
+            ZLinkObjectRelocationRegistration.SnapshotPolicy =>
+                ZLinkObjectMaintenancePolicyKind.Snapshot,
             _ => throw new ZLinkConfigurationException(
                 $"Unknown relocation policy kind '{sourcePolicy.PolicyKind}'."
             ),

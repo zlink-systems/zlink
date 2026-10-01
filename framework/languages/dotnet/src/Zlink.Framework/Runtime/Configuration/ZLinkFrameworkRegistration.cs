@@ -82,7 +82,9 @@ internal sealed class ZLinkFrameworkRegistration
         foreach (var streamNode in StreamNodes.Values)
             maximum = Math.Max(maximum, streamNode.SocketConfig.MaxMessageSize);
 
-        return maximum > 0 ? checked((ulong)maximum) : 16UL * 1024 * 1024;
+        return maximum > 0
+            ? checked((ulong)maximum)
+            : (ulong)ZLinkSocketConfig.DefaultMaxMessageSize;
     }
 
     public IEnumerable<Assembly> EnumerateHandlerScanAssemblies()
@@ -381,6 +383,8 @@ internal sealed class ZLinkMeshChannelMembership
 
 internal sealed class ZLinkSpotNodeRegistration
 {
+    internal const int DefaultPlacementWeight = 100;
+    internal const int DefaultActivationConcurrencyLimit = 128;
     public required string SpotNodeName { get; init; }
 
     public string? SpotMeshChannelName { get; set; }
@@ -444,15 +448,17 @@ internal sealed class ZLinkSpotNodeRegistration
 
     public bool ObjectRoleSelected { get; set; }
 
-    public int PlacementWeight { get; set; } = 100;
+    public int PlacementWeight { get; set; } = DefaultPlacementWeight;
 
     public int ActorLimit { get; set; }
 
     public int SpotLimit { get; set; }
 
-    public int ActivationConcurrencyLimit { get; set; } = 128;
+    public int ActivationConcurrencyLimit { get; set; } = DefaultActivationConcurrencyLimit;
 
-    public int MaxActiveObjects { get; set; } = 10_000;
+    public int MaxActiveObjects { get; set; } =
+        (int)
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.NodeActiveCapacityDefault;
 
     public TimeSpan InstanceSpotIdleTimeout { get; set; }
 }
@@ -477,7 +483,12 @@ internal sealed record ZLinkObjectRelocationRegistration(
     byte PolicyKind,
     Type? AdapterType,
     IZLinkRelocationAdapterInvoker? AdapterInvoker
-);
+)
+{
+    internal const byte DisabledPolicy = 0;
+    internal const byte RecreatePolicy = 1;
+    internal const byte SnapshotPolicy = 2;
+}
 
 internal sealed record ZLinkObjectPlacementOptions
 {
@@ -535,7 +546,7 @@ internal sealed class ZLinkSpotRouterCapabilityRegistration
 
 internal sealed class ZLinkNetworkOptionsModel : IZLinkNetworkOptions
 {
-    private string _bindHost = "127.0.0.1";
+    private string _bindHost = ZLinkNetworkEndpointResolver.IPv4LoopbackHost;
     private string? _advertiseHost;
 
     public string BindHost

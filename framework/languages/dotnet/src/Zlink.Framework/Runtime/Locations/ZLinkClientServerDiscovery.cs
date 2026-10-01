@@ -334,7 +334,10 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                 var page = await store
                     .ListClientServersAsync(
                         channelName,
-                        new ZLinkPageRequest(256, continuation),
+                        new ZLinkPageRequest(
+                            ZLinkPageRequestPolicy.DiscoveryPageSize,
+                            continuation
+                        ),
                         cancellationToken
                     )
                     .ConfigureAwait(false);

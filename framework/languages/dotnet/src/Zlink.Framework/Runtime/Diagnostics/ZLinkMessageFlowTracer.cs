@@ -247,6 +247,52 @@ internal sealed class ZLinkMessageFlowTracer
 
 internal static class ZLinkTraceFormat
 {
+    internal const string EventField = "event";
+    internal const string PhaseField = "phase";
+    internal const string SurfaceField = "surface";
+    internal const string KindField = "kind";
+    internal const string MeshField = "mesh";
+    internal const string ChannelField = "channel";
+    internal const string ChannelRouteField = "channel_route";
+    internal const string SourceRidField = "source_rid";
+    internal const string TargetRidField = "target_rid";
+    internal const string ServerRidField = "server_rid";
+    internal const string PacketField = "packet";
+    internal const string TopicField = "topic";
+    internal const string SpotField = "spot";
+    internal const string InstanceTypeField = "instance_type";
+    internal const string ActivationStateField = "activation_state";
+    internal const string ActorField = "actor";
+    internal const string SessionField = "session";
+    internal const string CorrField = "corr";
+    internal const string FlowField = "flow";
+    internal const string OriginField = "origin";
+    internal const string OutcomeField = "outcome";
+    internal const string ReasonField = "reason";
+    internal const string SizeField = "size";
+    internal const string ActionField = "action";
+    internal const string EventIdField = "event_id";
+    internal const string MessageKindField = "message_kind";
+    internal const string PacketNameField = "packet_name";
+    internal const string ChannelNameField = "channel_name";
+    internal const string ChannelRouteKindField = "channel_route_kind";
+    internal const string MeshNameField = "mesh_name";
+    internal const string SpotIdField = "spot_id";
+    internal const string InstanceSpotTypeField = "instance_spot_type";
+    internal const string ActorIdField = "actor_id";
+    internal const string StreamSessionIdField = "stream_session_id";
+    internal const string CorrelationIdField = "correlation_id";
+    internal const string FlowIdField = "flow_id";
+    internal const string FlowOriginField = "flow_origin";
+    internal const string MessageSizeBytesField = "message_size_bytes";
+    internal const string DurationSecondsField = "duration_seconds";
+    internal const string ErrorTypeField = "error_type";
+    internal const string ErrorMessageField = "error_message";
+    internal const string MessageFlowEventName = "zlink.message_flow";
+    internal const string DispatchErrorEventName = "zlink.dispatch_error";
+
+    private const int MessageFlowFieldCapacity = 23;
+    private const int DispatchErrorFieldCapacity = 21;
     internal const int ErrorMessageMaxLength = 512;
     private static readonly (Regex Pattern, string Replacement)[] CredentialPatterns =
     [
@@ -412,32 +458,32 @@ internal static class ZLinkTraceFormat
         long? size
     )
     {
-        var fields = new List<KeyValuePair<string, object?>>(23);
+        var fields = new List<KeyValuePair<string, object?>>(MessageFlowFieldCapacity);
         //  Structured log 본문의 key는 관찰 스펙의 "Structured log 대체 표기"가 고정한다 —
         //  첫 key는 `event`다. telemetry attribute 이름(`event_id`)과는 다른 집합이다.
-        Add(fields, "event", "zlink.message_flow");
-        Add(fields, "phase", OutcomeKey(flow.Outcome));
-        Add(fields, "surface", SurfaceKey(flow.Surface));
-        Add(fields, "kind", MessageKindKey(flow.MessageKind));
-        Add(fields, "mesh", flow.MeshName);
-        Add(fields, "channel", flow.ChannelName);
-        Add(fields, "channel_route", ChannelRouteKind(flow.Surface, flow.ChannelRouteKind));
-        Add(fields, "source_rid", flow.SourceRid);
-        Add(fields, "target_rid", flow.TargetRid ?? flow.PeerRid);
-        Add(fields, "server_rid", flow.ServerRid);
-        Add(fields, "packet", flow.PacketName);
-        Add(fields, "topic", flow.Topic);
-        Add(fields, "spot", flow.SpotId);
-        Add(fields, "instance_type", flow.InstanceSpotType);
-        Add(fields, "activation_state", ActivationStateKey(flow.ActivationState));
-        Add(fields, "actor", flow.ActorId);
-        Add(fields, "session", flow.StreamSessionId);
-        Add(fields, "corr", flow.CorrelationId);
-        Add(fields, "flow", FlowIdKey(flow));
-        Add(fields, "origin", FlowOriginKey(flow));
-        Add(fields, "outcome", ResultKey(flow));
-        Add(fields, "reason", MessageReasonKey(flow.Reason));
-        Add(fields, "size", size);
+        Add(fields, EventField, MessageFlowEventName);
+        Add(fields, PhaseField, OutcomeKey(flow.Outcome));
+        Add(fields, SurfaceField, SurfaceKey(flow.Surface));
+        Add(fields, KindField, MessageKindKey(flow.MessageKind));
+        Add(fields, MeshField, flow.MeshName);
+        Add(fields, ChannelField, flow.ChannelName);
+        Add(fields, ChannelRouteField, ChannelRouteKind(flow.Surface, flow.ChannelRouteKind));
+        Add(fields, SourceRidField, flow.SourceRid);
+        Add(fields, TargetRidField, flow.TargetRid ?? flow.PeerRid);
+        Add(fields, ServerRidField, flow.ServerRid);
+        Add(fields, PacketField, flow.PacketName);
+        Add(fields, TopicField, flow.Topic);
+        Add(fields, SpotField, flow.SpotId);
+        Add(fields, InstanceTypeField, flow.InstanceSpotType);
+        Add(fields, ActivationStateField, ActivationStateKey(flow.ActivationState));
+        Add(fields, ActorField, flow.ActorId);
+        Add(fields, SessionField, flow.StreamSessionId);
+        Add(fields, CorrField, flow.CorrelationId);
+        Add(fields, FlowField, FlowIdKey(flow));
+        Add(fields, OriginField, FlowOriginKey(flow));
+        Add(fields, OutcomeField, ResultKey(flow));
+        Add(fields, ReasonField, MessageReasonKey(flow.Reason));
+        Add(fields, SizeField, size);
         return fields;
     }
 
@@ -448,39 +494,39 @@ internal static class ZLinkTraceFormat
         ZLinkFlowOrigin? flowOrigin
     )
     {
-        var fields = new List<KeyValuePair<string, object?>>(21);
-        Add(fields, "event", "zlink.dispatch_error");
-        Add(fields, "surface", SurfaceKey(error.Surface));
-        Add(fields, "kind", MessageKindKey(error.MessageKind));
-        Add(fields, "mesh", error.MeshName);
-        Add(fields, "channel", error.ChannelName);
-        Add(fields, "channel_route", ChannelRouteKind(error.Surface, error.ChannelRouteKind));
-        Add(fields, "source_rid", error.SourceRid);
-        Add(fields, "target_rid", error.TargetRid);
-        Add(fields, "server_rid", error.ServerRid);
-        Add(fields, "packet", error.PacketName);
-        Add(fields, "topic", error.Topic);
-        Add(fields, "spot", error.SpotId);
-        Add(fields, "instance_type", error.InstanceSpotType);
-        Add(fields, "activation_state", ActivationStateKey(error.ActivationState));
-        Add(fields, "actor", error.ActorId);
-        Add(fields, "session", error.StreamSessionId);
-        Add(fields, "corr", error.CorrelationId);
-        Add(fields, "flow", string.IsNullOrEmpty(flowId) || flowOrigin is null ? null : flowId);
+        var fields = new List<KeyValuePair<string, object?>>(DispatchErrorFieldCapacity);
+        Add(fields, EventField, DispatchErrorEventName);
+        Add(fields, SurfaceField, SurfaceKey(error.Surface));
+        Add(fields, KindField, MessageKindKey(error.MessageKind));
+        Add(fields, MeshField, error.MeshName);
+        Add(fields, ChannelField, error.ChannelName);
+        Add(fields, ChannelRouteField, ChannelRouteKind(error.Surface, error.ChannelRouteKind));
+        Add(fields, SourceRidField, error.SourceRid);
+        Add(fields, TargetRidField, error.TargetRid);
+        Add(fields, ServerRidField, error.ServerRid);
+        Add(fields, PacketField, error.PacketName);
+        Add(fields, TopicField, error.Topic);
+        Add(fields, SpotField, error.SpotId);
+        Add(fields, InstanceTypeField, error.InstanceSpotType);
+        Add(fields, ActivationStateField, ActivationStateKey(error.ActivationState));
+        Add(fields, ActorField, error.ActorId);
+        Add(fields, SessionField, error.StreamSessionId);
+        Add(fields, CorrField, error.CorrelationId);
+        Add(fields, FlowField, string.IsNullOrEmpty(flowId) || flowOrigin is null ? null : flowId);
         Add(
             fields,
-            "origin",
+            OriginField,
             string.IsNullOrEmpty(flowId) || flowOrigin is null
                 ? null
                 : flowOrigin.Value.ToString().ToLowerInvariant()
         );
-        Add(fields, "outcome", "failed");
-        Add(fields, "reason", DispatchReasonKey(error.Reason));
-        Add(fields, "action", DispatchActionKey(error.Action));
+        Add(fields, OutcomeField, ResultKey(ZLinkMessageFlowResult.Failed));
+        Add(fields, ReasonField, DispatchReasonKey(error.Reason));
+        Add(fields, ActionField, DispatchActionKey(error.Action));
         if (errorDetails.Type is not null)
         {
-            fields.Add(new KeyValuePair<string, object?>("error_type", errorDetails.Type));
-            fields.Add(new KeyValuePair<string, object?>("error_message", errorDetails.Message));
+            fields.Add(new KeyValuePair<string, object?>(ErrorTypeField, errorDetails.Type));
+            fields.Add(new KeyValuePair<string, object?>(ErrorMessageField, errorDetails.Message));
         }
         return fields;
     }

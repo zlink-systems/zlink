@@ -442,10 +442,16 @@ internal sealed class ZLinkClientServerRuntimeService(
     private ZLinkLocationRuntimeSnapshot LocationSnapshot()
     {
         if (_storeHealth is null)
-            return new ZLinkLocationRuntimeSnapshot("not_configured", null, null);
+            return new ZLinkLocationRuntimeSnapshot(
+                ZLinkLocationRuntimeSnapshot.NotConfiguredState,
+                null,
+                null
+            );
         var snapshot = _storeHealth.GetSnapshot();
         return new ZLinkLocationRuntimeSnapshot(
-            snapshot.Healthy ? "ready" : "degraded",
+            snapshot.Healthy
+                ? ZLinkLocationRuntimeSnapshot.ReadyState
+                : ZLinkLocationRuntimeSnapshot.DegradedState,
             snapshot.LastSuccessAt,
             snapshot.LastFailureAt
         );

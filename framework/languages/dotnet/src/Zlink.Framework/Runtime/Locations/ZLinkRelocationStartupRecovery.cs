@@ -20,7 +20,11 @@ internal sealed class ZLinkRelocationStartupRecovery(
 )
 {
     private const int PageSize = 128;
-    private static readonly string[] Prefixes = ["zla1:a:", "zla1:s:"];
+    private static readonly string[] Prefixes =
+    [
+        ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor),
+        ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Spot),
+    ];
 
     internal async ValueTask RecoverAsync(
         Func<ZLinkRelocationRecoveryCandidate, CancellationToken, ValueTask> resume,

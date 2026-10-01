@@ -61,7 +61,11 @@ internal sealed class ZLinkLocationObjectQuery(
         ZLinkAuthorityScanCursor? cursor = normalized.ContinuationToken is { } token
             ? new ZLinkAuthorityScanCursor(token)
             : null;
-        var prefix = filter.ObjectKind == ZLinkLocationObjectKind.Actor ? "zla1:a:" : "zla1:s:";
+        var prefix = ZLinkAuthorityKeyCodec.Prefix(
+            filter.ObjectKind == ZLinkLocationObjectKind.Actor
+                ? ZLinkAuthorityKeyKind.Actor
+                : ZLinkAuthorityKeyKind.Spot
+        );
         var scan = await ReadAsync(
                 "object-location-query-list",
                 cancellationToken,

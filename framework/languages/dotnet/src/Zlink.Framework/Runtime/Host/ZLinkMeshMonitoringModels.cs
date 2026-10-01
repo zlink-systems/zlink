@@ -44,7 +44,13 @@ internal sealed record ZLinkLocationRuntimeSnapshot(
     string State,
     DateTimeOffset? LastSuccessAt,
     DateTimeOffset? LastFailureAt
-);
+)
+{
+    internal const string UnknownState = "unknown";
+    internal const string NotConfiguredState = "not_configured";
+    internal const string ReadyState = "ready";
+    internal const string DegradedState = "degraded";
+}
 
 internal sealed record ZLinkInstanceSpotTypeSnapshot(
     string InstanceSpotType,

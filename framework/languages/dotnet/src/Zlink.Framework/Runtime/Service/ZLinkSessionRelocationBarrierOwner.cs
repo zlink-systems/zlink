@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Service;
@@ -27,12 +28,12 @@ internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime r
         cancellationToken.ThrowIfCancellationRequested();
         var senderMatches =
             route.Route.Action == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                ? route.SenderRole == 2
+                ? route.SenderRole == (byte)ServiceWireCodec.RelocationRole.Target
                     && route.Route.TargetNodeRid == authenticatedRoute.NodeRid
                     && route.Route.TargetNodeGeneration == authenticatedRoute.NodeGeneration
                     && route.Route.TargetAuthorityOwnerGeneration
                         == authenticatedRoute.AuthorityOwnerGeneration
-                : route.SenderRole == 1
+                : route.SenderRole == (byte)ServiceWireCodec.RelocationRole.Source
                     && route.Coordinator.NodeRid == authenticatedRoute.NodeRid
                     && route.Coordinator.NodeGeneration == authenticatedRoute.NodeGeneration
                     && route.Route.CurrentAuthorityOwnerGeneration

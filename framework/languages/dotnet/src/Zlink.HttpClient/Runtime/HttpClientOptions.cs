@@ -10,13 +10,17 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal sealed class HttpClientOptions
 {
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMilliseconds(3000);
+    internal const long DefaultMaxResponseBodySize = 16 * 1024 * 1024;
+    internal const int DefaultRedirectLimit = 5;
+
     public IZLinkHttpExecutionScheduler? ExecutionScheduler { get; init; }
 
     public required string BaseUrl { get; init; }
 
-    public TimeSpan Timeout { get; init; } = TimeSpan.FromMilliseconds(3000);
+    public TimeSpan Timeout { get; init; } = DefaultTimeout;
 
-    public long MaxResponseBodySize { get; init; } = 16 * 1024 * 1024;
+    public long MaxResponseBodySize { get; init; } = DefaultMaxResponseBodySize;
 
     public required IReadOnlyDictionary<string, string> Headers { get; init; }
 

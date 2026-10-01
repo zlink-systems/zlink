@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+using System.Net;
+
 namespace Zlink.HttpClient.Runtime;
 
 /// <summary>
@@ -9,10 +11,12 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal static class HttpRedirectPolicy
 {
+    private const string RootUrlPath = "/";
+
     /// <summary>Combines the base URL path prefix with the request target.</summary>
     public static string MakeTarget(string prefix, string path)
     {
-        if (prefix.Length == 0 || prefix == "/")
+        if (prefix.Length == 0 || prefix == RootUrlPath)
             return path;
 
         return prefix[^1] == '/' ? prefix[..^1] + path : prefix + path;
@@ -27,7 +31,12 @@ internal static class HttpRedirectPolicy
 
     public static bool IsRedirectStatus(int status)
     {
-        return status is 301 or 302 or 303 or 307 or 308;
+        return (HttpStatusCode)status
+            is HttpStatusCode.MovedPermanently
+                or HttpStatusCode.Found
+                or HttpStatusCode.SeeOther
+                or HttpStatusCode.TemporaryRedirect
+                or HttpStatusCode.PermanentRedirect;
     }
 
     /// <summary>The request path without query, used for cookie path matching.</summary>
@@ -48,7 +57,13 @@ internal static class HttpRedirectPolicy
         byte[]? body
     )
     {
-        if (status == 303 || (status is 301 or 302 && method == ZLinkHttpMethod.Post))
+        if (
+            (HttpStatusCode)status == HttpStatusCode.SeeOther
+            || (
+                (HttpStatusCode)status is HttpStatusCode.MovedPermanently or HttpStatusCode.Found
+                && method == ZLinkHttpMethod.Post
+            )
+        )
             return (ZLinkHttpMethod.Get, null);
 
         return (method, body);
@@ -58,7 +73,7 @@ internal static class HttpRedirectPolicy
     {
         if (
             Uri.TryCreate(current, location, out var resolved)
-            && resolved.Scheme is "http" or "https"
+            && (resolved.Scheme == Uri.UriSchemeHttp || resolved.Scheme == Uri.UriSchemeHttps)
         )
             return resolved;
 

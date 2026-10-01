@@ -805,12 +805,27 @@ internal static class ZLinkRelocationEnvelopeCodec
     private static void ReadCanonicalFrozenRecord(ref CanonicalReader reader)
     {
         var recordKind = reader.ReadByte();
-        if (recordKind is < 1 or > 14)
+        if (
+            recordKind
+            is < (byte)ServiceWireCodec.MeshRecordKind.NodeSend
+                or > (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+        )
             throw new InvalidDataException("The relocation saved work record kind is invalid.");
         var sourceKind = reader.ReadByte();
-        if (sourceKind is < 1 or > 4)
+        if (
+            sourceKind
+            is < (byte)ServiceWireCodec.FrozenSourceKind.Node
+                or > (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+        )
             throw new InvalidDataException("The relocation saved work source kind is invalid.");
-        if (recordKind is 8 or 11 or 12 or 13 && sourceKind != 1)
+        if (
+            recordKind
+                is (byte)ServiceWireCodec.MeshRecordKind.SpotControl
+                    or (byte)ServiceWireCodec.MeshRecordKind.Completion
+                    or (byte)ServiceWireCodec.MeshRecordKind.SendReady
+                    or (byte)ServiceWireCodec.MeshRecordKind.RelocationControl
+            && sourceKind != (byte)ServiceWireCodec.FrozenSourceKind.Node
+        )
             throw new InvalidDataException(
                 "Infrastructure relocation records require a node source."
             );
@@ -823,16 +838,20 @@ internal static class ZLinkRelocationEnvelopeCodec
         _ = source.ReadText8();
         if (source.ReadUInt64() == 0)
             throw new InvalidDataException("The relocation saved work source lease is invalid.");
-        if (sourceKind == 2)
+        if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.Spot)
             _ = source.ReadText8();
-        else if (sourceKind is 3 or 4)
+        else if (
+            sourceKind
+            is (byte)ServiceWireCodec.FrozenSourceKind.Actor
+                or (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+        )
         {
             _ = source.ReadText8();
             if (source.ReadUInt64() == 0)
                 throw new InvalidDataException(
                     "The relocation saved work Actor generation is invalid."
                 );
-            if (sourceKind == 4)
+            if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
             {
                 _ = source.ReadText8();
                 if (source.ReadUInt64() == 0 || source.ReadUInt64() == 0)
@@ -845,7 +864,19 @@ internal static class ZLinkRelocationEnvelopeCodec
             throw new InvalidDataException("The relocation saved work metadata flag is invalid.");
         if (
             hasMetadata == 1
-            && recordKind is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 9 or 10 or 14)
+            && recordKind
+                is not (
+                    (byte)ServiceWireCodec.MeshRecordKind.NodeSend
+                    or (byte)ServiceWireCodec.MeshRecordKind.NodeRequest
+                    or (byte)ServiceWireCodec.MeshRecordKind.ChannelSend
+                    or (byte)ServiceWireCodec.MeshRecordKind.ChannelRequest
+                    or (byte)ServiceWireCodec.MeshRecordKind.SpotSend
+                    or (byte)ServiceWireCodec.MeshRecordKind.SpotRequest
+                    or (byte)ServiceWireCodec.MeshRecordKind.SpotMulticast
+                    or (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+                    or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
+                    or (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+                )
         )
             throw new InvalidDataException(
                 "The relocation saved work metadata is forbidden for this record kind."
@@ -855,7 +886,7 @@ internal static class ZLinkRelocationEnvelopeCodec
         var operationHigh = reader.ReadUInt64();
         var operationLow = reader.ReadUInt64();
         var operationKind = reader.ReadUInt32();
-        if (operationKind > 15)
+        if (operationKind > (uint)ServiceWireCodec.MeshOperationKind.ActorCreate)
             throw new InvalidDataException("The relocation saved work operation kind is invalid.");
         var operationNonzero = operationHigh != 0 || operationLow != 0;
         if (!IsCanonicalFrozenOperation(recordKind, operationKind, operationNonzero))
@@ -863,7 +894,14 @@ internal static class ZLinkRelocationEnvelopeCodec
                 "The relocation saved work operation identity is invalid."
             );
         var replyRoute = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        if (operationKind is 1 or 2 or 3 or 4 or 12)
+        if (
+            operationKind
+            is (uint)ServiceWireCodec.MeshOperationKind.NodeRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.ChannelRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.SpotRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+        )
         {
             if (replyRoute.ReadUInt64() == 0)
                 throw new InvalidDataException("The relocation reply route is invalid.");
@@ -878,10 +916,18 @@ internal static class ZLinkRelocationEnvelopeCodec
     )
     {
         var recordKind = reader.ReadByte();
-        if (recordKind is < 1 or > 14)
+        if (
+            recordKind
+            is < (byte)ServiceWireCodec.MeshRecordKind.NodeSend
+                or > (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation
+        )
             throw new InvalidDataException("The relocation saved work record kind is invalid.");
         var sourceKind = reader.ReadByte();
-        if (sourceKind is < 1 or > 4)
+        if (
+            sourceKind
+            is < (byte)ServiceWireCodec.FrozenSourceKind.Node
+                or > (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+        )
             throw new InvalidDataException("The relocation saved work source kind is invalid.");
         var source = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
         var sourceNodeRid = source.ReadText8();
@@ -889,16 +935,20 @@ internal static class ZLinkRelocationEnvelopeCodec
         var sourceOwnerId = source.ReadText8();
         var sourceOwnerLease = source.ReadUInt64();
         string? sourceSpotId = null;
-        if (sourceKind == 2)
+        if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.Spot)
             sourceSpotId = source.ReadText8();
-        else if (sourceKind is 3 or 4)
+        else if (
+            sourceKind
+            is (byte)ServiceWireCodec.FrozenSourceKind.Actor
+                or (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+        )
         {
             _ = source.ReadText8();
             if (source.ReadUInt64() == 0)
                 throw new InvalidDataException(
                     "The relocation saved work Actor generation is invalid."
                 );
-            if (sourceKind == 4)
+            if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
             {
                 _ = source.ReadText8();
                 if (source.ReadUInt64() == 0 || source.ReadUInt64() == 0)
@@ -929,12 +979,27 @@ internal static class ZLinkRelocationEnvelopeCodec
                     operationLow
                 );
         var operationKind = reader.ReadUInt32();
-        if (operationKind > 15)
+        if (operationKind > (uint)ServiceWireCodec.MeshOperationKind.ActorCreate)
             throw new InvalidDataException("The relocation saved work operation kind is invalid.");
         var replyRoute = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        var replyRouteId = operationKind is 1 or 2 or 3 or 4 or 12 ? replyRoute.ReadUInt64() : 0;
+        var replyRouteId = operationKind
+            is (uint)ServiceWireCodec.MeshOperationKind.NodeRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.ChannelRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.SpotRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
+                or (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+            ? replyRoute.ReadUInt64()
+            : 0;
         replyRoute.RequireEnd("relocation reply route");
-        if (recordKind is not (5 or 6 or 9 or 10))
+        if (
+            recordKind
+            is not (
+                (byte)ServiceWireCodec.MeshRecordKind.SpotSend
+                or (byte)ServiceWireCodec.MeshRecordKind.SpotRequest
+                or (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+                or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
+            )
+        )
         {
             ReadCanonicalFrozenRecordBody(
                 ref reader,
@@ -991,30 +1056,34 @@ internal static class ZLinkRelocationEnvelopeCodec
     {
         switch (recordKind)
         {
-            case 1 or 2:
+            case (byte)ServiceWireCodec.MeshRecordKind.NodeSend
+            or (byte)ServiceWireCodec.MeshRecordKind.NodeRequest:
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
-            case 3 or 4:
+            case (byte)ServiceWireCodec.MeshRecordKind.ChannelSend
+            or (byte)ServiceWireCodec.MeshRecordKind.ChannelRequest:
                 _ = reader.ReadText8();
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
-            case 5 or 6:
+            case (byte)ServiceWireCodec.MeshRecordKind.SpotSend
+            or (byte)ServiceWireCodec.MeshRecordKind.SpotRequest:
                 ReadCanonicalSpotFence(ref reader);
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
-            case 7:
+            case (byte)ServiceWireCodec.MeshRecordKind.SpotMulticast:
                 _ = reader.ReadText8();
                 _ = reader.ReadText8();
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
-            case 8:
+            case (byte)ServiceWireCodec.MeshRecordKind.SpotControl:
                 ReadCanonicalActorControl(ref reader);
                 return;
-            case 9 or 10:
+            case (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+            or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest:
                 ReadCanonicalActorFence(ref reader);
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
-            case 11:
+            case (byte)ServiceWireCodec.MeshRecordKind.Completion:
                 //  Schema terminal-failure-integrity: the frozen completion's
                 //  terminal/failure pair must match the schema table, and a
                 //  failure terminal carries no application payload.
@@ -1040,21 +1109,32 @@ internal static class ZLinkRelocationEnvelopeCodec
                     ReadCanonicalApplicationPayload(ref reader);
                 }
                 return;
-            case 12:
+            case (byte)ServiceWireCodec.MeshRecordKind.SendReady:
                 ReadCanonicalSendReadyDestination(ref reader);
                 return;
-            case 13:
+            case (byte)ServiceWireCodec.MeshRecordKind.RelocationControl:
                 ReadCanonicalRelocationControl(ref reader);
                 return;
-            case 14:
+            case (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation:
                 ReadCanonicalInstanceRoute(ref reader);
                 var sourceGeneration = reader.ReadUInt64();
                 var instanceOperation = reader.ReadByte();
                 if (
                     sourceGeneration == 0
-                    || instanceOperation is < 1 or > 2
-                    || instanceOperation == 1 && (operationKind != 0 || operationNonzero)
-                    || instanceOperation == 2 && (operationKind != 12 || !operationNonzero)
+                    || instanceOperation
+                        is < (byte)ServiceWireCodec.InstanceOperationKind.Send
+                            or > (byte)ServiceWireCodec.InstanceOperationKind.Request
+                    || instanceOperation == (byte)ServiceWireCodec.InstanceOperationKind.Send
+                        && (
+                            operationKind != (uint)ServiceWireCodec.MeshOperationKind.None
+                            || operationNonzero
+                        )
+                    || instanceOperation == (byte)ServiceWireCodec.InstanceOperationKind.Request
+                        && (
+                            operationKind
+                                != (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+                            || !operationNonzero
+                        )
                 )
                     throw new InvalidDataException("The Instance activation record is invalid.");
                 ReadCanonicalApplicationPayload(ref reader);
@@ -1071,17 +1151,49 @@ internal static class ZLinkRelocationEnvelopeCodec
     ) =>
         recordKind switch
         {
-            1 or 3 or 7 or 12 or 13 => operationKind == 0 && !operationNonzero,
-            2 => operationKind == 1 && operationNonzero,
-            4 => operationKind == 2 && operationNonzero,
-            5 or 9 => operationKind == 0 && operationNonzero,
-            6 => operationKind == 3 && operationNonzero,
-            8 => operationKind == 0
+            (byte)ServiceWireCodec.MeshRecordKind.NodeSend
+            or (byte)ServiceWireCodec.MeshRecordKind.ChannelSend
+            or (byte)ServiceWireCodec.MeshRecordKind.SpotMulticast
+            or (byte)ServiceWireCodec.MeshRecordKind.SendReady
+            or (byte)ServiceWireCodec.MeshRecordKind.RelocationControl => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.None
+                && !operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.NodeRequest => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.NodeRequest
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.ChannelRequest => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.ChannelRequest
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.SpotSend
+            or (byte)ServiceWireCodec.MeshRecordKind.ActorSend => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.None
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.SpotRequest => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.SpotRequest
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.SpotControl => operationKind
+            == (uint)ServiceWireCodec.MeshOperationKind.None
                 ? !operationNonzero
-                : operationKind is 6 or 7 or 8 && operationNonzero,
-            10 => operationKind == 4 && operationNonzero,
-            11 => operationKind is >= 1 and <= 15 && operationNonzero,
-            14 => operationKind is 0 or 12 && operationNonzero == (operationKind == 12),
+                : operationKind
+                    is (uint)ServiceWireCodec.MeshOperationKind.ActorDestroy
+                        or (uint)ServiceWireCodec.MeshOperationKind.ActorJoin
+                        or (uint)ServiceWireCodec.MeshOperationKind.ActorLeave
+                    && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.ActorRequest => operationKind
+                == (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.Completion => operationKind
+                is >= (uint)ServiceWireCodec.MeshOperationKind.NodeRequest
+                    and <= (uint)ServiceWireCodec.MeshOperationKind.ActorCreate
+                && operationNonzero,
+            (byte)ServiceWireCodec.MeshRecordKind.InstanceSpotActivation => operationKind
+                is (uint)ServiceWireCodec.MeshOperationKind.None
+                    or (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+                && operationNonzero
+                    == (
+                        operationKind
+                        == (uint)ServiceWireCodec.MeshOperationKind.InstanceSpotRequest
+                    ),
             _ => false,
         };
 
@@ -1175,7 +1287,12 @@ internal static class ZLinkRelocationEnvelopeCodec
 
     private static void ReadCanonicalRelocationControl(ref CanonicalReader reader)
     {
-        if (reader.ReadByte() > 9 || reader.ReadByte() is < 1 or > 3)
+        if (
+            reader.ReadByte() > (byte)ServiceWireCodec.RelocationPhase.Aborted
+            || reader.ReadByte()
+                is < (byte)ServiceWireCodec.RelocationRole.Source
+                    or > (byte)ServiceWireCodec.RelocationRole.Coordinator
+        )
             throw new InvalidDataException("The relocation control discriminator is invalid.");
         var relocationId = reader.ReadBytes(16);
         if (relocationId.Span.IndexOfAnyExcept((byte)0) < 0)
@@ -1320,7 +1437,10 @@ internal static class ZLinkRelocationEnvelopeCodec
     }
 
     private static bool IsCanonicalTerminalResult(uint value) =>
-        value == 0 || value is >= 101 and <= 113;
+        value == (uint)ServiceWireCodec.RequestTerminalResult.Ok
+        || value
+            is >= (uint)ServiceWireCodec.RequestTerminalResult.TimedOut
+                and <= (uint)ServiceWireCodec.RequestTerminalResult.Backpressured;
 
     private sealed class CanonicalTimerProjection(
         string timerId,

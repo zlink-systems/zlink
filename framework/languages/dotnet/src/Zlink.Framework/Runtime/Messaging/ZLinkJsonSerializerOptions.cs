@@ -4,6 +4,15 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
+internal static class ZLinkObjectReferenceJsonFields
+{
+    internal const string ActorId = "actorId";
+    internal const string SpotId = "spotId";
+    internal const string ObjectGeneration = "objectGeneration";
+    internal const string MeshName = "meshName";
+    internal const string NodeRid = "nodeRid";
+}
+
 internal static class ZLinkJsonSerializerOptions
 {
     // Runtime control and Store DTOs keep their own wire contracts. Application

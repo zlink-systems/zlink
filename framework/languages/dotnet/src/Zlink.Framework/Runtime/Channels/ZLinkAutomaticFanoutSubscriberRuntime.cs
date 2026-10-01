@@ -14,6 +14,7 @@ internal sealed record ZLinkFanoutConnectionPlan(
 /// </summary>
 internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
 {
+    private static readonly TimeSpan InboundLivenessPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkBackendRuntimeContext _context;
@@ -33,7 +34,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
     > _connections = [];
     private IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> _excluded =
         Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
-    private ZLinkLocationRuntimeSnapshot _location = new("unknown", null, null);
+    private ZLinkLocationRuntimeSnapshot _location = new(
+        ZLinkLocationRuntimeSnapshot.UnknownState,
+        null,
+        null
+    );
     private int _disposed;
     private long _socketCreationCount;
 
@@ -153,7 +158,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                _location = new ZLinkLocationRuntimeSnapshot("degraded", lastSuccessAt, failureAt);
+                _location = new ZLinkLocationRuntimeSnapshot(
+                    ZLinkLocationRuntimeSnapshot.DegradedState,
+                    lastSuccessAt,
+                    failureAt
+                );
                 PublishSnapshotNoLock();
             })
         );
@@ -383,7 +392,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         {
             while (!attempt.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(250), owner._time, attempt.Token)
+                await Task.Delay(InboundLivenessPollInterval, owner._time, attempt.Token)
                     .ConfigureAwait(false);
                 var lastActivity = await _lane.RunAsync(() => _lastActivity).ConfigureAwait(false);
                 if (

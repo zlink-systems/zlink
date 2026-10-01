@@ -1,5 +1,6 @@
 using System.Text;
 using Zlink.Framework.Contracts.Streams;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -241,7 +242,7 @@ internal static class ZLinkSpotAcceptedJournal
             || ownerLeaseGeneration == 0
             || replyRouteId != 0
                 && (requestSequence != replyRouteId || operationId.Low != replyRouteId)
-            || messageFollowHopCount > 8
+            || messageFollowHopCount > ZLinkServiceWireCodec.MessageFollowMaximumHopCount
         )
             throw new InvalidDataException("The accepted Spot journal authority fence is invalid.");
         var metadataFrame = ReadBytes(reader);

@@ -16,6 +16,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     Func<CancellationToken, ValueTask>? awaitTargetReady = null
 ) : ICanonicalRelocationTarget
 {
+    private static readonly TimeSpan DefaultPrepareDeadline = TimeSpan.FromSeconds(30);
     private readonly Func<CancellationToken, ValueTask> _awaitTargetReady =
         awaitTargetReady ?? (static _ => ValueTask.CompletedTask);
 
@@ -192,7 +193,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(
-            prepareDeadline > TimeSpan.Zero ? prepareDeadline : TimeSpan.FromSeconds(30)
+            prepareDeadline > TimeSpan.Zero ? prepareDeadline : DefaultPrepareDeadline
         );
         try
         {

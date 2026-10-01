@@ -15,6 +15,15 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal static class ResponseCompression
 {
+    internal const string GzipEncoding = "gzip";
+    internal const string DeflateEncoding = "deflate";
+    internal const string AcceptedEncodings = GzipEncoding + ", " + DeflateEncoding;
+    private const int ZlibHeaderSize = sizeof(ushort);
+    private const byte CompressionMethodMask = 0x0f;
+    private const byte DeflateCompressionMethod = 8;
+    private const int ZlibHeaderCheckDivisor = 31;
+    private const int BitsPerByte = 8;
+
     public static byte[] Gunzip(byte[] input, long maxBytes)
     {
         return Decode(
@@ -38,9 +47,9 @@ internal static class ResponseCompression
     // method is deflate (low nibble 8) and the 16-bit header is a multiple of 31.
     private static bool IsZlibWrapped(byte[] input)
     {
-        return input.Length >= 2
-            && (input[0] & 0x0f) == 8
-            && (((input[0] << 8) | input[1]) % 31) == 0;
+        return input.Length >= ZlibHeaderSize
+            && (input[0] & CompressionMethodMask) == DeflateCompressionMethod
+            && (((input[0] << BitsPerByte) | input[1]) % ZlibHeaderCheckDivisor) == 0;
     }
 
     private static byte[] Decode(Func<Stream> open, long maxBytes)
@@ -49,7 +58,7 @@ internal static class ResponseCompression
         {
             using var decompressor = open();
             using var output = new MemoryStream();
-            var buffer = new byte[16384];
+            var buffer = new byte[ResponseBodyReader.ReadBufferSize];
             int read;
             while ((read = decompressor.Read(buffer, 0, buffer.Length)) > 0)
             {

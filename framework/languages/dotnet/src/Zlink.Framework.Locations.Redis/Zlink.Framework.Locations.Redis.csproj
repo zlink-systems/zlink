@@ -18,6 +18,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="../Shared/ZLinkLocationStoreLimits.cs" Link="Internal/ZLinkLocationStoreLimits.cs"/>
         <Compile Include="../Shared/ZLinkStoreRetention.cs"
                  Link="Internal/ZLinkStoreRetention.cs"/>
     </ItemGroup>

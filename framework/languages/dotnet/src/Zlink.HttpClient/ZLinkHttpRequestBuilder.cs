@@ -88,7 +88,7 @@ public class ZLinkHttpRequestBuilder
     {
         var encoded = ResolveCodecs().Encode(value, typeof(T));
         _body = encoded.Body;
-        _headers["content-type"] = encoded.ContentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = encoded.ContentType;
         return this;
     }
 
@@ -103,7 +103,7 @@ public class ZLinkHttpRequestBuilder
 
         HttpClientText.RequireNonBlank(contentType, "HTTP request body content type is required");
         _body = Encoding.UTF8.GetBytes(content);
-        _headers["content-type"] = contentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = contentType;
         return this;
     }
 
@@ -116,7 +116,7 @@ public class ZLinkHttpRequestBuilder
         ArgumentNullException.ThrowIfNull(provider);
         HttpClientText.RequireNonBlank(contentType, "HTTP request body content type is required");
         _bodyProvider = provider;
-        _headers["content-type"] = contentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = contentType;
         return this;
     }
 
@@ -244,7 +244,7 @@ public class ZLinkHttpRequestBuilder
     {
         var codecs = ResolveCodecs();
         var raw = await AsyncRaw(cancellationToken).ConfigureAwait(false);
-        if (raw.Status >= 400)
+        if (raw.Status >= (int)System.Net.HttpStatusCode.BadRequest)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 $"HTTP request failed with status {raw.Status}"
@@ -259,7 +259,10 @@ public class ZLinkHttpRequestBuilder
             }
             else
             {
-                var contentType = HttpHeaderLookup.Find(raw.Headers, "content-type");
+                var contentType = HttpHeaderLookup.Find(
+                    raw.Headers,
+                    HttpHeaderLookup.ContentTypeKey
+                );
                 body =
                     (T?)codecs.Decode(raw.BodyBytes, typeof(T), contentType)
                     ?? throw new InvalidOperationException("HTTP response body decoded to null");
@@ -390,14 +393,14 @@ public class ZLinkHttpRequestBuilder
 
         if (_form.Count > 0)
         {
-            headers["content-type"] = "application/x-www-form-urlencoded";
+            headers[HttpHeaderLookup.ContentTypeKey] = "application/x-www-form-urlencoded";
             return (Encoding.UTF8.GetBytes(EncodeFormBody()), headers);
         }
 
         if (_multipart.Count > 0)
         {
             var boundary = HttpClientText.MakeMultipartBoundary();
-            headers["content-type"] = "multipart/form-data; boundary=" + boundary;
+            headers[HttpHeaderLookup.ContentTypeKey] = "multipart/form-data; boundary=" + boundary;
             return (Encoding.UTF8.GetBytes(EncodeMultipartBody(boundary)), headers);
         }
 
@@ -429,24 +432,37 @@ public class ZLinkHttpRequestBuilder
         return encoded.ToString();
     }
 
+    private const string MultipartDelimiterPrefix = "--";
+    private const string MimeLineEnd = "\r\n";
+    private const string FormDataDispositionPrefix = "Content-Disposition: form-data; name=\"";
+    private const string FilenameParameterPrefix = "; filename=\"";
+
     private string EncodeMultipartBody(string boundary)
     {
         var encoded = new StringBuilder();
         foreach (var part in _multipart)
         {
-            encoded.Append("--").Append(boundary).Append("\r\n");
-            encoded.Append("Content-Disposition: form-data; name=\"").Append(part.Name).Append('"');
+            encoded.Append(MultipartDelimiterPrefix).Append(boundary).Append(MimeLineEnd);
+            encoded.Append(FormDataDispositionPrefix).Append(part.Name).Append('"');
             if (part.Filename.Length > 0)
-                encoded.Append("; filename=\"").Append(part.Filename).Append('"');
+                encoded.Append(FilenameParameterPrefix).Append(part.Filename).Append('"');
 
-            encoded.Append("\r\n");
+            encoded.Append(MimeLineEnd);
             if (part.ContentType.Length > 0)
-                encoded.Append("Content-Type: ").Append(part.ContentType).Append("\r\n");
+                encoded
+                    .Append(HttpHeaderLookup.ContentType)
+                    .Append(": ")
+                    .Append(part.ContentType)
+                    .Append(MimeLineEnd);
 
-            encoded.Append("\r\n").Append(part.Content).Append("\r\n");
+            encoded.Append(MimeLineEnd).Append(part.Content).Append(MimeLineEnd);
         }
 
-        encoded.Append("--").Append(boundary).Append("--\r\n");
+        encoded
+            .Append(MultipartDelimiterPrefix)
+            .Append(boundary)
+            .Append(MultipartDelimiterPrefix)
+            .Append(MimeLineEnd);
         return encoded.ToString();
     }
 
@@ -543,7 +559,7 @@ public sealed class ZLinkHttpServerRequestBuilder : ZLinkHttpRequestBuilder
     /// </summary>
     public ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)
     {
-        var turn = RequireExecutionTurn("Yield");
+        var turn = RequireExecutionTurn(nameof(Yield));
         return turn.YieldAsync(Async<T>, cancellationToken);
     }
 }

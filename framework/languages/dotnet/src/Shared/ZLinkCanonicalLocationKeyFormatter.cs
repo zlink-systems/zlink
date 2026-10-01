@@ -123,7 +123,7 @@ internal static class ZLinkCanonicalLocationKeyFormatter
             );
         }
 
-        if (size is < 1 or > 255 || value.Contains('\0'))
+        if (size is < 1 or > byte.MaxValue || value.Contains('\0'))
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,

@@ -36,6 +36,10 @@ internal sealed record ZLinkFanoutChannelSnapshot(
 
 internal abstract record ZLinkFanoutRuntimeEvent
 {
+    private const string PublisherChangedIdentifier = "zlink.runtime.fanout.publisher_changed";
+    private const string LocationChangedIdentifier = "zlink.runtime.location.store_changed";
+    private const string RuntimeChangedIdentifier = "zlink.runtime.framework.state_changed";
+
     private protected ZLinkFanoutRuntimeEvent(
         string identifier,
         ulong sequence,
@@ -61,13 +65,7 @@ internal abstract record ZLinkFanoutRuntimeEvent
         DateTimeOffset Timestamp,
         string ChannelName,
         ZLinkFanoutPublisherConnectionSnapshot Entry
-    )
-        : ZLinkFanoutRuntimeEvent(
-            "zlink.runtime.fanout.publisher_changed",
-            Sequence,
-            Timestamp,
-            ChannelName
-        )
+    ) : ZLinkFanoutRuntimeEvent(PublisherChangedIdentifier, Sequence, Timestamp, ChannelName)
     {
         internal override string SourceKey =>
             $"{Identifier}:{Entry.PublisherRid.ToHex()}:" + Entry.LifecycleGeneration;
@@ -82,23 +80,11 @@ internal abstract record ZLinkFanoutRuntimeEvent
         DateTimeOffset Timestamp,
         string ChannelName,
         ZLinkLocationRuntimeSnapshot Location
-    )
-        : ZLinkFanoutRuntimeEvent(
-            "zlink.runtime.location.store_changed",
-            Sequence,
-            Timestamp,
-            ChannelName
-        );
+    ) : ZLinkFanoutRuntimeEvent(LocationChangedIdentifier, Sequence, Timestamp, ChannelName);
 
     internal sealed record RuntimeChanged(
         ulong Sequence,
         DateTimeOffset Timestamp,
         string ChannelName
-    )
-        : ZLinkFanoutRuntimeEvent(
-            "zlink.runtime.framework.state_changed",
-            Sequence,
-            Timestamp,
-            ChannelName
-        );
+    ) : ZLinkFanoutRuntimeEvent(RuntimeChangedIdentifier, Sequence, Timestamp, ChannelName);
 }

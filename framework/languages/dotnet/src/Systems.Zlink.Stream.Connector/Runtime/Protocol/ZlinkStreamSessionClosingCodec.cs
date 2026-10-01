@@ -6,6 +6,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Protocol;
 internal static class ZlinkStreamSessionClosingCodec
 {
     public const string ControlName = "session-closing";
+    private const int PrefixSize = sizeof(byte) + sizeof(byte) + sizeof(ushort);
+    private const int DiagnosticLengthOffset = sizeof(byte) + sizeof(byte);
+    private const byte WireReasonOffset = 1;
     private const byte Version = 1;
     private const int MaximumDiagnosticBytes = 512;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -34,25 +37,33 @@ internal static class ZlinkStreamSessionClosingCodec
 
     public static ZlinkStreamSessionClosing Decode(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length < 4)
+        if (payload.Length < PrefixSize)
             throw Error("Session-closing payload is truncated.");
         if (payload[0] != Version)
             throw Error("Session-closing version is not supported.");
 
         var reason = payload[1] switch
         {
-            1 => ZlinkStreamCloseReason.ClientClose,
-            2 => ZlinkStreamCloseReason.IdleTimeout,
-            3 => ZlinkStreamCloseReason.HeartbeatTimeout,
-            4 => ZlinkStreamCloseReason.ServerDrain,
-            5 => ZlinkStreamCloseReason.ProtocolError,
-            6 => ZlinkStreamCloseReason.TransportError,
+            (byte)ZlinkStreamCloseReason.ClientClose + WireReasonOffset =>
+                ZlinkStreamCloseReason.ClientClose,
+            (byte)ZlinkStreamCloseReason.IdleTimeout + WireReasonOffset =>
+                ZlinkStreamCloseReason.IdleTimeout,
+            (byte)ZlinkStreamCloseReason.HeartbeatTimeout + WireReasonOffset =>
+                ZlinkStreamCloseReason.HeartbeatTimeout,
+            (byte)ZlinkStreamCloseReason.ServerDrain + WireReasonOffset =>
+                ZlinkStreamCloseReason.ServerDrain,
+            (byte)ZlinkStreamCloseReason.ProtocolError + WireReasonOffset =>
+                ZlinkStreamCloseReason.ProtocolError,
+            (byte)ZlinkStreamCloseReason.TransportError + WireReasonOffset =>
+                ZlinkStreamCloseReason.TransportError,
             _ => throw Error("Session-closing reason is not supported."),
         };
-        var diagnosticLength = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(2, 2));
+        var diagnosticLength = BinaryPrimitives.ReadUInt16BigEndian(
+            payload.Slice(DiagnosticLengthOffset, sizeof(ushort))
+        );
         if (diagnosticLength > MaximumDiagnosticBytes)
             throw Error("Session-closing diagnostic is too large.");
-        if (payload.Length != 4 + diagnosticLength)
+        if (payload.Length != PrefixSize + diagnosticLength)
             throw Error("Session-closing diagnostic length does not match the payload.");
 
         try
@@ -60,7 +71,7 @@ internal static class ZlinkStreamSessionClosingCodec
             var diagnostic =
                 diagnosticLength == 0
                     ? null
-                    : StrictUtf8.GetString(payload.Slice(4, diagnosticLength));
+                    : StrictUtf8.GetString(payload.Slice(PrefixSize, diagnosticLength));
             return new ZlinkStreamSessionClosing(reason, diagnostic);
         }
         catch (DecoderFallbackException exception)
@@ -90,15 +101,15 @@ internal static class ZlinkStreamSessionClosingCodec
                 "Session-closing diagnostic must not exceed 512 UTF-8 bytes."
             );
 
-        var payload = new byte[4 + diagnosticLength];
+        var payload = new byte[PrefixSize + diagnosticLength];
         payload[0] = Version;
-        payload[1] = checked((byte)((byte)reason + 1));
+        payload[1] = checked((byte)((byte)reason + WireReasonOffset));
         BinaryPrimitives.WriteUInt16BigEndian(
-            payload.AsSpan(2, 2),
+            payload.AsSpan(DiagnosticLengthOffset, sizeof(ushort)),
             checked((ushort)diagnosticLength)
         );
         if (diagnosticLength > 0)
-            StrictUtf8.GetBytes(diagnostic!, payload.AsSpan(4));
+            StrictUtf8.GetBytes(diagnostic!, payload.AsSpan(PrefixSize));
         return payload;
     }
 
