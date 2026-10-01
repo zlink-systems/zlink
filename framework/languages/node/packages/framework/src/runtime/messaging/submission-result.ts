@@ -25,8 +25,12 @@ export function classifySubmitResult(result: number, operation: string): ZLinkSu
     case SubmitResult.Ok:
       return { status: ZLinkSubmitStatus.Submitted };
     case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
       return { status: ZLinkSubmitStatus.Backpressured };
+    case SubmitResult.NotAdmitted:
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        `${operation} was not admitted.`
+      );
     case SubmitResult.NotFound:
       return { status: ZLinkSubmitStatus.TargetNotFound };
     case SubmitResult.NotConnected:

@@ -978,6 +978,22 @@ test('location runtime emits row events and resolvers emit resolve misses', asyn
   assert.equal(events[2][1].actorId, 'missing');
 });
 
+test('location runtime uses the contract default page size when no override is supplied', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const pages = [];
+  for (const methodName of ['listSpots', 'listActors', 'listRoutes']) {
+    store[methodName] = async (_filter, page) => {
+      pages.push(page.pageSize);
+      return { items: [] };
+    };
+  }
+  const runtime = runtimeFor(store);
+  await runtime.listSpotLocations({});
+  await runtime.listActorLocations({});
+  await runtime.listRouteLocations({});
+  assert.deepEqual(pages, [100, 100, 100]);
+});
+
 test('location runtime applies listPageSize when callers omit a page size', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const pages = [];
@@ -992,13 +1008,15 @@ test('location runtime applies listPageSize when callers omit a page size', asyn
 
   await runtime.listSpotLocations({});
   await runtime.listActorLocations({}, { continuationToken: 'next' });
-  await runtime.listRouteLocations({}, { pageSize: 5 });
+  const explicitPage = { pageSize: 5 };
+  await runtime.listRouteLocations({}, explicitPage);
 
   assert.deepEqual(pages, [
     { methodName: 'listSpots', page: { pageSize: 37 } },
     { methodName: 'listActors', page: { continuationToken: 'next', pageSize: 37 } },
     { methodName: 'listRoutes', page: { pageSize: 5 } }
   ]);
+  assert.equal(pages[2].page, explicitPage);
 });
 
 test('location resolver filters exact actor capacity before weighted placement', async () => {

@@ -1,8 +1,11 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -23,24 +26,41 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkProviderRelocationRepositoryTest {
     @Test
-    void lostPutResponseIsReconciledByExactReferenceAndBytes() throws Exception {
+    void uncertainReadbackObservesTheOriginalOperationCancellation() {
         var provider = new LostResponseProvider();
         var repository = new ZLinkProviderRelocationRepository(provider);
         var cancellationChecks = new AtomicInteger();
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                repository
+                                        .put(
+                                                new byte[] {1, 2, 3},
+                                                Duration.ofMinutes(5),
+                                                () -> cancellationChecks.getAndIncrement() > 0)
+                                        .toCompletableFuture()
+                                        .join());
+        assertTrue(provider.readCancellationRequested);
+        assertEquals("operation expired", failure.getCause().getMessage());
+    }
 
+    @Test
+    void lostPutResponseIsReconciledByExactReferenceAndBytes() throws Exception {
+        var provider = new LostResponseProvider();
+        var repository = new ZLinkProviderRelocationRepository(provider);
         var first =
                 repository
-                        .put(
-                                new byte[] {1, 2, 3},
-                                Duration.ofMinutes(5),
-                                () -> cancellationChecks.getAndIncrement() > 0)
+                        .put(new byte[] {1, 2, 3}, Duration.ofMinutes(5), () -> false)
                         .toCompletableFuture()
                         .get();
         var second =
@@ -59,6 +79,7 @@ final class ZLinkProviderRelocationRepositoryTest {
     private static final class LostResponseProvider implements ZLinkRelocationStore {
         private final Map<String, byte[]> values = new ConcurrentHashMap<>();
         private boolean loseNext = true;
+        private boolean readCancellationRequested;
 
         @Override
         public CompletionStage<ZLinkBlobPutResult> put(
@@ -85,7 +106,11 @@ final class ZLinkProviderRelocationRepositoryTest {
         @Override
         public CompletionStage<ZLinkBlobReadResult> read(
                 ZLinkBlobReference reference, ZLinkStoreCancellation cancellation) {
-            assertFalse(cancellation.isCancellationRequested());
+            readCancellationRequested = cancellation.isCancellationRequested();
+            if (readCancellationRequested) {
+                return CompletableFuture.failedFuture(
+                        new CancellationException("operation expired"));
+            }
             Instant now = Instant.now();
             byte[] payload = values.get(reference.value());
             return CompletableFuture.completedFuture(

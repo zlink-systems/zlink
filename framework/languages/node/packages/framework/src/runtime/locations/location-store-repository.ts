@@ -1,5 +1,6 @@
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkClientServerServerDescriptorKey,
@@ -97,7 +98,6 @@ import {
   routingIdHexSegment
 } from './opaque-record-key';
 const LOCATION_STORE_WRITE_CONCURRENCY = 64;
-const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
 const MAX_REPOSITORY_RETRY_DELAY_MS = 100;
 const INITIAL_REPOSITORY_RETRY_DELAY_MS = 2;
 const MAX_REPOSITORY_RETRY_SHIFT = 5;
@@ -1755,7 +1755,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2475,7 +2475,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2618,7 +2618,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     matches: (value: T) => boolean,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
-    const requested = page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE;
+    const requested = page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize;
     let cursor =
       page.continuationToken === undefined
         ? undefined

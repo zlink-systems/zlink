@@ -1186,7 +1186,7 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void instanceSpotSendMapsLostReadyOwnerRouteWithoutColdActivation() {
+    void instanceSpotSendRejectsBindingAdmissionWithoutColdActivation() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -1255,7 +1255,7 @@ final class ZLinkChannelRuntimeTest {
                                             .join());
 
             assertEquals(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    ZLinkFrameworkErrorKind.REJECTED,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, activationAttempts.get());

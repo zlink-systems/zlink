@@ -1429,8 +1429,11 @@ class public_memory_authority_store_t final
 class public_memory_relocation_repository_t final : public zlink::framework::relocation_repository_t
 {
   public:
-    zlink::framework::task_t<zlink::framework::relocation_stored_t> put_relocation (
-      std::vector<std::byte> payload, std::chrono::hours retention, std::stop_token) override
+    zlink::framework::task_t<zlink::framework::relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point,
+                    std::stop_token) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1489,7 +1492,8 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 {
   public:
     relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                             std::chrono::hours retention) override
+                             std::chrono::hours retention,
+                             std::chrono::steady_clock::time_point) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -2660,7 +2664,8 @@ void test_public_relocation_store_adapter (test_context_t &test)
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
     public_relocation_store_adapter_t adapter (public_store);
     const std::vector<std::uint8_t> payload{0, 1, 127, 255};
-    const auto stored = adapter.put (payload, std::chrono::hours (24));
+    const auto stored = adapter.put (payload, std::chrono::hours (24),
+                                     std::chrono::steady_clock::now () + std::chrono::minutes (1));
     test.require (stored.reference == "public-root"
                     && stored.checksum_crc32c == maintenance_runtime_t::crc32c (payload),
                   "public relocation adapter must preserve reference and CRC32C");

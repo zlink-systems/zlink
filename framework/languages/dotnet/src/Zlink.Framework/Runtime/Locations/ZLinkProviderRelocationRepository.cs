@@ -5,8 +5,6 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore provider)
     : IZLinkRelocationRepository
 {
-    private static readonly TimeSpan AmbiguousReconciliationTimeout = TimeSpan.FromSeconds(5);
-
     public async ValueTask<ZLinkRelocationStored> PutRelocationAsync(
         ReadOnlyMemory<byte> payload,
         TimeSpan retention,
@@ -84,23 +82,11 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
                         and not AccessViolationException
             )
         {
-            ZLinkBlobReadResult read;
-            try
-            {
-                using var reconciliationDeadline = new CancellationTokenSource(
-                    AmbiguousReconciliationTimeout
-                );
-                read = await provider
-                    .ReadAsync(reference, reconciliationDeadline.Token)
-                    .AsTask()
-                    .WaitAsync(reconciliationDeadline.Token)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                ExceptionDispatchInfo.Capture(failure).Throw();
-                throw;
-            }
+            var read = await provider
+                .ReadAsync(reference, cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
 
             if (
                 read is ZLinkBlobReadResult.Found found

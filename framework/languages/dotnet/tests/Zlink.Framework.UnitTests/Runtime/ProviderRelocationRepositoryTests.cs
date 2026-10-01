@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Locations;
 
@@ -40,22 +39,28 @@ public sealed class ProviderRelocationRepositoryTests
     }
 
     [Fact]
-    public async Task LostPutResponse_WithHangingProviderRead_IsBounded()
+    public async Task LostPutResponse_ReadbackUsesOperationCancellation()
     {
+        using var cancellation = new CancellationTokenSource();
         var provider = new AmbiguousRelocationStore(commitBeforeFailure: true, hangRead: true);
         var repository = new ZLinkProviderRelocationRepository(provider);
-        var started = Stopwatch.GetTimestamp();
+        var operation = repository
+            .PutRelocationAsync(new byte[] { 7, 8 }, TimeSpan.FromMinutes(5), cancellation.Token)
+            .AsTask();
 
-        var failure = await Assert.ThrowsAsync<IOException>(() =>
-            repository.PutRelocationAsync(new byte[] { 7, 8 }, TimeSpan.FromMinutes(5)).AsTask()
-        );
-
-        Assert.Equal("put response lost", failure.Message);
-        Assert.InRange(
-            Stopwatch.GetElapsedTime(started),
-            TimeSpan.FromSeconds(4.5),
-            TimeSpan.FromSeconds(7)
-        );
+        await provider.ReadEntered.Task;
+        try
+        {
+            Assert.Equal(cancellation.Token, provider.ReadCancellation);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        }
+        finally
+        {
+            provider.ReadRelease.TrySetResult();
+            if (!operation.IsCompleted)
+                await operation;
+        }
     }
 
     [Fact]
@@ -96,6 +101,11 @@ public sealed class ProviderRelocationRepositoryTests
         private readonly List<string> _readReferences = [];
         private bool _failNextPut = failNextPut;
 
+        internal TaskCompletionSource ReadEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReadRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal CancellationToken ReadCancellation { get; private set; }
         internal int PutCalls { get; private set; }
         internal int StoredCount => _stored.Count;
         internal IReadOnlyList<string> PutReferences => _putReferences;
@@ -147,7 +157,11 @@ public sealed class ProviderRelocationRepositoryTests
             cancellationToken.ThrowIfCancellationRequested();
             _readReferences.Add(reference.Value);
             if (hangRead)
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            {
+                ReadCancellation = cancellationToken;
+                ReadEntered.TrySetResult();
+                await ReadRelease.Task.WaitAsync(cancellationToken);
+            }
             return _stored.TryGetValue(reference.Value, out var stored)
                 ? new ZLinkBlobReadResult.Found(stored.Bytes, stored.ExpiresAt, stored.StoreNow)
                 : new ZLinkBlobReadResult.Missing(DateTimeOffset.UtcNow);

@@ -705,6 +705,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> seal_session_remote (const zlink::routing_id_t &session_owner_node,
                                       protocol::session_relocation_seal_t seal,
                                       std::chrono::milliseconds timeout,
+                                      std::chrono::steady_clock::time_point operation_deadline,
                                       session_relocation_journal_capture_t capture_journal,
                                       session_relocation_seal_completion_t completion);
     task_t<bool> activate_instance_spot_remote (const zlink::routing_id_t &target_node,

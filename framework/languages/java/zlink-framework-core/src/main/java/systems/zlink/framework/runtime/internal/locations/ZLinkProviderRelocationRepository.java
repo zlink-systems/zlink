@@ -15,7 +15,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32C;
 
 /** Keeps relocation identity and retry policy inside the Framework. */
@@ -40,7 +39,12 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
                         (result, failure) ->
                                 failure == null
                                         ? completed(reference, checksum, result)
-                                        : reconcile(reference, bytes, checksum, unwrap(failure)))
+                                        : reconcile(
+                                                reference,
+                                                bytes,
+                                                checksum,
+                                                unwrap(failure),
+                                                cancellation))
                 .thenCompose(stage -> stage);
     }
 
@@ -48,16 +52,15 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
             ZLinkBlobReference reference,
             byte[] expected,
             long checksum,
-            Throwable originalFailure) {
-        // A committed write can lose its response. Reconciliation therefore
-        // ignores the caller cancellation that ended the original operation.
-        return provider.read(reference, () -> false)
-                .toCompletableFuture()
-                .orTimeout(5, TimeUnit.SECONDS)
+            Throwable originalFailure,
+            ZLinkStoreCancellation cancellation) {
+        return provider.read(reference, cancellation::isCancellationRequested)
                 .handle(
                         (result, failure) -> {
-                            if (failure == null
-                                    && result instanceof ZLinkBlobFound found
+                            if (failure != null) {
+                                throw new CompletionException(unwrap(failure));
+                            }
+                            if (result instanceof ZLinkBlobFound found
                                     && Arrays.equals(expected, found.bytes())) {
                                 return stored(
                                         reference, checksum, found.expiresAt(), found.storeNow());

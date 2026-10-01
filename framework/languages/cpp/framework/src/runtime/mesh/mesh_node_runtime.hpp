@@ -569,7 +569,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
-      std::chrono::milliseconds timeout);
+      std::chrono::milliseconds timeout,
+      std::chrono::steady_clock::time_point operation_deadline);
     task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
     capture_session_routes (
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
@@ -577,7 +578,8 @@ class mesh_node_runtime_t
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       mesh_node_descriptor_t target,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
-      std::shared_ptr<bool> attempted);
+      std::shared_ptr<bool> attempted,
+      std::chrono::steady_clock::time_point operation_deadline);
     runtime::protocol::session_relocation_route_t make_session_relocation_route (
       const session_relocation_checkpoint_t &checkpoint,
       const zlink::routing_id_t &target_node,

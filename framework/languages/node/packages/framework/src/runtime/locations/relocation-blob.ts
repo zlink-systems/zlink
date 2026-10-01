@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ZLinkBlobReference,
+  ZLinkBlobPutResult,
   ZLinkRelocationStore
 } from '../../contracts/Locations/RelocationStore';
 
@@ -23,7 +24,17 @@ export async function putNewRelocationBlob(
   for (let attempt = 0; attempt < MAX_REFERENCE_GENERATION_ATTEMPTS; attempt += 1) {
     signal?.throwIfAborted();
     const reference = relocationBlobReference(randomUUID());
-    const result = await store.put(reference, payload, retentionMs, signal);
+    let result: ZLinkBlobPutResult;
+    try {
+      result = await store.put(reference, payload, retentionMs, signal);
+    } catch (failure) {
+      signal?.throwIfAborted();
+      const read = await store.read(reference, signal);
+      if (read.kind === 'found' && Buffer.compare(read.bytes, payload) === 0) {
+        return { reference, expiresAt: read.expiresAt, storeNow: read.storeNow };
+      }
+      throw failure;
+    }
     if (result.kind !== 'conflict') {
       return {
         reference,

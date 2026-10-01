@@ -936,7 +936,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>> {
     const normalizedPage = this.pageRequest(page);
-    const pageSize = normalizedPage.pageSize ?? this.options.listPageSize;
+    const pageSize = normalizedPage.pageSize;
     const requestedCursor = normalizedPage.continuationToken;
     let cursor =
       requestedCursor === undefined ? undefined : PublicAuthorityScanCursor.from(requestedCursor);
@@ -1076,8 +1076,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return this.pageInMemory(entries, page);
   }
 
-  private pageRequest(page: ZLinkPageRequest | undefined): ZLinkPageRequest {
-    return page?.pageSize === undefined ? { ...page, pageSize: this.options.listPageSize } : page;
+  private pageRequest(
+    page: ZLinkPageRequest | undefined
+  ): ZLinkPageRequest & { readonly pageSize: number } {
+    return page?.pageSize === undefined
+      ? { ...page, pageSize: this.options.listPageSize }
+      : (page as ZLinkPageRequest & { readonly pageSize: number });
   }
 
   async listServiceSummaries(
@@ -1135,7 +1139,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const normalized = this.pageRequest(page);
     const parsedOffset = Number.parseInt(normalized.continuationToken ?? '0', 10);
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
-    const pageSize = normalized.pageSize ?? this.options.listPageSize;
+    const pageSize = normalized.pageSize;
     const items = entries.slice(offset, offset + pageSize);
     const nextOffset = offset + items.length;
     return {

@@ -7,6 +7,7 @@
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
+#include <zlink/framework/contracts/detail/handler_invocation.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -786,6 +787,77 @@ class post_commit_failure_relocation_store_t final : public relocation_store_t
   private:
     bool _fail_next_put = true;
 };
+
+class transient_put_relocation_store_t final : public relocation_store_t
+{
+  public:
+    task_t<blob_put_result_t> put (blob_reference_t reference,
+                                   std::span<const std::byte> payload,
+                                   std::chrono::milliseconds retention) override
+    {
+        put_references.push_back (reference.value);
+        if (put_references.size () < 3)
+            return task_t<blob_put_result_t> (result_t<blob_put_result_t>::failure (
+              framework_error_kind_t::unavailable, "put response uncertain"));
+        return inner.put (std::move (reference), payload, retention);
+    }
+    task_t<blob_read_result_t> read (blob_reference_t reference) override
+    {
+        read_references.push_back (reference.value);
+        return inner.read (std::move (reference));
+    }
+    task_t<blob_renew_result_t> renew (blob_reference_t reference,
+                                       std::chrono::milliseconds retention) override
+    {
+        return inner.renew (std::move (reference), retention);
+    }
+    task_t<void> erase (blob_reference_t reference) override
+    {
+        return inner.erase (std::move (reference));
+    }
+    in_memory_relocation_store_t inner;
+    std::vector<std::string> put_references;
+    std::vector<std::string> read_references;
+};
+
+TEST (CppFrameworkOpaqueRelocationStore, ReconciliationDoesNotStopAtFixedAttemptCount)
+{
+    transient_put_relocation_store_t provider;
+    provider_relocation_repository_t repository (provider);
+    const auto result =
+      repository
+        .put_relocation (bytes ("eventual-commit"), 1h, std::chrono::steady_clock::now () + 1min)
+        .result ();
+    ASSERT_TRUE (result);
+    ASSERT_EQ (provider.put_references.size (), 3u);
+    EXPECT_EQ (provider.put_references[0], provider.put_references[1]);
+    EXPECT_EQ (provider.put_references[0], provider.put_references[2]);
+    ASSERT_EQ (provider.read_references.size (), 2u);
+    EXPECT_EQ (provider.read_references[0], provider.put_references[0]);
+    EXPECT_EQ (provider.read_references[1], provider.put_references[0]);
+}
+
+TEST (CppFrameworkOpaqueRelocationStore, ExpiredOperationDoesNotStartProviderIo)
+{
+    transient_put_relocation_store_t provider;
+    provider_relocation_repository_t repository (provider);
+    const auto result =
+      repository.put_relocation (bytes ("expired"), 1h, std::chrono::steady_clock::now ())
+        .result ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), framework_error_kind_t::deadline_exceeded);
+    EXPECT_TRUE (provider.put_references.empty ());
+    EXPECT_TRUE (provider.read_references.empty ());
+    try {
+        (void) result.value ();
+        FAIL () << "expired operation did not throw its typed failure";
+    }
+    catch (...) {
+        const auto failure =
+          detail::current_exception_to_message_result ("expired operation lost its typed failure");
+        EXPECT_EQ (failure.error_kind (), framework_error_kind_t::deadline_exceeded);
+    }
+}
 
 TEST (CppFrameworkOpaqueLocationStore, AtomicWriteUsesExactVersions)
 {
@@ -1995,7 +2067,10 @@ TEST (CppFrameworkOpaqueRelocationStore, PrivateRepositoryUsesTheRegisteredOpaqu
     provider_relocation_repository_t repository (provider);
     const auto payload = bytes ("repository-payload");
 
-    const auto stored = repository.put_relocation (payload, 1h).result ().value ();
+    const auto stored =
+      repository.put_relocation (payload, 1h, std::chrono::steady_clock::now () + 1min)
+        .result ()
+        .value ();
     EXPECT_FALSE (stored.reference.empty ());
     EXPECT_GT (stored.expires_at, stored.store_now);
 
@@ -2025,7 +2100,10 @@ TEST (CppFrameworkOpaqueRelocationStore, RepositoryReconcilesLostCommitReply)
     provider_relocation_repository_t repository (provider);
     const auto payload = bytes ("immutable-after-timeout");
 
-    const auto stored = repository.put_relocation (payload, 1h).result ().value ();
+    const auto stored =
+      repository.put_relocation (payload, 1h, std::chrono::steady_clock::now () + 1min)
+        .result ()
+        .value ();
     const auto read = provider.inner.read (blob_reference_t{stored.reference}).result ().value ();
     const auto *found = std::get_if<blob_found_t> (&read);
     ASSERT_NE (found, nullptr);

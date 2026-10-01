@@ -41,14 +41,17 @@ class public_relocation_store_adapter_t final : public relocation_store_port_t
     }
 
     relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                             std::chrono::hours retention) override
+                             std::chrono::hours retention,
+                             std::chrono::steady_clock::time_point operation_deadline) override
     {
         std::vector<std::byte> public_payload;
         public_payload.reserve (payload.size ());
         for (const auto value : payload)
             public_payload.push_back (static_cast<std::byte> (value));
         const auto stored =
-          _store->put_relocation (std::move (public_payload), retention).result ().value ();
+          _store->put_relocation (std::move (public_payload), retention, operation_deadline)
+            .result ()
+            .value ();
         return {stored.reference, stored.checksum_crc32c};
     }
 

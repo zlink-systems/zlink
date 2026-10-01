@@ -5,8 +5,11 @@ namespace Zlink.Framework.Contracts.Locations;
 /// value uses the contract page size of 100.
 /// </summary>
 public readonly record struct ZLinkPageRequest(
-    int PageSize = 100,
+    int PageSize = ZLinkPageRequest.DefaultPageSize,
     string? ContinuationToken = null
-);
+)
+{
+    internal const int DefaultPageSize = 100;
+}
 
 public sealed record ZLinkLocationPage<T>(IReadOnlyList<T> Items, string? ContinuationToken);
