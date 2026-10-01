@@ -51,7 +51,7 @@
   --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
 }
 *{box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
+body{zoom:.9;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
 .wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 20px}
 header h1{margin:0;font-size:clamp(21px,2.8vw,28px);letter-spacing:-.01em}
@@ -271,6 +271,25 @@ svg.shake{animation:shake .5s ease}
 .link.relay{stroke:var(--hold);stroke-width:3;stroke-dasharray:9 5}
 .relay-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--hold)}
 .flylabel{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+.band{fill:#7A4FC0;fill-opacity:.16}
+.zr.hot{stroke:var(--accent);stroke-width:3}
+.ch.gh{opacity:.5}
+.ch.gh>circle.body{stroke:var(--ink-2);stroke-dasharray:3 2}
+.spot.dim{opacity:.35;transition:opacity .3s}
+.link.wire{stroke:var(--look);stroke-width:3}
+.link.wire.on{stroke:var(--accent);stroke-width:4}
+.link.wire.broken,.link.mesh.broken{stroke:var(--hold);stroke-dasharray:3 5;stroke-width:3}
+.chan-frame.rank{stroke:#B5527F;fill:#B5527F;fill-opacity:.04}
+.chan-tag.rank>rect{fill:#B5527F}
+.chipc.hot>rect{fill:var(--accent)}
+.chipc.hot>text{fill:var(--on-accent)}
+.chipc.pub.hot>rect{fill:#2F6DB5}
+.chipc.pub.hot>text{fill:#fff}
+.spot .chipc.pub>rect{stroke:#2F6DB5}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .spot .chipc.pub>text{fill:#8DB9F2}:root:not([data-theme="light"]) .spot .chipc.pub>rect{stroke:#8DB9F2}}
+:root[data-theme="dark"] .spot .chipc.pub>text{fill:#8DB9F2}
+:root[data-theme="dark"] .spot .chipc.pub>rect{stroke:#8DB9F2}
+.spot .chipc.pub.hot>text{fill:#fff}
 </style>
 
 </head>
@@ -284,8 +303,8 @@ svg.shake{animation:shake .5s ease}
   <div class="main">
     <div class="side">
       <ol class="steps" id="steps" aria-label="단계"></ol>
-      <label class="speed" for="speedRange">메시지 속도 <b id="speedVal">1.0×</b></label>
-      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1" aria-label="메시지 속도">
+      <label class="speed" for="speedRange">메시지 속도 <b id="speedVal">1.5×</b></label>
+      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1.5" aria-label="메시지 속도">
     </div>
     <div class="col">
       <div class="bar">
@@ -308,7 +327,7 @@ svg.shake{animation:shake .5s ease}
 (function(){
 const $ = id => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
-let K = 3.5;                       /* message speed: larger is slower */
+let K = 3.5 / 1.5;                     /* message speed: larger is slower */
 let gen = 0;                       /* bumps when the group changes; stale loops stop */
 class Cancel extends Error {}
 const sleep = ms => { const g = gen; return new Promise((res, rej) => setTimeout(() => g === gen ? res() : rej(new Cancel()), ms)); };
@@ -343,6 +362,8 @@ function flyPath(d, {cls = 'pkt', dur = 420, r = 5, back = false, label} = {}){
 function chipc(x, y, label, cls = ''){ const g = mk(sB, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
 function chanTag(x, y, text, cls){ const g = mk(sB, 'g', {class: 'chan-tag ' + cls}); const w = 16 + [...text].reduce((t, ch) => t + (/[ㄱ-힝]/.test(ch) ? 11.5 : 7.2), 0); mk(g, 'rect', {x, y: y - 11, width: w, height: 22, rx: 6}); mk(g, 'text', {x: x + 8, y: y + 4, text}); return g; }
 function chipcIn(p, x, y, label, cls = ''){ const g = mk(p, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+/* smooth weighted round-robin over the ready, weight > 0 entries (ClientServer and RouteMesh share the rule) */
+function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
 function storeBox(x, y, w){ const b = box(x, y, w, 48, 'store', 'Location Store'); const t1 = mk(sB, 'text', {x: x + 150, y: y + 20, class: 't-store'}), t2 = mk(sB, 'text', {x: x + 150, y: y + 38, class: 't-store'}); b.set = (a, c) => { if (a != null) t1.textContent = a; if (c != null) t2.textContent = c; pulse(b.g); }; b.pt = {x: x + w / 2, y: y + 48}; return b; }
 function actorDot(label, x, y, p = sB){ const g = mk(p, 'g', {class: 'actor'}); const c = mk(g, 'circle', {r: 13}); const t = mk(g, 'text', {text: label}); const o = {g, x, y, set(nx, ny){ this.x = nx; this.y = ny; c.setAttribute('cx', nx); c.setAttribute('cy', ny); t.setAttribute('x', nx); t.setAttribute('y', ny); }}; o.set(x, y); return o; }
 /* a Spot box with a visible queue and a single "running" slot (the gate) */
@@ -469,20 +490,19 @@ function gClientServer(){
     const b = box(296, y, 340, 60, ghost ? 'ghost faded' : '', title);
     Object.assign(b, {w: 100, cur: 0, n: 0, batch: 0, ready: !ghost, chan});
     b.wT = mk(sB, 'text', {x: 306, y: y + 46, class: 'w-badge', text: ghost ? '아직 없다' : 'weight 100'});
-    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L());
+    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L(), 'wire'); if (!ghost) chipc(580, y + 6, ':' + (chan === 'inventory' ? 7101 : 7201));
     return b;
   }
   function drawCells(b){ b.cells.replaceChildren(); for (let k = 0; k < Math.min(b.batch, 14); k++) mk(b.cells, 'rect', {x: 420 + k * 15, y: b.y + 36, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 420 + Math.min(b.batch, 14) * 15 + 4, y: b.y + 48, class: 't-count', text: `${b.batch}건`}); }
-  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link wire' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
   const I = [server('아이템 서버 1', 88, false, 'inventory'), server('아이템 서버 2', 154, false, 'inventory'), server('아이템 서버 3', 220, true, 'inventory')];
   const P = [server('결제 서버 1', 324, false, 'payment'), server('결제 서버 2', 390, false, 'payment')];
   I.slice(0, 2).concat(P).forEach(upd);
   /* what a ClientServer channel is */
   const lg = box(666, 62, 224, 392, 'legend', 'ClientServer 구성');
-  ['client → server 한 방향', 'server가 포트를 연다', 'client(API 서버)가 연결한다', 'request는 응답을 받는다', 'server가 여럿이면', '  client가 weight로 고른다', 'server는 client를', '  먼저 부르지 않는다', '', '■ = 이번에 받은 요청'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
+  ['client → server 한 방향', 'server가 포트를 연다', 'client(API 서버)가 연결한다', 'request는 응답을 받는다', 'server가 여럿이면', '  client가 weight로 고른다', 'server는 client를', '  먼저 부르지 않는다', '', '■ = 이번에 받은 요청', '실선 = 네트워크 연결', '점선 = 논리 구분(channel)'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
   store.set('ClientServer inventory → 아이템 서버 1, 2', 'ClientServer payment → 결제 서버 1, 2');
 
-  function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
   async function call(i, list, label){
     await fly(CL[i], {x: 116, y: CL[i].y}, {dur: 280, bend: 0, label: 'HTTP'});
     const b = pick(list); if (!b) { note('대상 없음 오류', 'warn'); return; }
@@ -510,7 +530,7 @@ function gClientServer(){
      more: ['서버는 시작할 때 자기 주소와 맡은 channel 이름을 Store에 적는다.', 'API 서버는 Store 기록을 보고 연결한 뒤, 실제 연결에서 신원을 확인하고 나서 보낸다.', '서버를 몇 대 띄우든 호출 코드는 같다.'],
      async run(){ const s3 = I[2]; s3.g.classList.remove('ghost', 'faded');
        await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set('ClientServer inventory → 아이템 서버 1, 2, 3', null);
-       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L()); s3.ready = true; upd(s3); pulse(s3.g);
+       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L(), 'wire'); chipc(580, s3.y + 6, ':7101'); s3.ready = true; upd(s3); pulse(s3.g);
        res('아이템 서버 3이 후보가 됐다. "아이템 서버로 6번 요청"로 확인해 보라.'); }},
     {title: '가중치로 나누기', line: '아이템 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3의 칸이 다른 서버의 세 배로 쌓인다.',
      act: '서버 3 weight 300', extra: ['아이템 서버로 10번 요청', async () => { const r = await burst(10, I, 'inventory', '인벤토리'); res(`${r}. 서버 3이 다른 서버의 약 3배를 받았다.`); }],
@@ -521,7 +541,7 @@ function gClientServer(){
      more: ['weight는 실행 중에 바꿀 수 있는 유일한 값이다. 0은 새 요청 후보에서만 뺀다.', '이미 받은 요청은 끝까지 처리한다. 연결과 Store 기록도 그대로 남는다.', '점검 전에 0으로 두고, 끝나면 100으로 돌린다.'],
      async run(){ I[0].w = 0; I.forEach(b => b.cur = 0); upd(I[0]); res('서버 1의 weight가 0이 됐다(주황 점선). "아이템 서버로 10번 요청"로 확인해 보라.'); }},
     {title: '다른 channel 부르기', line: '상점에서 아이템을 사면 API 서버가 payment channel로 결제 서버를 부른다. 이름만 다를 뿐 부르는 방법은 같다.',
-     act: '결제 서버로 4번 요청', repeat: true, more: ['channel 이름마다 담당 server 묶음이 따로 있다. inventory와 payment는 서로 다른 channel이다.', 'API 서버 한 곳에 client 등록을 둘 둔다. 등록만 다르고 호출 코드는 같다.'],
+     act: '결제 서버로 4번 요청', repeat: true, more: ['channel 이름마다 담당 server 묶음이 따로 있다. inventory와 payment는 서로 다른 channel이다.', 'API 서버 한 곳에 client 등록을 둘 둔다. 등록만 다르고 호출 코드는 같다.', 'channel마다 server가 포트를 열고 client가 따로 연결한다. channel이 늘면 연결도 는다.'],
      async run(){ const r = await burst(4, P, 'payment', '결제 승인'); res(`${r}. payment 묶음 안에서 나뉜다. inventory 묶음과는 섞이지 않는다.`); }},
   ];
   return {title: 'ClientServer channel', steps: STEPS, foot: '가이드 01장(전체 topology)·20장 §4(ClientServer channel)·30장(Channel 동작 원리)'};
@@ -554,6 +574,7 @@ function gFanout(){
   const pub = box(24, 170, 200, 150, '', '운영 툴', 'PUB · 발행하는 쪽');
   mk(sB, 'text', {x: 34, y: 236, class: 'legend-t', text: '받을 서버 목록을'}); mk(sB, 'text', {x: 34, y: 256, class: 'legend-t', text: '알지 않는다'});
   const topicT = mk(sB, 'text', {x: 34, y: 296, class: 'w-badge heavy', text: ''});
+  chipc(34, 262, ':7301'); mk(sB, 'text', {x: 34, y: 352, class: 'legend-t', text: '실선 = 네트워크 연결'}); mk(sB, 'text', {x: 34, y: 374, class: 'legend-t', text: '점선 = 논리 구분(topic)'});
   const SUBS = [];
   function sub(kind, label, k, ghost){
     const y = 76 + SUBS.length * 52;
@@ -562,7 +583,7 @@ function gFanout(){
     b.chips = mk(sB, 'g');
     if (!ghost) { let x = 560; ['SUB', ...b.topics].forEach(t => { x += chipcIn(b.chips, x, y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; }); }
     b.cT = mk(sB, 'text', {x: 840, y: y + 28, class: 't-count', 'text-anchor': 'end', text: ghost ? '아직 없다' : ''});
-    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, '', 0);
+    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, 'wire', 0);
     SUBS.push(b); return b;
   }
   sub('field', '필드 서버 1'); sub('field', '필드 서버 2'); sub('dungeon', '던전 서버 1'); sub('dungeon', '던전 서버 2'); sub('item', '아이템 서버 1'); sub('item', '아이템 서버 2');
@@ -582,7 +603,7 @@ function gFanout(){
   }
   const STEPS = [
     {title: '전체에 보내기', line: '운영 툴이 topic all로 공지를 발행한다. all을 구독한 서버 전부가 받는다. 응답은 없다.',
-     act: 'topic all 발행', repeat: true, more: ['Fanout channel: 발행하는 쪽(PUB)이 하나 보내면, 연결된 구독자(SUB)가 각자 받는다.', '발행하는 쪽은 구독자 목록을 모른다. 구독 서버가 늘거나 줄어도 발행 코드는 같다.', '응답이 없으므로 <code>publish</code>만 있다. 처리 결과가 필요하면 ClientServer나 RouteMesh의 <code>request</code>를 쓴다.'],
+     act: 'topic all 발행', repeat: true, more: ['Fanout channel: 발행하는 쪽(PUB)이 하나 보내면, 연결된 구독자(SUB)가 각자 받는다.', 'fanout channel은 mesh와 별개로 PUB/SUB 소켓 쌍을 연다.', '발행하는 쪽은 구독자 목록을 모른다. 구독 서버가 늘거나 줄어도 발행 코드는 같다.', '응답이 없으므로 <code>publish</code>만 있다. 처리 결과가 필요하면 ClientServer나 RouteMesh의 <code>request</code>를 쓴다.'],
      async run(){ const r = await publish('all'); res(`${r.length}대가 모두 받았다: ${r.join(', ')}.`); }},
     {title: '필드 서버에만', line: 'topic field로 발행하면 field를 구독한 필드 서버만 받는다. 다른 서버로는 가지 않는다.',
      act: 'topic field 발행', repeat: true, more: ['구독은 topic으로 등록한다. 발행한 topic과 맞는 구독자만 받는다.', '서버 하나가 topic 여럿을 구독할 수 있다. 여기서는 각자 자기 종류 + all을 구독한다.', 'topic을 생략하면 메시지의 packet 이름이 topic이 된다.'],
@@ -598,7 +619,7 @@ function gFanout(){
      more: ['구독하는 쪽이 Store에서 발행하는 쪽(PUB)의 주소를 찾아 연결한다.', '연결과 구독이 끝나기 전에 발행된 공지는 나중에 받지 못한다. 저장·재전송은 하지 않는다.', '느린 구독자의 몫은 버리고 발행은 성공한다. 버리면 안 되면 NoDrop을 켠다. 그러면 발행이 기다리다 오류로 끝날 수 있다.'],
      async run(){ F3.g.classList.remove('ghost', 'faded'); await fly(F3.T(), store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, F3.T(), {cls: 'pkt-look', dur: 400});
        let x = 560; ['SUB', 'field', 'all'].forEach(t => { x += chipcIn(F3.chips, x, F3.y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; });
-       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}); F3.ready = true; F3.cT.textContent = '받음 0'; pulse(F3.g);
+       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}, 'wire'); F3.ready = true; F3.cT.textContent = '받음 0'; pulse(F3.g);
        res('필드 서버 3이 운영 툴에 연결하고 field, all을 구독했다. "topic field 발행"으로 확인해 보라.'); }},
   ];
   return {title: 'Fanout channel', steps: STEPS, foot: '가이드 20장 §5(Fanout channel)·30장 §5(pub/sub의 형태)'};
@@ -800,7 +821,7 @@ function gRelocate(){
   zone(14, 14, 160, 208, 'village', '마을', 'town-1');
   mk(gG, 'rect', {x: 186, y: 14, width: 700, height: 208, rx: 14, class: 'dungeon'});
   mk(gG, 'text', {x: 202, y: 38, class: 'g-title d', text: '던전 dungeon-7'}); const where = mk(gG, 'text', {x: 202, y: 55, class: 'g-sub d', text: '던전 서버 B에서 실행 중'});
-  const boss = makeBoss(760, 132, 44, 676, 62, 190, 3000);
+  const boss = makeBoss(760, 132, 44, 676, 62, 190, 1200);
   const DNG = [[320, 92], [320, 172], [420, 80], [420, 180]];
   const ch = DNG.map(([x, y], i) => gchar(i, x, y));
   const bannerG = mk(gF, 'g');
@@ -876,9 +897,15 @@ function gBack(){
     mk(gG, 'text', {x: x + 16, y: 38, class: 'g-title d', text: title});
     const st = mk(gG, 'text', {x: x + 16, y: 58, class: 'bp-world', text: '대기 중'});
     const cx = x + 214, cy = 136; const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r: 34}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: '월드 보스'});
-    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2; mk(gG, 'circle', {cx: cx + Math.cos(a) * 150, cy: cy + Math.sin(a) * 60, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); }
-    return {x, cx, cy, st};
+    const pg = mk(gG, 'g'), P = [];
+    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2, px = cx + Math.cos(a) * 150, py = cy + Math.sin(a) * 60; mk(pg, 'circle', {cx: px, cy: py, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); P.push([px, py]); }
+    return {x, cx, cy, st, g, P, pg};
   }
+  /* a player around the boss fires one attack per message sent; the boss takes the hit when the message is processed */
+  function shot(W){ const [px, py] = W.P[Math.floor(Math.random() * W.P.length)], b = mk(gF, 'circle', {r: 5, class: 'spark'});
+    tween(90 * K, e => { b.setAttribute('cx', px + (W.cx - px) * e); b.setAttribute('cy', py + (W.cy - py) * e); }).catch(() => {}).finally(() => b.remove()); }
+  function hitBoss(W){ W.g.classList.remove('hit'); void W.g.getBBox(); W.g.classList.add('hit'); popup(W.cx + Math.random() * 60 - 30, W.cy - 40, '-' + (40 + Math.floor(Math.random() * 30))); }
+  const holdPlayers = (W, on) => { W.pg.style.transition = 'opacity .3s'; W.pg.style.opacity = on ? .4 : 1; };
   const W1 = world(14, '백프레셔 없음'), W2 = world(458, 'ZLink 백프레셔');
 
   /* server view: two lanes */
@@ -928,10 +955,10 @@ function gBack(){
       if (L.dead) return;
       if (L.bounded && L.paused) continue;
       if (L.bounded && L.q + L.inflight >= L.cap) {
-        L.paused = true; L.stops++; L.setPill('stop', '⏸ 전송 멈춤'); pulse(L.snd.g, 'bad');
+        L.paused = true; L.stops++; L.setPill('stop', '⏸ 전송 멈춤'); pulse(L.snd.g, 'bad'); holdPlayers(W, true);
         W.st.textContent = `queue가 가득 찼다 → 보내는 쪽이 멈췄다 (멈춤 ${L.stops}회)`; W.st.setAttribute('class', 'bp-world warn'); continue;
       }
-      L.sent++; L.inflight++; L.render();
+      L.sent++; L.inflight++; L.render(); shot(W);
       const k = Math.min(L.cap - 1, L.q + L.inflight - 1);
       spawn(async () => { await fly({x: 166, y: L.y0 + 93}, {x: L.qx + k * L.cw + L.cw / 2, y: L.qy + L.qh / 2}, {r: 5, dur: 140, bend: 0});
         L.inflight--; if (L.dead) { L.lost++; L.render(); return; } L.q++; L.render();
@@ -942,8 +969,8 @@ function gBack(){
     spawn(async () => { for (;;) {
       await sleep(PROC * K);
       if (L.dead) return;
-      if (L.q > 0) { L.q--; L.done++; L.render(); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
-        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ 전송 재개'); W.st.textContent = 'queue가 절반 아래로 비었다 → 다시 보낸다'; W.st.setAttribute('class', 'bp-world'); } }
+      if (L.q > 0) { L.q--; L.done++; L.render(); hitBoss(W); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
+        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ 전송 재개'); holdPlayers(W, false); W.st.textContent = 'queue가 절반 아래로 비었다 → 다시 보낸다'; W.st.setAttribute('class', 'bp-world'); } }
     } });
   }
   const STEPS = [
@@ -959,8 +986,174 @@ function gBack(){
   return {title: 'Backpressure', steps: STEPS, foot: '가이드 33장(Backpressure) · Core pipe의 HWM/low watermark'};
 }
 
+/* =========================================================
+   Group 2b. RouteMesh channel: request by channel name over the mesh
+   ========================================================= */
+function gMeshChannel(){
+  resetViews('0 0 900 236', '0 0 900 400');
+  const DID = [7, 8, 9, 12, 10, 13, 14, 15, 16, 17], DSIDE = [0, 0, 1, 1, 0, 1, 0, 1, 0, 1], rowN = [0, 0];
+  const DG = DID.map((n, i) => ({id: 'dungeon-' + n, d: DSIDE[i], row: rowN[DSIDE[i]]++}));
+  const CW = 168;
+  const cards = DG.map((dg, i) => {
+    const x = 14 + (i % 5) * 176, y = 14 + Math.floor(i / 5) * 110;
+    const cg = mk(gG, 'g', {class: 'dng' + (i > 3 ? ' locked' : '')}); const keep = gG; gG = cg; const sub = zone(x, y, CW, 98, 'dungeon', dg.id, '파티 진행 중', true); gG = keep;
+    const dots = [0, 1, 2, 3].map(k => { const cx = x + 26 + k * 28; const c = mk(cg, 'circle', {cx, cy: y + 64, r: 10, fill: COLORS[k], stroke: '#fff', 'stroke-width': 2}); mk(cg, 'text', {x: cx, y: y + 67.5, fill: '#fff', 'font-size': 9.5, 'font-weight': 700, 'text-anchor': 'middle', text: 'P' + (k + 1)}); return c; });
+    return {sub, dots, x, y, rew: mk(cg, 'text', {x: x + 14, y: y + 90, class: 'hp-t', text: ''})};
+  });
+  const resetCard = i => { const c = cards[i]; c.sub.textContent = '파티 진행 중'; c.dots.forEach(d => { d.setAttribute('stroke', '#fff'); d.setAttribute('stroke-width', 2); }); c.rew.textContent = ''; };
+  const unlock = n => { for (let i = 0; i < n; i++) { cards[i].sub.parentNode.classList.remove('locked'); DG[i].g.classList.remove('dim'); } };
+
+  const store = storeBox(280, 4, 610);
+  store.set('mesh game → 던전 B, C · API 1, 2', 'channel reward → API 서버 1, 2');
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 332, rx: 14, class: 'chan-frame mesh'}); chanTag(16, 60, 'RouteMesh · game', 'mesh');
+  mk(sB, 'rect', {x: 316, y: 70, width: 228, height: 294, rx: 12, class: 'chan-frame cs'}); chanTag(324, 70, 'channel · reward', 'cs');
+  const D = [box(24, 84, 200, 138, '', '던전 서버 B', 'node B · 호출하는 쪽'), box(24, 236, 200, 138, '', '던전 서버 C', 'node C · 호출하는 쪽')];
+  DG.forEach((dg, i) => { const y = D[dg.d].y + 40 + dg.row * 19; dg.g = mk(sB, 'g', {class: 'spot' + (i > 3 ? ' dim' : '')}); mk(dg.g, 'rect', {x: 36, y, width: 176, height: 17, rx: 5, class: 'bg'}); mk(dg.g, 'text', {x: 44, y: y + 12.5, class: 't-spot', text: dg.id}); dg.cy = y + 8.5; });
+  const A = [[84, 'API 서버 1', 'node D'], [176, 'API 서버 2', 'node E'], [268, 'API 서버 3', 'node F']].map(([y, t, s], k) => {
+    const ghost = k === 2; const b = box(330, y, 200, 80, ghost ? 'ghost faded' : '', t, ghost ? '아직 없다' : s);
+    Object.assign(b, {idx: k, ready: !ghost, w: 100, cur: 0, n: 0, batch: 0, rn: 0}); b.cells = mk(sB, 'g'); b.wT = mk(sB, 'text', {x: 340, y: y + 75, class: 'w-badge', text: ghost ? '' : 'weight 100'}); if (!ghost) chipc(456, y + 6, 'reward'); return b; });
+  box(560, 84, 330, 264, 'legend', 'RouteMesh channel');
+  ['서버끼리 하나의 망(mesh)이다', '던전 서버는 이름(reward)으로 호출한다', 'reward를 맡은 node가 여럿이면', '  Framework가 하나를 고른다', '실선 = 네트워크 연결', '점선 = 논리 구분(channel · topic)', '■ = 이번에 받은 요청'].forEach((t, k) => mk(sB, 'text', {x: 572, y: 126 + k * 24, class: 'legend-t', text: t}));
+  const connT = mk(sB, 'text', {x: 572, y: 322, class: 't-count', text: ''});
+  let nChan = 1; const setConnT = () => { connT.textContent = `그림의 실선(연결) ${Object.keys(conns).length}개 · channel ${nChan}개`; };
+  /* mesh connections: right ports of the dungeon servers, left ports of the API servers */
+  const PD = [[110, 150, 190], [262, 302, 342]], PA = [[104, 140], [196, 232], [288, 324]];
+  const connD = (d, a) => `M224,${PD[d][a]} L330,${PA[a][d]}`;
+  const route = (i, a) => `M212,${DG[i].cy} L224,${PD[DG[i].d][a]} L330,${PA[a][DG[i].d]}`;
+  const conns = {}; const drawConn = (d, a) => { conns[d + '-' + a] = path(connD(d, a), 'wire'); };
+  [0, 1].forEach(a => [0, 1].forEach(d => drawConn(d, a))); setConnT();
+  function drawCells(b){ b.cells.replaceChildren(); const m = Math.min(b.batch, 8); for (let k = 0; k < m; k++) mk(b.cells, 'rect', {x: 340 + k * 15, y: b.y + 48, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 340 + m * 15 + 4, y: b.y + 60, class: 't-count', text: `${b.batch}건`}); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); [0, 1].forEach(d => { const l = conns[d + '-' + b.idx]; if (l) l.classList.toggle('broken', b.w === 0); }); drawCells(b); }
+
+  /* one request per dungeon: the dungeon's result (the whole party's reward) */
+  async function clearDungeon(i, out){
+    const dg = DG[i], c = cards[i]; c.sub.textContent = '클리어 · reward 요청 중'; pulse(dg.g);
+    const b = pick(A); if (!b) return; const p = route(i, b.idx); conns[dg.d + '-' + b.idx].classList.add('on');
+    await flyPath(p, {dur: 360, label: i === 0 ? 'reward' : undefined}); pulse(b.g); b.n++; b.batch++; drawCells(b); out[i] = b.idx + 1; await sleep(220 * K);
+    await flyPath(p, {cls: 'pkt-push', dur: 300, back: true});
+    c.sub.textContent = '보상 지급 완료'; c.dots.forEach(d => { d.setAttribute('stroke', '#F7D774'); d.setAttribute('stroke-width', 3.5); }); c.rew.textContent = `보상 ← API 서버 ${b.idx + 1}`; popup(c.x + 84, c.y + 50, '+보상');
+  }
+  async function burst(n){
+    unlock(n); A.forEach(b => { b.batch = 0; drawCells(b); }); for (let i = 0; i < n; i++) resetCard(i);
+    const out = []; await Promise.all(Array.from({length: n}, async (_, i) => { await sleep(i * 260 * K / 3.5); await clearDungeon(i, out); }));
+    return A.filter(b => b.ready).map(b => `API 서버 ${b.idx + 1}: ${b.batch}건`).join(' · ') + '. ' + out.map((a, i) => `${DG[i].id} → ${a}`).join(' · ');
+  }
+  /* ranking channel: API 서버 2, 3 serve it; requests use the same mesh lines as reward */
+  const R = [];
+  async function callRank(k){
+    const i = [0, 2, 1, 3][k % 4], c = cards[i]; c.sub.textContent = '랭킹 갱신 중'; pulse(DG[i].g);
+    const r = pick(R), b = r.n, p = route(i, b.idx); conns[DG[i].d + '-' + b.idx].classList.add('on');
+    await flyPath(p, {cls: 'pkt-pub', dur: 360, label: 'ranking'}); pulse(b.g); b.rn++; b.rt.textContent = `ranking ${b.rn}건`; await sleep(220 * K);
+    await flyPath(p, {cls: 'pkt-push', dur: 300, back: true}); c.sub.textContent = '랭킹 갱신 완료';
+  }
+  const MORE_W = ['weight는 0~10000이고 기본은 100이다. 모두 100이면 균등하게 돌아가며(round-robin) 고른다.', '비율은 길게 보았을 때의 비율이다. 호출 하나하나의 순서는 보장하지 않는다.', 'weight 규칙은 RouteMesh와 ClientServer가 같다.'];
+  const STEPS = [
+    {title: '던전 결과 요청', line: '던전이 끝나면 그 던전의 결과 한 건(파티 4명의 보상)을 reward channel에 요청한다. Framework가 reward를 맡은 API 서버 중 하나를 골라 보내고, 응답이 오면 그 던전 파티 전원에게 보상이 표시된다.',
+     act: '던전 4곳 클리어', repeat: true, more: ['요청은 던전마다 한 건이다. 파티원마다 요청하지 않는다.', 'RouteMesh channel: 같은 mesh에 참여한 서버끼리 channel 이름으로 부른다. 호출에는 channel 이름 <code>reward</code>만 쓴다(<code>RequestToChannel</code>). RouteMesh는 runtime 옵션에서 ChannelName으로 지정한다.', '던전 서버는 API 서버의 주소를 모른다. reward라는 이름만 안다.', 'ClientServer와 달리 별도 포트를 열고 접속하지 않는다. 이미 연결된 mesh로 보낸다.', '담당 node가 여럿이고 weight가 같으면 Framework가 돌아가며(round-robin) 고른다. 응답은 요청이 간 연결을 따라 돌아온다.'],
+     async run(){ const r = await burst(4); res(`${r}. 던전마다 한 건만 요청했다.`); }},
+    {title: '담당 node 늘리기', line: 'API 서버 3이 mesh에 참여한다. Location Store에 reward 담당으로 기록되고, 호출하는 쪽의 설정은 바꾸지 않는다.',
+     act: 'API 서버 3 시작', extra: ['던전 6곳 클리어', async () => { const r = await burst(6); res(`${r}. 새 서버도 reward를 받는다.`); }],
+     more: ['서버는 시작할 때 자기 주소와 맡은 channel 이름을 Store에 적는다.', 'mesh에 있는 node가 Store 기록을 보고 새 node와 연결한다. 연결은 node 쌍마다 하나다.', '호출하는 쪽의 코드와 설정은 그대로다.'],
+     async run(){ const s3 = A[2]; s3.g.classList.remove('ghost', 'faded'); s3.st.textContent = 'node F';
+       await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set(null, 'channel reward → API 서버 1, 2, 3');
+       await Promise.all(D.map(d => fly(store.pt, d.T(), {cls: 'pkt-look', dur: 500})));
+       drawConn(0, 2); drawConn(1, 2); setConnT(); chipc(456, s3.y + 6, 'reward'); s3.ready = true; upd(s3); pulse(s3.g);
+       res('API 서버 3이 reward 담당이 되었다. "던전 6곳 클리어"로 확인해 보라.'); }},
+    {title: '가중치로 나누기', line: 'API 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3이 다른 서버의 세 배쯤 받는다.',
+     act: 'API 서버 3 weight 300', extra: ['던전 10곳 클리어', async () => { const r = await burst(10); res(`${r}. 서버 3이 다른 서버의 약 3배를 받았다.`); }],
+     more: [...MORE_W, '사양이 다른 장비를 섞거나, 한 대에 덜 보내야 할 때 쓴다.'],
+     async run(){ A[2].w = 300; A.forEach(b => b.cur = 0); upd(A[2]); pulse(A[2].g); res('API 서버 3의 weight가 300이 되었다. "던전 10곳 클리어"로 칸이 쌓이는 길이를 비교해 보라.'); }},
+    {title: '가중치 0', line: 'API 서버 1의 weight를 0으로 바꾼다. 서버 1로는 새 요청이 가지 않는다. 연결과 Store 기록은 그대로 남는다.',
+     act: 'API 서버 1 weight 0', extra: ['던전 10곳 클리어', async () => { const r = await burst(10); res(`${r}. 서버 1로는 하나도 가지 않았다.`); }],
+     more: ['weight 0은 연결과 Store 등록을 유지한 채 새 요청 후보에서만 뺀다. 이미 받은 요청은 끝까지 처리한다.', '실행 중에 바꿀 수 있는 값은 weight 하나다.', '점검 전에 0으로 두고, 끝나면 100으로 돌린다.'],
+     async run(){ A[0].w = 0; A.forEach(b => b.cur = 0); upd(A[0]); res('API 서버 1의 weight가 0이 되었다(주황 점선). "던전 10곳 클리어"로 확인해 보라.'); }},
+    {title: 'channel 하나 더', line: 'API 서버 2와 3이 ranking channel도 맡는다. Store에 기록만 추가되고 새 연결은 생기지 않는다. ranking 요청은 reward와 같은 mesh 연결 위로 지난다.',
+     act: 'ranking 담당 추가', extra: ['랭킹 갱신 4번', async () => { A.forEach(b => { b.rn = 0; if (b.rt) b.rt.textContent = ''; }); R.forEach(r => r.cur = 0); await Promise.all(Array.from({length: 4}, async (_, k) => { await sleep(k * 260 * K / 3.5); await callRank(k); }));
+       res(`API 서버 2: ${A[1].rn}건 · API 서버 3: ${A[2].rn}건. channel이 하나 늘었지만 실선(연결)은 하나도 늘지 않았다.`); }],
+     more: ['channel은 mesh 위의 논리 구분이다. channel이 늘어도 새 소켓이나 연결은 생기지 않고, 이미 있는 peer 연결을 쓴다.', 'MeshNode는 node 쌍마다 연결 하나를 둔다. reward와 ranking 요청이 같은 연결을 지난다.', 'ClientServer와 Fanout은 channel마다 별도의 포트와 연결을 둔다. 그 점이 RouteMesh와 다르다.'],
+     async run(){ unlock(10); mk(sB, 'rect', {x: 322, y: 168, width: 216, height: 192, rx: 10, class: 'chan-frame rank'}); chanTag(330, 360, 'channel · ranking', 'rank');
+       await Promise.all([A[1], A[2]].map(b => fly(b.T(), store.pt, {cls: 'pkt-look', dur: 500}))); store.set(null, 'reward → API 1, 2, 3 · ranking → API 2, 3');
+       [A[1], A[2]].forEach(b => { b.rt = mk(sB, 'text', {x: 442, y: b.y + 75, class: 't-count', text: ''}); R.push({n: b, ready: true, w: 100, cur: 0}); pulse(b.g); });
+       nChan = 2; setConnT(); res('API 서버 2와 3이 ranking도 맡는다. 연결선은 그대로이고 channel만 늘었다. "랭킹 갱신 4번"으로 확인해 보라.'); }},
+  ];
+  return {title: 'RouteMesh channel', steps: STEPS, foot: '가이드 20장 §3(RouteMesh)·30장(Channel 동작 원리)'};
+}
+
+/* =========================================================
+   Group 3b. RouteMesh pub/sub: Logical Multicast (ZoneWorld border)
+   ========================================================= */
+function gMeshPubSub(){
+  resetViews('0 0 900 236', '0 0 900 404');
+  const ZN = ['nw', 'ne', 'sw', 'se'], ZR = {nw: [14, 14], ne: [254, 14], sw: [14, 118], se: [254, 118]};
+  const zr = {}; ZN.forEach(k => { zr[k] = mk(gG, 'rect', {x: ZR[k][0], y: ZR[k][1], width: 240, height: 104, rx: 12, class: 'zone-sel zr'}); });
+  mk(gG, 'rect', {x: 236, y: 14, width: 36, height: 208, class: 'band'}); mk(gG, 'rect', {x: 14, y: 100, width: 480, height: 36, class: 'band'});
+  [['nw', 24, 32, 'start'], ['ne', 484, 32, 'end'], ['sw', 24, 214, 'start'], ['se', 484, 214, 'end']].forEach(([k, x, y, a]) => mk(gG, 'text', {x, y, class: 'g-sub', 'text-anchor': a, text: 'zone-' + k}));
+  const note = notes(508, 14, 378, 208, 'zone 화면에서 본 일');
+  mk(gG, 'text', {x: 522, y: 208, class: 'g-sub', text: 'ghost = 이웃 zone이 받은 P1 위치 · 보라 띠 = 경계 band'});
+  function dot(name, i, x, y, cls = '', p = gG){ const g = mk(p, 'g', {class: 'ch ' + cls, transform: `translate(${x},${y})`}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 12, fill: COLORS[i % 4], class: 'body'}); mk(g, 'text', {text: name}); return g; }
+  [['P2', 1, 380, 64], ['P5', 1, 440, 92], ['P3', 2, 100, 176], ['P4', 3, 370, 176]].forEach(([n, i, x, y]) => dot(n, i, x, y));
+  const p1 = {x: 110, y: 66, g: dot('P1', 0, 110, 66), set(x, y){ this.x = x; this.y = y; this.g.setAttribute('transform', `translate(${x},${y})`); }, async walk(nx, ny, d){ const ox = this.x, oy = this.y; await tween(d, e => this.set(ox + (nx - ox) * e, oy + (ny - oy) * e)); }};
+  const ghosts = {};
+  function ghostPos(to){ return to === 'ne' ? [p1.x + 28, p1.y] : to === 'sw' ? [p1.x, p1.y + 28] : [p1.x + 28, p1.y + 28]; }
+  function setGhost(to){ const [x, y] = ghostPos(to); let o = ghosts[to]; if (!o) { o = ghosts[to] = {g: dot('P1', 0, x, y, 'gh', gF)}; seen(o); } o.g.setAttribute('transform', `translate(${x},${y})`); }
+  async function dropGhost(to){ const o = ghosts[to]; if (!o) return; delete ghosts[to]; await tween(300 * K, e => { o.g.style.opacity = .5 * (1 - e); }).finally(() => o.g.remove()); }
+
+  const store = storeBox(280, 4, 610);
+  store.set('mesh game → Zone 서버 1, 2', 'zone-nw, zone-sw → 서버 1 · zone-ne, zone-se → 서버 2');
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 336, rx: 14, class: 'chan-frame mesh'}); chanTag(16, 60, 'RouteMesh · game', 'mesh');
+  box(24, 84, 380, 300, '', 'Zone 서버 1', 'node A'); box(496, 84, 380, 300, '', 'Zone 서버 2', 'node B');
+  const SIDE = z => (z === 'nw' || z === 'sw') ? 1 : 2, ROWY = {nw: 182, ne: 182, sw: 318, se: 318};
+  function route(a, b){
+    const ya = ROWY[a], yb = ROWY[b];
+    if (SIDE(a) === SIDE(b)) { const cx = SIDE(a) === 1 ? 214 : 686; return ya < yb ? `M${cx},236 L${cx},264` : `M${cx},264 L${cx},236`; }
+    return SIDE(a) === 1 ? `M388,${ya} L420,${ya} L420,250 L480,250 L480,${yb} L512,${yb}` : `M512,${ya} L480,${ya} L480,250 L420,250 L420,${yb} L388,${yb}`;
+  }
+  path(route('nw', 'ne')); path(route('sw', 'se')); path(route('nw', 'sw')); path(route('ne', 'se')); path(route('nw', 'se')); path(route('sw', 'ne')); path('M420,250 L480,250', 'wire on');
+  mk(sB, 'text', {x: 450, y: 242, class: 'mesh-t', 'text-anchor': 'middle', text: 'mesh'}); mk(sB, 'text', {x: 450, y: 270, class: 'mesh-t', 'text-anchor': 'middle', text: '연결 하나'});
+  mk(sB, 'text', {x: 16, y: 18, class: 'legend-t', text: '실선 = 네트워크 연결'}); mk(sB, 'text', {x: 16, y: 38, class: 'legend-t', text: '점선 = 논리 구분(topic)'});
+  [222, 694].forEach(x => mk(sB, 'text', {x, y: 255, class: 't-mono', text: 'node 안'}));
+  const SPXY = {nw: [40, 128], sw: [40, 264], ne: [512, 128], se: [512, 264]};
+  const SP = {};
+  ZN.forEach(z => {
+    const sp = qspot(SPXY[z][0], SPXY[z][1], 348, 108, 'zone-' + z, 'User Spot'); mk(sp.g, 'text', {x: 10, y: 47, class: 'lbl', text: '구독 topic'});
+    sp.chip = {}; let x = 10; ZN.filter(f => f !== z).forEach(f => { x += chipcIn(sp.g, x, 52, `border.${f}→${z}`, 'pub') + 8; sp.chip[f] = sp.g.lastChild; });
+    sp.st = mk(sp.g, 'text', {x: 10, y: 88, class: 't-mono', text: z === 'nw' ? 'publish 없음' : ''}); sp.rc = mk(sp.g, 'text', {x: 10, y: 102, class: 't-mono', text: ''}); sp.recv = 0; SP[z] = sp;
+  });
+  const clearHot = () => ZN.forEach(z => Object.values(SP[z].chip).forEach(c => c.classList.remove('hot')));
+  /* zone-nw publishes P1's position (pos) or the leave event to the zones in tos; each receiver acts on arrival */
+  async function publish(tos, kind){
+    const f = SP.nw, leave = kind === 'leave'; f.st.textContent = (leave ? 'leave → ' : 'publish → ') + tos.join(', '); pulse(f.g);
+    const others = ZN.filter(z => z !== 'nw' && !tos.includes(z)); others.forEach(z => { SP[z].g.classList.add('dim'); SP[z].st.textContent = '받지 않음'; });
+    await Promise.all(tos.map(async to => {
+      await flyPath(route('nw', to), {cls: 'pkt-pub', dur: SIDE(to) === 1 ? 200 : 420, r: 6, label: leave ? `leave → ${to}` : `border.nw→${to}`});
+      const sp = SP[to]; sp.chip.nw.classList.add('hot'); pulse(sp.g);
+      if (leave) { sp.rc.textContent = 'P1 leave 받음 · ghost 지움'; spawn(() => dropGhost(to)); } else { sp.recv++; sp.rc.textContent = `P1 위치 받음 ${sp.recv}회`; setGhost(to); }
+    }));
+    await sleep(300 * K); others.forEach(z => { SP[z].g.classList.remove('dim'); SP[z].st.textContent = ''; }); clearHot();
+  }
+  async function to(x, y){ if (Math.abs(p1.x - x) > 1 || Math.abs(p1.y - y) > 1) await p1.walk(x, y, 500 * K); await sleep(150 * K); }
+  const STEPS = [
+    {title: 'zone마다 Spot', line: '월드는 zone 네 개이고, zone마다 User Spot이 하나다. 각 zone Spot은 시작할 때 나머지 세 zone에서 오는 topic을 구독한다.',
+     act: '구독 보기', more: ['zone은 2×2이고 각 zone은 id를 가진 User Spot이다(zone-nw, zone-ne, zone-sw, zone-se). Zone 서버 두 대가 둘씩 맡는다.', 'Spot이 시작할 때 구독을 등록한다. 칩의 <code>border.ne→nw</code>는 topic <code>zone.border.zone-ne.zone-nw</code>를 줄여 쓴 것이다.', '발행하는 쪽은 구독자 목록을 모른다. 같은 topic을 구독한 Spot이 받는다.', 'topic은 mesh 위의 논리 구분이다. border topic 패킷은 Zone 서버 사이의 mesh 연결 하나 위로 지나가고, topic이 늘어도 연결은 늘지 않는다.'],
+     async run(){ for (const z of ZN) { zr[z].classList.add('hot'); pulse(SP[z].g); Object.values(SP[z].chip).forEach(c => c.classList.add('hot')); await sleep(450 * K); zr[z].classList.remove('hot'); clearHot(); }
+       note('zone마다 나머지 세 zone의 topic을 구독'); res('각 zone이 구독한 topic은 3개이고, 모두 다른 zone에서 온다. 구독은 새 연결을 만들지 않는다.'); }},
+    {title: '경계 가까이', line: 'P1이 zone-nw 안에서 동쪽 경계 band로 들어서면 zone-nw가 위치를 topic으로 발행한다. 동쪽 경계에서는 zone-ne만 받는다.',
+     act: 'P1 동쪽 경계로 이동', repeat: true, more: ['발행하는 쪽은 받을 Spot이나 node를 지정하지 않는다. topic <code>zone.border.zone-nw.zone-ne</code>로 발행할 뿐이다.', 'Logical Multicast는 별도 PUB/SUB 소켓 없이 이미 연결된 mesh를 쓴다. Fanout(classic)과 달리 받는 대상이 그 topic을 구독한 Spot이다.', 'band는 경계에서 10칸 폭이다. band 안에서 player가 움직이면 zone Spot이 그 위치를 발행한다.'],
+     async run(){ await to(240, 64); await publish(['ne']); note('zone-ne 화면에 P1 ghost가 나타남'); res('zone-nw가 한 topic으로 발행했고 zone-ne만 받았다. zone-sw와 zone-se는 받지 않았다. zone-ne 유저 화면에 P1 ghost가 나타났다.'); }},
+    {title: '모서리', line: 'P1이 네 zone이 만나는 중앙 모서리로 간다. ne, sw, se 세 topic으로 위치를 발행하고, 세 zone이 모두 받는다.',
+     act: 'P1 모서리로 이동', extra: ['모서리에서 움직이기', async () => { for (const [x, y] of [[238, 104], [254, 114], [246, 106]]) { await p1.walk(x, y, 250 * K); await publish(['ne', 'sw', 'se']); } note('P1이 움직일 때마다 세 zone의 ghost가 따라감'); res('P1이 band 안에서 움직일 때마다 세 topic으로 위치를 발행했다. 세 zone의 ghost가 따라 움직였다.'); }],
+     more: ['모서리는 네 zone의 band가 겹친 곳이라 나머지 세 zone이 모두 이 위치를 받는다.', 'zone-sw는 같은 Zone 서버 안이라 node 안에서 전달되고, zone-ne와 zone-se는 서버 사이의 mesh를 건너간다. 발행하는 코드는 같다.'],
+     async run(){ await to(246, 110); await publish(['ne', 'sw', 'se']); note('zone-ne, zone-sw, zone-se 화면에 P1 ghost'); res('zone-sw는 같은 서버 안에서, zone-ne와 zone-se는 mesh를 건너 받았다. "모서리에서 움직이기"로 위치가 따라가는 것을 확인해 보라.'); }},
+    {title: '경계에서 멀어지기', line: 'P1이 zone 가운데로 돌아가며 band를 벗어나면 같은 topic으로 leave 이벤트를 발행한다. 받은 쪽은 즉시 ghost를 지운다.',
+     act: 'P1 가운데로 이동', more: ['위치는 band 안에서 움직일 때 발행한다. band를 벗어나면 위치 대신 leave 이벤트를 같은 topic으로 발행한다.', '받은 쪽은 leave를 받는 즉시 그 player의 ghost를 지운다. 만료를 기다리지 않는다.'],
+     async run(){ const w = p1.walk(110, 66, 900 * K); while (p1.x >= 236 || p1.y >= 100) await sleep(30);
+       await Promise.all([w, publish(Object.keys(ghosts), 'leave')]); SP.nw.st.textContent = 'publish 없음 · 경계 밖'; note('leave를 받아 ghost가 모두 사라짐'); res('P1이 band를 벗어나는 순간 leave를 발행했고, 받은 zone의 ghost가 즉시 사라졌다.'); }},
+  ];
+  return {title: 'RouteMesh pub/sub · Logical Multicast', steps: STEPS, foot: '가이드 30장 §5.1(Logical Multicast)·56장(ZoneWorld 따라 읽기)'};
+}
+
 /* ---------- groups and steps ---------- */
-const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['lobby', '로비와 던전 · RouteMesh', gLobby], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
+const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['meshchannel', 'RouteMesh channel', gMeshChannel], ['lobby', '로비와 던전 · RouteMesh', gLobby], ['meshpubsub', 'RouteMesh pub/sub', gMeshPubSub], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
 let STEPS = [], cur = 0, done = new Set(), curKey = 'clientserver';
 function renderSteps(){
   $('steps').replaceChildren();
