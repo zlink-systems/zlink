@@ -414,14 +414,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 foreach (var intent in _peersByIntent.Values)
                     ConnectPeerCore(intent);
                 using (ExecutionContext.SuppressFlow())
-                    _receiveLoop = Task
-                        .Factory.StartNew(
-                            () => ReceiveLoop(_stop.Token),
-                            CancellationToken.None,
-                            TaskCreationOptions.LongRunning,
-                            TaskScheduler.Default
-                        )
-                        .Unwrap();
+                    _receiveLoop = Task.Factory.StartNew(
+                        () => ReceiveLoop(_stop.Token),
+                        CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default
+                    );
             }
             catch (Exception error)
             {
@@ -5415,7 +5413,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             part.Dispose();
     }
 
-    private async Task ReceiveLoop(CancellationToken cancellationToken)
+    private void ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[1];
         var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
@@ -5452,7 +5450,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 RunState(() => _state = MeshNodeState.Error);
                 Publish(MeshMonitorEventKind.ProtocolError);
             }
-            await Task.Yield();
         }
     }
 
