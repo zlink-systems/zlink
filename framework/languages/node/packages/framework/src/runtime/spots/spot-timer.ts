@@ -24,13 +24,14 @@ import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { AsyncResource } from 'node:async_hooks';
-import type { OperationClock } from '../foundation/operation-registry';
 
 const detachedTimerStateLaneResource = new AsyncResource('zlink:spot-timer');
 
-export interface ZLinkTimerClock extends OperationClock {
+export interface ZLinkTimerClock {
   now(): number;
   utcNow(): number;
+  setTimeout(callback: () => void, delayMs: number): unknown;
+  clearTimeout(handle: unknown): void;
 }
 
 const systemTimerClock: ZLinkTimerClock = {

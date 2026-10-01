@@ -45,14 +45,19 @@ async function closeFixture(fixture, pump) {
   await fixture.context.dispose();
 }
 
-function observeClaims(node, observeRecords) {
+function observeClaims(node, observeRecords, observeRelease) {
   const createReadyBatch = node.createReadyBatch.bind(node);
-  node.createReadyBatch = capacity => {
+  node.createReadyBatch = (capacity) => {
     const batch = createReadyBatch(capacity);
     const takeClaim = batch.takeClaim.bind(batch);
-    batch.takeClaim = index => {
+    batch.takeClaim = (index) => {
       const claim = takeClaim(index);
       const recvBatch = claim.recvBatch.bind(claim);
+      const release = claim.release.bind(claim);
+      claim.release = () => {
+        release();
+        observeRelease?.();
+      };
       claim.recvBatch = (...args) => {
         const result = recvBatch(...args);
         if (result.records.length > 0) observeRecords(result.records);
@@ -228,9 +233,14 @@ test('dispatch failure returns every pre-admitted lease and closes every batch p
   const observed = [];
   const failure = new Error('dispatch failed');
   const reported = deferred();
+  const claimReleased = deferred();
   let dispatches = 0;
   let pump;
-  observeClaims(fixture.node, records => trackReceivedRecordCleanup(records, observed));
+  observeClaims(
+    fixture.node,
+    (records) => trackReceivedRecordCleanup(records, observed),
+    claimReleased.resolve
+  );
   try {
     for (let index = 0; index < 64; index += 1) {
       await fixture.node.sendToChannel(fixture.channel, Buffer.from(String(index)));
@@ -245,8 +255,9 @@ test('dispatch failure returns every pre-admitted lease and closes every batch p
     });
     pump.start();
     assert.equal(await reported.promise, failure);
+    await claimReleased.promise;
 
-    assert.equal(dispatches, 1);
+    assert.equal(dispatches, 64);
     assert.equal(observed.length, 64);
     for (const record of observed) {
       assert.equal(record.released(), 1);
@@ -255,6 +266,47 @@ test('dispatch failure returns every pre-admitted lease and closes every batch p
     const snapshot = fixture.queue.snapshot();
     assert.equal(snapshot.permitsInUse, 0n);
     assert.equal(snapshot.queuedApplicationJobs, 0n);
+  } finally {
+    await closeFixture(fixture, pump);
+  }
+});
+
+test('raw channel send preserves a normal sibling after the first record fails', async () => {
+  const fixture = createFixture();
+  const claimReleased = deferred();
+  const observed = [];
+  const dispatched = [];
+  const errors = [];
+  const failure = new Error('first record failed');
+  let pump;
+  observeClaims(
+    fixture.node,
+    (records) => trackReceivedRecordCleanup(records, observed),
+    claimReleased.resolve
+  );
+  try {
+    await fixture.node.sendToChannel(fixture.channel, Buffer.from('first'));
+    await fixture.node.sendToChannel(fixture.channel, Buffer.from('second'));
+    pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
+      applicationJobQueue: fixture.queue,
+      dispatch(_owner, record) {
+        dispatched.push(record.parts[0].data().toString());
+        if (dispatched.length === 1) throw failure;
+      },
+      reportError(error) {
+        errors.push(error);
+      }
+    });
+    pump.start();
+    await claimReleased.promise;
+    assert.deepEqual(dispatched, ['first', 'second']);
+    assert.deepEqual(errors, [failure]);
+    assert.equal(observed.length, 2);
+    for (const record of observed) {
+      assert.equal(record.released(), 1);
+      for (const closed of record.parts) assert.equal(closed(), 1);
+    }
+    assert.equal(fixture.queue.snapshot().permitsInUse, 0n);
   } finally {
     await closeFixture(fixture, pump);
   }

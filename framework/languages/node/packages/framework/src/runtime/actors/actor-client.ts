@@ -35,6 +35,7 @@ import {
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
+import { remainingActorRequestTimeout, waitActorReply } from './actor-request-deadline';
 import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
 import {
   createInternalFrameworkException,
@@ -223,7 +224,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       effectiveTimeoutMs === undefined ? undefined : performance.now() + effectiveTimeoutMs;
     const deadlineUnixMs =
       effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
-    const route = await this.resolveActorRoute(actorId, signal);
+    const route = await this.resolveActorRoute(actorId, signal, deadlineMs);
     if (
       waitPolicy === 'async' &&
       sourceSpotId !== undefined &&
@@ -257,10 +258,13 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     );
     const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
+      const delivery = this.options
+        .transportDeliveryGate?.()
+        ?.waitBeforeSubmit(actorId, 'request', signal);
       const submissionCopies =
-        (await this.options
-          .transportDeliveryGate?.()
-          ?.waitBeforeSubmit(actorId, 'request', signal)) ?? 1;
+        delivery === undefined
+          ? 1
+          : ((await waitActorReply(delivery, actorId, deadlineMs, signal)) ?? 1);
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -282,9 +286,11 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           );
           if (duplicate !== undefined) submissions.push(duplicate);
         }
-        const replies = await waitHandoffReply<unknown[]>(
+        const replies = await waitActorReply<unknown[]>(
           Promise.all(submissions),
-          remainingActorRequestTimeout(actorId, deadlineMs)
+          actorId,
+          deadlineMs,
+          signal
         );
         return replies[0] as TReply;
       }
@@ -311,7 +317,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
 
   private async resolveActorRoute(
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineMs?: number
   ): Promise<ZLinkResolvedActorRoute> {
     const resolver = this.options.locationResolver();
     if (resolver === undefined) {
@@ -320,7 +327,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         'Actor direct messaging requires a Location Store.'
       );
     }
-    const resolution = await resolver.resolveDirectActorRoute(actorId, signal);
+    const resolution = await resolver.resolveDirectActorRoute(actorId, signal, deadlineMs);
     if (resolution.kind === 'missing') {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
@@ -567,55 +574,12 @@ function remoteRelayErrorKind(value: unknown): ZLinkFrameworkInternalErrorKind {
     : ZLinkFrameworkInternalErrorKind.RequestFailed;
 }
 
-function remainingActorRequestTimeout(
-  actorId: string,
-  deadlineMs: number | undefined
-): number | undefined {
-  if (deadlineMs === undefined) return undefined;
-  const remaining = deadlineMs - performance.now();
-  if (remaining <= 0) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-      `Actor request '${actorId}' exceeded its deadline before submission.`
-    );
-  }
-  return Math.max(1, Math.ceil(remaining));
-}
-
 function requireActorId(actorId: string): void {
   const byteLength = Buffer.byteLength(actorId, 'utf8');
   if (byteLength < 1 || byteLength > ZLINK_MAX_ACTOR_ID_BYTES) {
     throw new ZLinkConfigurationException(
       `Actor ID must contain 1..${ZLINK_MAX_ACTOR_ID_BYTES} UTF-8 bytes.`
     );
-  }
-}
-
-async function waitHandoffReply<TReply>(
-  reply: Promise<unknown>,
-  timeoutMs: number | undefined
-): Promise<TReply> {
-  if (timeoutMs === undefined) return (await reply) as TReply;
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reply as Promise<TReply>,
-      new Promise<TReply>((_resolve, reject) => {
-        deadline = setTimeout(
-          () =>
-            reject(
-              createInternalFrameworkException(
-                ZLinkFrameworkInternalErrorKind.RequestFailed,
-                'Actor handoff request timed out.',
-                true
-              )
-            ),
-          timeoutMs
-        );
-      })
-    ]);
-  } finally {
-    if (deadline !== undefined) clearTimeout(deadline);
   }
 }
 

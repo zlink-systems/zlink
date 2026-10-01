@@ -766,10 +766,20 @@ test('backend mesh dispatch reports service-wire command context before closing 
   let received = false;
   let partClosed = false;
   let resolveFailure;
-  const failure = new Promise((resolve) => { resolveFailure = resolve; });
+  const failure = new Promise((resolve) => {
+    resolveFailure = resolve;
+  });
+  let releaseClaim;
+  const claimReleased = new Promise((resolve) => {
+    releaseClaim = resolve;
+  });
   const part = {
-    data() { return Buffer.from([0x5a, 0x4d, 0x01, 34, 0x00]); },
-    close() { partClosed = true; }
+    data() {
+      return Buffer.from([0x5a, 0x4d, 0x01, 34, 0x00]);
+    },
+    close() {
+      partClosed = true;
+    }
   };
   const claim = {
     recvBatch() {
@@ -777,21 +787,33 @@ test('backend mesh dispatch reports service-wire command context before closing 
       received = true;
       return {
         ok: true,
-        records: [{
-          kind: framework.ReceiveKind.ChannelSend,
-          operationKind: 0,
-          packetName: undefined,
-          sourceNodeRid: 'source-node',
-          parts: [part]
-        }]
+        records: [
+          {
+            kind: framework.ReceiveKind.ChannelSend,
+            operationKind: 0,
+            packetName: undefined,
+            sourceNodeRid: 'source-node',
+            parts: [part]
+          }
+        ]
       };
     },
-    release() {}
+    release() {
+      releaseClaim();
+    }
   };
   const node = {
-    setReadyHandler(handler) { readyHandler = handler; },
+    setReadyHandler(handler) {
+      readyHandler = handler;
+    },
     createReadyBatch() {
-      return { reset() {}, takeClaim() { return claim; }, close() {} };
+      return {
+        reset() {},
+        takeClaim() {
+          return claim;
+        },
+        close() {}
+      };
     },
     createReceiveBatch() {
       return { reset() {}, close() {} };
@@ -807,14 +829,19 @@ test('backend mesh dispatch reports service-wire command context before closing 
   const rootCause = new Error('target authority lost relocation envelope');
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
-    dispatch() { throw rootCause; },
-    reportError(error, context) { resolveFailure({ error, context }); }
+    dispatch() {
+      throw rootCause;
+    },
+    reportError(error, context) {
+      resolveFailure({ error, context });
+    }
   });
 
   try {
     pump.start();
     readyHandler(framework.ReadyDomain.Infrastructure);
     const reported = await failure;
+    await claimReleased;
     assert.equal(reported.error, rootCause);
     assert.equal(reported.context.commandId, 34);
     assert.equal(reported.context.packetName, undefined);

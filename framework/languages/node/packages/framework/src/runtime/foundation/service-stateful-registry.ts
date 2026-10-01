@@ -651,6 +651,14 @@ export class ServiceTerminalOperationRegistry<T> {
     return this.operations.isPending(id);
   }
 
+  get size(): number {
+    return this.operations.size;
+  }
+
+  expire(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
   close(): void {
     this.operations.close('Stateful runtime closed.');
   }

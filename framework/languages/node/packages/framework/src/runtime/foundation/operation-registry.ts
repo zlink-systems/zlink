@@ -1,6 +1,5 @@
 export interface OperationClock {
-  setTimeout(callback: () => void, delayMs: number): unknown;
-  clearTimeout(handle: unknown): void;
+  now(): number;
 }
 
 export class OperationTimeoutError extends Error {
@@ -26,32 +25,26 @@ export interface PendingOperation<T> {
 }
 
 interface Entry<T> {
-  readonly generation: bigint;
+  readonly deadlineMs?: number;
   readonly resolve: (value: T | PromiseLike<T>) => void;
   readonly reject: (reason: unknown) => void;
-  timer?: unknown;
 }
 
 const systemClock: OperationClock = {
-  setTimeout(callback, delayMs) {
-    // A request promise is live work.  Raw RouteMesh polling deliberately
-    // uses unref'ed timers, so this deadline is the handle that keeps a
-    // submit() caller alive until a reply, cancellation, or deadline settles.
-    return setTimeout(callback, delayMs);
-  },
-  clearTimeout(handle) {
-    clearTimeout(handle as NodeJS.Timeout);
-  }
+  now: () => performance.now()
 };
 
 /** Owns request completion so reply, timeout, cancellation, and shutdown race safely. */
 export class OperationRegistry<T> {
   private readonly entries = new Map<bigint, Entry<T>>();
   private nextId = 1n;
-  private generation = 1n;
+  private deadlineCursor?: MapIterator<[bigint, Entry<T>]>;
   private closed = false;
 
-  constructor(private readonly clock: OperationClock = systemClock) {}
+  constructor(
+    private readonly clock: OperationClock = systemClock,
+    private readonly onPendingChanged?: () => void
+  ) {}
 
   register(
     timeoutMs: number,
@@ -62,23 +55,19 @@ export class OperationRegistry<T> {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
     const id = this.nextId++;
-    const generation = this.generation;
     let resolve!: Entry<T>['resolve'];
     let reject!: Entry<T>['reject'];
     const promise = new Promise<T>((onResolve, onReject) => {
       resolve = onResolve;
       reject = onReject;
     });
-    const entry: Entry<T> = { generation, resolve, reject };
+    const entry: Entry<T> = {
+      deadlineMs: timeoutOwner === 'registry' ? this.clock.now() + timeoutMs : undefined,
+      resolve,
+      reject
+    };
     this.entries.set(id, entry);
-    // Durable senders classify exhaustion from admission history. Keep their
-    // identity and cancellation here without racing that decision with a timer.
-    if (timeoutOwner === 'registry') {
-      entry.timer = this.clock.setTimeout(
-        () => this.rejectIfCurrent(id, generation, new OperationTimeoutError(id)),
-        timeoutMs
-      );
-    }
+    if (this.entries.size === 1) this.onPendingChanged?.();
     return { id, promise };
   }
 
@@ -90,10 +79,6 @@ export class OperationRegistry<T> {
   }
 
   fail(id: bigint, reason: unknown): boolean {
-    return this.failCore(id, reason);
-  }
-
-  private failCore(id: bigint, reason: unknown): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
     entry.reject(reason);
@@ -101,7 +86,7 @@ export class OperationRegistry<T> {
   }
 
   cancel(id: bigint, message?: string): boolean {
-    return this.failCore(id, new OperationCancelledError(id, message));
+    return this.fail(id, new OperationCancelledError(id, message));
   }
 
   isPending(id: bigint): boolean {
@@ -111,38 +96,36 @@ export class OperationRegistry<T> {
   close(reason = 'Operation registry closed.'): void {
     if (this.closed) return;
     this.closed = true;
-    this.generation++;
-    const pending = [...this.entries.entries()];
-    this.entries.clear();
-    for (const [, entry] of pending) this.clearTimer(entry);
-    for (const [id, entry] of pending) {
-      entry.reject(new OperationCancelledError(id, reason));
-    }
+    for (const id of this.entries.keys()) this.cancel(id, reason);
+    this.deadlineCursor = undefined;
   }
 
   get size(): number {
     return this.entries.size;
   }
 
-  private rejectIfCurrent(id: bigint, generation: bigint, reason: unknown): void {
-    const entry = this.entries.get(id);
-    if (entry === undefined || entry.generation !== generation) return;
-    this.entries.delete(id);
-    this.clearTimer(entry);
-    entry.reject(reason);
+  expire(nowMs: number, turnDeadlineMs: number): number {
+    let expired = 0;
+    while (this.clock.now() < turnDeadlineMs) {
+      this.deadlineCursor ??= this.entries.entries();
+      const current = this.deadlineCursor.next();
+      if (current.done === true) {
+        this.deadlineCursor = undefined;
+        break;
+      }
+      const [id, entry] = current.value;
+      if (entry.deadlineMs !== undefined && entry.deadlineMs <= nowMs) {
+        if (this.fail(id, new OperationTimeoutError(id))) expired++;
+      }
+    }
+    return expired;
   }
 
   private take(id: bigint): Entry<T> | undefined {
     const entry = this.entries.get(id);
     if (entry === undefined) return undefined;
     this.entries.delete(id);
-    this.clearTimer(entry);
+    if (this.entries.size === 0) this.onPendingChanged?.();
     return entry;
-  }
-
-  private clearTimer(entry: Entry<T>): void {
-    if (entry.timer === undefined) return;
-    this.clock.clearTimeout(entry.timer);
-    entry.timer = undefined;
   }
 }

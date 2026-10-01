@@ -42,6 +42,7 @@ import {
 } from '../../foundation/operation-registry';
 import {
   RawServiceMeshRuntime,
+  RAW_MESH_RECEIVE_TIME_BUDGET_MS,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
 import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
@@ -140,6 +141,9 @@ const MAX_DRAIN_RECORDS = 64;
 // Preserve the existing route observation/admission/liveness cadence. Only the binding
 // readable handler admits receive work; this timer never probes the socket.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
+// Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
+// can use the remaining turn, including time the raw registry did not consume.
+const MESH_BACKEND_RAW_MAINTENANCE_SHARE = 1 / 2;
 /**
  * Conservative Actor Join admission cap for relocation state chunks (spec 15
  * §4.2): a stable lower bound safe on any deployment, never lowered on
@@ -184,8 +188,18 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   };
   private readonly onMaintenance = (): void => {
     this.maintenanceTimer = undefined;
+    if (this.closed) return;
+    const nowMs = performance.now();
+    const turnDeadlineMs = nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS;
+    this.runtime?.expireOperations(
+      nowMs,
+      nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS * MESH_BACKEND_RAW_MAINTENANCE_SHARE
+    );
+    this.stateful?.expireOperations(nowMs, turnDeadlineMs);
+    this.scheduleMaintenance();
     void this.pump();
   };
+  private readonly onPendingOperationsChanged = (): void => this.scheduleMaintenance();
   private nextPeerIntent = 1n;
   private closed = false;
   private objectRole: ServiceNodeDescriptor['objectRole'] = 'none';
@@ -371,6 +385,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       throw new Error('MeshNode bind endpoint is not configured.');
     const descriptor = this.createDescriptor();
     const runtime = new RawServiceMeshRuntime({
+      onPendingOperationsChanged: this.onPendingOperationsChanged,
       descriptor,
       resolveAdvertisedEndpoint: (boundEndpoint) => this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
@@ -414,7 +429,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful = new ServiceStatefulRuntime(
       runtime,
       descriptor.nodeRoutingId,
-      descriptor.lifecycleGeneration
+      descriptor.lifecycleGeneration,
+      this.onPendingOperationsChanged
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
@@ -1502,15 +1518,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   private scheduleMaintenance(): void {
-    if (this.closed || this.maintenanceTimer !== undefined) return;
-    this.maintenanceTimer = setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    if (this.closed) return;
+    this.maintenanceTimer ??= setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    const pending =
+      (this.runtime?.pendingOperationCount ?? 0) + (this.stateful?.pendingOperationCount ?? 0) > 0;
+    if (pending === this.maintenanceTimer.hasRef()) return;
+    if (pending) {
+      this.maintenanceTimer.ref();
+    } else {
+      this.maintenanceTimer.unref();
+    }
   }
 
   private async pump(): Promise<void> {
     if (this.isClosed() || this.pumping) return;
     this.pumping = true;
-    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
-    this.maintenanceTimer = undefined;
     try {
       do {
         const ready = this.readable;
