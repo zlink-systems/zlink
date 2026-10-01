@@ -64,7 +64,7 @@ locations.setMessageFollowDuration(Duration.ofSeconds(30));
 
 | Property | Default | Meaning |
 | --- | --- | --- |
-| `ownerLeaseRenewInterval` / `ownerLeaseTtl` / `ownerLeaseFencingMargin` / `ownerLeaseRenewTimeout` | 5s / 15s / 5s / 3s | The owner lease's renewal interval and TTL. Must satisfy `renewInterval + renewTimeout < ttl - fencingMargin` |
+| `ownerLeaseRenewInterval` / `ownerLeaseTtl` / `ownerLeaseFencingMargin` / `ownerLeaseRenewTimeout` | 5s / 15s / 5s / 3s | The owner lease's renewal interval and TTL. Must satisfy `max(renewInterval, renewTimeout) + renewTimeout < ttl - fencingMargin` |
 | `pollingInterval` | 1 second | The Store status-check interval |
 | `storeFailureGrace` | 30 seconds | The grace period tolerating a Store failure |
 | `routeCacheMaxAge` / `messageFollowDuration` | 15s / 30s | `Duration.ZERO` disables the feature. If both are positive, cache age must be at least 5 seconds smaller than message follow duration |
