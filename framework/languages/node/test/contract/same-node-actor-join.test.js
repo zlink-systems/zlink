@@ -7,17 +7,18 @@ const { DefaultZLinkActorContext } = require('../../packages/framework/dist/runt
 const { ZLinkActorRuntimeState } = require('../../packages/framework/dist/runtime/actors/actor-runtime-state');
 const { runActorHandlerWithDeferredJoins } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
 
-function fixture({ storeFailure = false, lifecycleFailure = false, entry = false, rejected = false, sameTarget = false, sourceLeave, admissionWaitForAbort = false } = {}) {
+function fixture({ storeFailure = false, lifecycleFailure = false, entry = false, rejected = false, sameTarget = false, sourceLeave, admissionWaitForAbort = false, entrySpotId = 'node-a', destroyAfterJoined = false, postCommitBinder } = {}) {
   const events = [];
   let joinSignal;
   const completions = [];
+  const storeMemberships = [];
   const shutdown = new AbortController();
   const actorRef = { actorId: 'alice', nodeRid: 'node-a', generation: 1n };
   let location = { actor: actorRef, spotId: 'node-a', spotGeneration: 1n, membershipEpoch: 1n };
   const state = new ZLinkActorRuntimeState('alice');
   state.rememberMeshName('game');
   state.setNativeActorRef(actorRef);
-  const target = { routerChannelId: 'game', targetNodeRid: 'node-a', spotId: entry ? 'node-a' : 'room', spotKind: entry ? framework.ZLinkSpotKind.Entry : framework.ZLinkSpotKind.User, targetSpotGeneration: 1n };
+  const target = { routerChannelId: 'game', targetNodeRid: 'node-a', spotId: entry ? entrySpotId : 'room', spotKind: entry ? framework.ZLinkSpotKind.Entry : framework.ZLinkSpotKind.User, targetSpotGeneration: 1n };
   if (entry) {
     location = { ...location, spotId: 'room' };
     state.setJoinedSpot('room', undefined, 1n, 1n);
@@ -26,23 +27,26 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
   let frameworkJoined = false;
   const node = {
     status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }),
+    entrySpot: () => ({ routingId: 'node-a', status: () => ({ lifecycleGeneration: 1n }) }),
     actorLookup: () => location,
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
-      location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };
+      location = { actor: actorRef, spotId: spotId ?? 'node-a', spotGeneration, membershipEpoch };
       return actorRef;
     },
     joinActorSpot() { events.push('mesh-record'); return { high: 1n, low: 1n }; },
     joinActorEntrySpot() { events.push('mesh-record'); return { high: 1n, low: 1n }; }
   };
-  const publish = async () => {
+  const publish = async (_actorType, _actorId, spotId, spotGeneration) => {
     events.push('store');
+    storeMemberships.push({ spotId, spotGeneration });
     if (storeFailure) throw new Error('Store commit failed');
   };
   const joined = async () => {
-    assert.equal(location.spotId, target.spotId);
+    assert.equal(location.spotId, entry ? 'node-a' : target.spotId);
     events.push('joined');
     if (lifecycleFailure) throw new Error('OnJoinedActor failed');
+    if (destroyAfterJoined) state.markNativeActorDestroyed(actorRef);
   };
   const activation = {
     spotId: target.spotId,
@@ -71,11 +75,12 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
       }
     }),
     spotRouteResolver: { async resolve() { return target; } },
-    entrySpotIdProvider: () => 'node-a',
+    entrySpotIdProvider: () => entrySpotId,
     locationLifecycle: { notifyActorJoinedSpot: publish, notifyActorLeftSpot: publish },
     localSpotJoin: (...args) => { joinSignal = args[4]; return membership.admitActorJoin(...args); },
     async localSourceLeave() { events.push('source-left'); await sourceLeave?.(); },
     localEntryJoin: joined,
+    remoteActorBinder: postCommitBinder?.bind,
     reportSourceLeaveError(error) { events.push(`source-error:${error.message}`); },
     shutdownSignal: shutdown.signal
   });
@@ -86,7 +91,7 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
   };
   state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
   state.bindActor(actor, context);
-  return { state, events, completions, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
+  return { state, events, completions, storeMemberships, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
     try {
       await runActorHandlerWithDeferredJoins(() => {
         const call = entry ? context.joinEntrySpot() : context.joinSpot('room');
@@ -111,6 +116,23 @@ for (const entry of [false, true]) {
     assert.equal(f.location().membershipEpoch, 1n);
   });
 }
+
+test('same-node Entry Join preserves public Entry identity while committing native membership', async () => {
+  const f = fixture({ entry: true, entrySpotId: 'game-entry-00000000-0000-4000-8000-000000000001' });
+  await f.run();
+  assert.deepEqual(f.events, ['store', 'membership', 'joined', 'source-left', 'completion:accepted']);
+  assert.equal(f.location().spotId, 'node-a');
+  assert.deepEqual(f.storeMemberships, [{ spotId: 'game-entry-00000000-0000-4000-8000-000000000001', spotGeneration: 1n }]);
+});
+
+test('same-node Entry Join retains committed identity when the joined callback destroys the Actor', async () => {
+  const bindings = [];
+  const f = fixture({ entry: true, destroyAfterJoined: true, postCommitBinder: { async bind(actor) { bindings.push(actor); } } });
+  await f.run();
+  assert.equal(f.state.nativeActorRef, undefined);
+  assert.equal(f.completions[0].status, 'accepted');
+  assert.deepEqual(bindings, []);
+});
 
 test('same-node lifecycle failure reports Failed while committed membership remains', async () => {
   const f = fixture({ lifecycleFailure: true });

@@ -895,6 +895,7 @@ export class ZLinkLocationSpotRouteResolver implements ZLinkSpotRouteResolver {
         targetNodeRid: entrySpot.nodeRid,
         spotId: entrySpot.spotId,
         spotKind: ZLinkSpotKind.Entry,
+        targetSpotGeneration: entrySpot.targetNodeGeneration,
         targetNodeGeneration: entrySpot.targetNodeGeneration,
         targetOwnerId: entrySpot.targetOwnerId,
         ownerLeaseGeneration: entrySpot.ownerLeaseGeneration,
