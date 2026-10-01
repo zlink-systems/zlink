@@ -232,7 +232,9 @@ internal sealed class ZLinkDeferredActorJoin(
                 catch (Exception exception)
                 {
                     failure = MapFailure(exception);
-                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery($"deferred_join_target_wait_failed kind={failure} {exception}");
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"deferred_join_target_wait_failed kind={failure} {exception}"
+                    );
                 }
                 barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
             }
@@ -319,7 +321,9 @@ internal sealed class ZLinkDeferredActorJoin(
                     //  to the same kind looks identical from the outside. Trace it on
                     //  the message flow as well, so the cause carries the same flow
                     //  identity as the Join that produced it.
-                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery($"deferred_join_failed kind={kind} {exception}");
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"deferred_join_failed kind={kind} {exception}"
+                    );
                     if (runtime.Flow.CaptureEnabled)
                         runtime.Flow.TraceDispatchError(
                             new ZLinkDispatchFailure(

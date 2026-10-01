@@ -80,14 +80,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (actor is null || sourceRef is null || string.IsNullOrWhiteSpace(actorType))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_target_rejected reason=incomplete_actor_state actor={(actorState.ActorId)}"
+                $"relocation_target_rejected reason=incomplete_actor_state actor={actorState.ActorId}"
             );
             return ZLinkStandaloneActorRelocationResult.TargetRejected;
         }
         if (target.Rid == sourceRef.Value.NodeRid)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_target_rejected reason=target_is_source actor={(actorState.ActorId)} targetRid={(target.Rid)} sourceRid={(sourceRef.Value.NodeRid)}"
+                $"relocation_target_rejected reason=target_is_source actor={actorState.ActorId} targetRid={target.Rid} sourceRid={sourceRef.Value.NodeRid}"
             );
             return ZLinkStandaloneActorRelocationResult.TargetRejected;
         }

@@ -460,6 +460,7 @@ class actor_gateway_runtime_t
       const std::shared_ptr<bound_session_delivery_fence_t> &fence,
       result_t<void> callback_result,
       std::function<void (result_t<void>)> settled);
+    bool trace_bound_session_send_stage_enabled () const;
     template <typename BuildResult>
     void trace_bound_session_send_stage (std::string_view actor_id,
                                          std::string_view stage,

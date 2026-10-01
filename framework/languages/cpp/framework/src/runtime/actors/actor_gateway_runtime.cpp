@@ -3485,6 +3485,11 @@ void actor_gateway_runtime_t::bind_serializers (serializer_registry_t &serialize
     _state->sync ([this, &serializers] { _state->serializers = &serializers; });
 }
 
+bool actor_gateway_runtime_t::trace_bound_session_send_stage_enabled () const
+{
+    return message_flow_tracer_t (_state->dispatch).enabled (message_flow_log_mode_t::detailed);
+}
+
 void actor_gateway_runtime_t::set_dispatch (dispatch_options_t options)
 {
     _state->sync (

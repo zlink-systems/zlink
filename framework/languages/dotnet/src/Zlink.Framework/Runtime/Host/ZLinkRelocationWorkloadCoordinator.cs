@@ -91,7 +91,9 @@ internal sealed class ZLinkRelocationWorkloadCoordinator(
                 control.CancellationToken
             )
             .ConfigureAwait(false);
-        ZLinkFrameworkDebugLog.SpotDiscovery($"relocation_phase_per_actor completed={shells.Completed} committed={shells.CommittedUnitCount}");
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"relocation_phase_per_actor completed={shells.Completed} committed={shells.CommittedUnitCount}"
+        );
         if (!shells.Completed || control.StopRequested())
             return new ZLinkRelocationWorkloadDrainResult(
                 false,
@@ -103,7 +105,9 @@ internal sealed class ZLinkRelocationWorkloadCoordinator(
 
         var actors = await drainActors(control.AbsoluteDeadline, control.CancellationToken)
             .ConfigureAwait(false);
-        ZLinkFrameworkDebugLog.SpotDiscovery($"relocation_phase_actors completed={actors.Completed} committed={actors.CommittedUnitCount} reason={actors.TerminalReason}");
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"relocation_phase_actors completed={actors.Completed} committed={actors.CommittedUnitCount} reason={actors.TerminalReason}"
+        );
         var committed = checked(shells.CommittedUnitCount + actors.CommittedUnitCount);
         if (!actors.Completed || actors.TerminalReason is not null)
             return new ZLinkRelocationWorkloadDrainResult(
@@ -127,7 +131,9 @@ internal sealed class ZLinkRelocationWorkloadCoordinator(
                 control.CancellationToken
             )
             .ConfigureAwait(false);
-        ZLinkFrameworkDebugLog.SpotDiscovery($"relocation_phase_aggregates completed={aggregates.Completed} committed={aggregates.CommittedUnitCount}");
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"relocation_phase_aggregates completed={aggregates.Completed} committed={aggregates.CommittedUnitCount}"
+        );
         return new ZLinkRelocationWorkloadDrainResult(
             aggregates.Completed,
             aggregates.TerminalReason,

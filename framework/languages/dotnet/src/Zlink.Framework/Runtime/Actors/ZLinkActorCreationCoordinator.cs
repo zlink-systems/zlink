@@ -651,7 +651,9 @@ internal sealed class ZLinkActorCreationCoordinator(
             .RunAsync(
                 token => teardownActor(state, nativeActor, token),
                 exception =>
-                    ZLinkFrameworkDebugLog.SpotDiscovery($"actor creation compensation retry for '{actorId}': {exception.Message}"),
+                    ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"actor creation compensation retry for '{actorId}': {exception.Message}"
+                    ),
                 cancellationToken,
                 static exception => exception is OperationCanceledException
             )

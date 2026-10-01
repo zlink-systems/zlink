@@ -1819,7 +1819,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 },
                                 exception =>
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"published Actor relocation recovery id={envelope.AggregateId:N}: {(exception.Message)}"
+                                        $"published Actor relocation recovery id={envelope.AggregateId:N}: {exception.Message}"
                                     ),
                                 token,
                                 static exception =>
@@ -5233,7 +5233,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_actor_reply_received actor={actorId} request_id={requestId} source_node={sourceNodeRid} responder_node={responderNodeRid} flags={flags} capability={(!string.IsNullOrWhiteSpace(replyCapability))}"
+            $"remote_actor_reply_received actor={actorId} request_id={requestId} source_node={sourceNodeRid} responder_node={responderNodeRid} flags={flags} capability={!string.IsNullOrWhiteSpace(replyCapability)}"
         );
         if (
             await _actorMessageFollower

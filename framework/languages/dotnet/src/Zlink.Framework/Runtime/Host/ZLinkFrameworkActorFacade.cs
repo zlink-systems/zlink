@@ -274,7 +274,9 @@ internal sealed class ZLinkFrameworkActorFacade(
 
     private static ZLinkActorJoinResult.Rejected RejectedWithTrace(ZLinkMessage reply, string site)
     {
-        Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery($"actor_join_rejected site={site}");
+        Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"actor_join_rejected site={site}"
+        );
         return new ZLinkActorJoinResult.Rejected(reply);
     }
 }

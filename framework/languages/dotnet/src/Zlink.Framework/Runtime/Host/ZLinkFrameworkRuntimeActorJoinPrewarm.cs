@@ -96,7 +96,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                 //  at Accepted time for this flow, so there is no separate
                 //  installed-stage to abort.
                 _ = _actorHandoffAdmissions.AbortAsync(evictedHandoffId);
-                ZLinkFrameworkDebugLog.SpotDiscovery($"actor_join_prewarm_evicted handoff={evictedHandoffId}");
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_join_prewarm_evicted handoff={evictedHandoffId}"
+                );
             }
         );
         //  CompleteMigration removes the temporary queue once PREPARE owns
@@ -166,7 +168,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         catch (InvalidOperationException)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery($"actor_join_prewarm_migration_discarded handoff={handoffId}");
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"actor_join_prewarm_migration_discarded handoff={handoffId}"
+            );
             return false;
         }
     }

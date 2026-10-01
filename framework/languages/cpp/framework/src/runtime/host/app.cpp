@@ -13,6 +13,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
+#include "runtime/host/bound_session_send_stage_trace.hpp"
 #include "runtime/host/framework_runtime.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/http/http_host_service.hpp"
@@ -734,25 +735,6 @@ class public_framework_runtime_t final : public framework_runtime_t
 
 namespace
 {
-
-struct bound_session_send_stage_trace_context_t
-{
-    zlink::framework::detail::actor_gateway_runtime_t *gateway;
-    std::string_view actor_id;
-    const zlink::routing_id_t *session_rid;
-    void operator() (std::string_view stage, std::string_view result) const
-    {
-        gateway->trace_bound_session_send_stage (
-          actor_id, stage, [&] { return std::string (result); }, session_rid);
-    }
-};
-
-zlink::framework::detail::backend::raw_send_stage_trace_t
-make_bound_session_send_stage_trace (bound_session_send_stage_trace_context_t &context)
-{
-    // Supported standard libraries store this small reference_wrapper target inline.
-    return std::ref (context);
-}
 
 volatile std::sig_atomic_t g_stop_signal_requested = 0;
 
@@ -2177,11 +2159,12 @@ void app_t::_apply_zlink_framework ()
                     node_rid_t::from_string (local.routing_id ().to_string ()),
                     std::string (detail::actor_ref_access_t::actor_type (actor)),
                     std::string (actor.actor_id ().value ()), actor.object_generation ());
-                  /* The raw send invokes this callback before its awaited task
-                   * completes, so the coroutine frame owns its trace context. */
-                  bound_session_send_stage_trace_context_t stage_trace_context{
+                  /* The deferred raw-send completion can outlive this frame, so
+                   * the trace factory must own every value it needs. */
+                  detail::bound_session_send_stage_trace_context_t stage_trace_context{
                     &actor_gateway_runtime, local_actor.actor_id ().value (), &*route->session_rid};
-                  auto stage_trace = make_bound_session_send_stage_trace (stage_trace_context);
+                  auto stage_trace =
+                    detail::make_bound_session_send_stage_trace (stage_trace_context);
                   const auto submitted =
                     co_await application_mesh->native_node ().send_bound_session (
                       local_actor, route->node_rid, route->binding_generation,
@@ -2531,11 +2514,11 @@ void app_t::_apply_zlink_framework ()
                               framework_error_kind_t::not_configured,
                               "Framework Actor bound Session route is unavailable");
                         }
-                        bound_session_send_stage_trace_context_t stage_trace_context{
+                        detail::bound_session_send_stage_trace_context_t stage_trace_context{
                           &actor_gateway_runtime, actor.actor_id ().value (),
                           &*current_route->session_rid};
                         auto stage_trace =
-                          make_bound_session_send_stage_trace (stage_trace_context);
+                          detail::make_bound_session_send_stage_trace (stage_trace_context);
                         const auto submitted =
                           co_await application_mesh->native_node ().send_bound_session (
                             actor, current_route->node_rid, current_route->binding_generation,

@@ -215,7 +215,7 @@ internal static class ZLinkActorBoundSessionRelay
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_reply_begin actor={actorId} request_id={requestId} flags={flags} no_bind={isNoBind} capability={(!string.IsNullOrWhiteSpace(replyCapability))} source_node={sourceNodeRid} direct={directReply is not null}"
+            $"actor_reply_begin actor={actorId} request_id={requestId} flags={flags} no_bind={isNoBind} capability={!string.IsNullOrWhiteSpace(replyCapability)} source_node={sourceNodeRid} direct={directReply is not null}"
         );
         if (isNoBind)
         {
@@ -311,7 +311,7 @@ internal static class ZLinkActorBoundSessionRelay
     {
         var frame = reply.ToFrame(requestHeader);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_reply_no_bind_begin actor={actorRef.ActorId} request_id={requestId} source_node={sourceNodeRid} source_session={sourceSessionRid} capability={(!string.IsNullOrWhiteSpace(replyCapability))} direct={directReply is not null}"
+            $"actor_reply_no_bind_begin actor={actorRef.ActorId} request_id={requestId} source_node={sourceNodeRid} source_session={sourceSessionRid} capability={!string.IsNullOrWhiteSpace(replyCapability)} direct={directReply is not null}"
         );
         if (directReply is not null)
         {
