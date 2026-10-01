@@ -97,14 +97,12 @@ public final class S2sSpotToChannelRequestEchoScenario {
                                 PerfEchoRequest echo = measurement.request(spot,
                                         sequences.incrementAndGet(spot % sequences.length()), true);
                                 return spots.requestToSpot(config.spotIds().get(spot), new PerfDriveRequest(echo))
-                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs() * 2L))
+                                        .timeout(Duration.ofMillis(config.workload().driverTimeoutMs()))
                                         .submit(PerfDriveReply.class)
                                         .thenAccept(driven -> {
                                             if (!driven.started() || driven.echo() == null) {
                                                 throw new PerfValidationException("IdentityMismatch", "The setup probe did not reach the Channel.");
                                             }
-                                            PayloadPattern.validateIdentity(echo, driven.echo());
-                                            measurement.pattern().validate(driven.echo().payload());
                                             Map<String, Object> observed = new LinkedHashMap<>();
                                             observed.put("correlationId", echo.correlationId());
                                             observed.put("receivedTicks", driven.echo().receivedTicks());
@@ -141,9 +139,9 @@ public final class S2sSpotToChannelRequestEchoScenario {
             metrics.count("driver.issued");
             CompletionStage<PerfDriveReply> call;
             try {
-                // The driver call must outlast the measured remote call it wraps, so it gets twice the request deadline.
+                // The role workload owns the deadline of this local public driver call.
                 call = spots.requestToSpot(spotId, new PerfDriveRequest(echo))
-                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs() * 2L))
+                        .timeout(Duration.ofMillis(config.workload().driverTimeoutMs()))
                         .submit(PerfDriveReply.class);
             } catch (RuntimeException error) {
                 call = CompletableFuture.failedFuture(error);
@@ -152,7 +150,9 @@ public final class S2sSpotToChannelRequestEchoScenario {
                 if (error != null) {
                     driverFailed(error);
                 } else if (driven.started()) {
-                    metrics.record("driverLatencyMs", started, PerfClock.now());
+                    if (driven.echo() != null) {
+                        metrics.record("driverLatencyMs", started, PerfClock.now());
+                    }
                 } else {
                     metrics.count("driver.notStarted");
                 }
@@ -204,36 +204,43 @@ public final class S2sSpotToChannelRequestEchoScenario {
                         return CompletableFuture.completedFuture(new PerfDriveReply(false, null));
                     }
                 }
-                long begun = started;
-                PerfEchoRequest sent = request.withSentTicks(started);
-                ZLinkRequestCall call = spot.context().outbound().requestToChannel(config.channelName(), sent)
-                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs()));
-                CompletionStage<PerfEchoReply> reply;
-                if ("yield".equals(config.terminal())) {
-                    metrics.count("spot.applicationYieldCalls");
-                    reply = call.yield(PerfEchoReply.class);
-                } else {
-                    reply = call.submit(PerfEchoReply.class);
-                }
-                return reply.handle((echoed, error) -> {
-                    try {
-                        if (error == null) {
-                            try {
-                                PayloadPattern.validateIdentity(sent, echoed);
-                                measurement.pattern().validate(echoed.payload());
-                            } catch (RuntimeException invalid) {
-                                return failed(probe, begun, invalid);
-                            }
-                            if (!probe) {
-                                measurement.completeOperation(begun);
-                            }
-                            return new PerfDriveReply(true, echoed);
-                        }
-                        return failed(probe, begun, error);
-                    } finally {
-                        measurement.handlerExit();
+                try {
+                    long operationStarted = started;
+                    PerfEchoRequest sent = request.withSentTicks(operationStarted);
+                    ZLinkRequestCall call = spot.context().outbound().requestToChannel(config.channelName(), sent)
+                            .timeout(Duration.ofMillis(config.workload().requestTimeoutMs()));
+                    CompletionStage<PerfEchoReply> reply;
+                    if ("yield".equals(config.terminal())) {
+                        metrics.count("spot.applicationYieldCalls");
+                        reply = call.yield(PerfEchoReply.class);
+                    } else {
+                        reply = call.submit(PerfEchoReply.class);
                     }
-                });
+                    return reply.handle((echoed, error) -> {
+                        try {
+                            if (error == null) {
+                                try {
+                                    PayloadPattern.validateIdentity(sent, echoed);
+                                    measurement.pattern().validate(echoed.payload());
+                                } catch (RuntimeException invalid) {
+                                    return failed(probe, operationStarted, invalid);
+                                }
+                                if (!probe) {
+                                    measurement.completeOperation(operationStarted, null, PerfClock.now());
+                                }
+                                return new PerfDriveReply(true, echoed);
+                            }
+                            return failed(probe, operationStarted, error);
+                        } finally {
+                            measurement.handlerExit();
+                        }
+                    });
+                } catch (RuntimeException error) {
+                    if (!probe) {
+                        measurement.completeOperation(started, error);
+                    }
+                    throw error;
+                }
             } catch (RuntimeException error) {
                 measurement.handlerExit();
                 throw error;

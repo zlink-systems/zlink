@@ -39,9 +39,7 @@ class s2s_send_send_spot_t final : public perf_spot_base_t<s2s_send_send_spot_t>
         std::int64_t started = 0;
         try {
             auto request = drive.echo;
-            measurement.validate_request (request, std::nullopt, request.return_spot_id);
-            if (!request.return_spot_id || request.return_spot_id->empty ())
-                throw validation_error_t ("IdentityMismatch", "No return SpotId in the request.");
+            measurement.validate_request (request, std::nullopt, _context.spot_id ());
             if (request.phase == "measured")
                 _role.metrics.count ("spot.applicationHandlerEntries");
             probe = measurement.phase () == "setup"; // the setup probe is no measured operation
@@ -49,7 +47,8 @@ class s2s_send_send_spot_t final : public perf_spot_base_t<s2s_send_send_spot_t>
             if (!probe && !measurement.begin_operation (started, "send"))
                 co_return drive_reply_t{false, std::nullopt};
             request.sent_ticks = dec (started);
-            const auto entry = _role.correlations->register_request (request, started); // §13: registered right before the first public send
+            // §13: register immediately before the first public send.
+            const auto entry = _role.correlations->register_request (request);
             try {
                 co_await _route.send_to_channel (*config.channel_name, request).async ();
                 _role.correlations->first_send_ended (entry, nullptr);
@@ -113,7 +112,7 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
             auto echo = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             echo.return_spot_id = config.spot_ids[target];
             const auto driven = route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
-                                  .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms * 2))
+                                  .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms))
                                   .async<drive_reply_t> ()
                                   .result ()
                                   .value ();
@@ -151,31 +150,32 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
             echo.return_spot_id = spot_id;
             const auto driver_started = now_ticks ();
             _role.metrics.count ("driver.issued");
-            std::exception_ptr error;
+            std::optional<drive_reply_t> driven;
+            std::optional<std::int64_t> driver_finished;
             try {
-                const auto driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                                      .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms * 2))
-                                      .async<drive_reply_t> ();
-                if (!driven.started) {
-                    _role.metrics.count ("driver.notStarted");
-                    continue;
-                }
-                // Outside the Spot turn: the final result of the correlation the handler registered (§13).
-                const auto entry = _role.correlations->find (echo.correlation_id);
-                if (!entry)
-                    throw validation_error_t ("UnknownCorrelation", "The started drive registered no correlation.");
-                const auto [result, completed] = co_await _role.correlations->complete (entry);
-                measurement.complete_operation (entry->started_ticks, result, completed);
-                if (!result)
-                    _role.metrics.record ("driverLatencyMs", driver_started, now_ticks ());
+                driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
+                           .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
+                driver_finished = now_ticks ();
             }
             catch (...) {
-                error = std::current_exception ();
-            }
-            if (error) {
                 _role.metrics.count ("driver.failed");
-                measurement.record_diagnostic (error);
+                measurement.record_diagnostic (std::current_exception ());
             }
+            if (driven && !driven->started) {
+                _role.metrics.count ("driver.notStarted");
+                continue;
+            }
+            // A failed driver call can race an operation the Spot already started; its correlation still closes it (§13).
+            const auto entry = _role.correlations->find (echo.correlation_id);
+            if (!entry) {
+                if (driven)
+                    measurement.record_diagnostic (std::make_exception_ptr (
+                      validation_error_t ("UnknownCorrelation", "The started drive registered no correlation.")));
+                continue;
+            }
+            const auto [result, completed] = co_await _role.correlations->complete (entry);
+            if (measurement.complete_operation (parse_i64 (entry->request.sent_ticks), result, completed) && driver_finished)
+                _role.metrics.record ("driverLatencyMs", driver_started, *driver_finished);
         }
     }
 

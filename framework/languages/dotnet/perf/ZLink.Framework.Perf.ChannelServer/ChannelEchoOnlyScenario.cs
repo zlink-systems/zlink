@@ -8,7 +8,7 @@ namespace ZLink.Framework.Perf;
 // Source public request -> typed identity/full-byte validation is one operation.
 // JSON payloads: 1024/4096, request/ordinary. Connector/Actor/Spot/worker/fanout metrics do not apply.
 public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, IZLinkClientServerRuntime channelRuntime)
+    IZLinkRouteMeshRuntime meshRuntime, IZLinkClientServerRuntime channelRuntime, ObjectsReadiness readiness)
 {
     private readonly RoleConfig config = measurement.Config;
     private long[] sequences = [];
@@ -18,6 +18,7 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
         timeout.CancelAfter(config.workload.setupTimeoutMs);
         try
         {
+            object? channelTargetStatus = null;
             // ObserveAsync is a change stream, not an initial snapshot (monitoring §6).
             // Query public status until setup evidence is ready; never retry the probe call.
             while (true)
@@ -26,12 +27,21 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
                 if (config.topology == "routemesh")
                 {
                     var status = meshRuntime.GetStatus(config.meshName!);
-                    if (status.IsReady && status.Channels.Any(c => c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0)) break;
+                    var channel = status.Channels.FirstOrDefault(c => c.ChannelName == config.channelName);
+                    if (status.IsReady && channel is { IsReady: true, ReadyTargetCount: > 0 })
+                    {
+                        channelTargetStatus = channel;
+                        break;
+                    }
                 }
                 else
                 {
                     var status = channelRuntime.GetStatus(config.channelName!);
-                    if (status.IsReady && status.ReadyTargetCount > 0) break;
+                    if (status.IsReady && status.ReadyTargetCount > 0)
+                    {
+                        channelTargetStatus = status;
+                        break;
+                    }
                 }
                 await Task.Yield();
             }
@@ -43,6 +53,9 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
             measurement.Pattern.Validate(reply.payload);
             measurement.SetupEvidence = [new { kind = "typedProbeEcho", source = "IZLinkRouteClient.RequestToChannel.Async<PerfEchoReply>",
                 observedValue = new { request.correlationId, reply.receivedTicks, reply.clockDomainId } }];
+            readiness.Set(true, "", [new { kind = "channelTarget",
+                source = config.topology == "routemesh" ? "IZLinkRouteMeshRuntime.GetStatus" : "IZLinkClientServerRuntime.GetStatus",
+                observedValue = channelTargetStatus }]);
         }
         catch (Exception error) { measurement.RecordDiagnostic(error); }
     }

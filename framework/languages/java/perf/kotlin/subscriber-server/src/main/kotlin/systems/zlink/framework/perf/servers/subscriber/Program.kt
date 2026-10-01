@@ -9,6 +9,7 @@ import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.perf.CellDirectory
 import systems.zlink.framework.perf.Measurement
 import systems.zlink.framework.perf.ObjectsReadiness
+import systems.zlink.framework.perf.PerfClock
 import systems.zlink.framework.perf.PerfPublishEvent
 import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.servers.subscriber.FanoutReceipts
@@ -23,9 +24,10 @@ class KotlinPerfFanoutHandler(
     private val receipts: FanoutReceipts,
 ) : ZLinkSuspendingPublishHandler<PerfPublishEvent> {
     override suspend fun handle(message: PerfPublishEvent, context: ZLinkPublishMessageContext) {
+        val handlerEntryTicks = PerfClock.now()
         measurement.handlerEnter()
         try {
-            receipts.record(message)
+            receipts.record(message, handlerEntryTicks)
         } catch (error: RuntimeException) {
             measurement.recordDiagnostic(error)
             throw error

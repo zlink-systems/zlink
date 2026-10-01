@@ -27,7 +27,7 @@ public static class S2sSpotToChannelSendSendEchoTarget
     }
 }
 
-public sealed class S2sReturnToSpotHandler(Measurement measurement, IZLinkSpotClient spots) : IZLinkSendHandler<PerfEchoRequest>
+public sealed class S2sReturnToSpotHandler(Measurement measurement, IZLinkSpotClient spots, RoleConfig config) : IZLinkSendHandler<PerfEchoRequest>
 {
     public async ValueTask HandleAsync(PerfEchoRequest message, IZLinkMessageContext context, CancellationToken cancellationToken)
     {
@@ -35,8 +35,10 @@ public sealed class S2sReturnToSpotHandler(Measurement measurement, IZLinkSpotCl
         measurement.HandlerEnter();
         try
         {
-            if (string.IsNullOrEmpty(message.returnSpotId)) throw new PerfValidationException("IdentityMismatch", "No return SpotId in the request.");
-            measurement.ValidateRequest(message, returnSpotId: message.returnSpotId);
+            if (message.clientId < 0 || config.spotIds.Length == 0 || string.IsNullOrEmpty(message.returnSpotId))
+                throw new PerfValidationException("IdentityMismatch", "The request has no source Spot in this cell.");
+            var expectedReturnSpotId = config.spotIds[message.clientId % config.spotIds.Length];
+            measurement.ValidateRequest(message, returnSpotId: expectedReturnSpotId);
             var reply = PayloadPattern.Reply(message, received);
             measurement.RecordApplicationCall(message, "send");
             await spots.SendToSpot(message.returnSpotId, reply).Async(cancellationToken);
