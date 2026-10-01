@@ -179,7 +179,7 @@ class request_performer_t
           "zlink-http-client/" + std::to_string (zlink::http_client::version_major) + "."
           + std::to_string (zlink::http_client::version_minor);
         wire.set (http::field::user_agent, user_agent);
-        wire.set (http::field::accept, zlink::detail::json_profile::content_type);
+        wire.set (http::field::accept, json_media_type);
         if (_options.compression) {
             wire.set (http::field::accept_encoding, "gzip, deflate");
         }

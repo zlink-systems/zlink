@@ -110,7 +110,7 @@ bool flow_id_t::is_valid (std::string_view value) noexcept
 {
     if (!zlink::framework::detail::is_lowercase_uuid_text (value))
         return false;
-    if (value[14] != '7') {
+    if (value[14] != uuid_v7_version_character) {
         return false;
     }
     const char variant = value[19];

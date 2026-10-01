@@ -276,7 +276,7 @@ bool content_type_is_json (std::string value)
     while (!value.empty () && std::isspace (static_cast<unsigned char> (value.back ()))) {
         value.pop_back ();
     }
-    return header_name_equals (value, "application/json");
+    return header_name_equals (value, zlink::framework::detail::json_media_type);
 }
 
 void validate_json_content_type (const http::request<http::string_body> &request,
@@ -614,7 +614,7 @@ make_health_response (health_builder_t &health,
     http::response<http::string_body> response{
       status == health_status_t::unhealthy ? http::status::service_unavailable : http::status::ok,
       request.version ()};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::framework::detail::json_media_type);
     response.body () = body.dump ();
     apply_context_response (response, context, false);
     response.prepare_payload ();
@@ -625,7 +625,7 @@ http::response<http::string_body>
 make_json_response (http::status status, unsigned version, std::string body)
 {
     http::response<http::string_body> response{status, version};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::framework::detail::json_media_type);
     response.body () = std::move (body);
     return response;
 }
@@ -775,7 +775,7 @@ http::response<http::string_body>
 make_http_status_response (http::status status, unsigned version, std::string body, bool keep_alive)
 {
     http::response<http::string_body> response{status, version};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::framework::detail::json_media_type);
     response.keep_alive (keep_alive);
     response.body () = std::move (body);
     response.prepare_payload ();

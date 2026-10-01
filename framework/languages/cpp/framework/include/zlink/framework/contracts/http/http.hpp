@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/json_profile.hpp>
-
 #include <zlink/framework/contracts/configuration/services.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
@@ -28,6 +26,7 @@ namespace zlink::framework
 namespace detail
 {
 inline constexpr int default_http_success_status = 200;
+inline constexpr char json_media_type[] = "application/json";
 }
 
 
@@ -90,7 +89,7 @@ struct http_response_t
 {
     int status = detail::default_http_success_status;
     std::string body;
-    std::string content_type = zlink::detail::json_profile::content_type;
+    std::string content_type = detail::json_media_type;
     std::map<std::string, std::string> headers;
 
     http_response_t &header (std::string name, std::string value)
@@ -673,7 +672,7 @@ class http_options_builder_t
               [] (const encoded_payload_t &payload) {
                   return detail::encoded_payload_to_raw (payload).template parse_json<T> ();
               },
-              zlink::detail::json_profile::content_type);
+              detail::json_media_type);
         }
     }
 

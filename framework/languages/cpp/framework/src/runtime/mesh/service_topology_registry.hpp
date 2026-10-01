@@ -185,4 +185,3 @@ class service_topology_registry_t
 };
 
 } // namespace zlink::framework::runtime::mesh
-#include <mutex>

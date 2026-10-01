@@ -19,7 +19,13 @@ namespace zlink::framework::runtime
 
 inline constexpr char incomplete_flow_context_error[] =
   "flow id and origin must be present together";
-inline constexpr char invalid_flow_context_error[] = "flow id must be UUIDv7";
+inline constexpr char uuid_v7_version_character = '7';
+inline constexpr char invalid_flow_context_error_prefix[] = "flow id must be UUIDv";
+
+inline std::string invalid_flow_context_error_message ()
+{
+    return std::string (invalid_flow_context_error_prefix) + uuid_v7_version_character;
+}
 
 /* flow_id wire form (flow-correlation §6): lowercase hyphenated UUIDv7,
  * 36 ASCII bytes. The generation algorithm is a framework-internal decision;
@@ -100,7 +106,7 @@ class flow_context_t
         if (flow_id) {
             if (!flow_id_t::is_valid (*flow_id)) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                             invalid_flow_context_error);
+                                             invalid_flow_context_error_message ());
             }
             return scope_t (
               flow_value_t{*flow_id, *origin, diagnostics_mode, std::move (stream_session_id)});
@@ -124,7 +130,7 @@ class flow_context_t
         if (flow_id) {
             if (!flow_id_t::is_valid (*flow_id)) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                             invalid_flow_context_error);
+                                             invalid_flow_context_error_message ());
             }
             return scope_t (flow_value_t{std::move (*flow_id), *origin, diagnostics_mode,
                                          std::move (stream_session_id)});

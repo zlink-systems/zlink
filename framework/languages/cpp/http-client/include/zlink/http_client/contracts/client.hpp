@@ -55,6 +55,7 @@ namespace detail
 {
 inline constexpr char content_type_header_name[] = "content-type";
 inline constexpr char authorization_header_name[] = "authorization";
+inline constexpr char json_media_type[] = "application/json";
 inline constexpr std::chrono::milliseconds default_timeout{3000};
 inline constexpr std::size_t default_max_response_body_size = 16 * 1024 * 1024;
 
@@ -158,8 +159,7 @@ class request_builder_t
     template <typename T> request_builder_t &body (const T &value)
     {
         _body = zlink::message_t::from_json (value).to_string ();
-        _headers.try_emplace (detail::content_type_header_name,
-                              zlink::detail::json_profile::content_type);
+        _headers.try_emplace (detail::content_type_header_name, detail::json_media_type);
         return *this;
     }
 

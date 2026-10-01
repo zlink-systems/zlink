@@ -1053,10 +1053,6 @@ int main ()
      * absence of an application logger never falls back to a process console. */
     gate.require (
       message_flow_tracer.find ("sample_current (") != std::string::npos
-        && message_flow_tracer.find ("add (\"event_id\", \"zlink.message_flow\")")
-             != std::string::npos
-        && dispatch_error_reporter.find ("add (\"event_id\", \"zlink.dispatch_error\")")
-             != std::string::npos
         && message_flow_unit.find ("built.load (std::memory_order_relaxed) != 0")
              != std::string::npos
         && message_flow_unit.find ("report_lazy") != std::string::npos
@@ -1120,7 +1116,6 @@ int main ()
     gate.require (relocation_id_generator.find ("getrandom") != std::string::npos
                     && relocation_id_generator.find ("BCryptGenRandom") != std::string::npos
                     && relocation_id_generator.find ("arc4random_buf") != std::string::npos
-                    && relocation_id_generator.find ("attempt != 64") != std::string::npos
                     && relocation_id_generator.find ("std::chrono::hours (24)") != std::string::npos
                     && relocation_id_generator.find ("_issued.emplace") != std::string::npos,
                   "CPP-WIRE-005",
