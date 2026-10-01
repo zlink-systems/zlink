@@ -49,11 +49,13 @@ import {
   decodeRouteMeshAdmission,
   decodeReplyHeader,
   encodeApplicationPayload,
+  encodeReject,
   encodeNodeRequestHeader,
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
 import { encodeActorJoin28 } from '../../../../runtime/protocol/generated/node/service_wire_pilot_codec.generated';
+import { enumWireRejectReason } from '../../../../runtime/protocol/generated/node/service_wire_codec.generated';
 
 function descriptor(
   nodeRoutingId: string,
@@ -1358,6 +1360,32 @@ test('ClientServer selection and classic fanout discovery use dedicated descript
   );
 });
 
+test('security identity mismatch reject does not mark a peer NotRequired', async () => {
+  const runtime = rawServiceRuntime({
+    descriptor: { ...descriptor('local'), channels: [], objectRole: 'client' }
+  });
+  const internals = runtime as unknown as {
+    processReceived(
+      received: { sourceRid: string; parts: readonly Buffer[] },
+      nowMs: number
+    ): Promise<string>;
+  };
+  try {
+    assert.equal(
+      await internals.processReceived(
+        {
+          sourceRid: 'peer',
+          parts: [encodeReject(enumWireRejectReason('securityIdentityMismatch'))]
+        },
+        0
+      ),
+      'infrastructure'
+    );
+    assert.equal(runtime.topology.notRequiredPeers().length, 0);
+  } finally {
+    runtime.close();
+  }
+});
 test('raw admission keeps Object Client-only pairs out of liveness and records NotRequired', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
   let leftDescriptor: ServiceNodeDescriptor = {
