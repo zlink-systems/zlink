@@ -320,16 +320,25 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 .ConfigureAwait(false);
             throw;
         }
-        catch (Exception ex) when (ex is not ZlinkStreamException)
+        catch (Exception ex)
         {
-            var error = MapConnectException(ex, cancellationToken);
-            await TransitionToDisconnectedAsync(error, cancellationToken).ConfigureAwait(false);
+            var error = ex is ZlinkStreamException streamException
+                ? streamException.Error
+                : MapConnectException(ex, cancellationToken);
+            if (
+                error.Code
+                is ZlinkStreamErrorCode.ConfigurationError
+                    or ZlinkStreamErrorCode.ValidationFailed
+            )
+                await TransitionToDisconnectedAsync(error, cancellationToken).ConfigureAwait(false);
+            else
+                await HandleDisconnectAsync(
+                        error,
+                        ZlinkStreamCloseReason.TransportError,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             throw new ZlinkStreamException(error);
-        }
-        catch (ZlinkStreamException ex)
-        {
-            await TransitionToDisconnectedAsync(ex.Error, cancellationToken).ConfigureAwait(false);
-            throw;
         }
     }
 

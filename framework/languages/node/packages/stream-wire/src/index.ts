@@ -64,6 +64,12 @@ export function isStreamWireCodec(value: number): boolean {
   return validCodecs.has(value);
 }
 
+const UTF8_TWO_BYTE_MIN = 0x80;
+const UTF8_THREE_BYTE_MIN = 0x800;
+const UTF16_HIGH_SURROGATE_MIN = 0xd800;
+const UTF16_HIGH_SURROGATE_MAX = 0xdbff;
+const UTF16_LOW_SURROGATE_MIN = 0xdc00;
+const UTF16_LOW_SURROGATE_MAX = 0xdfff;
 const UINT8_MAX = 0xff;
 const UINT16_MAX = 0xffff;
 const UINT16_BYTES = 2;
@@ -153,15 +159,6 @@ export function encodeStreamWireSessionClosingPayload(
   writeUInt16BE(payload, CLOSING_DIAGNOSTIC_LENGTH_OFFSET, bytes.length);
   payload.set(bytes, CLOSING_PREFIX_BYTES);
   return payload;
-}
-
-export function encodeStreamWireSessionClosing(
-  reason: ZlinkStreamCloseReason,
-  diagnostic?: string
-): Uint8Array {
-  const reasonCode = ZlinkStreamCloseReasonCode[reason];
-  if (!Number.isInteger(reasonCode)) throw new Error('Unknown session-closing reason.');
-  return encodeStreamWireSessionClosingPayload(reasonCode, diagnostic ?? '');
 }
 
 export function decodeStreamWireSessionClosing(payload: Uint8Array): {
@@ -461,11 +458,13 @@ export function decodeStreamWireHeader(
     throw new Error('Stream packet name length is missing.');
   }
   const nameLength = header[offset++];
-  if ((!isReplyKind(kind) && nameLength === 0) || header.length - offset < nameLength) {
+  if (
+    (isReplyKind(kind) ? nameLength !== 0 : nameLength === 0) ||
+    header.length - offset < nameLength
+  ) {
     throw new Error('Stream packet name is invalid.');
   }
-  const decodedName = utf8Decode(header.subarray(offset, offset + nameLength));
-  const name = isReplyKind(kind) ? '' : decodedName;
+  const name = utf8Decode(header.subarray(offset, offset + nameLength));
   offset += nameLength;
   const decodedMetadata = hasMetadata
     ? decodeStreamWireHeaderMetadata(header, offset)
@@ -543,27 +542,33 @@ function asciiDecode(value: Uint8Array): string {
   return String.fromCharCode(...value);
 }
 
-export function encodeStreamWireMetadata(metadata: ReadonlyMap<string, string>): Uint8Array {
-  if (metadata.size > 255) {
+/** Standalone metadata includes its count byte even when the map is empty. */
+export function streamWireMetadataSize(metadata: ReadonlyMap<string, string>): number {
+  if (metadata.size > UINT8_MAX) {
     throw new Error('Metadata entry count must not exceed 255.');
   }
   let size = 1;
-  const encoded = [...metadata].map(([key, value]) => {
-    const keyBytes = utf8Encode(key);
-    const valueBytes = utf8Encode(value);
-    if (keyBytes.length === 0 || keyBytes.length > 255) {
+  for (const [key, value] of metadata) {
+    const keySize = utf8Size(key);
+    const valueSize = utf8Size(value);
+    if (keySize === 0 || keySize > UINT8_MAX) {
       throw new Error('Metadata key length is invalid.');
     }
-    if (valueBytes.length > UINT16_MAX) {
+    if (valueSize > UINT16_MAX) {
       throw new Error('Metadata value is too large.');
     }
-    size += 1 + keyBytes.length + 2 + valueBytes.length;
-    return { keyBytes, valueBytes };
-  });
-  const buffer = new Uint8Array(size);
+    size += 1 + keySize + UINT16_BYTES + valueSize;
+  }
+  return size;
+}
+
+export function encodeStreamWireMetadata(metadata: ReadonlyMap<string, string>): Uint8Array {
+  const buffer = new Uint8Array(streamWireMetadataSize(metadata));
   let offset = 0;
   buffer[offset++] = metadata.size;
-  for (const { keyBytes, valueBytes } of encoded) {
+  for (const [key, value] of metadata) {
+    const keyBytes = utf8Encode(key);
+    const valueBytes = utf8Encode(value);
     buffer[offset++] = keyBytes.length;
     buffer.set(keyBytes, offset);
     offset += keyBytes.length;
@@ -705,4 +710,25 @@ function readBigUInt64BE(buffer: Uint8Array, offset: number): bigint {
     value = (value << 8n) | BigInt(buffer[offset + index]);
   }
   return value;
+}
+
+/** TextEncoder replaces lone surrogates with the three-byte replacement character. */
+function utf8Size(value: string): number {
+  let size = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < UTF8_TWO_BYTE_MIN) size += 1;
+    else if (code < UTF8_THREE_BYTE_MIN) size += 2;
+    else if (
+      code >= UTF16_HIGH_SURROGATE_MIN &&
+      code <= UTF16_HIGH_SURROGATE_MAX &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= UTF16_LOW_SURROGATE_MIN &&
+      value.charCodeAt(index + 1) <= UTF16_LOW_SURROGATE_MAX
+    ) {
+      size += 4;
+      index += 1;
+    } else size += 3;
+  }
+  return size;
 }

@@ -61,6 +61,10 @@ export class ZlinkStreamHeaderCodec {
         correlationId: wire.correlationId,
         actorSlot: wire.actorSlot
       };
+      if (!isReplyKind(decoded.kind)) {
+        validateName(decoded.name, decoded.kind === ZlinkStreamMessageKind.Control);
+      }
+      validateHeaderSemantics(decoded);
     } catch (cause) {
       throw connectorError(
         ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -68,11 +72,6 @@ export class ZlinkStreamHeaderCodec {
         cause
       );
     }
-    validateEnum(decoded.kind, decoded.codec, decoded.flags);
-    if (!isReplyKind(decoded.kind)) {
-      validateName(decoded.name, decoded.kind === ZlinkStreamMessageKind.Control);
-    }
-    validateHeaderSemantics(decoded);
     return decoded;
   }
 }

@@ -1,13 +1,14 @@
 import { splitStreamWireFrames } from '@zlink-systems/stream-wire';
-import { ZlinkStreamErrorCode, ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES } from '../../Contracts';
+import { ZlinkStreamErrorCode } from '../../Contracts';
 import { decodeStreamWireFrame, encodeStreamWireFrame } from '@zlink-systems/stream-wire';
 import { connectorError } from '../ZlinkStreamSupport';
+import { ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../ZlinkStreamConnectorOptions';
 
 export class ZlinkStreamFrameCodec {
   static encode(
     header: Uint8Array,
     payload: Uint8Array,
-    maxPayloadSize: number = ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES
+    maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE
   ): Uint8Array {
     validatePayload(payload.length, maxPayloadSize);
     try {

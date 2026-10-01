@@ -1,6 +1,10 @@
 import type { Disposable, ZlinkStreamConnectionStateChanged, ZlinkStreamError } from '../Contracts';
 import { ZlinkStreamErrorCode } from '../Contracts';
-import { subscription } from './ZlinkStreamSupport';
+import {
+  currentRegistrations,
+  registerHandler,
+  type HandlerRegistration
+} from './ZlinkStreamSupport';
 
 export class ZlinkStreamConnectorEvents {
   /**
@@ -11,23 +15,25 @@ export class ZlinkStreamConnectorEvents {
     private readonly enqueueCallback: (callback: () => void, callbacks: () => number) => void
   ) {}
   private readonly errorHandlers = new Set<
-    (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<(error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void>
   >();
-  private readonly disconnectedHandlers = new Set<(signal?: AbortSignal) => Promise<void> | void>();
+  private readonly disconnectedHandlers = new Set<
+    HandlerRegistration<(signal?: AbortSignal) => Promise<void> | void>
+  >();
   private readonly stateHandlers = new Set<
-    (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<
+      (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
+    >
   >();
 
   onError(
     handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
-    this.errorHandlers.add(handler);
-    return subscription(() => this.errorHandlers.delete(handler));
+    return registerHandler(this.errorHandlers, handler);
   }
 
   onDisconnected(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable {
-    this.disconnectedHandlers.add(handler);
-    return subscription(() => this.disconnectedHandlers.delete(handler));
+    return registerHandler(this.disconnectedHandlers, handler);
   }
 
   onStateChanged(
@@ -36,8 +42,7 @@ export class ZlinkStreamConnectorEvents {
       signal?: AbortSignal
     ) => Promise<void> | void
   ): Disposable {
-    this.stateHandlers.add(handler);
-    return subscription(() => this.stateHandlers.delete(handler));
+    return registerHandler(this.stateHandlers, handler);
   }
   publishError(error: ZlinkStreamError, signal?: AbortSignal): void {
     this.publish(this.errorHandlers, (handler) => handler(error, signal), signal);
@@ -70,20 +75,20 @@ export class ZlinkStreamConnectorEvents {
   }
 
   private publish<T>(
-    handlers: Set<T>,
+    handlers: Set<HandlerRegistration<T>>,
     invoke: (handler: T) => Promise<void> | void,
     signal?: AbortSignal
   ): void {
     this.enqueueCallback(
       () => {
-        for (const handler of Array.from(handlers)) {
+        for (const handler of currentRegistrations(handlers)) {
           const report = (cause: unknown) =>
             this.reportFailure(
               cause,
               signal,
               handlers === this.errorHandlers ? handler : undefined
             );
-          this.invoke(() => invoke(handler), report);
+          this.invoke(() => invoke(handler.handler), report);
         }
       },
       () => handlers.size
@@ -112,16 +117,22 @@ export class ZlinkStreamConnectorEvents {
       (candidate) => !attempted.has(candidate)
     );
     if (remaining.length === 0) return;
-    const nextAttempted = new Set([...attempted, ...remaining]);
+    const nextAttempted = new Set(Array.from(attempted).concat(remaining));
     this.enqueueCallback(
       () => {
-        for (const handler of remaining) {
+        for (const handler of currentRegistrations(this.errorHandlers, remaining)) {
           const report = (cause: unknown) =>
             this.reportToRemaining({ ...error, cause }, signal, nextAttempted);
-          this.invoke(() => handler(error, signal), report);
+          const callback = handler.handler;
+          this.invoke(() => callback(error, signal), report);
         }
       },
-      () => remaining.length
+      () => {
+        let count = 0;
+        const registrations = currentRegistrations(this.errorHandlers, remaining);
+        while (registrations.next().done === false) count += 1;
+        return count;
+      }
     );
   }
 

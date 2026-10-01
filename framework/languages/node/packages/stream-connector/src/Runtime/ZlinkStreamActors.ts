@@ -12,7 +12,12 @@ import type {
   ZlinkStreamSendCall
 } from '../Contracts';
 import { ZlinkStreamErrorCode } from '../Contracts';
-import { connectorError, subscription } from './ZlinkStreamSupport';
+import {
+  connectorError,
+  currentRegistrations,
+  registerHandler,
+  type HandlerRegistration
+} from './ZlinkStreamSupport';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 
@@ -87,12 +92,11 @@ export class DefaultZlinkStreamActor implements ZlinkStreamActor {
 export class ZlinkStreamActors {
   private readonly bySlot = new Map<number, DefaultZlinkStreamActor>();
   private readonly byId = new Map<string, DefaultZlinkStreamActor>();
-  private readonly issued: DefaultZlinkStreamActor[] = [];
   private readonly boundHandlers = new Set<
-    (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
   >();
   private readonly unboundHandlers = new Set<
-    (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
   >();
 
   constructor(
@@ -112,15 +116,13 @@ export class ZlinkStreamActors {
   onBound(
     handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
-    this.boundHandlers.add(handler);
-    return subscription(() => this.boundHandlers.delete(handler));
+    return registerHandler(this.boundHandlers, handler);
   }
 
   onUnbound(
     handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
-    this.unboundHandlers.add(handler);
-    return subscription(() => this.unboundHandlers.delete(handler));
+    return registerHandler(this.unboundHandlers, handler);
   }
 
   processControl(name: string, payload: Uint8Array, signal?: AbortSignal): boolean {
@@ -147,14 +149,12 @@ export class ZlinkStreamActors {
   }
 
   closeAll(signal?: AbortSignal): void {
-    for (const actor of this.issued) {
-      if (!actor.isBound) continue;
+    for (const actor of this.bySlot.values()) {
       this.bySlot.delete(actor.slot);
       this.byId.delete(actor.actorId);
       actor.close();
       this.queue(this.unboundHandlers, actor, signal);
     }
-    this.issued.length = 0;
   }
 
   private bind(payload: Uint8Array, signal?: AbortSignal): void {
@@ -175,7 +175,6 @@ export class ZlinkStreamActors {
     const actor = new DefaultZlinkStreamActor(this.connector, actorId, slot);
     this.bySlot.set(slot, actor);
     this.byId.set(actorId, actor);
-    this.issued.push(actor);
     this.queue(this.boundHandlers, actor, signal);
   }
 
@@ -200,13 +199,15 @@ export class ZlinkStreamActors {
   }
 
   private queue(
-    handlers: Set<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>,
+    handlers: Set<
+      HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
+    >,
     actor: ZlinkStreamActor,
     signal?: AbortSignal
   ): void {
     this.receivedMessages.enqueueCallback(
       () => {
-        for (const handler of Array.from(handlers)) {
+        for (const { handler } of currentRegistrations(handlers)) {
           this.events.runUserCallback(
             () => handler(actor, signal),
             'Actor lifecycle handler failed.',

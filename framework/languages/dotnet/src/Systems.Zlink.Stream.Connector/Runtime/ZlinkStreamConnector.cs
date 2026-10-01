@@ -41,7 +41,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamConnectorOptionsValidator.Validate(options);
         _taskRunner = new ZlinkStreamTaskRunner(_lifetimeCts.Token);
         _receivedMessages = new ZlinkStreamReceivedMessages();
-        _callbacks = new ZlinkStreamConnectorCallbacks(_taskRunner, options.DispatchMode);
+        _callbacks = new ZlinkStreamConnectorCallbacks(
+            _taskRunner,
+            options.DispatchMode,
+            _receivedMessages
+        );
         _actors = new ZlinkStreamActors(this, _callbacks);
         _headerCodec = new ZlinkStreamHeaderCodec();
         _compressionCodec = CreateCompressionCodec(options);

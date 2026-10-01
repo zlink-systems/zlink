@@ -15,7 +15,6 @@ import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotActorTransferRuntime } from './spot-runtime-ports';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
@@ -153,24 +152,6 @@ export class ZLinkSpotActorMembership {
       throw new ZLinkConfigurationException(
         'Spot actor leave requires an Entry Spot node routing id.'
       );
-    }
-    const remoteEntry =
-      localEntryNodeRid !== undefined && !routingIdsEqual(entryNodeRid, localEntryNodeRid);
-    if (!remoteEntry) {
-      const leaveSource = async () => {
-        activation.beginActorTransfer(actor.context.actorId);
-        await activation.spot.onLeaveActor(actor);
-        activation.commitActorDeparture(actor.context.actorId);
-        this.options.actorTransferRuntime?.clearRoutedActor(actor);
-      };
-      // A Spot actor handler already owns this activation's serial turn.
-      // Complete its lifecycle transition inside that turn instead of trying
-      // to acquire a second turn for the same owner.
-      if (activation.serial.isCurrentTurn) {
-        await leaveSource();
-      } else {
-        await activation.serial.execute(leaveSource);
-      }
     }
     const request = RuntimeMessage.from(Buffer.alloc(0));
     try {
