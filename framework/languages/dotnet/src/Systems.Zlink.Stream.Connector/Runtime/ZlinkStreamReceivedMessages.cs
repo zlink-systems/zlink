@@ -12,12 +12,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 /// </remarks>
 internal sealed class ZlinkStreamReceivedMessages
 {
-    private readonly object _gate = new();
+    internal object SyncRoot { get; } = new();
 
-    private readonly Dictionary<
-        string,
-        LinkedList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>
-    > _messages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LinkedList<ReceiveEntry>> _messages = new(
+        StringComparer.Ordinal
+    );
 
     private readonly Dictionary<string, int> _counts = new(StringComparer.Ordinal);
     private TaskCompletionSource<bool> _arrived = new(
@@ -45,7 +44,7 @@ internal sealed class ZlinkStreamReceivedMessages
     /// </summary>
     public int Count(string name)
     {
-        lock (_gate)
+        lock (SyncRoot)
         {
             return _counts.GetValueOrDefault(name);
         }
@@ -73,7 +72,7 @@ internal sealed class ZlinkStreamReceivedMessages
     public void ResetForConnection(long connectionGeneration)
     {
         TaskCompletionSource<bool> arrived;
-        lock (_gate)
+        lock (SyncRoot)
         {
             if (connectionGeneration <= _establishedGeneration)
                 return;
@@ -81,10 +80,13 @@ internal sealed class ZlinkStreamReceivedMessages
             _establishedGeneration = connectionGeneration;
             _connectionGeneration = connectionGeneration;
             _counts.Clear();
-            // Clearing each list detaches its nodes, so a dispatch entry that still holds
-            // one sees its message as taken.
+            // Reset removes the dispatch index before detaching each receive index.
             foreach (var messages in _messages.Values)
+            {
+                foreach (var entry in messages)
+                    entry.RemoveQueued();
                 messages.Clear();
+            }
             _messages.Clear();
             arrived = _arrived;
             _arrived = new TaskCompletionSource<bool>(
@@ -111,7 +113,7 @@ internal sealed class ZlinkStreamReceivedMessages
     public void ConnectionEnded()
     {
         TaskCompletionSource<bool> arrived;
-        lock (_gate)
+        lock (SyncRoot)
         {
             if (_connectionGeneration == 0)
                 return;
@@ -132,21 +134,25 @@ internal sealed class ZlinkStreamReceivedMessages
     ///     a handler's dispatch or a wait takes it; the returned node names it for the
     ///     dispatch.
     /// </summary>
-    public LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> Record(
+    public LinkedListNode<ReceiveEntry> Record(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
-    )
+    ) => Record(new ReceiveEntry(message));
+
+    public LinkedListNode<ReceiveEntry> Record(ReceiveEntry entry)
     {
+        var message = entry.Message;
         TaskCompletionSource<bool> arrived;
-        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node;
-        lock (_gate)
+        LinkedListNode<ReceiveEntry> node;
+        lock (SyncRoot)
         {
             if (!_messages.TryGetValue(message.Name, out var messages))
             {
-                messages = new LinkedList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>();
+                messages = new LinkedList<ReceiveEntry>();
                 _messages.Add(message.Name, messages);
             }
 
-            node = messages.AddLast(message);
+            node = messages.AddLast(entry);
+            entry.Node = node;
             CountLocked(message.Name);
             arrived = _arrived;
             _arrived = new TaskCompletionSource<bool>(
@@ -159,9 +165,9 @@ internal sealed class ZlinkStreamReceivedMessages
     }
 
     /// <summary>Whether no dispatch or wait has taken the message at <paramref name="node" />.</summary>
-    public bool IsUnread(LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node)
+    public bool IsUnread(LinkedListNode<ReceiveEntry> node)
     {
-        lock (_gate)
+        lock (SyncRoot)
             return node.List is not null;
     }
 
@@ -169,15 +175,13 @@ internal sealed class ZlinkStreamReceivedMessages
     ///     Takes the message at <paramref name="node" /> for a dispatch, or returns
     ///     <see langword="false" /> when a wait or the next connection took it first.
     /// </summary>
-    public bool TryTake(LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node)
+    public bool TryTake(LinkedListNode<ReceiveEntry> node)
     {
-        lock (_gate)
+        lock (SyncRoot)
         {
-            if (node.List is not { } messages)
+            if (node.List is null)
                 return false;
-            messages.Remove(node);
-            if (messages.Count == 0)
-                _messages.Remove(node.Value.Name);
+            RemoveLocked(node);
             return true;
         }
     }
@@ -210,14 +214,14 @@ internal sealed class ZlinkStreamReceivedMessages
         timeoutSource.CancelAfter(timeout);
 
         long observedGeneration;
-        lock (_gate)
+        lock (SyncRoot)
         {
             observedGeneration = _connectionGeneration;
         }
 
         // The last message this wait examined and rejected. The next scan continues after it,
         // so each unread message meets the predicate once while messages keep arriving.
-        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined = null;
+        LinkedListNode<ReceiveEntry>? examined = null;
         while (!timeoutSource.IsCancellationRequested)
         {
             var pending = TryTakeOrWait(
@@ -237,7 +241,7 @@ internal sealed class ZlinkStreamReceivedMessages
                     // The wait started before any connection was established, so it has
                     // no earlier connection to lose: the first one to be established is
                     // the connection it observes.
-                    lock (_gate)
+                    lock (SyncRoot)
                     {
                         observedGeneration = _connectionGeneration;
                     }
@@ -285,12 +289,12 @@ internal sealed class ZlinkStreamReceivedMessages
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         long observedGeneration,
-        ref LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined,
+        ref LinkedListNode<ReceiveEntry>? examined,
         CancellationToken cancellationToken
     )
     {
-        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? cursor;
-        lock (_gate)
+        LinkedListNode<ReceiveEntry>? cursor;
+        lock (SyncRoot)
         {
             if (_connectionGeneration != observedGeneration)
                 return PendingMessage.ConnectionEnded;
@@ -302,22 +306,20 @@ internal sealed class ZlinkStreamReceivedMessages
 
         while (true)
         {
-            var matches = predicate is null || predicate(cursor.Value);
-            lock (_gate)
+            var matches = predicate is null || predicate(cursor.Value.Message);
+            lock (SyncRoot)
             {
                 if (_connectionGeneration != observedGeneration)
                     return PendingMessage.ConnectionEnded;
 
                 // A node still in a list is still unread; another wait may have taken it
                 // while the predicate ran.
-                if (cursor.List is { } messages)
+                if (cursor.List is not null)
                 {
                     if (matches)
                     {
-                        messages.Remove(cursor);
-                        if (messages.Count == 0)
-                            _messages.Remove(name);
-                        return new PendingMessage(cursor.Value, null, false);
+                        RemoveLocked(cursor);
+                        return new PendingMessage(cursor.Value.Message, null, false);
                     }
 
                     examined = cursor;
@@ -334,14 +336,42 @@ internal sealed class ZlinkStreamReceivedMessages
         }
     }
 
-    private LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? NextCandidateLocked(
+    private LinkedListNode<ReceiveEntry>? NextCandidateLocked(
         string name,
-        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined
+        LinkedListNode<ReceiveEntry>? examined
     )
     {
         if (examined?.List is not null)
             return examined.Next;
         return _messages.TryGetValue(name, out var messages) ? messages.First : null;
+    }
+
+    private void RemoveLocked(LinkedListNode<ReceiveEntry> node)
+    {
+        var messages = node.List!;
+        messages.Remove(node);
+        node.Value.RemoveQueued();
+        if (messages.Count == 0)
+            _messages.Remove(node.Value.Message.Name);
+    }
+
+    // The packet owns its message once; both queue nodes are removable indexes.
+    internal class ReceiveEntry(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
+        : ZlinkStreamDispatchEntry
+    {
+        public ZlinkStreamMessage<ZlinkStreamEncodedPayload> Message { get; } = message;
+
+        public LinkedListNode<ReceiveEntry>? Node { get; set; }
+
+        public override bool ReportErrors => false;
+
+        public override int PendingCallbacks => 0;
+
+        public override Func<CancellationToken, ValueTask>? Take(out bool keep)
+        {
+            keep = Node?.List is not null;
+            return null;
+        }
     }
 
     private readonly record struct PendingMessage(

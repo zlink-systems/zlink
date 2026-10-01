@@ -52,6 +52,7 @@ export enum ZlinkStreamErrorCode {
   SendFailed = 'sendFailed',
   CompressionFailed = 'compressionFailed',
   DecompressionFailed = 'decompressionFailed',
+  TlsValidationFailed = 'tlsValidationFailed',
   UserCallbackFailed = 'userCallbackFailed',
   RemoteError = 'remoteError'
 }

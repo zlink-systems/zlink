@@ -6,6 +6,9 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "test_completion_poller_driver.hpp"
+#include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
 #include <zlink/framework.hpp>
 
@@ -17,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <future>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -39,6 +43,7 @@ std::vector<std::uint8_t> bytes (const std::string &value)
 
 struct network_probe_message_t
 {
+    static constexpr const char *packet_name = "metadata.send";
 };
 
 void to_json (nlohmann::json &json, const network_probe_message_t &)
@@ -98,6 +103,320 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     assert (slow_send_handler_t::completed.load (std::memory_order_acquire));
     app.stop ();
     app_thread.join ();
+}
+
+struct metadata_send_handler_t
+{
+    using message_type = network_probe_message_t;
+    void handle (const network_probe_message_t &,
+                 const zlink::framework::message_context_t &context)
+    {
+        received.store (context.metadata.find ("tenant-id") == "tenant-42",
+                        std::memory_order_release);
+        completed.store (true, std::memory_order_release);
+        calls.fetch_add (1, std::memory_order_release);
+    }
+    inline static std::atomic_bool received{false};
+    inline static std::atomic_bool completed{false};
+    inline static std::atomic_int calls{0};
+};
+
+struct metadata_request_t
+{
+    static constexpr const char *packet_name = "metadata.request";
+};
+void to_json (nlohmann::json &json, const metadata_request_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, metadata_request_t &)
+{
+}
+
+struct metadata_empty_request_t
+{
+    static constexpr const char *packet_name = "metadata.empty-request";
+};
+void to_json (nlohmann::json &json, const metadata_empty_request_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, metadata_empty_request_t &)
+{
+}
+
+struct metadata_empty_request_handler_t
+{
+    using request_type = metadata_empty_request_t;
+    using reply_type = std::string;
+    std::string handle (const metadata_empty_request_t &,
+                        const zlink::framework::message_context_t &context)
+    {
+        return context.metadata.empty () ? "empty" : "copied";
+    }
+};
+
+struct metadata_request_handler_t
+{
+    using request_type = metadata_request_t;
+    using reply_type = std::string;
+    explicit metadata_request_handler_t (zlink::framework::channel_client_t &client) :
+        client (client)
+    {
+    }
+    zlink::framework::task_t<std::string>
+    handle (const metadata_request_t &, const zlink::framework::message_context_t &context)
+    {
+        calls.fetch_add (1);
+        const auto tenant = std::string (context.metadata.find ("tenant-id").value_or ("missing"));
+        const auto nested =
+          co_await client.request_to_channel ("metadata-empty", metadata_empty_request_t{})
+            .async<std::string> ();
+        assert (nested == "empty");
+        co_return tenant;
+    }
+    zlink::framework::channel_client_t &client;
+    inline static std::atomic_int calls{0};
+};
+
+zlink::framework::task_t<std::vector<zlink::message_t>>
+await_metadata_wire_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+{
+    co_return co_await std::move (pending);
+}
+
+std::vector<std::string> invalid_metadata_headers (bool request = false,
+                                                   bool metadata_first = false)
+{
+    std::ifstream input (ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH);
+    assert (input.good ());
+    const auto fixture = nlohmann::json::parse (input);
+    std::vector<std::string> headers;
+    for (const auto &test : fixture.at ("cases")) {
+        if (test.at ("valid").get<bool> ())
+            continue;
+        nlohmann::json header = {{"formatMarker", 242},
+                                 {"kind", request ? 1 : 3},
+                                 {"channelName", "metadata"},
+                                 {"messageName", request ? "metadata.request" : "metadata.send"},
+                                 {"correlationId", "malformed-metadata"},
+                                 {"contentType", "application/json"}};
+        const auto metadata = test.contains ("receivedEncoded")
+                                ? test.at ("receivedEncoded").get<std::string> ()
+                                : test.at ("metadata").dump ();
+        auto encoded = header.dump ();
+        encoded.pop_back ();
+        headers.push_back (metadata_first
+                             ? "{\"metadata\":" + metadata + "," + encoded.substr (1) + "}"
+                             : encoded + ",\"metadata\":" + metadata + "}");
+    }
+    return headers;
+}
+
+void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
+{
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("metadata-malformed-peer"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (endpoint);
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"metadata", "default", 16 * 1024 * 1024});
+    const auto admitted =
+      await_metadata_wire_reply (
+        source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply)
+        .result ();
+    assert (admitted && admitted.value ().size () == 1);
+    assert (protocol::decode_client_server_server_admission (
+              bytes (admitted.value ().front ().to_string ()), protocol::command::admit)
+              .channel_name
+            == "metadata");
+    const std::string valid =
+      R"({"formatMarker":242,"kind":3,"channelName":"metadata","messageName":"metadata.send","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    for (const auto &bad : invalid_metadata_headers ()) {
+        const auto previous = metadata_send_handler_t::calls.load (std::memory_order_acquire);
+        (void) source.send ()
+          .message (zlink::message_t::from (bad))
+          .message (zlink::message_t::from ("{}"))
+          .async ();
+        (void) source.send ()
+          .message (zlink::message_t::from (valid))
+          .message (zlink::message_t::from ("{}"))
+          .async ();
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (metadata_send_handler_t::calls.load (std::memory_order_acquire) == previous
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::sleep_for (1ms);
+        assert (metadata_send_handler_t::calls.load (std::memory_order_acquire) == previous + 1);
+        assert (metadata_send_handler_t::received.load ());
+    }
+    const std::string valid_request =
+      R"({"formatMarker":242,"kind":1,"channelName":"metadata","messageName":"metadata.request","correlationId":"valid-metadata","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    const auto response =
+      await_metadata_wire_reply (source.request ()
+                                   .message (zlink::message_t::from (valid_request))
+                                   .message (zlink::message_t::from ("{}"))
+                                   .timeout (5s)
+                                   .async ()
+                                   .reply)
+        .result ();
+    assert (response && response.value ().size () == 2);
+    const auto reply_header =
+      zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+        response.value ().front (), false);
+    assert (reply_header && reply_header.value ().metadata.empty ());
+    assert (nlohmann::json::parse (response.value ()[1].to_string ()) == "tenant-42");
+    for (const bool first : {false, true}) {
+        for (const auto &bad_request : invalid_metadata_headers (true, first)) {
+            const auto calls = metadata_request_handler_t::calls.load ();
+            const auto rejected =
+              await_metadata_wire_reply (source.request ()
+                                           .message (zlink::message_t::from (bad_request))
+                                           .message (zlink::message_t::from ("{}"))
+                                           .timeout (5s)
+                                           .async ()
+                                           .reply)
+                .result ();
+            assert (rejected && rejected.value ().size () == 2);
+            const auto error =
+              zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+                rejected.value ().front (), false);
+            assert (error
+                    && error.value ().kind
+                         == zlink::framework::runtime::messaging::message_kind_t::error);
+            assert (error.value ().error_code == "protocol_error");
+            assert (error.value ().metadata.empty ());
+            assert (metadata_request_handler_t::calls.load () == calls);
+        }
+    }
+}
+
+void verify_invalid_metadata_is_a_protocol_error ()
+{
+    protocol::client_server_server_admission_t descriptor{
+      "metadata",
+      bytes ("metadata-raw-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server ({{descriptor}});
+    server.start ();
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("metadata-raw-peer"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (server.endpoint ());
+    const auto pump = [&] (client_server::client_server_pump_result_t expected) {
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        auto result = client_server::client_server_pump_result_t::no_data;
+        while (result != expected && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server.drain_monitor_events (now);
+            result = server.pump_one (now).result ().value ();
+            if (result == client_server::client_server_pump_result_t::no_data)
+                std::this_thread::sleep_for (1ms);
+        }
+        assert (result == expected);
+    };
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"metadata", "default", 16 * 1024 * 1024});
+    auto admission = await_metadata_wire_reply (
+      source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
+    pump (client_server::client_server_pump_result_t::infrastructure);
+    assert (admission.result ());
+    const std::string valid =
+      R"({"formatMarker":242,"kind":3,"channelName":"metadata","messageName":"metadata.send","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
+    (void) source.send ()
+      .message (zlink::message_t::from (valid))
+      .message (zlink::message_t::from ("{}"))
+      .async ();
+    pump (client_server::client_server_pump_result_t::application);
+    using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+    const auto claim =
+      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
+    assert (claim && claim->records.size () == 1);
+    assert (server.mailbox ().release (*claim));
+    for (const auto &bad : invalid_metadata_headers ()) {
+        (void) source.send ()
+          .message (zlink::message_t::from (bad))
+          .message (zlink::message_t::from ("{}"))
+          .async ();
+        pump (client_server::client_server_pump_result_t::protocol_error);
+        assert (server.mailbox ().pending_messages (service_mailbox_domain_t::application) == 0);
+    }
+    server.close ();
+}
+
+void verify_client_server_metadata_snapshot ()
+{
+    metadata_send_handler_t::completed.store (false);
+    metadata_send_handler_t::received.store (false);
+    auto app = zlink::framework::app_t::create ();
+    if (const auto *log = std::getenv ("ZLINK_CPP_METADATA_FLOW_LOG"))
+        app.logging ().use_file (log);
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        if (std::getenv ("ZLINK_CPP_METADATA_FLOW_LOG"))
+            options.configure_dispatch ().message_flow (
+              zlink::framework::message_flow_log_mode_t::normal);
+        options.handlers ()
+          .group ("metadata")
+          .add_send<metadata_send_handler_t> ()
+          .add<metadata_request_handler_t> ()
+          .add<metadata_empty_request_handler_t> ();
+        auto channel = options.add_client_server_channel ("metadata");
+        channel.server ().listen ().add_handler_group ("metadata");
+        channel.client ();
+        auto empty = options.add_client_server_channel ("metadata-empty");
+        empty.server ().listen ().add_handler_group ("metadata");
+        empty.client ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &routes = provider.get_required<zlink::framework::channel_client_t> ();
+    char program[] = "client-server-metadata";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!runtime.snapshot ("metadata").selectable
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.snapshot ("metadata").selectable);
+    while (!runtime.snapshot ("metadata-empty").selectable
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.snapshot ("metadata-empty").selectable);
+    const auto &framework = provider.get_required<zlink::framework::framework_runtime_t> ();
+    verify_invalid_metadata_never_dispatches (
+      framework.listener_status (zlink::framework::listener_kind_t::client_server, "metadata")
+        .endpoint);
+    metadata_send_handler_t::completed.store (false);
+    metadata_send_handler_t::received.store (false);
+    const auto public_calls = metadata_send_handler_t::calls.load (std::memory_order_acquire);
+    const auto send = routes.send ("metadata", network_probe_message_t{})
+                        .metadata ("tenant-id", "tenant-42")
+                        .async ()
+                        .result ();
+    assert (send);
+    const auto send_deadline = std::chrono::steady_clock::now () + 5s;
+    while (metadata_send_handler_t::calls.load (std::memory_order_acquire) == public_calls
+           && std::chrono::steady_clock::now () < send_deadline)
+        std::this_thread::sleep_for (1ms);
+    const auto reply = routes.request_to_channel ("metadata", metadata_request_t{})
+                         .metadata ("tenant-id", "tenant-42")
+                         .async<std::string> ()
+                         .result ();
+    app.stop ();
+    app_thread.join ();
+    assert (metadata_send_handler_t::completed.load ());
+    assert (metadata_send_handler_t::received.load ());
+    assert (metadata_send_handler_t::calls.load (std::memory_order_acquire) == public_calls + 1);
+    assert (reply && reply.value () == "tenant-42");
 }
 
 struct readiness_case_t
@@ -511,6 +830,8 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
 int main ()
 {
+    verify_invalid_metadata_is_a_protocol_error ();
+    verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();

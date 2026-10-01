@@ -433,7 +433,7 @@ final class ZLinkClientServerReadyWaitTest {
                                 @Override
                                 public ZLinkBackendSocketMonitorEvent recvDontWait() {
                                     if (emitted) {
-                                        admissionListening.countDown();
+                                        if (socket == dealer) admissionListening.countDown();
                                         return null;
                                     }
                                     emitted = true;

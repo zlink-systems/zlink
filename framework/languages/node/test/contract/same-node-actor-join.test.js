@@ -136,24 +136,26 @@ for (const entry of [false, true]) {
   });
 }
 
-test('same-node Join completion does not wait for one-way source leave', async () => {
-  let release;
-  const leave = new Promise(resolve => { release = resolve; });
-  const f = fixture({ sourceLeave: () => leave });
-  try {
-    await f.run();
-    assert.deepEqual(f.events, ['admission', 'store', 'membership', 'joined', 'source-left', 'completion:accepted']);
-  } finally { release(); }
-});
+for (const entry of [false, true]) {
+  test(`same-node ${entry ? 'Entry' : 'User'} Join completion does not wait for one-way source leave`, async () => {
+    let release;
+    const leave = new Promise(resolve => { release = resolve; });
+    const f = fixture({ entry, sourceLeave: () => leave });
+    try {
+      await f.run();
+      assert.deepEqual(f.events, [...(entry ? [] : ['admission']), 'store', 'membership', 'joined', 'source-left', 'completion:accepted']);
+    } finally { release(); }
+  });
 
-test('same-node source leave failure is reported without changing Accepted completion', async () => {
-  const f = fixture({ sourceLeave: async () => { throw new Error('source leave failed'); } });
-  await f.run();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.completions[0].status, 'accepted');
-  assert.ok(f.events.includes('source-error:source leave failed'));
-  assert.equal(f.location().membershipEpoch, 2n);
-});
+  test(`same-node ${entry ? 'Entry' : 'User'} source leave failure is reported without changing Accepted completion`, async () => {
+    const f = fixture({ entry, sourceLeave: async () => { throw new Error('source leave failed'); } });
+    await f.run();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.completions[0].status, 'accepted');
+    assert.ok(f.events.includes('source-error:source leave failed'));
+    assert.equal(f.location().membershipEpoch, 2n);
+  });
+}
 
 test('same-node Join deadline expires during admission before Store commit', async () => {
   const f = fixture({ admissionWaitForAbort: true });

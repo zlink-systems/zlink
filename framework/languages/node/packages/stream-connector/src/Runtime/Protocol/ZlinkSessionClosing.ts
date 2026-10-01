@@ -28,20 +28,3 @@ export function decodeSessionClosing(payload: Uint8Array): {
       : new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(4));
   return { closeReason, diagnostic };
 }
-
-export function encodeSessionClosing(
-  reason: ZlinkStreamCloseReason,
-  diagnostic?: string
-): Uint8Array {
-  const reasonCode = Number(Object.entries(reasons).find(([, value]) => value === reason)?.[0]);
-  if (!Number.isInteger(reasonCode)) throw new Error('Unknown session-closing reason.');
-  const bytes = new TextEncoder().encode(diagnostic ?? '');
-  if (bytes.length > 512) throw new Error('Session-closing diagnostic is too large.');
-  const payload = new Uint8Array(4 + bytes.length);
-  payload[0] = 1;
-  payload[1] = reasonCode;
-  payload[2] = bytes.length >>> 8;
-  payload[3] = bytes.length & 0xff;
-  payload.set(bytes, 4);
-  return payload;
-}

@@ -52,10 +52,8 @@ record's part count, the record is not consumed, the needed count is written to 
 `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is returned. Ownership, close, and capacity rules
 are owned by [Socket Common](README.en.md#zlink_recv-and-zlink_router_recv).
 
-The returned RID is a socket-owned borrowed view. It remains valid until entry to the next data-recv
-API on the same socket or until socket close. Poller wait, completion recv, monitor recv, and data
-recv on another socket do not invalidate it. A caller or binding that must retain it longer copies
-it to an owned RID immediately after receive.
+The returned RID is a socket-owned borrowed view. Its lifetime and invalidation conditions follow the
+[Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv).
 
 ## 3. Whole-message ownership and record atomicity
 
@@ -311,9 +309,8 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   moves that pair out of the selection it completes the request once with `ZLINK_REQUEST_NOT_CONNECTED`
   as the [completion table](README.en.md#completion-pull-and-ownership) defines.
 - **`zlink_router_recv_route_generation()` returns the route generation of the record returned by the
-  last successful `zlink_router_recv()`.** It has the same lifetime as the returned RID (until the next
-  data recv on the same socket). It is `0` if the next data recv failed or there was no successful
-  receive. If the RID has no selected-route row, the record
+  last successful `zlink_router_recv()`.** It has the same lifetime as the returned RID. It is `0` if
+  the next admitted data-receive call fails or no receive has succeeded. If the RID has no selected-route row, the record
   was left by a pipe that ended with no successor selection and was not discarded by a selection change;
   the reply result for such a REQUEST follows [§9](#9-raw-reply-submit).
 - **Keep one route observer per socket.** The same observer calls the snapshot and handles
