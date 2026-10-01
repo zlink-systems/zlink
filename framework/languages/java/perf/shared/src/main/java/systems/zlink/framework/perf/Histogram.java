@@ -97,7 +97,7 @@ public final class Histogram {
         value.put("count", Long.toString(count));
         value.put("sumNs", sumText());
         value.put("maxNs", count == 0 ? null : Long.toString(max));
-        value.put("percentileMethod", "nearest-rank-bucket-upper-bound");
+        value.put("percentileMethod", "nearest-rank-bucket-upper-bound-capped-by-max");
         return value;
     }
 
@@ -120,7 +120,7 @@ public final class Histogram {
                 reasons.put("/metrics/" + key, count == 0
                         ? new NullReason("NO_SAMPLES", "No successful samples in this cohort and window.")
                         : new NullReason("HISTOGRAM_OVERFLOW", "Nearest rank lies above the final bucket.",
-                                "perf/README.ko.md", 1024.0));
+                                "perf/README.ko.md", BOUNDS[BOUNDS.length - 1]));
             }
         }
         if (count == 0) {
@@ -135,7 +135,7 @@ public final class Histogram {
         for (int i = 0; i < counts.length; i++) {
             cumulative += counts[i];
             if (cumulative >= rank) {
-                return BOUNDS[i];
+                return Math.min(BOUNDS[i], max / 1_000_000.0);
             }
         }
         return null;

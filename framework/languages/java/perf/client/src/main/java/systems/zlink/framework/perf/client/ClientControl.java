@@ -39,12 +39,11 @@ public final class ClientControl {
         System.setOut(System.err); // stdout carries typed control JSON only
         boolean cs = manifest.roles().stream().anyMatch(role -> role.streamEndpoint() != null);
         String scenarioName = manifest.cellId().split("/")[0];
-        RoleConfig config = new RoleConfig(manifest.runId(), manifest.cellId(), manifest.configHash(), "client", index,
+        RoleConfig config = new RoleConfig(manifest.runId(), manifest.cellId(), manifest.configHash(), manifest.language(), "client", index,
                 scenarioName, "request", "ordinary", null, null, null, Map.of(), null, "", "", false, "None", true, null,
                 List.of(), List.of(), null, null, null, "Immediate", manifest.workload(), null, manifest.provenance());
         Measurement measurement = new Measurement(config, cs);
-        try (Workload scenario = cs ? scenarioFactory.create(manifest, measurement, index, scenarioName) : null;
-                MetricsClient admin = new MetricsClient(manifest)) {
+        try (Workload scenario = cs ? scenarioFactory.create(manifest, measurement, index, scenarioName) : null) {
             if (scenario != null) {
                 scenario.prepare().toCompletableFuture().join();
             }
@@ -63,8 +62,6 @@ public final class ClientControl {
                     switch (command) {
                         case "start" -> response = measurement.start(request(root, PerfTriggerRequest.class),
                                 scenario == null ? null : scenario::run);
-                        case "triggerRoles" -> response = admin.triggerRoles(request(root, PerfTriggerRequest.class));
-                        case "resetRoles" -> response = admin.resetRoles(request(root, ResetRequest.class));
                         case "reset" -> response = measurement.reset(request(root, ResetRequest.class), null);
                         case "wait" -> {
                             measurement.phaseTask().join();

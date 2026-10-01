@@ -671,7 +671,7 @@ Owner lease를 갱신하지 못한 host가 계속 새 작업을 받으면 새 ow
 식별자를 자동으로 만들었는지 수동으로 지정했는지와는 관계없다.
 
 ```text
-renew interval + renew timeout < owner lease TTL - owner lease fencing margin
+max(renew interval, renew timeout) + renew timeout < owner lease TTL - owner lease fencing margin
 ```
 
 | 설정(host 하나 기준) | 기본값 |
@@ -681,7 +681,7 @@ renew interval + renew timeout < owner lease TTL - owner lease fencing margin
 | Renew timeout | 3초 |
 | Owner lease fencing margin | 5초 |
 
-모든 값은 양수여야 한다. 위 관계를 위반하면 startup error다. Automatic RID descriptor 등록도
+모든 값은 양수여야 한다. 위 관계를 위반하면 startup error다. 다음 갱신은 직전 갱신을 시작한 시각에서 renew interval 뒤에 시작하며, 직전 갱신이 아직 끝나지 않았으면 끝난 뒤에 시작한다. Automatic RID descriptor 등록도
 같은 host 실행 조합과 deadline을 사용한다.
 
 Framework는 성공한 등록·읽기·갱신 결과의 `StoreNow`와 `ExpiresAt`으로 남은 시간을 계산한다.
@@ -976,7 +976,7 @@ message의 target 목록이나 배치 조건으로 사용하지 않는다.
   만들지 않는다.
 - Paged list는 object kind를 필수 filter로 받고 stable type과 MeshName을 선택 filter로
   받는다.
-- 한 페이지에는 `1..1000`개를 반환한다.
+- 한 페이지에는 `1..1000`개를 반환한다. 호출자가 크기를 정하지 않으면 100개다.
 - Encoding된 한 page의 크기는 최대 4 MiB다. 다음 항목을 더하면 상한을 넘는 경우 그 항목부터
   다음 continuation page로 넘긴다. Entry field의 기존 길이 제한은 단일 항목이 이 상한 안에
   들어오도록 유지한다.
@@ -1332,7 +1332,7 @@ Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확�
 재시도한다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
-있어야 한다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
+있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. 같은 bytes가 저장된 것을 확인하면 성공으로 끝난다. 다시 읽은 결과가 없으면 같은 reference에 같은 bytes를 다시 저장한다. 저장이 `Conflict`를 반환하거나 다시 읽은 결과가 다른 bytes이면 같은 충돌로 보고 새 reference로 저장을 다시 시작한다. 재시도 횟수 상한이나 별도 기한 없이 그 operation의 deadline 안에서 진행한다. Location Store가 이미 가리키는 payload가 없거나 checksum이 다르면 이 규칙이 아니라 아래의 `DataLost` 처리를 따른다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
 비동기 요청이 끝난 뒤에도 입력 bytes를 보관하면 복사본을 만들어야 한다. 성공 결과로 반환한
 bytes는 이후 바뀌지 않아야 한다.
 

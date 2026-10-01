@@ -371,7 +371,7 @@ inline json null_reason (const std::string &code, const std::string &reason,
 class payload_pattern_t
 {
   public:
-    explicit payload_pattern_t (int size) : _size (static_cast<std::size_t> (size)), _base64 (generate (size)) {}
+    explicit payload_pattern_t (int size) : _base64 (generate (size)) {}
     const std::string &base64 () const noexcept { return _base64; }
     // The canonical Base64 string is the whole contract: equality with it proves length and every logical byte.
     void validate (const std::string &payload) const
@@ -422,7 +422,6 @@ class payload_pattern_t
         }
         return out;
     }
-    std::size_t _size;
     std::string _base64;
 };
 
@@ -475,7 +474,7 @@ class histogram_t
                 {"count", dec (_count)},
                 {"sumNs", dec (_sum)},
                 {"maxNs", _count == 0 ? json (nullptr) : json (dec (_max))},
-                {"percentileMethod", "nearest-rank-bucket-upper-bound"}};
+                {"percentileMethod", "nearest-rank-bucket-upper-bound-capped-by-max"}};
     }
     // Writes the histogram and its dotted latency keys; a null carries its reason (§15.5).
     void export_to (const std::string &histogram_key, const std::string &prefix, json &metrics, json &histograms,
@@ -499,7 +498,7 @@ class histogram_t
                 reasons["/metrics/" + key] =
                   _count == 0 ? null_reason ("NO_SAMPLES", "No successful samples in this cohort and window.")
                               : null_reason ("HISTOGRAM_OVERFLOW", "Nearest rank lies above the final bucket.",
-                                             "perf/README.ko.md", 1024);
+                                             "perf/README.ko.md §15.3", histogram_bounds ().back ());
         }
         if (_count == 0)
             reasons["/histograms/" + histogram_key + "/maxNs"] =
@@ -514,7 +513,7 @@ class histogram_t
         for (std::size_t i = 0; i < _counts.size (); ++i) {
             cumulative += _counts[i];
             if (cumulative >= rank)
-                return histogram_bounds ()[i];
+                return std::min (histogram_bounds ()[i], static_cast<double> (_max) / 1'000'000.0);
         }
         return nullptr;
     }

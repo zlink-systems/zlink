@@ -113,11 +113,11 @@ export class SessionActorSetup {
   private createMaxNs = 0n;
   private bindNs = 0n;
   private bindMaxNs = 0n;
+  private evidence: unknown = null;
 
   constructor(
     @Inject(ROLE_CONFIG) private readonly config: RoleConfig,
     @Inject(Measurement) private readonly measurement: Measurement,
-    @Inject(ObjectsReadiness) private readonly readiness: ObjectsReadiness,
     @Inject(ZLINK_ACTOR_MANAGER) private readonly actors: ZLinkActorManager
   ) {}
 
@@ -139,7 +139,7 @@ export class SessionActorSetup {
     } catch (error) {
       this.measurement.recordDiagnostic(error);
       this.failed++;
-      this.publish();
+      this.recordEvidence();
       throw error;
     }
   }
@@ -149,18 +149,16 @@ export class SessionActorSetup {
     this.bound++;
     this.createNs += create; if (create > this.createMaxNs) this.createMaxNs = create;
     this.bindNs += bind; if (bind > this.bindMaxNs) this.bindMaxNs = bind;
-    this.publish();
+    this.recordEvidence();
   }
 
-  private publish(): void {
+  private recordEvidence(): void {
     const bound = this.bound;
-    this.readiness.set(bound > 0 && this.failed === 0, this.failed > 0 ? 'Actor create or bind failed.' : 'No Actor is bound to a session yet.',
-      [{ kind: 'actorCreateAndBind', source: 'ZLinkActorManager.getOrCreate + ZLinkSessionActors.bindOrGet',
-        observedValue: { created: this.created, existing: this.existing, bound, failed: this.failed, expectedActors: this.config.actorIds.length,
-          createMeanMs: bound === 0 ? 0 : Number(this.createNs) / 1e6 / bound, createMaxMs: Number(this.createMaxNs) / 1e6,
-          bindMeanMs: bound === 0 ? 0 : Number(this.bindNs) / 1e6 / bound, bindMaxMs: Number(this.bindMaxNs) / 1e6 } }]);
-    // The Session role has no typed reply of its own: its setup probe is the admitted relay of a bound Actor.
-    if (bound > 0) this.measurement.setupEvidence = [{ kind: 'relayAdmission', source: 'ZLinkSessionActor.relay', observedValue: { bound } }];
+    this.evidence = { kind: 'actorCreateAndBind', source: 'ZLinkActorManager.getOrCreate + ZLinkSessionActors.bindOrGet',
+      observedValue: { created: this.created, existing: this.existing, bound, failed: this.failed, expectedActors: this.config.actorIds.length,
+        createMeanMs: bound === 0 ? 0 : Number(this.createNs) / 1e6 / bound, createMaxMs: Number(this.createMaxNs) / 1e6,
+        bindMeanMs: bound === 0 ? 0 : Number(this.bindNs) / 1e6 / bound, bindMaxMs: Number(this.bindMaxNs) / 1e6 } };
+    this.measurement.preparationEvidence.actorCreateAndBind = this.evidence;
   }
 }
 
@@ -178,6 +176,9 @@ class PerfActorRelaySession implements ZLinkSession {
     const actor = dispatch.actor ?? this.binding ?? (this.binding = await this.setup.prepare(this.context, payload));
     try {
       await actor.relay(dispatch, payload);
+      if (this.measurement.phase === 'setup') this.measurement.setupEvidence = [
+        { kind: 'relayAdmission', source: 'ZLinkSessionActor.relay', observedValue: true }
+      ];
     } catch (error) {
       this.measurement.recordDiagnostic(error);
       throw error;

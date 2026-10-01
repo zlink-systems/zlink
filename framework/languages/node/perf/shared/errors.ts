@@ -8,6 +8,7 @@ export interface ClassifiedError {
   publicKind: string | null;
   harnessKind: string | null;
   connectorCode: string | null;
+  unrecognizedFrameworkKind?: number;
 }
 
 export function classifyError(error: unknown): ClassifiedError {
@@ -16,7 +17,11 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   const shaped = error as { name?: string; kind?: unknown; error?: { code?: unknown } };
   if (error instanceof Error && shaped.name === 'ZLinkFrameworkException' && typeof shaped.kind === 'number') {
-    const kind = ZLinkFrameworkErrorKind[shaped.kind] ?? `Unknown(${shaped.kind})`;
+    const kind = ZLinkFrameworkErrorKind[shaped.kind];
+    if (typeof kind !== 'string') {
+      return { namespace: 'harness', key: 'CollectionFailure', category: 'failed', publicKind: null,
+        harnessKind: 'CollectionFailure', connectorCode: null, unrecognizedFrameworkKind: shaped.kind };
+    }
     return { namespace: 'byKind', key: kind, category: kind === 'DeadlineExceeded' ? 'timeout' : 'failed', publicKind: kind, harnessKind: null, connectorCode: null };
   }
   const name = error instanceof Error ? (error.constructor?.name || error.name) : typeof error;

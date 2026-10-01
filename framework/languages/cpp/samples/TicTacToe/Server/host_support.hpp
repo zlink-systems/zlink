@@ -161,32 +161,13 @@ class play_api_channel_readiness_service_t final : public hosted_service_t
           services.get_required<channel_client_t> ());
         _worker = std::thread ([state, node_name = _node_name] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
-                struct attempt_t
-                {
-                    std::condition_variable ready;
-                    std::mutex mutex;
-                    bool completed = false;
-                    bool accepted = false;
-                };
-                auto attempt = std::make_shared<attempt_t> ();
                 auto request = state->client
                                  ->request (sample_names_t::api_channel,
                                             authenticate_player_req_t{"tictactoe-readiness"})
                                  .timeout (std::chrono::milliseconds (500))
                                  .async<authenticate_player_res_t> ();
-                observe_task_completion (
-                  request, [attempt] (const result_t<authenticate_player_res_t> &result) {
-                      {
-                          std::lock_guard lock (attempt->mutex);
-                          attempt->accepted = result && !result.value ().player.actor_id.empty ();
-                          attempt->completed = true;
-                      }
-                      attempt->ready.notify_one ();
-                  });
-                std::unique_lock lock (attempt->mutex);
-                attempt->ready.wait_for (
-                  lock, std::chrono::milliseconds (500), [&attempt] { return attempt->completed; });
-                if (!attempt->accepted)
+                const auto result = request.result_for (std::chrono::milliseconds (500));
+                if (!result || !*result || result->value ().player.actor_id.empty ())
                     continue;
                 if (!state->reported.exchange (true, std::memory_order_acq_rel)) {
                     std::cout << "tictactoe play api channel ready node=" << node_name << std::endl;

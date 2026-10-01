@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -84,16 +85,12 @@ void coroutine_executor_t::post_native_continuation (std::function<void ()> work
 {
     std::lock_guard lock (_mutex);
     if (_drained) {
-        throw std::runtime_error ("handler coroutine executor is drained");
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "handler coroutine executor is drained");
     }
-    boost::asio::post (_pool, [work = std::move (work)] () mutable {
-        try {
-            if (work) {
-                work ();
-            }
-        }
-        catch (...) {
-        }
+    boost::asio::post (_pool, [work = std::move (work)] () noexcept {
+        if (work)
+            work ();
     });
 }
 
@@ -163,7 +160,7 @@ void shutdown_handler_coroutine_executor () noexcept
 namespace zlink::framework::detail
 {
 
-task_scheduler_t capture_runtime_native_continuation_scheduler ()
+task_scheduler_t capture_host_continuation_scheduler ()
 {
     {
         std::lock_guard lock (runtime::executor_mutex ());
@@ -174,7 +171,9 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
     return [] (std::function<void ()> work) {
         std::lock_guard lock (runtime::executor_mutex ());
         if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
-            throw std::runtime_error ("handler coroutine executor is not accepting continuations");
+            throw framework_exception_t (
+              framework_error_kind_t::shutting_down,
+              "handler coroutine executor is not accepting continuations");
         }
         auto &configured = runtime::executor_instance ();
         if (!configured) {
@@ -188,4 +187,23 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
     };
 }
 
+void check_blocking_submit_context ();
+
+namespace
+{
+constexpr runtime_execution_hooks_t host_execution_hooks{&capture_host_continuation_scheduler,
+                                                         &check_blocking_submit_context};
+} // namespace
+
 } // namespace zlink::framework::detail
+
+namespace zlink::framework::runtime
+{
+
+void install_host_context_hooks () noexcept
+{
+    detail::set_runtime_execution_hooks (&detail::host_execution_hooks);
+    detail::set_ambient_context_hooks (&ambient_flow_hooks ());
+}
+
+} // namespace zlink::framework::runtime

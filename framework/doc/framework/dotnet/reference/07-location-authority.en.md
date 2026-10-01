@@ -75,7 +75,7 @@ services.AddZLinkFramework(options =>
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| `OwnerLeaseRenewInterval` / `OwnerLeaseTtl` / `OwnerLeaseFencingMargin` / `OwnerLeaseRenewTimeout` | 5s / 15s / 5s / 3s | the owner lease renewal interval and validity period. Must satisfy `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout < OwnerLeaseTtl - OwnerLeaseFencingMargin` |
+| `OwnerLeaseRenewInterval` / `OwnerLeaseTtl` / `OwnerLeaseFencingMargin` / `OwnerLeaseRenewTimeout` | 5s / 15s / 5s / 3s | the owner lease renewal interval and validity period. Must satisfy `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout < OwnerLeaseTtl - OwnerLeaseFencingMargin` |
 | `PollingInterval` | 1 second | the interval for checking Store state |
 | `StoreFailureGrace` | 30 seconds | the grace period for tolerating Store failure |
 | `RouteCacheMaxAge` / `MessageFollowDuration` | 15s / 30s | 0 turns the feature off. If both are positive, cache age must be at least 5 seconds less than Message Follow duration |

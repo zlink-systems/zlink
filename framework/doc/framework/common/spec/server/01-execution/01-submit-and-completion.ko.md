@@ -189,6 +189,7 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 | admission deadline 만료 | `DeadlineExceeded` |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
 | 같은 call의 terminal을 두 번 실행 | `InvalidOperation` |
+| Binding이 one-way send를 수락하지 않음(`NOT_ADMITTED`) | `Rejected` |
 
 Pending admission은 caller가 지정한 Node RID, global Spot·Actor ID와 session binding
 token을 유지한다. 여러 MeshNode가 참여해 node와 Channel message를 주고받는 범위인
