@@ -181,15 +181,12 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, RenewReturnsBeforeDelayedProviderWrite
     const auto owner = std::get<owner_lease_claimed_t> (claimed).token;
     auto write_called = store.write_called.get_future ();
     store.delay_write = true;
-    auto submitted =
-      std::async (std::launch::async, [&] { return repository.renew_owner_lease (owner, 30s); });
+    auto renewal = repository.renew_owner_lease (owner, 30s);
     write_called.wait ();
-    const auto returned_before_completion = submitted.wait_for (0ms);
+    EXPECT_FALSE (renewal.await_ready ());
     store.finish_write ();
-    auto renewal = submitted.get ();
     std::atomic_int completions = 0;
     detail::observe_task_completion (renewal, [&] (const auto &) { ++completions; });
-    EXPECT_EQ (std::future_status::ready, returned_before_completion);
     EXPECT_TRUE (std::holds_alternative<owner_lease_renewed_t> (renewal.result ().value ()));
     EXPECT_EQ (1, completions.load ());
 }
@@ -788,17 +785,23 @@ class post_commit_failure_relocation_store_t final : public relocation_store_t
     bool _fail_next_put = true;
 };
 
-class transient_put_relocation_store_t final : public relocation_store_t
+class uncertain_put_relocation_store_t final : public relocation_store_t
 {
   public:
+    explicit uncertain_put_relocation_store_t (
+      framework_error_kind_t error_kind = framework_error_kind_t::unavailable) :
+        _error_kind (error_kind)
+    {
+    }
+
     task_t<blob_put_result_t> put (blob_reference_t reference,
                                    std::span<const std::byte> payload,
                                    std::chrono::milliseconds retention) override
     {
         put_references.push_back (reference.value);
         if (put_references.size () < 3)
-            return task_t<blob_put_result_t> (result_t<blob_put_result_t>::failure (
-              framework_error_kind_t::unavailable, "put response uncertain"));
+            return task_t<blob_put_result_t> (
+              result_t<blob_put_result_t>::failure (_error_kind, "put response uncertain"));
         return inner.put (std::move (reference), payload, retention);
     }
     task_t<blob_read_result_t> read (blob_reference_t reference) override
@@ -818,11 +821,28 @@ class transient_put_relocation_store_t final : public relocation_store_t
     in_memory_relocation_store_t inner;
     std::vector<std::string> put_references;
     std::vector<std::string> read_references;
+
+  private:
+    framework_error_kind_t _error_kind;
 };
+
+TEST (CppFrameworkOpaqueRelocationStore, MissingReadBackRetriesSameReferenceAfterProviderError)
+{
+    uncertain_put_relocation_store_t provider (framework_error_kind_t::protocol_error);
+    provider_relocation_repository_t repository (provider);
+    const auto result =
+      repository
+        .put_relocation (bytes ("uncommitted"), 1h, std::chrono::steady_clock::now () + 1min)
+        .result ();
+    ASSERT_TRUE (result);
+    ASSERT_EQ (provider.put_references.size (), 3u);
+    EXPECT_EQ (provider.put_references[0], provider.put_references[1]);
+    EXPECT_EQ (provider.put_references[0], provider.put_references[2]);
+}
 
 TEST (CppFrameworkOpaqueRelocationStore, ReconciliationDoesNotStopAtFixedAttemptCount)
 {
-    transient_put_relocation_store_t provider;
+    uncertain_put_relocation_store_t provider;
     provider_relocation_repository_t repository (provider);
     const auto result =
       repository
@@ -839,7 +859,7 @@ TEST (CppFrameworkOpaqueRelocationStore, ReconciliationDoesNotStopAtFixedAttempt
 
 TEST (CppFrameworkOpaqueRelocationStore, ExpiredOperationDoesNotStartProviderIo)
 {
-    transient_put_relocation_store_t provider;
+    uncertain_put_relocation_store_t provider;
     provider_relocation_repository_t repository (provider);
     const auto result =
       repository.put_relocation (bytes ("expired"), 1h, std::chrono::steady_clock::now ())
@@ -857,6 +877,89 @@ TEST (CppFrameworkOpaqueRelocationStore, ExpiredOperationDoesNotStartProviderIo)
           detail::current_exception_to_message_result ("expired operation lost its typed failure");
         EXPECT_EQ (failure.error_kind (), framework_error_kind_t::deadline_exceeded);
     }
+}
+
+class pending_relocation_store_t final : public relocation_store_t
+{
+  public:
+    enum class stage_t
+    {
+        put,
+        read
+    };
+    explicit pending_relocation_store_t (stage_t stage) : _stage (stage) {}
+    std::future<void> started () { return _started.get_future (); }
+
+    task_t<blob_put_result_t>
+    put (blob_reference_t, std::span<const std::byte> payload, std::chrono::milliseconds) override
+    {
+        _payload.assign (payload.begin (), payload.end ());
+        if (_stage == stage_t::read)
+            return task_t<blob_put_result_t> (result_t<blob_put_result_t>::failure (
+              framework_error_kind_t::unavailable, "put response uncertain"));
+        _started.set_value ();
+        return _put.task ();
+    }
+    task_t<blob_read_result_t> read (blob_reference_t) override
+    {
+        _started.set_value ();
+        return _read.task ();
+    }
+    task_t<blob_renew_result_t> renew (blob_reference_t, std::chrono::milliseconds) override
+    {
+        return task_t<blob_renew_result_t> (
+          result_t<blob_renew_result_t>::success (blob_missing_t{}));
+    }
+    task_t<void> erase (blob_reference_t) override
+    {
+        return task_t<void> (result_t<void>::success ());
+    }
+    void complete ()
+    {
+        const auto now = std::chrono::system_clock::now ();
+        if (_stage == stage_t::put)
+            _put.complete (result_t<blob_put_result_t>::success (blob_stored_t{now + 1h, now}));
+        else
+            _read.complete (
+              result_t<blob_read_result_t>::success (blob_found_t{_payload, now + 1h, now}));
+    }
+
+  private:
+    stage_t _stage;
+    std::vector<std::byte> _payload;
+    std::promise<void> _started;
+    detail::task_completion_source_t<blob_put_result_t> _put;
+    detail::task_completion_source_t<blob_read_result_t> _read;
+};
+
+void expect_pending_relocation_operation_deadline (pending_relocation_store_t::stage_t stage)
+{
+    pending_relocation_store_t provider (stage);
+    provider_relocation_repository_t repository (provider);
+    auto started = provider.started ();
+    const auto timeout = 200ms;
+    auto operation = std::async (std::launch::async, [&] {
+        return repository
+          .put_relocation (bytes ("pending"), 1h, std::chrono::steady_clock::now () + timeout)
+          .result ();
+    });
+    const auto started_status = started.wait_for (5s);
+    EXPECT_EQ (started_status, std::future_status::ready);
+    EXPECT_EQ (operation.wait_for (timeout * 2), std::future_status::ready);
+    provider.complete ();
+    const auto result = operation.get ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), framework_error_kind_t::deadline_exceeded);
+}
+
+TEST (CppFrameworkOpaqueRelocationStore, PendingPutEndsAtOperationDeadline)
+{
+    expect_pending_relocation_operation_deadline (pending_relocation_store_t::stage_t::put);
+}
+
+TEST (CppFrameworkOpaqueRelocationStore, PendingReadBackEndsAtOperationDeadline)
+{
+    expect_pending_relocation_operation_deadline (pending_relocation_store_t::stage_t::read);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AtomicWriteUsesExactVersions)

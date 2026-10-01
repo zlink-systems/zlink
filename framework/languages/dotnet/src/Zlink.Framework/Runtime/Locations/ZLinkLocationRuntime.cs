@@ -789,6 +789,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     scope.Key,
                     scope.Value
                 );
+            scheduledRenew = _time.GetTimestamp() + intervalTicks;
             try
             {
                 await RenewOwnerLeaseOnceAsync(cancellationToken).ConfigureAwait(false);
@@ -798,7 +799,6 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 RecordLeaseFailure(exception.Message);
                 OwnerLeaseRenewalFailed?.Invoke();
             }
-            scheduledRenew += intervalTicks;
         }
     }
 

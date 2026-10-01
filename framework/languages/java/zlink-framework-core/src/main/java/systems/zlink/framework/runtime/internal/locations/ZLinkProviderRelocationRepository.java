@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.internal.locations;
 
 import systems.zlink.framework.locationprovider.ZLinkBlobAlreadyStored;
 import systems.zlink.framework.locationprovider.ZLinkBlobFound;
-import systems.zlink.framework.locationprovider.ZLinkBlobPutResult;
 import systems.zlink.framework.locationprovider.ZLinkBlobReference;
 import systems.zlink.framework.locationprovider.ZLinkBlobRenewed;
 import systems.zlink.framework.locationprovider.ZLinkBlobStored;
@@ -13,7 +12,6 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.zip.CRC32C;
 
@@ -30,21 +28,60 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
     public CompletionStage<ZLinkRelocationStored> put(
             byte[] payload, Duration retention, ZLinkStoreCancellation cancellation) {
         byte[] bytes = Objects.requireNonNull(payload, "payload").clone();
-        var reference = new ZLinkBlobReference(UUID.randomUUID().toString());
+
         CRC32C crc = new CRC32C();
         crc.update(bytes, 0, bytes.length);
         long checksum = crc.getValue();
+        return put(null, bytes, checksum, retention, cancellation);
+    }
+
+    private CompletionStage<ZLinkRelocationStored> put(
+            ZLinkBlobReference requestedReference,
+            byte[] bytes,
+            long checksum,
+            Duration retention,
+            ZLinkStoreCancellation cancellation) {
+        ZLinkBlobReference reference =
+                requestedReference == null
+                        ? new ZLinkBlobReference(UUID.randomUUID().toString())
+                        : requestedReference;
+        if (cancellation.isCancellationRequested()) {
+            return CompletableFuture.failedFuture(
+                    new java.util.concurrent.CancellationException("operation expired"));
+        }
         return provider.put(reference, bytes, retention, cancellation::isCancellationRequested)
-                .handle(
-                        (result, failure) ->
-                                failure == null
-                                        ? completed(reference, checksum, result)
-                                        : reconcile(
+                .<CompletionStage<ZLinkRelocationStored>>handle(
+                        (result, failure) -> {
+                            if (failure != null) {
+                                return reconcile(
+                                        reference, bytes, checksum, retention, cancellation);
+                            }
+                            if (result instanceof ZLinkBlobStored stored) {
+                                return CompletableFuture.completedFuture(
+                                        stored(
                                                 reference,
-                                                bytes,
                                                 checksum,
-                                                unwrap(failure),
-                                                cancellation))
+                                                stored.expiresAt(),
+                                                stored.storeNow()));
+                            }
+                            if (result instanceof ZLinkBlobAlreadyStored stored) {
+                                return CompletableFuture.completedFuture(
+                                        stored(
+                                                reference,
+                                                checksum,
+                                                stored.expiresAt(),
+                                                stored.storeNow()));
+                            }
+                            return CompletableFuture.completedFuture((Void) null)
+                                    .thenComposeAsync(
+                                            ignored ->
+                                                    put(
+                                                            null,
+                                                            bytes,
+                                                            checksum,
+                                                            retention,
+                                                            cancellation));
+                        })
                 .thenCompose(stage -> stage);
     }
 
@@ -52,35 +89,24 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
             ZLinkBlobReference reference,
             byte[] expected,
             long checksum,
-            Throwable originalFailure,
+            Duration retention,
             ZLinkStoreCancellation cancellation) {
         return provider.read(reference, cancellation::isCancellationRequested)
-                .handle(
-                        (result, failure) -> {
-                            if (failure != null) {
-                                throw new CompletionException(unwrap(failure));
+                .thenComposeAsync(
+                        result -> {
+                            if (result instanceof ZLinkBlobFound found) {
+                                if (Arrays.equals(expected, found.bytes())) {
+                                    return CompletableFuture.completedFuture(
+                                            stored(
+                                                    reference,
+                                                    checksum,
+                                                    found.expiresAt(),
+                                                    found.storeNow()));
+                                }
+                                return put(null, expected, checksum, retention, cancellation);
                             }
-                            if (result instanceof ZLinkBlobFound found
-                                    && Arrays.equals(expected, found.bytes())) {
-                                return stored(
-                                        reference, checksum, found.expiresAt(), found.storeNow());
-                            }
-                            throw new CompletionException(originalFailure);
+                            return put(reference, expected, checksum, retention, cancellation);
                         });
-    }
-
-    private static CompletionStage<ZLinkRelocationStored> completed(
-            ZLinkBlobReference reference, long checksum, ZLinkBlobPutResult result) {
-        if (result instanceof ZLinkBlobStored stored) {
-            return CompletableFuture.completedFuture(
-                    stored(reference, checksum, stored.expiresAt(), stored.storeNow()));
-        }
-        if (result instanceof ZLinkBlobAlreadyStored stored) {
-            return CompletableFuture.completedFuture(
-                    stored(reference, checksum, stored.expiresAt(), stored.storeNow()));
-        }
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("provider rejected a newly issued relocation reference"));
     }
 
     @Override
@@ -121,11 +147,5 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
     private static ZLinkRelocationStored stored(
             ZLinkBlobReference reference, long checksum, Instant expiresAt, Instant storeNow) {
         return new ZLinkRelocationStored(reference.value(), checksum, expiresAt, storeNow);
-    }
-
-    private static Throwable unwrap(Throwable failure) {
-        return failure instanceof CompletionException completion && completion.getCause() != null
-                ? completion.getCause()
-                : failure;
     }
 }

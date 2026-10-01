@@ -31,14 +31,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkProviderRelocationRepositoryTest {
     @Test
     void uncertainReadbackObservesTheOriginalOperationCancellation() {
-        var provider = new LostResponseProvider();
+        var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        var provider = new LostResponseProvider(() -> cancelled.set(true));
         var repository = new ZLinkProviderRelocationRepository(provider);
-        var cancellationChecks = new AtomicInteger();
         var failure =
                 assertThrows(
                         CompletionException.class,
@@ -47,7 +46,7 @@ final class ZLinkProviderRelocationRepositoryTest {
                                         .put(
                                                 new byte[] {1, 2, 3},
                                                 Duration.ofMinutes(5),
-                                                () -> cancellationChecks.getAndIncrement() > 0)
+                                                cancelled::get)
                                         .toCompletableFuture()
                                         .join());
         assertTrue(provider.readCancellationRequested);
@@ -76,10 +75,136 @@ final class ZLinkProviderRelocationRepositoryTest {
         assertArrayEquals(new byte[] {1, 2, 3}, found.payload());
     }
 
+    @Test
+    void missingReadbackRestoresTheSameReference() {
+        var provider = new RetryProvider(0, false);
+        var stored =
+                new ZLinkProviderRelocationRepository(provider)
+                        .put(new byte[] {1}, Duration.ofMinutes(5), () -> false)
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(provider.firstReference, stored.reference());
+        assertEquals(2, provider.puts);
+    }
+
+    @Test
+    void conflictAndDifferentReadbackAllocateANewReference() {
+        for (boolean differentReadback : new boolean[] {false, true}) {
+            var provider = new RetryProvider(1, differentReadback);
+            var stored =
+                    new ZLinkProviderRelocationRepository(provider)
+                            .put(new byte[] {1}, Duration.ofMinutes(5), () -> false)
+                            .toCompletableFuture()
+                            .join();
+            assertNotEquals(provider.firstReference, stored.reference());
+            assertEquals(2, provider.puts);
+        }
+    }
+
+    @Test
+    void referenceConflictsHaveNoAttemptLimit() {
+        var provider = new RetryProvider(256, false);
+        var stored =
+                new ZLinkProviderRelocationRepository(provider)
+                        .put(new byte[] {1}, Duration.ofMinutes(5), () -> false)
+                        .toCompletableFuture()
+                        .join();
+        assertNotEquals(provider.firstReference, stored.reference());
+        assertEquals(257, provider.puts);
+    }
+
+    @Test
+    void readbackRetriesStopWhenTheOriginalOperationIsCancelled() {
+        var provider = new RetryProvider(Integer.MAX_VALUE, true);
+        var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        provider.onPut =
+                () -> {
+                    if (provider.puts == 3) cancelled.set(true);
+                };
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                new ZLinkProviderRelocationRepository(provider)
+                                        .put(new byte[] {1}, Duration.ofMinutes(5), cancelled::get)
+                                        .toCompletableFuture()
+                                        .join());
+        assertTrue(failure.getCause() instanceof CancellationException);
+        assertTrue(provider.puts > 1);
+    }
+
+    private static final class RetryProvider implements ZLinkRelocationStore {
+        private final int conflicts;
+        private final boolean differentReadback;
+        private int puts;
+        private String firstReference;
+        private Runnable onPut = () -> {};
+
+        RetryProvider(int conflicts, boolean differentReadback) {
+            this.conflicts = conflicts;
+            this.differentReadback = differentReadback;
+        }
+
+        public CompletionStage<ZLinkBlobPutResult> put(
+                ZLinkBlobReference reference,
+                byte[] payload,
+                Duration retention,
+                ZLinkStoreCancellation cancellation) {
+            if (cancellation.isCancellationRequested())
+                return CompletableFuture.failedFuture(
+                        new CancellationException("operation expired"));
+            puts++;
+            onPut.run();
+            if (firstReference == null) firstReference = reference.value();
+            Instant now = Instant.now();
+            if (puts <= conflicts) {
+                return differentReadback
+                        ? CompletableFuture.failedFuture(new IllegalStateException("lost response"))
+                        : CompletableFuture.completedFuture(new ZLinkBlobConflict(now));
+            }
+            if (puts == 1)
+                return CompletableFuture.failedFuture(new IllegalStateException("lost response"));
+            return CompletableFuture.completedFuture(new ZLinkBlobStored(now.plus(retention), now));
+        }
+
+        public CompletionStage<ZLinkBlobReadResult> read(
+                ZLinkBlobReference reference, ZLinkStoreCancellation cancellation) {
+            if (cancellation.isCancellationRequested())
+                return CompletableFuture.failedFuture(
+                        new CancellationException("operation expired"));
+            Instant now = Instant.now();
+            return CompletableFuture.completedFuture(
+                    differentReadback
+                            ? new ZLinkBlobFound(new byte[] {2}, now.plusSeconds(300), now)
+                            : new ZLinkBlobMissing(now));
+        }
+
+        public CompletionStage<ZLinkBlobRenewResult> renew(
+                ZLinkBlobReference reference,
+                Duration retention,
+                ZLinkStoreCancellation cancellation) {
+            return CompletableFuture.completedFuture(new ZLinkBlobRenewMissing(Instant.now()));
+        }
+
+        public CompletionStage<Void> delete(
+                ZLinkBlobReference reference, ZLinkStoreCancellation cancellation) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
     private static final class LostResponseProvider implements ZLinkRelocationStore {
         private final Map<String, byte[]> values = new ConcurrentHashMap<>();
         private boolean loseNext = true;
         private boolean readCancellationRequested;
+        private final Runnable onLostResponse;
+
+        LostResponseProvider() {
+            this(() -> {});
+        }
+
+        LostResponseProvider(Runnable onLostResponse) {
+            this.onLostResponse = onLostResponse;
+        }
 
         @Override
         public CompletionStage<ZLinkBlobPutResult> put(
@@ -98,6 +223,7 @@ final class ZLinkProviderRelocationRepositoryTest {
             }
             if (loseNext) {
                 loseNext = false;
+                onLostResponse.run();
                 return CompletableFuture.failedFuture(new IllegalStateException("lost response"));
             }
             return CompletableFuture.completedFuture(new ZLinkBlobStored(now.plus(retention), now));

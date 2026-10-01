@@ -534,6 +534,38 @@ public sealed class LocationRuntimeTests
     }
 
     [Fact]
+    public async Task Heartbeat_UsesActualStartAfterLateTimer_AndWaitsForInFlightRenewal()
+    {
+        var time = new HeartbeatTimeProvider();
+        var inner = new ZLinkInMemoryLocationStore(time);
+        var store = new BlockingHeartbeatStore(inner, blockedRenewCall: 1);
+        var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(100) },
+            store,
+            time
+        );
+        try
+        {
+            await runtime.StartAsync(RoutingId.From("late-heartbeat-node"));
+            var first = await time.FirstTimer.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Timestamp = 150;
+            first.Fire();
+            await store.HeartbeatStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(time.SecondTimer.Task.IsCompleted);
+            Assert.Equal(1, store.RenewCalls);
+            time.Timestamp = 200;
+            store.ReleaseHeartbeat.TrySetResult();
+            var second = await time.SecondTimer.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(TimeSpan.FromMilliseconds(50), second.DueTime);
+        }
+        finally
+        {
+            store.ReleaseHeartbeat.TrySetResult();
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task DisposeAsync_WaitsForInFlightHeartbeatBeforeCleaningOwnerResources()
     {
         var inner = new ZLinkInMemoryLocationStore();
@@ -1027,8 +1059,55 @@ public sealed class LocationRuntimeTests
         }
     }
 
-    private sealed class BlockingHeartbeatStore(IZLinkLocationRepository inner)
-        : ZLinkLocationStoreTestDouble
+    private sealed class HeartbeatTimeProvider : TimeProvider
+    {
+        private int _timerCount;
+        public long Timestamp { get; set; }
+        public override long TimestampFrequency => 1000;
+
+        public override long GetTimestamp() => Timestamp;
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+
+        public TaskCompletionSource<HeartbeatTimer> FirstTimer { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<HeartbeatTimer> SecondTimer { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period
+        )
+        {
+            var timer = new HeartbeatTimer(callback, state, dueTime);
+            if (Interlocked.Increment(ref _timerCount) == 1)
+                FirstTimer.TrySetResult(timer);
+            else
+                SecondTimer.TrySetResult(timer);
+            return timer;
+        }
+    }
+
+    private sealed class HeartbeatTimer(TimerCallback callback, object? state, TimeSpan dueTime)
+        : ITimer
+    {
+        public TimeSpan DueTime { get; } = dueTime;
+
+        public void Fire() => callback(state);
+
+        public bool Change(TimeSpan dueTime, TimeSpan period) => false;
+
+        public void Dispose() { }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingHeartbeatStore(
+        IZLinkLocationRepository inner,
+        int blockedRenewCall = 2
+    ) : ZLinkLocationStoreTestDouble
     {
         private int _renewCalls;
 
@@ -1062,7 +1141,7 @@ public sealed class LocationRuntimeTests
             CancellationToken cancellationToken = default
         )
         {
-            if (Interlocked.Increment(ref _renewCalls) == 2)
+            if (Interlocked.Increment(ref _renewCalls) == blockedRenewCall)
             {
                 HeartbeatStarted.TrySetResult();
                 await ReleaseHeartbeat.Task.ConfigureAwait(false);

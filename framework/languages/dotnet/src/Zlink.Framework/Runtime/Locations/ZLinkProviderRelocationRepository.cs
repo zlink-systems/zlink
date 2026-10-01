@@ -1,5 +1,3 @@
-using System.Runtime.ExceptionServices;
-
 namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore provider)
@@ -12,9 +10,8 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        // The Framework issues the reference once before provider I/O. If the
-        // response is lost, it reads that same reference instead of creating
-        // another blob.
+        // Reconcile an uncertain write at the same reference. Only a confirmed
+        // conflict allocates another reference.
         var reference = new ZLinkBlobReference(Guid.NewGuid().ToString("N"));
         try
         {
@@ -68,48 +65,54 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         CancellationToken cancellationToken
     )
     {
-        ZLinkBlobPutResult result;
-        try
+        while (true)
         {
-            result = await provider
-                .PutAsync(reference, payload, retention, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception failure)
-            when (failure
-                    is not OutOfMemoryException
-                        and not StackOverflowException
-                        and not AccessViolationException
-            )
-        {
-            var read = await provider
-                .ReadAsync(reference, cancellationToken)
-                .AsTask()
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            if (
-                read is ZLinkBlobReadResult.Found found
-                && found.Bytes.Span.SequenceEqual(payload.Span)
-            )
+            cancellationToken.ThrowIfCancellationRequested();
+            ZLinkBlobPutResult result;
+            try
             {
-                return Stored(reference, payload.Span, found.ExpiresAt, found.StoreNow);
+                result = await provider
+                    .PutAsync(reference, payload, retention, cancellationToken)
+                    .AsTask()
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception failure)
+                when (failure
+                        is not OutOfMemoryException
+                            and not StackOverflowException
+                            and not AccessViolationException
+                )
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = await provider
+                    .ReadAsync(reference, cancellationToken)
+                    .AsTask()
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (read is ZLinkBlobReadResult.Found found)
+                {
+                    if (found.Bytes.Span.SequenceEqual(payload.Span))
+                        return Stored(reference, payload.Span, found.ExpiresAt, found.StoreNow);
+                    result = new ZLinkBlobPutResult.Conflict(found.StoreNow);
+                }
+                else
+                    continue;
             }
 
-            ExceptionDispatchInfo.Capture(failure).Throw();
-            throw;
+            if (result is ZLinkBlobPutResult.Conflict)
+            {
+                reference = new ZLinkBlobReference(Guid.NewGuid().ToString("N"));
+                continue;
+            }
+            var (expiresAt, storeNow) = result switch
+            {
+                ZLinkBlobPutResult.Stored stored => (stored.ExpiresAt, stored.StoreNow),
+                ZLinkBlobPutResult.AlreadyStored stored => (stored.ExpiresAt, stored.StoreNow),
+                _ => throw new InvalidOperationException(),
+            };
+            return Stored(reference, payload.Span, expiresAt, storeNow);
         }
-
-        var (expiresAt, storeNow) = result switch
-        {
-            ZLinkBlobPutResult.Stored stored => (stored.ExpiresAt, stored.StoreNow),
-            ZLinkBlobPutResult.AlreadyStored stored => (stored.ExpiresAt, stored.StoreNow),
-            ZLinkBlobPutResult.Conflict => throw new InvalidDataException(
-                "A Framework-issued relocation reference collided."
-            ),
-            _ => throw new InvalidOperationException(),
-        };
-        return Stored(reference, payload.Span, expiresAt, storeNow);
     }
 
     public async ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(

@@ -736,17 +736,26 @@ class location_runtime_t
 
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat)
     {
+        constexpr auto *wait_site = "location/heartbeat-input";
         while (!heartbeat->stop.load (std::memory_order_acquire)) {
             std::unique_lock lock (heartbeat->gate);
             if (!heartbeat->current) {
                 runtime::infrastructure_wait_guard::condition_wait_for (
                   heartbeat->wake, lock, _options.owner_lease_renew_interval,
-                  [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                  "location/heartbeat-input",
+                  [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
                   runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 if (heartbeat->stop.load (std::memory_order_acquire))
                     break;
             } else if (heartbeat->current->task && heartbeat->current->task->await_ready ()) {
+                const auto scheduled_at = heartbeat->current->deadline_at
+                                          - _options.owner_lease_renew_timeout
+                                          + _options.owner_lease_renew_interval;
+                runtime::infrastructure_wait_guard::condition_wait_for (
+                  heartbeat->wake, lock, remaining_until (scheduled_at),
+                  [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
+                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+                if (heartbeat->stop.load (std::memory_order_acquire))
+                    break;
                 heartbeat->current.reset ();
             } else {
                 auto attempt = heartbeat->current;
@@ -761,16 +770,18 @@ class location_runtime_t
                         runtime::infrastructure_wait_guard::condition_wait_for (
                           heartbeat->wake, lock, _options.owner_lease_renew_interval,
                           [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                          "location/heartbeat-input",
+                          wait_site,
                           runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                     }
                     continue;
                 }
                 runtime::infrastructure_wait_guard::condition_wait_for (
-                  heartbeat->wake, lock, std::min (_options.owner_lease_renew_interval, remaining),
-                  [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                  "location/heartbeat-input",
-                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+                  heartbeat->wake, lock, remaining,
+                  [&] {
+                      return heartbeat->stop.load (std::memory_order_acquire)
+                             || (attempt->task && attempt->task->await_ready ());
+                  },
+                  wait_site, runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 continue;
             }
             auto attempt = std::make_shared<heartbeat_attempt_t> (
@@ -779,6 +790,14 @@ class location_runtime_t
             heartbeat->current = attempt;
             lock.unlock ();
             attempt->task.emplace (heartbeat_renew_once_async (attempt));
+            detail::observe_task_completion (*attempt->task,
+                                             [weak_heartbeat = std::weak_ptr{heartbeat}] (
+                                               const result_t<lease_renew_outcome_t> &) {
+                                                 if (auto owner = weak_heartbeat.lock ()) {
+                                                     std::lock_guard lock (owner->gate);
+                                                     owner->wake.notify_all ();
+                                                 }
+                                             });
         }
     }
 

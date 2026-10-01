@@ -103,7 +103,7 @@
     },
     {
       "name": "weightMax",
-      "value": 100
+      "value": 10000
     },
     {
       "name": "creationIntentBytes",
@@ -1026,7 +1026,7 @@
       "ttlMs": 15000,
       "renewTimeoutMs": 3000,
       "fencingMarginMs": 5000,
-      "startupRelation": "renewInterval-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
+      "startupRelation": "max-renewInterval-renewTimeout-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
       "scope": "all-location-store-hosts-independent-of-routing-allocation"
     },
     {

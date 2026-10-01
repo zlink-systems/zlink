@@ -17,6 +17,20 @@ test('location queries default to a page of 100', () => {
   assert.equal(zlinkRuntimeDefaultLocationOptions.listPageSize, 100);
 });
 
+test('generated channel weight codec accepts glossary bounds and rejects values outside them', () => {
+  const { encodeChannelEntry, decodeChannelEntry } = require('../../packages/framework/dist/runtime/protocol/service_wire_codec.generated');
+  for (const weight of [0, 10_000]) {
+    const entry = { channelName: 'orders', weight };
+    assert.deepEqual(decodeChannelEntry(encodeChannelEntry(entry, {}), {}), entry);
+  }
+  for (const weight of [-1, 10_001]) {
+    assert.throws(() => encodeChannelEntry({ channelName: 'orders', weight }, {}), /weight constraint/u);
+  }
+  const encoded = Buffer.from(encodeChannelEntry({ channelName: 'orders', weight: 0 }, {}));
+  encoded.writeUInt32BE(10_001, encoded.length - 4);
+  assert.throws(() => decodeChannelEntry(encoded, {}), /weight constraint/u);
+});
+
 test('one-way NOT_ADMITTED completes with Rejected', () => {
   assert.throws(
     () => requireOneWayCompletion(classifySubmitResult(SubmitResult.NotAdmitted, 'Actor send'), 'Actor send'),
@@ -50,15 +64,48 @@ test('uncertain relocation put confirms the same reference and bytes using opera
   });
 });
 
-test('relocation reconciliation preserves the put failure when its bytes cannot be confirmed', async () => {
+test('relocation reconciliation stores missing bytes at the same reference and conflicting bytes at a new reference', async () => {
   const failure = new Error('Put response lost');
   for (const read of [
     async () => ({ kind: 'missing', storeNow: new Date(0) }),
     async () => ({ kind: 'found', bytes: Uint8Array.of(4), expiresAt: new Date(1000), storeNow: new Date(0) })
   ]) {
-    await assert.rejects(putNewRelocationBlob({ async put() { throw failure; }, read }, Uint8Array.of(1), 1000),
-      (error) => error === failure);
+    const references = [];
+    const result = await putNewRelocationBlob({
+      async put(reference) {
+        references.push(reference);
+        if (references.length === 1) throw failure;
+        return { kind: 'stored', expiresAt: new Date(1000), storeNow: new Date(0) };
+      }, read
+    }, Uint8Array.of(1), 1000);
+    const confirmation = await read();
+    assert.equal(references.length, 2);
+    assert.equal(references[0] === references[1], confirmation.kind === 'missing');
+    assert.equal(result.reference, references[1]);
   }
+});
+
+test('relocation conflicts have no attempt cap and end at the operation deadline', async () => {
+  const references = [];
+  const result = await putNewRelocationBlob({
+    async put(reference) {
+      references.push(reference.value);
+      return references.length <= 5
+        ? { kind: 'conflict', storeNow: new Date(0) }
+        : { kind: 'stored', expiresAt: new Date(1000), storeNow: new Date(0) };
+    }
+  }, Uint8Array.of(1), 1000);
+  assert.equal(references.length, 6);
+  assert.equal(new Set(references).size, 6);
+  assert.equal(result.reference.value, references[5]);
+  const controller = new AbortController();
+  const deadline = new Error('Operation deadline exceeded');
+  await assert.rejects(putNewRelocationBlob({
+    async put() {
+      controller.abort(deadline);
+      return { kind: 'conflict', storeNow: new Date(0) };
+    }
+  }, Uint8Array.of(1), 1000, controller.signal), (error) => error === deadline);
 });
 
 test('relocation reconciliation exposes provider read errors and operation cancellation', async () => {
@@ -83,6 +130,30 @@ test('relocation does not start provider I/O when operation cancellation is alre
   await assert.rejects(putNewRelocationBlob({ async put() { assert.fail('Provider must not be called'); } }, Uint8Array.of(1), 1000, controller.signal),
     (error) => error === reason);
 });
+
+for (const pending of ['put', 'read']) {
+  test(`operation cancellation ends a pending relocation ${pending} waiter`, { timeout: 1000 }, async (context) => {
+    const controller = new AbortController();
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    context.after(() => release(pending === 'put'
+      ? { kind: 'stored', expiresAt: new Date(1000), storeNow: new Date(0) }
+      : { kind: 'missing', storeNow: new Date(0) }));
+    const store = {
+      async put() {
+        if (pending === 'read') throw new Error('Put response lost');
+        queueMicrotask(() => controller.abort());
+        return held;
+      },
+      async read() {
+        queueMicrotask(() => controller.abort());
+        return held;
+      }
+    };
+    await assert.rejects(putNewRelocationBlob(store, Uint8Array.of(1), 1000, controller.signal),
+      (error) => error.name === 'AbortError');
+  });
+}
 
 test('Instance activation propagates the operation signal to payload put and confirmation', async () => {
   const { ZLinkInstanceActivationAuthority } = require('../../packages/framework/dist/runtime/host/instance-activation-authority');
@@ -228,3 +299,41 @@ test('Instance activation does not start payload put when its deadline expires d
     runtime.close();
   }
 });
+
+for (const retryResult of ['conflict', 'missing']) {
+  test(`Relocation Store immediate ${retryResult} responses allow the operation deadline to terminate`, () => {
+    const { execFileSync } = require('node:child_process');
+    const repositoryPath = require.resolve('../../packages/framework/dist/runtime/locations/relocation-blob');
+    const operationDeadlineMs = 20;
+    const childWatchdogMs = 1000;
+    const source = `
+      const assert = require('node:assert/strict');
+      const { putNewRelocationBlob } = require(${JSON.stringify(repositoryPath)});
+      const signal = AbortSignal.timeout(${operationDeadlineMs});
+      const references = [];
+      const store = {
+        async put(reference) {
+          references.push(reference.value);
+          if (${JSON.stringify(retryResult)} === 'missing') throw new Error('Put response lost');
+          return { kind: 'conflict', storeNow: new Date(0) };
+        },
+        async read() { return { kind: 'missing', storeNow: new Date(0) }; }
+      };
+      putNewRelocationBlob(store, Uint8Array.of(1), 1000, signal).then(
+        () => { throw new Error('Unexpected Put success'); },
+        (error) => {
+          assert.equal(signal.aborted, true);
+          assert.equal(error, signal.reason);
+          assert.ok(references.length > 0);
+          if (${JSON.stringify(retryResult)} === 'missing') assert.equal(new Set(references).size, 1);
+          console.log('operation-deadline=terminated');
+        }
+      );
+    `;
+    const output = execFileSync(process.execPath, ['-e', source], {
+      timeout: childWatchdogMs,
+      encoding: 'utf8'
+    });
+    assert.match(output, /operation-deadline=terminated/u);
+  });
+}

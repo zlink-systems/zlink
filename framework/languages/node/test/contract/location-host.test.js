@@ -76,6 +76,15 @@ test('framework and NestJS builders register separate location and relocation st
 
 });
 
+test('owner lease startup relation includes two timeouts when renewal is slower than its interval', () => {
+  const defaults = framework.createFrameworkOptions(() => {});
+  assert.doesNotThrow(() => framework.createFrameworkRegistration(defaults));
+  const invalid = framework.createFrameworkOptions((builder) => {
+    builder.configureLocations().ownerLeaseRenewIntervalMs(1000).ownerLeaseRenewTimeoutMs(8000);
+  });
+  assert.throws(() => framework.createFrameworkRegistration(invalid), /ownerLease/u);
+});
+
 test('Session relocation seal timeout is a positive finite Location option', () => {
   for (const value of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
     const options = framework.createFrameworkOptions((builder) => {
@@ -983,6 +992,7 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             nativeInstance: {},
             onEvent() {},
             recv() { return null; },
+            drain() { return 0; },
             status() { return {}; },
             async dispose() {}
           };

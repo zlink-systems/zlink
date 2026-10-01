@@ -883,7 +883,7 @@ bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
     auto store = std::make_shared<recovering_location_store_t> ();
     auto relocation_store =
       std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
-    constexpr auto renew_timeout = std::chrono::seconds (1);
+    constexpr auto renew_timeout = std::chrono::milliseconds (500);
     auto &options = app.add_zlink_framework ();
     options.add_location_store (store);
     options.add_relocation_store (relocation_store);

@@ -4498,7 +4498,7 @@
           "framework-service-v13"
         ],
         "objectRole": "none",
-        "placementWeight": 101,
+        "placementWeight": 10001,
         "activeCapacityLimit": 1,
         "pendingCapacityLimit": 0,
         "activeCapacityUsed": 0,

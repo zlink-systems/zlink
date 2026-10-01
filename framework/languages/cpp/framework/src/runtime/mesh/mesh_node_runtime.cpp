@@ -1092,7 +1092,7 @@ void mesh_node_runtime_t::configure_relocation_runtime (
 }
 
 void mesh_node_runtime_t::configure_bound_session_relocation_resolver (
-  std::function<std::optional<bound_session_relocation_route_t> (
+  std::function<task_t<std::optional<bound_session_relocation_route_t>> (
     const runtime::stateful::object_ref_t &)> resolver)
 {
     if (!resolver)
@@ -1134,7 +1134,7 @@ mesh_node_runtime_t::seal_bound_sessions (
         std::optional<bound_session_relocation_route_t> session;
         bool resolver_failed = false;
         try {
-            session = _bound_session_relocation_resolver (source);
+            session = co_await _bound_session_relocation_resolver (source);
         }
         catch (const std::exception &) {
             resolver_failed = true;
@@ -1216,7 +1216,7 @@ mesh_node_runtime_t::seal_bound_sessions (
         bool converged = false;
         std::optional<bound_session_relocation_route_t> current;
         try {
-            current = _bound_session_relocation_resolver (source);
+            current = co_await _bound_session_relocation_resolver (source);
         }
         catch (...) {
             current.reset ();

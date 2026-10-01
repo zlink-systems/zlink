@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include <zlink/framework/contracts/configuration/detail/framework_options_validation.hpp>
 
 #include <gtest/gtest.h>
 
@@ -18,19 +19,92 @@ using zlink::framework::location_options_t;
 using zlink::framework::runtime::in_memory_location_repository_t;
 using zlink::framework::runtime::location_runtime_t;
 
+TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
+{
+    location_options_t options;
+    options.owner_lease_renew_interval = std::chrono::seconds (1);
+    options.owner_lease_renew_timeout = std::chrono::seconds (8);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (location_options_t{}));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseRenewalWindowOverflow)
+{
+    location_options_t options;
+    options.owner_lease_renew_interval = std::chrono::milliseconds (1);
+    options.owner_lease_renew_timeout =
+      std::chrono::milliseconds::max () / 2 + std::chrono::milliseconds (1);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    options.owner_lease_renew_timeout = std::chrono::milliseconds::max ();
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    options.owner_lease_renew_interval = std::chrono::milliseconds::max ();
+    options.owner_lease_renew_timeout = std::chrono::milliseconds (1);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+}
+
+class timed_renew_repository_t final : public in_memory_location_repository_t
+{
+  public:
+    std::future<std::chrono::steady_clock::duration> renew_spacing ()
+    {
+        return _spacing.get_future ();
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
+    renew_owner_lease (zlink::framework::location_owner_token_t token,
+                       std::chrono::milliseconds ttl) override
+    {
+        const auto now = std::chrono::steady_clock::now ();
+        if (_calls++ == 0)
+            _first_started = now;
+        else if (_calls == 2)
+            _spacing.set_value (now - _first_started);
+        return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
+    }
+
+  private:
+    int _calls = 0;
+    std::chrono::steady_clock::time_point _first_started;
+    std::promise<std::chrono::steady_clock::duration> _spacing;
+};
+
+TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPlusInterval)
+{
+    timed_renew_repository_t store;
+    const auto interval = std::chrono::milliseconds (400);
+    location_runtime_t runtime (store,
+                                location_options_t{.owner_lease_renew_interval = interval,
+                                                   .owner_lease_renew_timeout = interval / 4},
+                                "owner-spacing");
+    auto spacing = store.renew_spacing ();
+    runtime.start (zlink::routing_id_t::from ("node-spacing"));
+    ASSERT_EQ (std::future_status::ready, spacing.wait_for (std::chrono::seconds (5)));
+    EXPECT_GE (spacing.get (), interval);
+    runtime.stop ();
+}
+
 class pending_renew_repository_t final : public in_memory_location_repository_t
 {
   public:
     std::future<void> renew_started () { return _renew_started.get_future (); }
+    std::future<void> next_renew_started () { return _next_renew_started.get_future (); }
 
     zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (zlink::framework::location_owner_token_t, std::chrono::milliseconds) override
     {
-        if (_renew_calls.fetch_add (1) != 0)
+        const auto call = _renew_calls.fetch_add (1);
+        if (call != 0) {
+            if (call == 1)
+                _next_renew_started.set_value ();
             return zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t> (
               zlink::framework::result_t<zlink::framework::owner_lease_renew_result_t>::success (
                 zlink::framework::owner_lease_renew_result_t{
                   zlink::framework::owner_lease_stale_t{}}));
+        }
         _renew_started.set_value ();
         return _renew_completion.task ();
     }
@@ -44,10 +118,30 @@ class pending_renew_repository_t final : public in_memory_location_repository_t
 
   private:
     std::promise<void> _renew_started;
+    std::promise<void> _next_renew_started;
     std::atomic_int _renew_calls = 0;
     zlink::framework::detail::task_completion_source_t<zlink::framework::owner_lease_renew_result_t>
       _renew_completion;
 };
+
+TEST (ZLinkFrameworkLocationRuntime, PendingHeartbeatDoesNotOverlapAndCompletionWakesNextRenewal)
+{
+    pending_renew_repository_t store;
+    const auto interval = std::chrono::milliseconds (400);
+    location_runtime_t runtime (store, location_options_t{.owner_lease_renew_interval = interval},
+                                "owner-pending");
+    auto started = store.renew_started ();
+    auto next = store.next_renew_started ();
+    runtime.start (zlink::routing_id_t::from ("node-pending"));
+    ASSERT_EQ (std::future_status::ready, started.wait_for (std::chrono::seconds (5)));
+    EXPECT_EQ (std::future_status::timeout, next.wait_for (interval + interval / 4));
+    const auto lease = store.read_owner_lease ("owner-pending").result ().value ();
+    const auto &found = std::get<zlink::framework::owner_lease_found_t> (lease);
+    store.complete_renew (
+      zlink::framework::owner_lease_renewed_t{found.lease_expires_at, found.store_now});
+    EXPECT_EQ (std::future_status::ready, next.wait_for (interval / 4));
+    runtime.stop ();
+}
 
 TEST (ZLinkFrameworkLocationRuntime, HeartbeatContinuesWhenRenewCompletesAsynchronously)
 {

@@ -696,7 +696,7 @@ test('location runtime bounds fixed routing-id owner lease renewal by the config
   await runtime.stop();
 });
 
-test('location runtime schedules heartbeats from a monotonic fixed cadence after a late renewal', async () => {
+test('location runtime schedules heartbeats from the actual monotonic start after a late renewal', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   let wallClockMs = 0;
@@ -731,7 +731,7 @@ test('location runtime schedules heartbeats from a monotonic fixed cadence after
   monotonicMs = 150;
   timers.shift().callback();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(timers[0].delayMs, 50);
+  assert.equal(timers[0].delayMs, 100);
 
   await runtime.stop();
 });

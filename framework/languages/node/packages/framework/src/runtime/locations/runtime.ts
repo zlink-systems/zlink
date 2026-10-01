@@ -1169,7 +1169,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       for (const scope of this.leaseScopes) {
         this.metrics?.recordOwnerLeaseRenewLateness(lateness, scope.kind, scope.name);
       }
-      this.nextLeaseRenewAtMs = scheduledAt + this.options.ownerLeaseRenewIntervalMs;
+      this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
       if (
         this.ownerLeaseDeadlineMs !== undefined &&
         this.monotonicNowMs() >= this.ownerLeaseDeadlineMs

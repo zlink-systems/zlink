@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -124,7 +123,7 @@ class ZLinkLocationStoreResolverTest {
     }
 
     @Test
-    void ownerLeaseRefreshTimeDoesNotMoveBackwardWhenStoreClockRegresses() {
+    void ownerLeaseRefreshTimePreservesRegressedStoreClock() {
         DescendingLeaseClockStore store =
                 new DescendingLeaseClockStore(
                         Instant.parse("2026-07-13T14:04:23.422Z"),
@@ -133,11 +132,11 @@ class ZLinkLocationStoreResolverTest {
                 new ZLinkLocationRuntime(
                         store, "owner-a", Duration.ofMinutes(1), Duration.ofDays(1))) {
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
-            Instant before = runtime.ownerLeaseRenewedAt();
+            assertEquals(Instant.parse("2026-07-13T14:04:23.422Z"), runtime.ownerLeaseRenewedAt());
 
             runtime.renewOwnerLeaseOnce().toCompletableFuture().join();
 
-            assertTrue(runtime.ownerLeaseRenewedAt().isAfter(before));
+            assertEquals(Instant.parse("2026-07-13T14:04:23.231Z"), runtime.ownerLeaseRenewedAt());
         }
     }
 
