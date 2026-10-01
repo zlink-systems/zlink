@@ -549,7 +549,7 @@ the route resolver returns rather than the Location Store.
   stale result, Store recovery, or lease invalidation.
 - The resolver result returns `Missing` and `Unavailable` as distinct tags,
   connecting `Missing` only to the creation coordinator and `Unavailable`
-  only to the terminal completion mapper.
+  to the forwarding target of [Object lifecycle §3](09-object-lifecycle.en.md#3-when-to-build-a-missing-object) when an Instance intent meets `Creating`, an explicit Close, or idle cleanup, and otherwise to the terminal completion mapper.
 - The positive route cache's lifetime doesn't exceed `MessageFollowDuration`.
 - Target admission verifies the resolved owner's authority owner generation and lease
   fence, excludes a direct message's `ObjectGeneration` from the target judgment per §2.6,
