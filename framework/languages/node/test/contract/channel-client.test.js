@@ -4193,17 +4193,25 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
       registration,
       new framework.ZLinkDealerChannelClientTransport(dealer)
     );
+    let sendMetadata;
     const dispatcher = new framework.ZLinkChannelRequestDispatcher({
       channelName: 'api',
       dispatchErrors: noDispatchErrorReporter(),
       handlers: new Map([
         ['Ping', {
-          async handle(payload) {
+          async handle(payload, context) {
             assert.equal(payload, 'ping');
-            return 'pong';
+            assert.equal(context.metadata.find('tenant-id'), 'tenant-42');
+            return context.metadata.find('tenant-id');
           }
         }]
       ]),
+      sendHandlers: new Map([['Notice', {
+        handle(payload, context) {
+          assert.equal(payload, 'notice');
+          sendMetadata = context.metadata.find('tenant-id');
+        }
+      }]]),
       filters: [{
         async invoke(_invocation, next) {
           filterEvents.push('before');
@@ -4214,14 +4222,23 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
       }]
     });
 
-    const replyPromise = client.requestToChannel('api', typedPacket('Ping', 'ping')).timeout(1000).submit();
+    const replyPromise = client.requestToChannel('api', typedPacket('Ping', 'ping'))
+      .metadata('tenant-id', 'tenant-42')
+      .timeout(1000)
+      .submit();
     const received = await recvRouterMessage(router);
     await dispatcher.dispatch(received, router);
 
     const reply = await withTimeout(replyPromise, 1000, 'framework dispatcher reply');
-    assert.equal(reply, 'pong');
+    assert.equal(reply, 'tenant-42');
     assert.deepEqual(filterEvents, ['before', 'after']);
     received.close();
+    await client.sendToChannel('api', typedPacket('Notice', 'notice'))
+      .metadata('tenant-id', 'tenant-42').submit();
+    const sent = await recvRouterMessage(router);
+    await dispatcher.dispatch(sent, router);
+    assert.equal(sendMetadata, 'tenant-42');
+    sent.close();
   } finally {
     completionPoller.close();
     dealerMonitor?.close();
@@ -4229,6 +4246,81 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
     dealer.close();
     router.close();
     ctx.close();
+  }
+});
+
+test('ClientServer malformed metadata replies ProtocolError before handlers', async () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../../../runtime/protocol/fixtures/client-server-metadata.json'
+      ),
+      'utf8'
+    )
+  );
+  const invalidCases = [
+    ...fixture.cases.filter(item => !item.valid),
+    {name: 'invalid UTF-8', metadata: {k: 'byte-marker'}, invalidUtf8: true}
+  ];
+  for (const scenario of invalidCases) {
+    let invocations = 0;
+    const replies = [];
+    const dispatcher = new framework.ZLinkChannelRequestDispatcher({
+      channelName: 'api',
+      dispatchErrors: noDispatchErrorReporter(),
+      handlers: new Map([
+        ['Ping', {
+          handle() {
+            invocations++;
+          }
+        }]
+      ]),
+      sendHandlers: new Map()
+    });
+    const header = {
+      formatMarker: 242,
+      kind: 1,
+      channelName: 'api',
+      messageName: 'Ping',
+      contentType: 'application/json',
+      correlationId: 'invalid-metadata',
+      deadline: null,
+      topic: null,
+      metadata: scenario.metadata
+    };
+    const json =
+      scenario.receivedEncoded === undefined
+        ? JSON.stringify(header)
+        : JSON.stringify(header).replace(
+            '"metadata":' + JSON.stringify(scenario.metadata),
+            '"metadata":' + scenario.receivedEncoded
+          );
+    const markerIndex = json.indexOf('byte-marker');
+    const wire = scenario.invalidUtf8
+      ? Buffer.concat([
+          Buffer.from(json.slice(0, markerIndex)),
+          Buffer.from([0xff]),
+          Buffer.from(json.slice(markerIndex + 'byte-marker'.length))
+        ])
+      : Buffer.from(json);
+    const parts = [wire, Buffer.from('{}')].map(fakeMessagePart);
+    await dispatcher.dispatch(
+      {parts, routingId: 'client-1', replyToken: {}},
+      {
+        reply() {
+          return captureMultipart(replies);
+        }
+      }
+    );
+    assert.equal(invocations, 0, scenario.name);
+    const channelCodec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+    assert.throws(
+      () => channelCodec.decodeChannelReply(replies),
+      error => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError,
+      scenario.name
+    );
+    parts.forEach(part => part.close());
   }
 });
 

@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 
@@ -89,7 +90,7 @@ internal sealed record ZLinkEnvelopeHeader(
     [System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     )]
-    public Dictionary<string, string>? Metadata { get; init; }
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 }
 
 internal sealed class ZLinkEnvelopeProtocolException(ZLinkEnvelopeHeader header, string message)
@@ -101,6 +102,7 @@ internal sealed class ZLinkEnvelopeProtocolException(ZLinkEnvelopeHeader header,
 internal static class ZLinkEnvelopeCodec
 {
     private const string JsonContentType = "application/json";
+    private static readonly UTF8Encoding StrictMetadataUtf8 = new(false, true);
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ZLinkStateLane CacheLane = new();
     private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
@@ -325,7 +327,10 @@ internal static class ZLinkEnvelopeCodec
         {
             header = ReadProtocolHeader(bytes);
         }
-        catch (Exception error) when (error is JsonException or InvalidOperationException)
+        catch (Exception error)
+            when (error is JsonException or InvalidOperationException
+                && error is not ZLinkEnvelopeProtocolException
+            )
         {
             throw new ZLinkEnvelopeProtocolException(
                 InvalidProtocolHeader(),
@@ -368,6 +373,7 @@ internal static class ZLinkEnvelopeCodec
         ZLinkFlowOrigin? flowOrigin = null;
         DateTimeOffset? deadline = null;
         Dictionary<string, string>? metadata = null;
+        string? metadataError = null;
         var complete = false;
         while (reader.Read())
         {
@@ -439,7 +445,7 @@ internal static class ZLinkEnvelopeCodec
                             : (ZLinkFlowOrigin)ReadHeaderInteger(ref reader);
                     break;
                 case HeaderField.Metadata:
-                    metadata = ReadHeaderMetadata(ref reader);
+                    metadata = ReadHeaderMetadata(ref reader, out metadataError);
                     break;
                 default:
                     reader.Skip();
@@ -449,7 +455,7 @@ internal static class ZLinkEnvelopeCodec
         if (!complete || reader.Read())
             throw new JsonException("ZLink envelope header is incomplete.");
 
-        return new ZLinkEnvelopeHeader(
+        var header = new ZLinkEnvelopeHeader(
             kind,
             channelName!,
             messageName!,
@@ -467,6 +473,9 @@ internal static class ZLinkEnvelopeCodec
             FlowOrigin = flowOrigin,
             Metadata = metadata,
         };
+        if (metadataError is not null)
+            throw new ZLinkEnvelopeProtocolException(header, metadataError);
+        return header;
     }
 
     private static string? ReadHeaderString(ref Utf8JsonReader reader) =>
@@ -479,12 +488,18 @@ internal static class ZLinkEnvelopeCodec
             ? value
             : throw new JsonException("ZLink envelope integer field is invalid.");
 
-    private static Dictionary<string, string>? ReadHeaderMetadata(ref Utf8JsonReader reader)
+    private static Dictionary<string, string>? ReadHeaderMetadata(
+        ref Utf8JsonReader reader,
+        out string? error
+    )
     {
-        if (reader.TokenType == JsonTokenType.Null)
-            return null;
+        error = null;
         if (reader.TokenType != JsonTokenType.StartObject)
-            throw new JsonException("ZLink envelope metadata must be an object.");
+        {
+            reader.Skip();
+            error = "ZLink envelope metadata must be an object.";
+            return null;
+        }
         var metadata = new Dictionary<string, string>();
         while (reader.Read())
         {
@@ -492,10 +507,33 @@ internal static class ZLinkEnvelopeCodec
                 return metadata;
             if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("ZLink envelope metadata key is invalid.");
-            var key = reader.GetString()!;
+            string? key = null;
+            try
+            {
+                key = reader.GetString();
+            }
+            catch (InvalidOperationException)
+            {
+                error = "ZLink envelope metadata must contain valid Unicode strings.";
+            }
             if (!reader.Read())
                 throw new JsonException("ZLink envelope metadata value is missing.");
-            metadata[key] = ReadHeaderString(ref reader)!;
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                reader.Skip();
+                error = "ZLink envelope metadata value must be a string.";
+            }
+            else if (key is not null)
+            {
+                try
+                {
+                    metadata[key] = reader.GetString()!;
+                }
+                catch (InvalidOperationException)
+                {
+                    error = "ZLink envelope metadata must contain valid Unicode strings.";
+                }
+            }
         }
         throw new JsonException("ZLink envelope metadata is incomplete.");
     }
@@ -814,6 +852,44 @@ internal static class ZLinkEnvelopeCodec
 
     private static void ValidateProtocolHeader(ZLinkEnvelopeHeader header, bool validateFlow = true)
     {
+        if (header.Metadata is { Count: > 0 } metadata)
+        {
+            foreach (var (key, value) in metadata)
+            {
+                if (
+                    string.IsNullOrEmpty(key)
+                    || key.Contains('\0')
+                    || value is null
+                    || value.Contains('\0')
+                )
+                    throw new ZLinkEnvelopeProtocolException(
+                        header,
+                        "ZLink envelope metadata keys must be non-empty and keys and values must not contain NUL."
+                    );
+            }
+            try
+            {
+                foreach (var (key, value) in metadata)
+                {
+                    _ = StrictMetadataUtf8.GetByteCount(key);
+                    _ = StrictMetadataUtf8.GetByteCount(value);
+                }
+            }
+            catch (EncoderFallbackException)
+            {
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope metadata must contain valid Unicode strings."
+                );
+            }
+            var size = 0;
+            WriteHeaderMetadata(metadata, default, ref size);
+            if (size > ServiceWireConstants.MetadataBytes)
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    $"ZLink envelope metadata exceeds the {ServiceWireConstants.MetadataBytes}-byte limit."
+                );
+        }
         if (!Enum.IsDefined(header.Kind))
             throw new ZLinkEnvelopeProtocolException(
                 header,
@@ -1061,21 +1137,31 @@ internal static class ZLinkEnvelopeCodec
 
         if (header.Metadata is { } metadata)
         {
-            WriteHeaderToken(",\"metadata\":{"u8, destination, ref written);
-            var first = true;
-            foreach (var entry in metadata)
-            {
-                if (!first)
-                    WriteHeaderToken(","u8, destination, ref written);
-                first = false;
-                WriteHeaderString(entry.Key, destination, ref written);
-                WriteHeaderToken(":"u8, destination, ref written);
-                WriteHeaderString(entry.Value, destination, ref written);
-            }
-            WriteHeaderToken("}"u8, destination, ref written);
+            WriteHeaderToken(",\"metadata\":"u8, destination, ref written);
+            WriteHeaderMetadata(metadata, destination, ref written);
         }
         WriteHeaderToken("}"u8, destination, ref written);
         return written;
+    }
+
+    private static void WriteHeaderMetadata(
+        IReadOnlyDictionary<string, string> metadata,
+        Span<byte> destination,
+        ref int written
+    )
+    {
+        WriteHeaderToken("{"u8, destination, ref written);
+        var first = true;
+        foreach (var (key, value) in metadata)
+        {
+            if (!first)
+                WriteHeaderToken(","u8, destination, ref written);
+            first = false;
+            WriteHeaderString(key, destination, ref written, minimumEscape: true);
+            WriteHeaderToken(":"u8, destination, ref written);
+            WriteHeaderString(value, destination, ref written, minimumEscape: true);
+        }
+        WriteHeaderToken("}"u8, destination, ref written);
     }
 
     private static void WriteHeaderToken(
@@ -1089,7 +1175,12 @@ internal static class ZLinkEnvelopeCodec
         written = checked(written + token.Length);
     }
 
-    private static void WriteHeaderString(string? value, Span<byte> destination, ref int written)
+    private static void WriteHeaderString(
+        string? value,
+        Span<byte> destination,
+        ref int written,
+        bool minimumEscape = false
+    )
     {
         if (value is null)
         {
@@ -1100,9 +1191,40 @@ internal static class ZLinkEnvelopeCodec
         WriteHeaderToken("\""u8, destination, ref written);
         Span<char> scalar = stackalloc char[2];
         Span<char> escaped = stackalloc char[12];
+        Span<byte> control = stackalloc byte[6];
         foreach (var rune in value.EnumerateRunes())
         {
-            if (JavaScriptEncoder.Default.WillEncode(rune.Value))
+            if (minimumEscape)
+            {
+                ReadOnlySpan<byte> token = rune.Value switch
+                {
+                    '"' => "\\\""u8,
+                    '\\' => "\\\\"u8,
+                    '\b' => "\\b"u8,
+                    '\f' => "\\f"u8,
+                    '\n' => "\\n"u8,
+                    '\r' => "\\r"u8,
+                    '\t' => "\\t"u8,
+                    _ => default,
+                };
+                if (!token.IsEmpty)
+                    WriteHeaderToken(token, destination, ref written);
+                else if (rune.Value < 0x20)
+                {
+                    "\\u00"u8.CopyTo(control);
+                    const string hex = "0123456789abcdef";
+                    control[4] = (byte)hex[rune.Value >> 4];
+                    control[5] = (byte)hex[rune.Value & 15];
+                    WriteHeaderToken(control, destination, ref written);
+                }
+                else
+                {
+                    if (!destination.IsEmpty)
+                        rune.EncodeToUtf8(destination[written..]);
+                    written = checked(written + rune.Utf8SequenceLength);
+                }
+            }
+            else if (JavaScriptEncoder.Default.WillEncode(rune.Value))
             {
                 var scalarLength = rune.EncodeToUtf16(scalar);
                 JavaScriptEncoder.Default.Encode(

@@ -51,11 +51,14 @@ internal sealed class ZLinkClientServerDispatcher(
             flowCaptureEnabled(),
             ZLinkFlowOrigin.Inbound
         );
+        var metadata = header.Metadata is { Count: > 0 } values
+            ? new ZLinkMessageMetadata(values)
+            : ZLinkMessageMetadata.Empty;
         switch (header.Kind)
         {
             case ZLinkMessageKind.Command:
                 await commandPipeline
-                    .DispatchAsync(channelName, received.Parts, header, cancellationToken)
+                    .DispatchAsync(channelName, received.Parts, header, cancellationToken, metadata)
                     .ConfigureAwait(false);
                 break;
             case ZLinkMessageKind.Request:
@@ -93,7 +96,8 @@ internal sealed class ZLinkClientServerDispatcher(
                             );
                             return ValueTask.CompletedTask;
                         },
-                        cancellationToken
+                        cancellationToken,
+                        metadata
                     )
                     .ConfigureAwait(false);
                 break;
