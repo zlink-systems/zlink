@@ -1,16 +1,18 @@
-import {
-  SERVICE_WIRE_COMMAND_OFFSET,
-  SERVICE_WIRE_FLAGS_OFFSET
-} from './service-wire-binary-primitives';
-import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from './operation-identity';
-import { shouldCompactBackingArray } from '../admission';
-const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
-
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
-const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { ZLinkFrameworkException } from '../../contracts';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { awaitWithAbort } from '../abort';
+import { shouldCompactBackingArray } from '../admission';
+import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import { flowIfEnabled } from '../diagnostics/message-flow';
 import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -19,21 +21,25 @@ import {
   internalFrameworkWireReply,
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
-import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
-import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
 import {
-  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
-  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
-} from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { flowIfEnabled } from '../diagnostics/message-flow';
+  decodeActorJoin28,
+  encodeActorJoin28,
+  type ActorJoin28
+} from '../protocol/service_wire_pilot_codec.generated';
+import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
+import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from './message-follow-suppression-registry';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from './operation-identity';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
   RawServicePumpResult
 } from './raw-service-mesh-runtime';
+import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
+import type { ServiceMailboxRecord } from './service-mailbox';
+import { validateServiceMetadataFrame } from './service-metadata-codec';
 import {
   ActorLifecycleKind,
   OperationKind,
@@ -45,11 +51,6 @@ import {
   type ServiceStreamSessionBinding,
   type StreamSessionActorAuthorityFence
 } from './service-runtime-contracts';
-import type { ServiceMailboxRecord } from './service-mailbox';
-import {
-  MessageFollowSuppressionRegistry,
-  type MessageFollowSuppressionFence
-} from './message-follow-suppression-registry';
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
@@ -61,6 +62,8 @@ import {
   type ServiceSpotState
 } from './service-stateful-registry';
 import {
+  M6bServiceWireCommand,
+  M6bServiceWireFlag,
   decodeStatefulHeader,
   decodeStatefulReply,
   encodeActorCreateHeader,
@@ -78,17 +81,15 @@ import {
   encodeStatefulReply,
   encodeUserSpotCloseHeader,
   encodeUserSpotCreateHeader,
-  M6bServiceWireCommand,
-  M6bServiceWireFlag,
   sessionBindingFromWire,
+  type ServiceActorCreateRecord,
   type ServiceActorRouteFence,
   type ServiceBoundSessionActorAuthority,
-  type ServiceRetiredBoundSessionRouteFence,
-  type ServiceActorCreateRecord,
+  type ServiceDirectSpotRouteFence,
   type ServiceInstanceActivationTarget,
   type ServiceInstanceRouteFence,
   type ServiceMessageFollowRoute,
-  type ServiceDirectSpotRouteFence,
+  type ServiceRetiredBoundSessionRouteFence,
   type ServiceSpotRouteFence,
   type ServiceStatefulReplyTail,
   type ServiceStatefulWireRecord,
@@ -96,22 +97,20 @@ import {
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
 import {
-  decodeActorJoin28,
-  encodeActorJoin28,
-  type ActorJoin28
-} from '../protocol/service_wire_pilot_codec.generated';
-import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
-
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET
+} from './service-wire-binary-primitives';
+import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
 import {
+  ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   encodeApplicationPayload,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
+  type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
-import { validateServiceMetadataFrame } from './service-metadata-codec';
-import { ZLinkFrameworkException } from '../../contracts';
+const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
+
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
 const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;

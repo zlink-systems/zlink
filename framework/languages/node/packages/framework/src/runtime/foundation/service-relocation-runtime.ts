@@ -1,26 +1,25 @@
-const MAX_RELOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
-
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
-import { enumWireRelocationPhase } from '../protocol/service_wire_codec.generated';
-import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
-const RELOCATION_PREPARING_PHASE = enumWireRelocationPhase('preparing');
-const RELOCATION_ACTIVATING_PHASE = enumWireRelocationPhase('activating');
-const RELOCATION_COMPLETED_PHASE = enumWireRelocationPhase('completed');
-const RELOCATION_LAST_PHASE = enumWireRelocationPhase('aborted');
-
 import { createHash } from 'node:crypto';
-import type {
-  ZLinkPlacementObjectKind,
-  ZLinkAuthorityKey
-} from '../locations/internal-location-contracts';
+import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { decodeAuthorityKey } from '../locations/authority-key-codec';
-import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkPlacementObjectKind
+} from '../locations/internal-location-contracts';
+import { enumWireRelocationPhase } from '../protocol/service_wire_codec.generated';
 import {
   decodeRelocationEnvelopeV1 as decodeGeneratedRelocationEnvelopeV1,
   encodeRelocationEnvelopeV1 as encodeGeneratedRelocationEnvelopeV1,
   type RelocationEnvelopeV1 as GeneratedRelocationEnvelopeV1,
   type RelocationObjectIdentity as GeneratedRelocationObjectIdentity
 } from '../protocol/service_wire_pilot_codec.generated';
+import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
+const MAX_RELOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
+
+const RELOCATION_PREPARING_PHASE = enumWireRelocationPhase('preparing');
+const RELOCATION_ACTIVATING_PHASE = enumWireRelocationPhase('activating');
+const RELOCATION_COMPLETED_PHASE = enumWireRelocationPhase('completed');
+const RELOCATION_LAST_PHASE = enumWireRelocationPhase('aborted');
 
 export interface ServiceRelocationParticipant {
   /** Wire-local participant ordinal; identity is projected from Location Store. */

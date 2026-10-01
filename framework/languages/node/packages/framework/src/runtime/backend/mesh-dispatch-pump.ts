@@ -1,19 +1,11 @@
-import {
-  SERVICE_WIRE_MAJOR_OFFSET,
-  SERVICE_WIRE_COMMAND_OFFSET,
-  SERVICE_WIRE_PREFIX_SIZE
-} from '../foundation/service-wire-binary-primitives';
-const DEFAULT_MESH_READY_CAPACITY = 32;
-
-const DEFAULT_MESH_PART_CAPACITY = 256;
-
-import {
-  SERVICE_WIRE_MAGIC,
-  SERVICE_WIRE_MAJOR
-} from '../foundation/service-wire-constants.generated';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { availableParallelism } from 'node:os';
-import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
+import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import { runZLinkExecutionArea } from '../execution';
 import {
   ReadyDomain,
   type ReadyBatch,
@@ -21,13 +13,20 @@ import {
   type ReceiveBatch,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
+import {
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_MAJOR_OFFSET,
+  SERVICE_WIRE_PREFIX_SIZE
+} from '../foundation/service-wire-binary-primitives';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR
+} from '../foundation/service-wire-constants.generated';
 import type { ZLinkBackendMeshNode } from './contracts';
-import { runZLinkExecutionArea } from '../execution';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
+const DEFAULT_MESH_READY_CAPACITY = 32;
+
+const DEFAULT_MESH_PART_CAPACITY = 256;
 
 const MESH_DISPATCH_YIELD_RECORDS = 16;
 const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;

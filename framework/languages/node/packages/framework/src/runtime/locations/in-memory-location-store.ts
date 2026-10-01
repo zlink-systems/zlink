@@ -1,17 +1,33 @@
-const MAX_LOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
-
-import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
-const MAX_DESCRIPTOR_OBJECT_CAPABILITIES = 1024;
-
-import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { RoutingId } from '../../contracts/Common';
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
-  ZLinkLocationKind,
+  isValidPublicWeight,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import type {
+  ZLinkActorTransferPrepareRequest,
+  ZLinkActorTransferRecord,
+  ZLinkActorTransferState,
+  ZLinkActorTransferWriteResult
+} from '../../contracts/Locations/ActorTransfer';
+import {
+  matchesActorLocation,
+  matchesPeerLocation,
+  matchesRouteLocation,
+  matchesSpotLocation
+} from '../../location-store-integration';
+import { encodeAuthorityKey } from './authority-key-codec';
+import type { ZLinkDomainLocationStore } from './domain-store-contract';
+import { ZLinkInMemoryAuthorityStore } from './in-memory-authority-store';
+import {
   ZLinkFrameworkRuntimeState,
+  ZLinkLocationKind,
   ZLinkLocationWriteIntent,
   ZLinkLocationWriteStatus,
   ZLinkObjectRole,
   type ZLinkActorLocation,
+  type ZLinkActorLocationFilter,
+  type ZLinkActorLocationKey,
   type ZLinkAggregateAbortResult,
   type ZLinkAggregateCommitResult,
   type ZLinkAggregateFence,
@@ -24,22 +40,18 @@ import {
   type ZLinkAuthorityScanCursor,
   type ZLinkAuthorityScanResult,
   type ZLinkAuthorityStoreVersion,
-  type ZLinkActorLocationFilter,
-  type ZLinkActorLocationKey,
+  type ZLinkClientServerServerDescriptor,
+  type ZLinkClientServerServerDescriptorKey,
+  type ZLinkCreationOperationIdentity,
+  type ZLinkCreationTerminalReadResult,
+  type ZLinkFanoutPublisherDescriptor,
+  type ZLinkFanoutPublisherDescriptorKey,
   type ZLinkLocationChangeStampScope,
   type ZLinkLocationOwnerToken,
   type ZLinkLocationPage,
   type ZLinkLocationWriteResult,
   type ZLinkMeshNodeDescriptor,
   type ZLinkMeshNodeDescriptorKey,
-  type ZLinkClientServerServerDescriptor,
-  type ZLinkClientServerServerDescriptorKey,
-  type ZLinkFanoutPublisherDescriptor,
-  type ZLinkFanoutPublisherDescriptorKey,
-  type ZLinkOwnerLeaseClaimResult,
-  type ZLinkOwnerLeaseReadResult,
-  type ZLinkOwnerLeaseReleaseResult,
-  type ZLinkOwnerLeaseRenewResult,
   type ZLinkObjectAbortRequest,
   type ZLinkObjectAbortResult,
   type ZLinkObjectCommitRequest,
@@ -48,8 +60,10 @@ import {
   type ZLinkObjectCreationCompleteResult,
   type ZLinkObjectReserveRequest,
   type ZLinkObjectReserveResult,
-  type ZLinkCreationOperationIdentity,
-  type ZLinkCreationTerminalReadResult,
+  type ZLinkOwnerLeaseClaimResult,
+  type ZLinkOwnerLeaseReadResult,
+  type ZLinkOwnerLeaseReleaseResult,
+  type ZLinkOwnerLeaseRenewResult,
   type ZLinkPageRequest,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
@@ -61,23 +75,11 @@ import {
   type ZLinkSpotLocationFilter,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
-import type {
-  ZLinkActorTransferPrepareRequest,
-  ZLinkActorTransferRecord,
-  ZLinkActorTransferState,
-  ZLinkActorTransferWriteResult
-} from '../../contracts/Locations/ActorTransfer';
 import type { ZLinkFanoutLocationStore } from './internal-store-contracts';
-import type { ZLinkDomainLocationStore } from './domain-store-contract';
-import { ZLinkInMemoryAuthorityStore } from './in-memory-authority-store';
-import { encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkLocationKeyCodec } from './key-codec';
-import {
-  matchesActorLocation,
-  matchesPeerLocation,
-  matchesRouteLocation,
-  matchesSpotLocation
-} from '../../location-store-integration';
+const MAX_LOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
+
+const MAX_DESCRIPTOR_OBJECT_CAPABILITIES = 1024;
 
 export class ZLinkInMemoryLocationStore
   implements ZLinkDomainLocationStore, ZLinkFanoutLocationStore
@@ -1455,7 +1457,9 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
     throw new RangeError('ClientServer descriptor generations are invalid.');
   }
   if (!isValidPublicWeight(descriptor.weight)) {
-    throw new RangeError('ClientServer descriptor weight must be an integer in 0..10000.');
+    throw new RangeError(
+      `ClientServer descriptor weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 

@@ -1,32 +1,20 @@
-const TRANSFER_RESOLUTION_TIMEOUT_MS = 5_000;
-const TRANSFER_POLL_INTERVAL_MS = 10;
-
-import { isRelocationDebugEnabled, relocationDebug } from '../diagnostics';
 import { createHash } from 'node:crypto';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkActorJoinOperationId,
-  ZLinkMessageSerializer,
-  ZLinkSpot
-} from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkMessage, ZLinkSpotKind } from '../../contracts';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type {
-  ZLinkAggregateId,
-  ZLinkAuthoritySnapshot,
-  ZLinkLocationOwnerToken
-} from '../locations/internal-location-contracts';
-import type {
-  ZLinkAuthorityStore,
-  ZLinkObjectCreationStore,
-  ZLinkOwnerLeaseStore
-} from '../locations/internal-store-contracts';
-import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
 import {
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActor,
+  type ZLinkActorJoinOperationId,
+  type ZLinkMessageSerializer,
+  type ZLinkSpot,
+  ZLinkEncodedPayload,
+  ZLinkMessage,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import type { Message } from '../../contracts/Common/Message';
+import {
+  createDeferredJoinCompletion,
+  rewriteActorAuthorityRoute,
   toFrameworkActorRef,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
@@ -34,18 +22,9 @@ import {
   type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkActorTransferRegistry,
-  createDeferredJoinCompletion,
-  rewriteActorAuthorityRoute,
   type ZLinkDeferredJoinCompletion,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
-import { ZLinkActorRetryDelay } from '../actors/actor-retry-delay';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import type { ZLinkLocationLifecycle } from '../locations';
-import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
-import type { DefaultZLinkSpotManager } from '../spots';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type {
   ZLinkActorHandoffPacket,
   ZLinkActorHandoffResult,
@@ -56,15 +35,39 @@ import {
   ownerFence,
   type ZLinkActorMessageFollowOwnerFence
 } from '../actors/actor-message-follow-context';
-import type {
-  ServiceSessionRelocationRoute,
-  ServiceSessionRelocationSeal,
-  ServiceSessionRelocationSealed,
-  ServiceWireOperationId
-} from '../foundation/service-stateful-wire-codec';
-import { serviceSessionRelocationIdentityKey } from '../foundation/service-stateful-wire-codec';
+import { ZLinkActorRetryDelay } from '../actors/actor-retry-delay';
+import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { isRelocationDebugEnabled, relocationDebug } from '../diagnostics';
 import { operationIdentityKey } from '../foundation/operation-identity';
+import {
+  type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationSeal,
+  type ServiceSessionRelocationSealed,
+  type ServiceWireOperationId,
+  serviceSessionRelocationIdentityKey
+} from '../foundation/service-stateful-wire-codec';
+
+import type { ZLinkLocationLifecycle } from '../locations';
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
+import type {
+  ZLinkAggregateId,
+  ZLinkAuthoritySnapshot,
+  ZLinkLocationOwnerToken
+} from '../locations/internal-location-contracts';
+import type {
+  ZLinkAuthorityStore,
+  ZLinkObjectCreationStore,
+  ZLinkOwnerLeaseStore
+} from '../locations/internal-store-contracts';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import type { DefaultZLinkSpotManager } from '../spots';
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { BoundedReplayMap } from './bounded-replay-map';
+const TRANSFER_RESOLUTION_TIMEOUT_MS = 5_000;
+const TRANSFER_POLL_INTERVAL_MS = 10;
 
 const DEFERRED_JOIN_TERMINAL_CAPACITY = 4096;
 

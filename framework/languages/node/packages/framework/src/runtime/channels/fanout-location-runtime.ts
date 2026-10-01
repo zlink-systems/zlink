@@ -1,4 +1,3 @@
-import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import { randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkRuntimeState,
@@ -7,17 +6,18 @@ import {
   type ZLinkFanoutPublisherDescriptor,
   type ZLinkLocationOwnerToken
 } from '../../contracts/Locations';
-import type { ZLinkFanoutLocationStore } from '../locations/internal-store-contracts';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import type { ZLinkBackendSubscriberSocket } from '../backend/contracts';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import { type ZLinkFrameworkRegistration, ZLinkConfigurationException } from '../configuration';
+
 import { ZLinkStateLane } from '../execution/state-lane';
+import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import type { ZLinkFanoutLocationStore } from '../locations/internal-store-contracts';
+import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 
 interface ActiveFanoutTarget {
   descriptor: ZLinkFanoutPublisherDescriptor;

@@ -1,5 +1,3 @@
-const DEFAULT_RELOCATION_CALLBACK_CONCURRENCY = 8;
-
 import type {
   ZLinkAuthorityKey,
   ZLinkAuthoritySnapshot
@@ -15,6 +13,7 @@ import type {
   ServiceRelocationQueuedMessage,
   ServiceRelocationTimer
 } from './service-relocation-runtime';
+const DEFAULT_RELOCATION_CALLBACK_CONCURRENCY = 8;
 
 export interface ServiceRelocationSealedWork {
   readonly boundSessionState: Uint8Array;

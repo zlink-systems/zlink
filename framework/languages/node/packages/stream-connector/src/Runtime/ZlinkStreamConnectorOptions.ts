@@ -1,4 +1,4 @@
-import { ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES } from '../Contracts/ZlinkStreamConnectorOptions';
+import { ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES } from '../Contracts/ZlinkStreamConnectorOptions';
 import {
   RequiredZlinkStreamConnectorOptions,
   ZlinkStreamCompression,
@@ -12,7 +12,7 @@ import {
 import { connectorError } from './ZlinkStreamSupport';
 import { inferTransport } from './Transport/ZlinkStreamEndpoint';
 
-export { ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES as ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../Contracts/ZlinkStreamConnectorOptions';
+export { ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES as ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../Contracts/ZlinkStreamConnectorOptions';
 
 export function normalizeOptions(
   options: ZlinkStreamConnectorOptions,
@@ -47,8 +47,8 @@ export function normalizeOptions(
       backoffFactor: options.reconnect?.backoffFactor ?? 2.0,
       maxAttempts: options.reconnect?.maxAttempts === undefined ? 3 : options.reconnect.maxAttempts
     },
-    maxSendPayloadSize: options.maxSendPayloadSize ?? ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
-    maxReceivePayloadSize: options.maxReceivePayloadSize ?? ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
+    maxSendPayloadSize: options.maxSendPayloadSize ?? ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
+    maxReceivePayloadSize: options.maxReceivePayloadSize ?? ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
     dispatchMode: options.dispatchMode ?? ZlinkStreamDispatchMode.Manual,
     compression: options.compression ?? ZlinkStreamCompression.Lz4,
     compressionCodec: options.compressionCodec,

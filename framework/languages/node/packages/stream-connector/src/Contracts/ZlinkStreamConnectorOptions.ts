@@ -1,11 +1,10 @@
-export const ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES = 64 * 1024;
-
 import type {
   ZlinkStreamCompression,
   ZlinkStreamDispatchMode,
   ZlinkStreamTransport
 } from './ZlinkStreamEnums';
 import type { ZlinkStreamEncodedPayload } from './ZlinkStreamModels';
+export const ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES = 64 * 1024;
 
 export interface ZlinkStreamConnectorOptions {
   readonly endpoint: string;

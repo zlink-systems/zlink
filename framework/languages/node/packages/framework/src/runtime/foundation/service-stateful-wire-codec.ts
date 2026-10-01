@@ -1,33 +1,6 @@
-import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
-import { UINT64_MAX } from '@zlink-systems/stream-wire';
-const MESSAGE_FOLLOW_MAX_BODY_BYTES = 16 * 1024 * 1024;
-const MESSAGE_FOLLOW_VERSION = 1;
-const INSTANCE_ROUTE_VERSION = 1;
-const INSTANCE_ACTIVATION_VERSION = 2;
-
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
-import type {
-  ServiceActorRef,
-  ServiceSessionBinding,
-  ServiceSpotRef
-} from './service-stateful-registry';
-import { operationRequiresReply } from './service-runtime-contracts';
-import { APPLICATION_PAYLOAD_VERSION, ServiceWireProtocolError } from './service-wire-m6a-codec';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
-import { routingIdsEqual } from '../routing-id';
-import {
-  SERVICE_WIRE_MAGIC,
-  SERVICE_WIRE_MAJOR,
-  ServiceWireCommand,
-  ServiceWireFlag
-} from './service-wire-constants.generated';
-import {
-  decodeCanonicalServiceWireText,
-  decodeServiceWireRoutingId,
-  encodeCanonicalServiceWireText,
-  encodeServiceWireRoutingId
-} from './service-wire-binary-primitives';
 import {
   decodeActorRequestCommand,
   decodeActorSendCommand,
@@ -42,8 +15,8 @@ import {
   type ServiceWireDecoderContext
 } from '../protocol/service_wire_codec.generated';
 import {
-  decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeActorJoin28,
+  decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeRelocationCutover34 as decodeGeneratedRelocationCutover34,
   decodeRelocationData31 as decodeGeneratedRelocationData31,
   decodeRelocationFailed53 as decodeGeneratedRelocationFailed53,
@@ -72,18 +45,43 @@ import {
   encodeUserSpotClose48 as encodeGeneratedUserSpotClose48,
   encodeUserSpotCreate47 as encodeGeneratedUserSpotCreate47,
   type ActorCreate49 as GeneratedActorCreate49,
+  type ServiceWireCoordinatorFence as GeneratedCoordinatorFence,
   type RelocationObjectIdentity as GeneratedRelocationObjectIdentity,
   type ReplyRelay33 as GeneratedReplyRelay33,
-  type ServiceWireCoordinatorFence as GeneratedCoordinatorFence,
   type ServiceWireRequestSourceFence as GeneratedRequestSourceFence,
   type ServiceWireRouteFence as GeneratedRouteFence,
-  type ServiceWireTargetFence as GeneratedTargetFence,
   type SessionRelocationRoute44 as GeneratedSessionRelocationRoute44,
   type SessionRelocationSeal42 as GeneratedSessionRelocationSeal42,
   type SessionRelocationSealed43 as GeneratedSessionRelocationSealed43,
+  type ServiceWireTargetFence as GeneratedTargetFence,
   type UserSpotClose48 as GeneratedUserSpotClose48,
   type UserSpotCreate47 as GeneratedUserSpotCreate47
 } from '../protocol/service_wire_pilot_codec.generated';
+import { routingIdsEqual } from '../routing-id';
+import { operationRequiresReply } from './service-runtime-contracts';
+import type {
+  ServiceActorRef,
+  ServiceSessionBinding,
+  ServiceSpotRef
+} from './service-stateful-registry';
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId,
+  SERVICE_WIRE_PREFIX_SIZE
+} from './service-wire-binary-primitives';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  ServiceWireCommand,
+  ServiceWireFlag
+} from './service-wire-constants.generated';
+import { APPLICATION_PAYLOAD_VERSION, ServiceWireProtocolError } from './service-wire-m6a-codec';
+const MESSAGE_FOLLOW_MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MESSAGE_FOLLOW_VERSION = 1;
+const INSTANCE_ROUTE_VERSION = 1;
+const INSTANCE_ACTIVATION_VERSION = 2;
 
 const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
@@ -1503,7 +1501,9 @@ export function encodeMessageFollowHeader(
     u64Any(record.originalReplyRouteId)
   );
   if (body.byteLength > MESSAGE_FOLLOW_MAX_BODY_BYTES) {
-    throw new RangeError('Message Follow body exceeds 16 MiB.');
+    throw new RangeError(
+      `Message Follow body exceeds ${MESSAGE_FOLLOW_MAX_BODY_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return concat(
     prefix(M6bServiceWireCommand.messageFollow),

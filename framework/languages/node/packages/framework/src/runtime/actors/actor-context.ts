@@ -1,48 +1,51 @@
-const DEFAULT_ACTOR_JOIN_TIMEOUT_MS = 5_000;
+import {
+  type RoutingId,
+  type SpotId,
+  type ZLinkActor,
+  type ZLinkActorContext,
+  type ZLinkActorJoinCompletion,
+  type ZLinkActorJoinEntrySpotCall,
+  type ZLinkActorJoinSpotCall,
+  type ZLinkBoundSession,
+  type ZLinkBoundSessionSendCall,
+  ZLinkEncodedPayload,
+  ZLinkFrameworkException,
+  ZLinkMessage,
+  type ZLinkMessageSerializer
+} from '../../contracts';
 
-const MAX_ACTOR_JOIN_TIMEOUT_MS = 2_147_483_647;
+import type { Message } from '../../contracts/Common/Message';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { ZLinkConfigurationException } from '../configuration';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import { captureZLinkSpotSerialTurn } from '../execution';
+import { createRandomOperationIdentity } from '../foundation/operation-identity';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import type {
-  RoutingId,
-  SpotId,
-  ZLinkActor,
-  ZLinkActorContext,
-  ZLinkActorJoinCompletion,
-  ZLinkActorJoinEntrySpotCall,
-  ZLinkActorJoinSpotCall,
-  ZLinkBoundSession,
-  ZLinkBoundSessionSendCall
-} from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkFrameworkException, ZLinkMessage } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import { type ZLinkMessageSerializer } from '../../contracts';
-import { ZLinkConfigurationException } from '../configuration';
-import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
-  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
-  ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
-} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { ZLinkActorRuntimeState, toFrameworkActorRef } from './actor-runtime-state';
-import type {
-  ZLinkActorBoundSessionFactory,
-  ZLinkActorJoinCoordinator
-} from './actor-runtime-contracts';
-import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
+import { deferActorJoin } from './actor-join-deferred-scope';
 import {
   ZLINK_ACTOR_LIFECYCLE_SNAPSHOT,
   type ZLinkActorLifecycleSnapshotSource
 } from './actor-lifecycle-snapshot';
-import { createRandomOperationIdentity } from '../foundation/operation-identity';
-import { deferActorJoin } from './actor-join-deferred-scope';
-import { captureZLinkSpotSerialTurn } from '../execution';
-import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import type {
+  ZLinkActorBoundSessionFactory,
+  ZLinkActorJoinCoordinator,
+  ZLinkActorManagerOptions
+} from './actor-runtime-contracts';
+import { ZLinkActorRuntimeState, toFrameworkActorRef } from './actor-runtime-state';
+const DEFAULT_ACTOR_JOIN_TIMEOUT_MS = 5_000;
+
+const MAX_ACTOR_JOIN_TIMEOUT_MS = 2_147_483_647;
 
 export const ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME = Symbol('zlink.actor.join-entry-spot-runtime');
 

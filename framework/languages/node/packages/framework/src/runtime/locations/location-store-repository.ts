@@ -1,104 +1,108 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  type ZLinkClientServerServerDescriptor,
+  type ZLinkClientServerServerDescriptorKey,
+  type ZLinkFanoutPublisherDescriptor,
+  type ZLinkFanoutPublisherDescriptorKey,
+  type ZLinkLocationPage,
+  type ZLinkLocationStore,
+  type ZLinkMeshNodeDescriptor,
+  type ZLinkMeshNodeDescriptorKey,
+  type ZLinkPageRequest,
+  type ZLinkStoreCondition,
+  type ZLinkStoreKey,
+  type ZLinkStoreReadResult,
+  type ZLinkStoreScanCursor,
+  type ZLinkStoreScanRequest,
+  type ZLinkStoreScanResult,
+  type ZLinkStoreVersion,
+  type ZLinkStoreWriteRequest,
+  type ZLinkStoreWriteResult,
+  ZLinkFrameworkRuntimeState,
+  ZLinkObjectRole
+} from '../../contracts';
+
+import { type RoutingId, ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+
 import {
   AUTHORITY_ENVELOPE_MAX_BYTES,
   CREATION_TERMINAL_ENVELOPE_MAX_BYTES
 } from '../../contracts/Configuration/InternalDefaults';
-import { ZLINK_PROVIDER_MAX_VALUE_BYTES } from '../../contracts/Locations/Stores';
-import { UINT64_MAX } from '@zlink-systems/stream-wire';
-import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import {
+  isValidPublicWeight,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import { ZLinkLocationWriteStatus as WriteStatus } from '../../contracts/Locations';
+import {
+  ZLINK_PROVIDER_MAX_PAGE_SIZE,
+  ZLINK_PROVIDER_MAX_VALUE_BYTES
+} from '../../contracts/Locations/Stores';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
+import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
+import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
+import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
+import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
+import {
+  type ZLinkActorLocation,
+  type ZLinkActorLocationFilter,
+  type ZLinkActorLocationKey,
+  type ZLinkAggregateAbortResult,
+  type ZLinkAggregateCommitResult,
+  type ZLinkAggregateFence,
+  type ZLinkAggregateId,
+  type ZLinkAggregatePrepareRequest,
+  type ZLinkAggregatePrepareResult,
+  type ZLinkAuthorityCompareExchangeResult,
+  type ZLinkAuthorityKey,
+  type ZLinkAuthorityMutation,
+  type ZLinkAuthorityReadResult,
+  type ZLinkAuthorityScanCursor,
+  type ZLinkAuthorityScanResult,
+  type ZLinkAuthoritySnapshot,
+  type ZLinkAuthorityStoreVersion,
+  type ZLinkCapacityVector,
+  type ZLinkCreationOperationIdentity,
+  type ZLinkCreationTerminalReadResult,
+  type ZLinkCreationTerminalRecord,
+  type ZLinkLocationOwnerToken,
+  type ZLinkLocationWriteResult,
+  type ZLinkLocationWriteStatus,
+  type ZLinkObjectAbortRequest,
+  type ZLinkObjectAbortResult,
+  type ZLinkObjectCommitRequest,
+  type ZLinkObjectCommitResult,
+  type ZLinkObjectCreationCompleteRequest,
+  type ZLinkObjectCreationCompleteResult,
+  type ZLinkObjectReserveRequest,
+  type ZLinkObjectReserveResult,
+  type ZLinkOwnerLeaseClaimResult,
+  type ZLinkOwnerLeaseReadResult,
+  type ZLinkOwnerLeaseReleaseResult,
+  type ZLinkOwnerLeaseRenewResult,
+  type ZLinkPlacementAllocation,
+  type ZLinkRouteLocation,
+  type ZLinkRouteLocationFilter,
+  type ZLinkRouteLocationKey,
+  type ZLinkSpotLocation,
+  type ZLinkSpotLocationFilter,
+  type ZLinkSpotLocationKey,
+  ZLinkLocationWriteIntent
+} from './internal-location-contracts';
+
+import {
+  creationTerminalPreimage,
+  opaqueRecordPreimage,
+  routingIdHexSegment
+} from './opaque-record-key';
 const LOCATION_STORE_WRITE_CONCURRENCY = 64;
 const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
 const MAX_REPOSITORY_RETRY_DELAY_MS = 100;
 const INITIAL_REPOSITORY_RETRY_DELAY_MS = 2;
 const MAX_REPOSITORY_RETRY_SHIFT = 5;
 
-import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
-import { PROVIDER_STORAGE_NAMESPACE_PREFIX } from './in-memory-provider-location-store';
 const LOCATION_RECORD_VERSION = 1;
-
-import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
-import { createHash, randomUUID } from 'node:crypto';
-import type {
-  ZLinkLocationStore,
-  ZLinkLocationPage,
-  ZLinkClientServerServerDescriptor,
-  ZLinkClientServerServerDescriptorKey,
-  ZLinkFanoutPublisherDescriptor,
-  ZLinkFanoutPublisherDescriptorKey,
-  ZLinkMeshNodeDescriptor,
-  ZLinkMeshNodeDescriptorKey,
-  ZLinkPageRequest,
-  ZLinkStoreCondition,
-  ZLinkStoreKey,
-  ZLinkStoreReadResult,
-  ZLinkStoreScanCursor,
-  ZLinkStoreScanRequest,
-  ZLinkStoreScanResult,
-  ZLinkStoreWriteRequest,
-  ZLinkStoreWriteResult,
-  ZLinkStoreVersion
-} from '../../contracts';
-import type {
-  ZLinkAggregateAbortResult,
-  ZLinkAggregateCommitResult,
-  ZLinkAggregateFence,
-  ZLinkAggregateId,
-  ZLinkAggregatePrepareRequest,
-  ZLinkAggregatePrepareResult,
-  ZLinkAuthorityCompareExchangeResult,
-  ZLinkAuthorityKey,
-  ZLinkAuthorityMutation,
-  ZLinkAuthorityReadResult,
-  ZLinkAuthorityScanCursor,
-  ZLinkAuthorityScanResult,
-  ZLinkAuthoritySnapshot,
-  ZLinkAuthorityStoreVersion,
-  ZLinkCapacityVector,
-  ZLinkCreationOperationIdentity,
-  ZLinkCreationTerminalReadResult,
-  ZLinkCreationTerminalRecord,
-  ZLinkLocationOwnerToken,
-  ZLinkLocationWriteResult,
-  ZLinkLocationWriteStatus,
-  ZLinkObjectCommitRequest,
-  ZLinkObjectCommitResult,
-  ZLinkObjectAbortRequest,
-  ZLinkObjectAbortResult,
-  ZLinkObjectCreationCompleteRequest,
-  ZLinkObjectCreationCompleteResult,
-  ZLinkObjectReserveRequest,
-  ZLinkObjectReserveResult,
-  ZLinkOwnerLeaseClaimResult,
-  ZLinkOwnerLeaseReadResult,
-  ZLinkOwnerLeaseReleaseResult,
-  ZLinkOwnerLeaseRenewResult,
-  ZLinkPlacementAllocation
-} from './internal-location-contracts';
-import { ZLinkLocationWriteIntent } from './internal-location-contracts';
-import type {
-  ZLinkActorLocation,
-  ZLinkActorLocationFilter,
-  ZLinkActorLocationKey,
-  ZLinkRouteLocation,
-  ZLinkRouteLocationFilter,
-  ZLinkRouteLocationKey,
-  ZLinkSpotLocation,
-  ZLinkSpotLocationFilter,
-  ZLinkSpotLocationKey
-} from './internal-location-contracts';
-import { ZLinkFrameworkRuntimeState, ZLinkObjectRole } from '../../contracts';
-import { ZLinkLocationWriteStatus as WriteStatus } from '../../contracts/Locations';
-import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
-import { storeKey } from './in-memory-provider-location-store';
-import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
-import {
-  creationTerminalPreimage,
-  opaqueRecordPreimage,
-  routingIdHexSegment
-} from './opaque-record-key';
-import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
-import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
-import type { RoutingId } from '../../contracts/Common/CoreTypes';
-import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 const PREFIX = PROVIDER_STORAGE_NAMESPACE_PREFIX;
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
@@ -235,7 +239,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityScanResult> {
     if (!Number.isInteger(limit) || limit < 1 || limit > ZLINK_PROVIDER_MAX_PAGE_SIZE) {
-      throw new RangeError('Authority scan limit must be in 1..1000.');
+      throw new RangeError(`Authority scan limit must be in 1..${ZLINK_PROVIDER_MAX_PAGE_SIZE}.`);
     }
     const scan = await this.provider.scan(
       {
@@ -4456,7 +4460,9 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
   );
   validateDescriptorGenerations(descriptor, 'ClientServer');
   if (!isValidPublicWeight(descriptor.weight)) {
-    throw new RangeError('ClientServer descriptor weight must be an integer in 0..10000.');
+    throw new RangeError(
+      `ClientServer descriptor weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 

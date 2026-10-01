@@ -1,5 +1,3 @@
-const DEFAULT_PENDING_ADMISSION_TIMEOUT_MS = 30_000;
-
 import type {
   ZLinkActor,
   ZLinkMessage,
@@ -7,6 +5,8 @@ import type {
   ZLinkSpotActorJoinResult
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
+import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
 import {
@@ -25,13 +25,12 @@ import {
   hasRemoteActorJoinIdentity,
   isRemoteActorJoinPayload,
   type ZLinkDecodedRemoteActorJoinRequest,
-  type ZLinkRoutedActorTransferProvider,
-  type ZLinkRemoteActorJoinWirePayload
+  type ZLinkRemoteActorJoinWirePayload,
+  type ZLinkRoutedActorTransferProvider
 } from './spot-remote-codec';
 import { submitRoutedActorJoinError, submitRoutedActorJoinReply } from './spot-route-replies';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
-import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
+const DEFAULT_PENDING_ADMISSION_TIMEOUT_MS = 30_000;
 
 interface ZLinkRoutedActorAdmissionTarget {
   onActorJoin?(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult>;

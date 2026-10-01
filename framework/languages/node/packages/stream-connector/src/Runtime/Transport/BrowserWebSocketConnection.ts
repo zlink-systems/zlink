@@ -1,17 +1,11 @@
-const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
-
-/** 제거된 항목 수가 배열 정리 조건에 도달했는지 판정합니다. */
-export function shouldCompactBackingArray(head: number, length: number): boolean {
-  return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
-}
-
 import {
+  type RequiredZlinkStreamConnectorOptions,
   ZlinkStreamConnection,
   ZlinkStreamErrorCode,
   ZlinkStreamTransportFactory
 } from '../../Contracts';
-import type { RequiredZlinkStreamConnectorOptions } from '../../Contracts';
-import { connectorError, throwIfAborted } from '../ZlinkStreamSupport';
+
+import { connectorError, shouldCompactBackingArray, throwIfAborted } from '../ZlinkStreamSupport';
 
 interface BrowserWebSocketEventMap {
   open: unknown;

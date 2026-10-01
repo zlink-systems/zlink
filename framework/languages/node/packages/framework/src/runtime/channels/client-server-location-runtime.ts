@@ -1,8 +1,4 @@
-import {
-  normalizeClientServerMessageLimit,
-  DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT
-} from './client-server-service-wire';
-import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import type { Message } from '../../contracts/Common/Message';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import {
   ZLinkFrameworkRuntimeState,
@@ -11,26 +7,28 @@ import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkLocationOwnerToken
 } from '../../contracts/Locations';
-import type { ZLinkClientServerLocationStore } from '../locations/internal-store-contracts';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import type { ZLinkBackendDealerSocket } from '../backend/contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { Message } from '../../contracts/Common/Message';
+import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import { type ZLinkFrameworkRegistration, ZLinkConfigurationException } from '../configuration';
+
+import { ZLinkStateLane } from '../execution/state-lane';
+import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
+import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
+import type { ZLinkClientServerLocationStore } from '../locations/internal-store-contracts';
+import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import {
   decodeClientServerControl,
+  DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT,
   encodeClientServerHello,
+  normalizeClientServerMessageLimit,
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
-import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { isBackendRequestTimeoutError } from '../backend/runtime-values';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;

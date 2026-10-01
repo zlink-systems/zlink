@@ -23,7 +23,6 @@
   },
   "dependencies": {
     "@zlink-systems/framework": "0.26.0",
-    "@zlink-systems/stream-wire": "0.26.0",
     "undici": "6.27.0"
   }
 }

@@ -1,72 +1,84 @@
-import {
-  ZLINK_MAX_CAPACITY,
-  MAX_LISTENER_PORT,
-  isValidListenerPort
-} from './RegistrationBuilderPolicy';
-import { ZLINK_MAX_STABLE_TYPE_BYTES } from '../Common/CoreTypes';
-import { isValidPositiveCapacity, isValidCapacity } from './RegistrationBuilderPolicy';
-import { requirePublicWeight } from './RegistrationBuilderPolicy';
+import { AutoHwmProfile } from '@zlink-systems/zlink';
 import type {
   RoutingId,
   Type,
   ZLinkActor,
   ZLinkActorFactory,
+  ZLinkClientServerChannelClientBuilder,
+  ZLinkClientServerChannelRoleBuilder,
+  ZLinkClientServerChannelServerBuilder,
   ZLinkEntrySpot,
   ZLinkFanoutChannelBuilder,
   ZLinkFrameworkOptions,
+  ZLinkHandlerFilter,
+  ZLinkInstanceSpot,
+  ZLinkLocationOptionValues,
   ZLinkMeshChannelBuilder,
   ZLinkMeshChannelClientBuilder,
   ZLinkMeshChannelServerBuilder,
   ZLinkMeshNodeBuilder,
+  ZLinkMeshNodeSocketConfig,
   ZLinkMeshObjectClientBuilder,
   ZLinkMeshObjectRoleBuilder,
   ZLinkMeshObjectServerBuilder,
-  ZLinkMeshNodeSocketConfig,
-  ZLinkNetworkOptions,
   ZLinkMeshPeerConnection,
   ZLinkMeshPeerConnections,
-  ZLinkLocationOptionValues,
-  ZLinkSpotPublisherConfig,
-  ZLinkHandlerFilter,
-  ZLinkInstanceSpot,
+  ZLinkNetworkOptions,
+  ZLinkSession,
+  ZLinkSessionFactory,
   ZLinkSpot,
-  ZLinkClientServerChannelClientBuilder,
-  ZLinkClientServerChannelRoleBuilder,
-  ZLinkClientServerChannelServerBuilder,
+  ZLinkSpotPublisherConfig,
   ZLinkStreamCompressionBuilder,
   ZLinkStreamCompressionCodec,
-  ZLinkStreamSocketConfig,
   ZLinkStreamNodeBuilder,
-  ZLinkSession,
-  ZLinkSessionFactory
+  ZLinkStreamSocketConfig
 } from '../../contracts';
-import type {
-  ZLinkActorFactoryBuilder,
-  ZLinkActorRelocationAdapter,
-  ZLinkInstanceSpotFactoryBuilder,
-  ZLinkSpotRelocationAdapter,
-  ZLinkUserSpotFactoryBuilder
-} from './ObjectRoles';
-import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from './ObjectRoles';
-import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
-import { readZLinkDecoratorMetadata } from '../Handlers/Attributes';
 import type { ZLinkCodecRegistryBuilder } from '../Codecs';
-import type {
-  ZLinkDispatchOptions,
-  ZLinkDispatchOptionsBuilder,
-  ZLinkInboundDispatchOptions,
-  ZLinkMessageFlowLogMode
-} from '../Dispatch';
+import { ZLINK_MAX_STABLE_TYPE_BYTES } from '../Common/CoreTypes';
 import {
+  type ZLinkDispatchOptions,
+  type ZLinkDispatchOptionsBuilder,
+  type ZLinkInboundDispatchOptions,
+  type ZLinkMessageFlowLogMode,
   ZLinkApplicationJobQueueProfile,
   ZLinkCoreHwmProfile,
   ZLinkUnhandledDispatchAction
 } from '../Dispatch';
-import { AutoHwmProfile } from '@zlink-systems/zlink';
-import { endpointConnections } from './RuntimeEndpointConnections';
-import type { ZLinkEndpointConnections } from './Connections';
+
+import { readZLinkDecoratorMetadata } from '../Handlers/Attributes';
 import type { ZLinkLocationOptions, ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
+import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
 import { ZLinkConfigurationException } from './ConfigurationException';
+import type { ZLinkEndpointConnections } from './Connections';
+import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
+import { normalizeEndpoint } from './EndpointNotation';
+import { requirePublicFanoutTopic } from './FanoutTopic';
+import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
+import {
+  type ZLinkActorFactoryBuilder,
+  type ZLinkActorRelocationAdapter,
+  type ZLinkInstanceSpotFactoryBuilder,
+  type ZLinkSpotRelocationAdapter,
+  type ZLinkUserSpotFactoryBuilder,
+  ZLinkSpotRelocationCoordinationMode,
+  ZLinkUserSpotExecutionMode
+} from './ObjectRoles';
+
+import {
+  MAX_LISTENER_PORT,
+  ZLINK_MAX_CAPACITY,
+  isValidCapacity,
+  isValidListenerPort,
+  isValidPositiveCapacity,
+  registerActorFactory,
+  registerEntrySpot,
+  registerSpotFactory,
+  requirePublicWeight,
+  validateActorTransferTimeout,
+  validateMessageFollowDuration,
+  validateRoutingIdPrefix,
+  validateSessionReplacementCallbackTimeout
+} from './RegistrationBuilderPolicy';
 import {
   RegistrationCodecRegistryBuilder,
   type MutableCodecRegistryOptions
@@ -76,14 +88,12 @@ import {
   normalizeOptionalPositiveInteger,
   typeMapToRecord
 } from './RegistrationNormalizers';
-import { normalizeEndpoint } from './EndpointNotation';
-import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import type {
-  ZLinkChannelPublishHandlerRegistration,
   ZLinkActorFactoryConfiguration,
   ZLinkApplicationJobQueueOptions,
-  ZLinkFrameworkRegistrationOptions,
+  ZLinkChannelPublishHandlerRegistration,
   ZLinkCoreHwmOptions,
+  ZLinkFrameworkRegistrationOptions,
   ZLinkInstanceSpotFactoryConfiguration,
   ZLinkRelocationConfiguration,
   ZLinkSpotRouterPeerConnectionOptions,
@@ -91,17 +101,7 @@ import type {
   ZLinkUserSpotFactoryConfiguration,
   ZLinkWorkerOptions
 } from './RegistrationTypes';
-import {
-  validateRoutingIdPrefix,
-  registerActorFactory,
-  registerEntrySpot,
-  registerSpotFactory,
-  validateActorTransferTimeout,
-  validateMessageFollowDuration,
-  validateSessionReplacementCallbackTimeout
-} from './RegistrationBuilderPolicy';
-import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
-import { requirePublicFanoutTopic } from './FanoutTopic';
+import { endpointConnections } from './RuntimeEndpointConnections';
 
 export function createFrameworkOptions(
   configure: (options: ZLinkFrameworkOptions) => void

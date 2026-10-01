@@ -2,8 +2,7 @@
 
 import { HTTP_ACCEPTED_CONTENT_ENCODINGS } from './compression';
 
-import { HttpHeaderName } from './text';
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { HttpContentType, HttpHeaderName } from './text';
 
 import { Readable } from 'node:stream';
 import { request, type Dispatcher } from 'undici';
@@ -144,7 +143,7 @@ export class RequestPerformer {
   ): Record<string, string> {
     const headers: Record<string, string> = {
       [HttpHeaderName.UserAgent]: httpClientUserAgent,
-      [HttpHeaderName.Accept]: ZlinkStreamContentType.Json
+      [HttpHeaderName.Accept]: HttpContentType.Json
     };
     if (this.options.compression) {
       headers[HttpHeaderName.AcceptEncoding] = HTTP_ACCEPTED_CONTENT_ENCODINGS;

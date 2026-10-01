@@ -1,46 +1,52 @@
-const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
-const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
-
-import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  wireReplyFailureException
-} from '../framework-errors-internal';
-import type {
-  ActorRef,
-  RoutingId,
-  SpotRef,
-  ZLinkActor,
-  ZLinkActorCreateCall,
-  ZLinkActorCreateResult,
-  ZLinkActorGetOrCreateCall,
-  ZLinkActorManager
+  type ActorRef,
+  type RoutingId,
+  type SpotRef,
+  type ZLinkActor,
+  type ZLinkActorCreateCall,
+  type ZLinkActorCreateResult,
+  type ZLinkActorGetOrCreateCall,
+  type ZLinkActorManager,
+  ZLinkEncodedPayload,
+  ZLinkFrameworkException,
+  ZLinkMessage
 } from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkFrameworkException } from '../../contracts';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import { ZLinkMessage } from '../../contracts';
-import { ZLinkConfigurationException } from '../configuration';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { throwIfAborted } from '../abort';
 import type { ZLinkBackendActorRef, ZLinkBackendSpotNode } from '../backend/contracts';
 import { closeMeshCompletion } from '../backend/mesh-completion-table';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { ZLinkConfigurationException } from '../configuration';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
   captureZLinkSpotSerialTurn,
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  wireReplyFailureException
+} from '../framework-errors-internal';
 import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { ZLinkActorCreationCoordinator, type ZLinkActorCreateRequest } from './actor-creation';
+import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
+import {
+  ZLinkActorRuntimeState,
+  toFrameworkActorRef,
+  type ZLinkActorCreationAttemptResult
+} from './actor-runtime-state';
+import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-rollback';
+const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
+const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
 
 export {
   DefaultZLinkActorClient,
   forwardEncodedActorPacket,
   type ZLinkActorClientOptions
 } from './actor-client';
-
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 export { DefaultZLinkActorContext, ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME } from './actor-context';
-import { ZLinkActorCreationCoordinator, type ZLinkActorCreateRequest } from './actor-creation';
 export { ZLinkActorSerialExecutor } from './actor-mailbox';
 export {
   DEFAULT_MESSAGE_FOLLOW_DURATION_MS,
@@ -85,11 +91,6 @@ export {
   publishInitialActorAuthority,
   type ZLinkActorAuthorityIdentity
 } from './actor-authority-publication';
-import {
-  ZLinkActorRuntimeState,
-  toFrameworkActorRef,
-  type ZLinkActorCreationAttemptResult
-} from './actor-runtime-state';
 export {
   ZLinkActorPacketKind,
   ZLinkSpotActorDispatcher,
@@ -107,8 +108,6 @@ export type {
   ZLinkActorJoinCoordinator,
   ZLinkActorManagerOptions
 } from './actor-runtime-contracts';
-import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
-import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-rollback';
 export {
   ZLinkActorTransferRegistry,
   type ZLinkActorTransferPayloadState

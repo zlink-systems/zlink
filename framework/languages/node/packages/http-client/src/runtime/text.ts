@@ -14,7 +14,8 @@ export const HttpHeaderName = Object.freeze({
   ContentEncoding: 'content-encoding',
   ContentLength: 'content-length'
 });
-export const HttpFormContentType = Object.freeze({
+export const HttpContentType = Object.freeze({
+  Json: 'application/json',
   UrlEncoded: 'application/x-www-form-urlencoded',
   Multipart: 'multipart/form-data'
 });

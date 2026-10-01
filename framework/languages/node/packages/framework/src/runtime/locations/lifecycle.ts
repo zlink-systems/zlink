@@ -1,29 +1,31 @@
-const INITIAL_LOCATION_RETRY_DELAY_MS = 50;
-const LOCATION_RETRY_BACKOFF_MULTIPLIER = 2;
-const MAX_LOCATION_RETRY_DELAY_MS = 1_000;
-
 import type { ActorRef, RoutingId } from '../../contracts/Common';
-import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
-import type { ZLinkActorLocationStore, ZLinkSpotLocationStore } from './internal-store-contracts';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import {
   ZLinkActorLocationClaims,
   type ZLinkActorClaimActivation,
   type ZLinkActorClaimResult
 } from './actor-location-claims';
+import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
+import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
+import type {
+  ZLinkActorLocationStore,
+  ZLinkAuthorityStore,
+  ZLinkSpotLocationStore
+} from './internal-store-contracts';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
+import {
+  type ZLinkInstanceClosingAuthority,
+  type ZLinkTrackedInstanceAuthority,
+  ZLinkSpotLocationClaims
+} from './spot-location-claims';
+const INITIAL_LOCATION_RETRY_DELAY_MS = 50;
+const LOCATION_RETRY_BACKOFF_MULTIPLIER = 2;
+const MAX_LOCATION_RETRY_DELAY_MS = 1_000;
 export {
   ZLinkActorClaimStatus,
   type ZLinkActorClaimActivation,
   type ZLinkActorClaimResult
 } from './actor-location-claims';
-import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
-import { ZLinkSpotLocationClaims } from './spot-location-claims';
-import type {
-  ZLinkInstanceClosingAuthority,
-  ZLinkTrackedInstanceAuthority
-} from './spot-location-claims';
-import type { ZLinkAuthorityStore } from './internal-store-contracts';
-import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 export type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export class ZLinkLocationLifecycle {

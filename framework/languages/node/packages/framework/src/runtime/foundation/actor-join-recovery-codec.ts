@@ -1,14 +1,13 @@
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
-const ACTOR_ID_DIGEST_MAX_BYTES = 0xffff;
-
 import { createHash } from 'node:crypto';
 import type { RoutingId, ZLinkActorJoinOperationId } from '../../contracts';
-import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 import {
   decodeZljrRecordV1 as decodeGeneratedZljrRecordV1,
   encodeZljrRecordV1 as encodeGeneratedZljrRecordV1
 } from '../protocol/service_wire_pilot_codec.generated';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 import { decodeServiceWireFrozenRecord } from './service-stateful-wire-codec';
+const ACTOR_ID_DIGEST_MAX_BYTES = 0xffff;
 
 export const SHA256_DIGEST_BYTES = 32;
 

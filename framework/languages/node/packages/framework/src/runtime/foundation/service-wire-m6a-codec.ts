@@ -1,13 +1,16 @@
-import { UINT32_MAX } from '@zlink-systems/stream-wire';
-import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
-import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { UINT32_MAX, UINT64_MAX } from '@zlink-systems/stream-wire';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import {
   validateDescriptor,
   type ServiceNodeDescriptor,
   type ServiceNodeState,
   type ServiceObjectRole
 } from './service-topology-registry';
-import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
+import {
+  SERVICE_WIRE_PREFIX_SIZE,
+  decodeCanonicalServiceWireText,
+  encodeCanonicalServiceWireText
+} from './service-wire-binary-primitives';
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
@@ -15,10 +18,6 @@ import {
   ServiceWireCommand,
   isValidServiceWireTerminalFailure
 } from './service-wire-constants.generated';
-import {
-  decodeCanonicalServiceWireText,
-  encodeCanonicalServiceWireText
-} from './service-wire-binary-primitives';
 
 const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const REPLY_HEADER_MIN_BYTES = PREFIX_SIZE + 16;

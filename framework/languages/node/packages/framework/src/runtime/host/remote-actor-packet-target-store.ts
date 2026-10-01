@@ -1,12 +1,17 @@
+import {
+  type ActorRef,
+  type RoutingId,
+  type SpotId,
+  type ZLinkSessionActor,
+  ZLinkSpotKind
+} from '../../contracts';
+
 import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
-import type { ActorRef, RoutingId, SpotId, ZLinkSessionActor } from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
 import type { DefaultZLinkActorManager, ZLinkRemoteActorPacketTarget } from '../actors';
-import type { ZLinkStreamActorLookupPort } from '../streams/stream-binding-runtime-ports';
 import { decodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
-import { normalizeRoutingId as normalizeRuntimeRoutingId } from '../routing-id';
+import { normalizeRoutingId as normalizeRuntimeRoutingId, routingIdsEqual } from '../routing-id';
+import type { ZLinkStreamActorLookupPort } from '../streams/stream-binding-runtime-ports';
 import type { MeshRouterResolver } from './mesh-router-resolver';
-import { routingIdsEqual } from '../routing-id';
 
 export interface ZLinkRemoteActorPacketTargetStoreOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;

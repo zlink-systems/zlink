@@ -1,56 +1,57 @@
-import { normalizeClientServerMessageLimit } from './client-server-service-wire';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
-import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
-import { ClientServerRejectReason } from './client-server-service-wire';
-import {
-  DEFAULT_SERVICE_PROBE_INTERVAL_MS,
-  DEFAULT_SERVICE_PEER_TIMEOUT_MS
-} from '../foundation/service-liveness-registry';
-import {
-  ZLINK_MAX_PUBLIC_WEIGHT,
-  isValidPublicWeight,
-  ZLINK_DEFAULT_PUBLIC_WEIGHT
-} from '../../contracts/Configuration/RegistrationBuilderPolicy';
-import { ZLinkListenerRecords } from '../foundation/listener-records';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkRuntimeState,
   type RoutingId,
   type ZLinkClientServerServerDescriptor,
   type ZLinkFanoutPublisherDescriptor
 } from '../../contracts';
-import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
-import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import type { Message } from '../../contracts/Common/Message';
 import {
-  buildAdvertisedEndpoint,
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration
-} from '../configuration';
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
+import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
+import { createAbortError, throwIfAborted } from '../abort';
 import type {
   ZLinkBackendContext,
   ZLinkBackendDealerSocket,
   ZLinkBackendPublisherSocket,
-  ZLinkBackendRouterSocket,
   ZLinkBackendReadablePoller,
+  ZLinkBackendRouterSocket,
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent,
   ZLinkBackendSubscriberSocket,
   ZLinkChannelBackendAdapter,
   ZLinkMonitoringBackendAdapter
 } from '../backend/contracts';
-import { createAbortError, throwIfAborted } from '../abort';
-import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
-import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { Message } from '../../contracts/Common/Message';
-import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import {
+  buildAdvertisedEndpoint,
+  ZLinkConfigurationException,
+  type ZLinkFrameworkRegistration
+} from '../configuration';
+import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
+import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import {
+  DEFAULT_SERVICE_PEER_TIMEOUT_MS,
+  DEFAULT_SERVICE_PROBE_INTERVAL_MS
+} from '../foundation/service-liveness-registry';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import type { ApplicationJobQueue } from '../host/application-job-queue';
+import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
+import {
+  ClientServerRejectReason,
   decodeClientServerControl,
   encodeClientServerAdmit,
   encodeClientServerHello,
@@ -59,6 +60,7 @@ import {
   encodeClientServerReject,
   encodeClientServerUpdate,
   isClientServerControlFrame,
+  normalizeClientServerMessageLimit,
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
 import {
@@ -66,9 +68,7 @@ import {
   FANOUT_LIVENESS_TOPIC,
   inspectFanoutInbound
 } from './fanout-service-wire';
-import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
-import type { ApplicationJobQueue } from '../host/application-job-queue';
-import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
 
 const MAX_LIFECYCLE_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const CLIENT_SERVER_PROBE_INTERVAL_MS = DEFAULT_SERVICE_PROBE_INTERVAL_MS;

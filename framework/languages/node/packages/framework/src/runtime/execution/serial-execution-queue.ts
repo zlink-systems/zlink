@@ -1,7 +1,7 @@
-import { isStructuralGuardEnabled } from './state-lane';
 import {
   diagnosticWorkName,
   guardStateLaneCompletion,
+  isStructuralGuardEnabled,
   trackDiagnosticCompletion
 } from './state-lane';
 

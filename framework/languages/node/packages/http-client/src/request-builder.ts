@@ -1,11 +1,16 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { HttpHeaderName, HttpFormContentType } from './runtime/text';
-const HTTP_FAILURE_STATUS_MIN = 400;
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import type { ZLinkHttpClient, ZLinkHttpClientBuilder } from './client';
+import type { HttpRequestSpec } from './runtime/request-performer';
+import {
+  HttpContentType,
+  HttpHeaderName,
+  makeMultipartBoundary,
+  percentEncode,
+  requireNonBlank,
+  requirePositiveTimeout
+} from './runtime/text';
 import type {
   BodyChunkProvider,
   DownloadSink,
@@ -15,13 +20,7 @@ import type {
   ZLinkHttpExecutionTurn,
   ZLinkHttpMethod
 } from './types';
-import type { HttpRequestSpec } from './runtime/request-performer';
-import {
-  makeMultipartBoundary,
-  percentEncode,
-  requireNonBlank,
-  requirePositiveTimeout
-} from './runtime/text';
+const HTTP_FAILURE_STATUS_MIN = 400;
 
 interface MultipartPart {
   name: string;
@@ -134,7 +133,7 @@ export class ZLinkHttpRequestBuilder {
       return this;
     }
     this.bodyValue = JSON.stringify(value);
-    this.headersValue[HttpHeaderName.ContentType] ??= ZlinkStreamContentType.Json;
+    this.headersValue[HttpHeaderName.ContentType] ??= HttpContentType.Json;
     return this;
   }
 
@@ -297,14 +296,13 @@ export class ZLinkHttpRequestBuilder {
     }
 
     if (this.formValue.length > 0) {
-      headers[HttpHeaderName.ContentType] = HttpFormContentType.UrlEncoded;
+      headers[HttpHeaderName.ContentType] = HttpContentType.UrlEncoded;
       return { body: this.encodeFormBody(), headers };
     }
 
     if (this.multipartValue.length > 0) {
       const boundary = makeMultipartBoundary();
-      headers[HttpHeaderName.ContentType] =
-        `${HttpFormContentType.Multipart}; boundary=${boundary}`;
+      headers[HttpHeaderName.ContentType] = `${HttpContentType.Multipart}; boundary=${boundary}`;
       return { body: this.encodeMultipartBody(boundary), headers };
     }
 

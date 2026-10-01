@@ -1,10 +1,14 @@
-const FLOW_UUID_BYTES = 16;
-const FLOW_UUID_VARIANT_BYTE = 8;
-
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import type { ZLinkFlowOrigin } from '../../contracts';
+const FLOW_UUID_BYTES = 16;
+const FLOW_UUID_VARIANT_BYTE = 8;
 
+/**
+ * Spec 27 §3 defines the flow_origin value set as lowercase
+ * (`inbound|timer|application|lifecycle`); every language emits these exact
+ * strings so records remain comparable across runtimes (spec 26 §3.1).
+ */
 export const FLOW_ORIGIN_VALUES: Readonly<Record<ZLinkFlowOrigin, string>> = Object.freeze({
   Inbound: 'inbound',
   Timer: 'timer',

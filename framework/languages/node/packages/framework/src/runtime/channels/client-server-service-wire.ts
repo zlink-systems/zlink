@@ -1,3 +1,21 @@
+import { UINT32_MAX } from '@zlink-systems/stream-wire';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
+import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import {
+  type ZLinkClientServerServerDescriptor,
+  ZLinkFrameworkRuntimeState
+} from '../../contracts/Locations';
+
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId
+} from '../foundation/service-wire-binary-primitives';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR
+} from '../foundation/service-wire-constants.generated';
 export const DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT = 0x7fff_ffff;
 export function normalizeClientServerMessageLimit(value: number): number {
   return Number.isSafeInteger(value) && value > 0
@@ -5,30 +23,14 @@ export function normalizeClientServerMessageLimit(value: number): number {
     : DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT;
 }
 
-import { UINT32_MAX } from '@zlink-systems/stream-wire';
 const CLIENT_SERVER_PREFIX_BYTES = 5;
 const CLIENT_SERVER_ROLE_BODY_MAX_BYTES = 0xffff;
 const CLIENT_SERVER_TEXT_MAX_BYTES = 4096;
 
-import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 export enum ClientServerRejectReason {
   ProtocolVersionUnsupported = 1,
   AdmissionMismatch = 3
 }
-
-import {
-  SERVICE_WIRE_MAGIC,
-  SERVICE_WIRE_MAJOR
-} from '../foundation/service-wire-constants.generated';
-import type { ZLinkClientServerServerDescriptor } from '../../contracts/Locations';
-import { ZLinkFrameworkRuntimeState } from '../../contracts/Locations';
-import {
-  decodeCanonicalServiceWireText,
-  decodeServiceWireRoutingId,
-  encodeCanonicalServiceWireText,
-  encodeServiceWireRoutingId
-} from '../foundation/service-wire-binary-primitives';
-import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
 const MAGIC_1 = SERVICE_WIRE_MAGIC[1];

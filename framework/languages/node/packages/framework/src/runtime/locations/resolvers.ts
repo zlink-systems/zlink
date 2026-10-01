@@ -1,26 +1,51 @@
+import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { ZLinkSpotKind } from '../../contracts/Spots';
+import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
+import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
+import { ZLinkStateLane } from '../execution/state-lane';
+import {
+  decodeServiceClosingSpotAuthority,
+  decodeServiceReadySpotAuthority
+} from '../foundation/service-authority-payload-codec';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
-import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { routingIdsEqual } from '../routing-id';
 import {
+  type SpotHandle,
+  type ZLinkActorSpotHandleResolver,
+  type ZLinkSpotHandleResolver,
+  createSpotHandle,
+  type ResolvedSpotHandle
+} from '../spots/spot-handle';
+
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { encodeAuthorityKey } from './authority-key-codec';
+import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
+import {
+  type ZLinkAuthoritySnapshot,
+  ZLinkFrameworkRuntimeState,
   ZLinkLocationRole,
   ZLinkLocationTopologyState,
-  ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
-  type ZLinkLocationReadiness,
-  type ZLinkLocationRuntimeQuery,
-  type ZLinkPeerLocationResolver,
   type ZLinkActorLocation,
   type ZLinkActorLocationKey,
+  type ZLinkLocationReadiness,
+  type ZLinkLocationRuntimeQuery,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
+  type ZLinkPeerLocationResolver,
   type ZLinkRouteLocation,
   type ZLinkRouteLocationKey,
   type ZLinkSpotLocation,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
+
 import type {
   ZLinkActorLocationStore,
   ZLinkAuthorityStore,
@@ -29,29 +54,7 @@ import type {
   ZLinkRouteLocationStore,
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
-import {
-  decodeServiceClosingSpotAuthority,
-  decodeServiceReadySpotAuthority
-} from '../foundation/service-authority-payload-codec';
-import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
-import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
-import { encodeAuthorityKey } from './authority-key-codec';
-import { ZLinkSpotKind } from '../../contracts/Spots';
-import type { ZLinkAuthoritySnapshot } from './internal-location-contracts';
-import type {
-  SpotHandle,
-  ZLinkActorSpotHandleResolver,
-  ZLinkSpotHandleResolver
-} from '../spots/spot-handle';
-import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { createSpotHandle, type ResolvedSpotHandle } from '../spots/spot-handle';
-import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
-import { routingIdsEqual } from '../routing-id';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
-import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;

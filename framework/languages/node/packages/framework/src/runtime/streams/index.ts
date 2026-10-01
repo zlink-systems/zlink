@@ -1,47 +1,43 @@
-const DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS = 1000;
-
-import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
-import type { ZLinkListenerRecords } from '../foundation/listener-records';
-import type {
-  ActorRef,
-  Type,
-  ZLinkActor,
-  ZLinkBoundSession,
-  ZLinkSessionActor,
-  ZLinkSessionFactory,
-  ZLinkSession,
-  ZLinkMessageSerializer,
-  ZLinkStreamCompressionCodec,
-  ZLinkStreamCompressionOptions
-} from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkSubmitResult } from '../messaging/submission-result';
-import { ZLinkMessage } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
 import {
-  buildAdvertisedEndpoint,
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration
-} from '../configuration';
-import { ZLinkDispatchErrorReporter } from '../channels';
+  type ActorRef,
+  type Type,
+  type ZLinkActor,
+  type ZLinkBoundSession,
+  type ZLinkMessageSerializer,
+  type ZLinkSession,
+  type ZLinkSessionActor,
+  type ZLinkSessionFactory,
+  type ZLinkStreamCompressionCodec,
+  type ZLinkStreamCompressionOptions,
+  ZLinkMessage
+} from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from '../../contracts/Configuration/InternalDefaults';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import type {
-  ZLinkBackendAdapterFactory,
   ZLinkBackendActorSessionNode,
+  ZLinkBackendAdapterFactory,
   ZLinkBackendContext,
   ZLinkBackendMeshNode,
   ZLinkBackendSocketMonitor,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
+import { ZLinkDispatchErrorReporter } from '../channels';
+import {
+  buildAdvertisedEndpoint,
+  ZLinkConfigurationException,
+  type ZLinkFrameworkRegistration
+} from '../configuration';
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
 import { registerServiceSessionBindingIngressPort } from '../foundation/service-session-binding-ingress-port';
 import {
-  messageToBytes,
-  ZLinkStreamCodec,
-  type ZLinkStreamFrameHeader,
-  ZLinkStreamMessageKind,
-  type ZLinkStreamReplyMessageKind
-} from './protocol';
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../host/application-job-queue';
+import type { ZLinkSubmitResult } from '../messaging/submission-result';
 import {
   DEFAULT_TERMINAL_RELOCATION_CAPACITY,
   ZLinkActorSessionBindingRegistry,
@@ -52,42 +48,45 @@ import {
   registerActorSessionBindingRuntimeOwner
 } from './actor-session-binding-runtime-owner';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
-import {
-  decompressStreamPayload,
-  resolveStreamCompressionCodec,
-  ZLinkStreamFrameMessageFactory
-} from './stream-frame-factory';
-import {
-  ApplicationJobQueue,
-  resolveApplicationJobQueueConfiguration
-} from '../host/application-job-queue';
-import { simpleMessage } from './stream-message-utils';
-import {
-  DefaultZLinkBoundSession,
-  DefaultZLinkSessionActor,
-  DefaultZLinkSessionContext
-} from './session-context';
+import { ZLinkBoundActorRelaySender } from './bound-actor-relay-sender';
 import {
   DefaultZLinkBoundSessionResponseTarget,
   type ZLinkBoundSessionResponseTarget
 } from './bound-session-response-target';
 import { ZLinkBoundSessionService, type ZLinkBoundSessionTransport } from './bound-session-service';
-import { ZLinkSessionActorCoordinator } from './session-actor-coordinator';
-import { ZLinkBoundActorRelaySender } from './bound-actor-relay-sender';
 import { ZLinkManagedStream } from './managed-stream';
+import {
+  messageToBytes,
+  ZLinkStreamCodec,
+  ZLinkStreamMessageKind,
+  type ZLinkStreamFrameHeader,
+  type ZLinkStreamReplyMessageKind
+} from './protocol';
+import { ZLinkSessionActorCoordinator } from './session-actor-coordinator';
+import {
+  DefaultZLinkBoundSession,
+  DefaultZLinkSessionActor,
+  DefaultZLinkSessionContext
+} from './session-context';
 import { createStreamSessionInstance } from './session-provider';
-import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from '../../contracts/Configuration/InternalDefaults';
+import type {
+  ZLinkActorRouteCommitOptions,
+  ZLinkSessionBindingConfirmationOptions,
+  ZLinkSessionBindingIdentity
+} from './stream-binding-runtime-ports';
+import {
+  decompressStreamPayload,
+  resolveStreamCompressionCodec,
+  ZLinkStreamFrameMessageFactory
+} from './stream-frame-factory';
+import { simpleMessage } from './stream-message-utils';
 import {
   ZLinkStreamSessionNodeRuntime as ZLinkStreamSessionNodeRuntimeCore,
   ZLinkStreamSessionRuntime as ZLinkStreamSessionRuntimeCore,
   type ZLinkStreamSessionNodeRuntimeOptions as ZLinkStreamSessionNodeRuntimeCoreOptions,
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
-import type {
-  ZLinkActorRouteCommitOptions,
-  ZLinkSessionBindingConfirmationOptions,
-  ZLinkSessionBindingIdentity
-} from './stream-binding-runtime-ports';
+const DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS = 1000;
 export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';

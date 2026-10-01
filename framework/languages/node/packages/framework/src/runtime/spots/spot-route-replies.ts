@@ -1,8 +1,7 @@
 import { constants as osConstants } from 'node:os';
-const nativeErrnoValues = osConstants.errno;
 import type {
-  ZLinkBackendMessageLike as MessageLike,
-  ZLinkBackendReceived as BackendReceived
+  ZLinkBackendReceived as BackendReceived,
+  ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
 import {
   decodeChannelEnvelope,
@@ -10,8 +9,9 @@ import {
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
 import { ZLinkConfigurationException } from '../configuration';
-import { encodeSpotRouteBridgeReply } from './spot-route-reply-wire';
 import type { ZLinkDecodedRemoteActorJoinRequest } from './spot-remote-codec';
+import { encodeSpotRouteBridgeReply } from './spot-route-reply-wire';
+const nativeErrnoValues = osConstants.errno;
 
 export interface ZLinkRouteReplySubmitOperation {
   message(message: MessageLike): ZLinkRouteReplySubmitOperation;

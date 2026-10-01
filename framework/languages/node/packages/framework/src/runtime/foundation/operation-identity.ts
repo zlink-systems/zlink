@@ -1,7 +1,6 @@
 import { UINT64_BYTES, UINT64_MAX } from '@zlink-systems/stream-wire';
-export const OPERATION_IDENTITY_BYTES = 16;
-
 import { randomBytes } from 'node:crypto';
+export const OPERATION_IDENTITY_BYTES = 16;
 
 export const ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE = 2n;
 

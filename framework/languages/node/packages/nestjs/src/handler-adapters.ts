@@ -1,4 +1,3 @@
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type { InjectionToken } from '@nestjs/common';
 import { ContextIdFactory, ModuleRef } from '@nestjs/core';
 import type {
@@ -280,7 +279,7 @@ function decodePayload(
     if (metadata?.decodePayload !== undefined) {
       return metadata.decodePayload(Buffer.from(payload), context);
     }
-    if (context.contentType !== undefined && context.contentType !== ZlinkStreamContentType.Json) {
+    if (context.contentType !== undefined && context.contentType !== 'application/json') {
       return Buffer.from(payload);
     }
     return parseWireJson(Buffer.from(payload).toString());

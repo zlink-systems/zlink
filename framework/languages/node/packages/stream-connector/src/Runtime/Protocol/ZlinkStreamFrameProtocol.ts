@@ -1,15 +1,14 @@
 import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
-import type {
-  RequiredZlinkStreamConnectorOptions,
-  ZlinkStreamEncodedPayload,
-  ZlinkStreamMetadata
-} from '../../Contracts';
 import {
+  type RequiredZlinkStreamConnectorOptions,
+  type ZlinkStreamEncodedPayload,
+  type ZlinkStreamMetadata,
   ZlinkStreamCodec,
   ZlinkStreamErrorCode,
   ZlinkStreamMessageKind,
   ZlinkStreamMetadataMap
 } from '../../Contracts';
+
 import { ZlinkStreamHeaderFlags } from '../../Contracts/ZlinkStreamEnums';
 import type { ZlinkStreamHeader } from '../../Contracts/ZlinkStreamModels';
 import { connectorError } from '../ZlinkStreamSupport';

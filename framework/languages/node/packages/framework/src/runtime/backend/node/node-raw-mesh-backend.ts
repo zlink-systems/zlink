@@ -1,42 +1,14 @@
-import { APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES } from '../../foundation/service-wire-m6a-codec';
-import { SERVICE_WIRE_COMMAND_OFFSET } from '../../foundation/service-wire-binary-primitives';
-import {
-  MeshPeerRuntimeState,
-  StreamSessionRuntimeState
-} from '../../foundation/service-runtime-contracts';
-import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
-import {
-  ZLINK_MAX_PUBLIC_WEIGHT,
-  ZLINK_MAX_CAPACITY,
-  isValidPositiveCapacity
-} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
-const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
-const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
-
-import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../../contracts/Configuration/InternalDefaults';
-import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../../contracts/Configuration/Registration';
-import { shouldCompactBackingArray } from '../../admission';
-import {
-  isValidPublicWeight,
-  ZLINK_DEFAULT_PUBLIC_WEIGHT
-} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
-import { randomBytes } from 'node:crypto';
-import { setImmediate as yieldToIO } from 'node:timers/promises';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
   encodeStreamWireFrame,
   encodeStreamWireHeader
 } from '@zlink-systems/stream-wire';
-import { disconnectStreamPeer } from './node-socket-backend-adapter';
-import { translateBindingResultError } from './node-backend-adapter-support';
-import { ZLinkFrameworkException } from '../../../contracts';
-import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
+  RoutingId as BindingRoutingId,
   ConfigError,
   ConfigResult,
   Message,
-  RoutingId as BindingRoutingId,
   RequestResult,
   SubmitError,
   SubmitResult,
@@ -44,32 +16,26 @@ import {
   type StreamSocket,
   type SubmitResult as SubmitResultValue
 } from '@zlink-systems/zlink';
-import {
-  isZLinkBackendResultError,
-  ZLinkBackendResultError,
-  type ZLinkBackendMessageLike as MessageLike
-} from '../runtime-values';
-import { ZLinkBufferMessage } from '../runtime-message';
+import { randomBytes } from 'node:crypto';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
+import { type RoutingId, ZLinkFrameworkException } from '../../../contracts';
+
 import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
-import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
-import type {
-  MeshOperationId,
-  MeshPeerEntry,
-  MeshPublisher,
-  ReadyBatch,
-  ReadyRecord,
-  ReceiveBatch,
-  ReceiveRecord,
-  ServiceSpot,
-  StreamSessionActorAuthorityFence,
-  StreamSessionService
-} from '../../foundation/service-runtime-contracts';
+import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
+import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/EndpointNotation';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../../contracts/Configuration/InternalDefaults';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../../contracts/Configuration/Registration';
 import {
-  OperationKind,
-  ReadyDomain,
-  ReadyOwnerKind,
-  ReceiveKind
-} from '../../foundation/service-runtime-contracts';
+  isValidPositiveCapacity,
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT,
+  ZLINK_MAX_CAPACITY,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
+import { shouldCompactBackingArray } from '../../admission';
+import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
+import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
 import {
   OperationCancelledError,
   OperationTimeoutError
@@ -78,20 +44,34 @@ import {
   RawServiceMeshRuntime,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
+import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
+import type {
+  ServiceMailboxClaim,
+  ServiceMailboxDomain,
+  ServiceMailboxRecord
+} from '../../foundation/service-mailbox';
+import { encodeServiceMetadataFrame } from '../../foundation/service-metadata-codec';
 import {
-  APPLICATION_PAYLOAD_VERSION,
-  decodeApplicationPayloadView,
-  encodeMultipartApplicationPayload,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
-} from '../../foundation/service-wire-m6a-codec';
-import {
-  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
-  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-  SERVICE_WIRE_REQUIRED_CAPABILITY,
-  ServiceWireFrameworkErrorCode,
-  ServiceWireCommand
-} from '../../foundation/service-wire-constants.generated';
+  type MeshOperationId,
+  type MeshPeerEntry,
+  type MeshPublisher,
+  type ReadyBatch,
+  type ReadyRecord,
+  type ReceiveBatch,
+  type ReceiveRecord,
+  type ServiceSpot,
+  type StreamSessionActorAuthorityFence,
+  type StreamSessionService,
+  MeshPeerRuntimeState,
+  OperationKind,
+  ReadyDomain,
+  ReadyOwnerKind,
+  ReceiveKind,
+  StreamSessionRuntimeState
+} from '../../foundation/service-runtime-contracts';
+
+import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
+import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
 import {
   ServiceStatefulRuntime,
   statefulMailboxData,
@@ -99,14 +79,12 @@ import {
   type ServiceInstanceApplicationLifecycle,
   type ServicePendingInstanceActivation,
   type ServiceSpotMessageFollowSeal,
-  type ServiceUserSpotOperationHandler,
-  type ServiceUserSpotOperationResult,
   type ServiceStatefulMailboxData,
   type ServiceStatefulPendingOperation,
-  type ServiceStatefulResult
+  type ServiceStatefulResult,
+  type ServiceUserSpotOperationHandler,
+  type ServiceUserSpotOperationResult
 } from '../../foundation/service-stateful-runtime';
-import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
-import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -117,27 +95,43 @@ import type {
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
-import { encodeServiceMetadataFrame } from '../../foundation/service-metadata-codec';
-import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
-import type {
-  ServiceMailboxClaim,
-  ServiceMailboxDomain,
-  ServiceMailboxRecord
-} from '../../foundation/service-mailbox';
 import type {
   ServiceChannelDescriptor,
   ServiceNodeDescriptor
 } from '../../foundation/service-topology-registry';
-import type { RoutingId } from '../../../contracts';
-import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/EndpointNotation';
-import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
+import { SERVICE_WIRE_COMMAND_OFFSET } from '../../foundation/service-wire-binary-primitives';
+import {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand,
+  ServiceWireFrameworkErrorCode
+} from '../../foundation/service-wire-constants.generated';
+import {
+  APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES,
+  APPLICATION_PAYLOAD_VERSION,
+  decodeApplicationPayloadView,
+  encodeMultipartApplicationPayload,
+  ServiceWireProtocolError,
+  type ServiceApplicationPayload
+} from '../../foundation/service-wire-m6a-codec';
+import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import type {
   ZLinkBackendActorRef,
-  ZLinkBackendObjectPlacement,
-  ZLinkBackendMeshNode
+  ZLinkBackendMeshNode,
+  ZLinkBackendObjectPlacement
 } from '../contracts';
 import type { ZLinkRawBindingPort } from '../raw-binding-port';
-import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
+import { ZLinkBufferMessage } from '../runtime-message';
+import {
+  isZLinkBackendResultError,
+  ZLinkBackendResultError,
+  type ZLinkBackendMessageLike as MessageLike
+} from '../runtime-values';
+import { translateBindingResultError } from './node-backend-adapter-support';
+import { disconnectStreamPeer } from './node-socket-backend-adapter';
+const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
+const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;

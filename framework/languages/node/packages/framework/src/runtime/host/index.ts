@@ -1,22 +1,87 @@
-import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
-const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
-const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
-
-import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
-import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
-import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
-const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
-
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
-import { ZLinkListenerRecords } from '../foundation/listener-records';
-import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkWireReply
-} from '../framework-errors-internal';
 import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  type ActorRef,
+  type RoutingId,
+  type ZLinkClientServerRuntime,
+  type ZLinkFanoutRuntime,
+  type ZLinkFrameworkLifecycleOptions,
+  type ZLinkFrameworkRelocationOptions,
+  type ZLinkFrameworkRelocationResult,
+  type ZLinkFrameworkRuntime,
+  type ZLinkFrameworkRuntimeStatus,
+  type ZLinkFrameworkTerminationResult,
+  type ZLinkListenerKind,
+  type ZLinkListenerStatus,
+  type ZLinkMeshNodeDescriptor,
+  type ZLinkMessageFlowControl,
+  type ZLinkMessageFlowLogMode,
+  type ZLinkObservedStatus,
+  type ZLinkRouteMeshRuntime,
+  ZLinkFrameworkRelocationMode,
+  ZLinkFrameworkRelocationOutcome,
+  ZLinkFrameworkRelocationReason,
+  ZLinkFrameworkRuntimeState,
+  ZLinkFrameworkTerminationOutcome,
+  ZLinkFrameworkTerminationReason,
+  zlinkMessageMetadata,
+  ZLinkObjectRole,
+  ZLinkPeerState,
+  ZLinkSpotCreateState,
+  ZLinkSpotKind
+} from '../../contracts';
+import type { Type } from '../../contracts/Common/CoreTypes';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
+import { requireMessageFlowLogMode } from '../../contracts/Configuration/DiagnosticsValidation';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import {
+  type ZLinkLocationOwnerToken,
+  zlinkDefaultLocationOptions,
+  type ZLinkLocationRuntimeQuery
+} from '../../contracts/Locations';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import { createDeadlineExceededError, isDeadlineExceededError } from '../abort';
+import { ZLinkActivationAdmission } from '../activation-admission';
+import {
+  type DefaultZLinkActorManager,
+  type ZLinkActorManagerOptions,
+  decodeRemoteActorSourceLeaveTerminal,
+  DefaultZLinkActorClient,
+  isActorAuthorityPayload,
+  publishInitialActorAuthority,
+  rewriteActorAuthorityOwner,
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+  ZLinkActorHandoffCoordinator,
+  ZLinkActorTransferRegistry
+} from '../actors';
+import { messageFollowOwnerNodeRid, ownerFence } from '../actors/actor-message-follow-context';
+import {
+  ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
+  type ZLinkInternalActorTransportDeliveryGate
+} from '../actors/actor-transport-delivery-gate';
+import { ZLinkRuntimeAdmissionGate } from '../admission';
+import {
+  ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE,
+  type ZLinkInternalApplicationJobQueueHandlerStartGate
+} from '../application-jobs/application-job-queue-handler-start-gate';
+import {
+  releaseApplicationJobPermitBeforeHandler,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
+import {
+  type ZLinkBackendAdapterFactory,
+  type ZLinkBackendContext,
+  type ZLinkBackendMeshNode,
+  meshActorSessionNodeAdapter,
+  ZLinkNodeBackendAdapterFactory
+} from '../backend';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
   RequestResult,
@@ -24,70 +89,9 @@ import {
   type ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
 import {
-  OperationKind,
-  ReceiveKind,
-  type ReadyRecord,
-  type ReceiveRecord
-} from '../foundation/service-runtime-contracts';
-import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
-import { runtimeAcceptsWork, runtimeStateIsReady } from '../foundation/runtime-state-projections';
-import { createDeadlineExceededError, isDeadlineExceededError } from '../abort';
-import { meshActorSessionNodeAdapter, ZLinkNodeBackendAdapterFactory } from '../backend';
-import type {
-  ZLinkBackendAdapterFactory,
-  ZLinkBackendContext,
-  ZLinkBackendMeshNode
-} from '../backend';
-
-const LEGACY_MESH_SEND_TIMEOUT_MS = 1000;
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkMeshNodeDescriptor,
-  ZLinkClientServerRuntime,
-  ZLinkFanoutRuntime,
-  ZLinkFrameworkRuntime,
-  ZLinkListenerKind,
-  ZLinkListenerStatus,
-  ZLinkFrameworkLifecycleOptions,
-  ZLinkFrameworkRelocationOptions,
-  ZLinkFrameworkRelocationResult,
-  ZLinkObservedStatus,
-  ZLinkFrameworkRuntimeStatus,
-  ZLinkFrameworkTerminationResult,
-  ZLinkRouteMeshRuntime
-} from '../../contracts';
-import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { Type } from '../../contracts/Common/CoreTypes';
-import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
-import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
-import {
-  ZLinkFrameworkRelocationMode,
-  ZLinkFrameworkRelocationOutcome,
-  ZLinkFrameworkRelocationReason,
-  ZLinkFrameworkRuntimeState,
-  ZLinkFrameworkTerminationOutcome,
-  ZLinkFrameworkTerminationReason,
-  ZLinkObjectRole,
-  ZLinkPeerState,
-  ZLinkSpotKind,
-  zlinkMessageMetadata,
-  ZLinkSpotCreateState
-} from '../../contracts';
-import { ZLinkSubmitStatus } from '../messaging/submission-result';
-import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
-} from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkMessageFlowControl, ZLinkMessageFlowLogMode } from '../../contracts';
-import { requireMessageFlowLogMode } from '../../contracts/Configuration/DiagnosticsValidation';
-import {
   DefaultZLinkChannelRuntimeOptions,
-  ZLinkDispatchErrorReporter,
   ZLinkChannelRuntimeManager,
+  ZLinkDispatchErrorReporter,
   ZLinkRuntimeRouteTransport,
   type ZLinkDispatchErrorSink
 } from '../channels';
@@ -97,33 +101,68 @@ import {
   encodeChannelErrorReplyParts,
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
-import { ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET } from '../actors';
+import type { ZLinkFrameworkRegistration } from '../configuration';
 import {
-  ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
-  type ZLinkInternalActorTransportDeliveryGate
-} from '../actors/actor-transport-delivery-gate';
-import {
-  ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE,
-  type ZLinkInternalApplicationJobQueueHandlerStartGate
-} from '../application-jobs/application-job-queue-handler-start-gate';
-import { ZLinkFrameworkExecutionState, ZLinkRuntimeTaskErrorSink } from '../execution';
-import {
+  type ZLinkRuntimeEventPublisher,
   createDiagnosticsContext,
   createInboundFlow,
   currentOrCreateFlow,
   DefaultZLinkRuntimeEventPublisher,
   flowIfEnabled,
   runWithFlow,
+  ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
   type ZLinkMessageFlowModeCell,
-  type ZLinkRuntimeMetricMeshSnapshot,
-  ZLinkRuntimeMetrics
+  type ZLinkRuntimeMetricMeshSnapshot
 } from '../diagnostics';
+import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
 import {
   ZLinkClientServerRuntimeProjection,
   ZLinkFanoutRuntimeProjection
 } from '../diagnostics/topology-runtime-projections';
-import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
+import { ZLinkFrameworkExecutionState, ZLinkRuntimeTaskErrorSink } from '../execution';
+import { ZLinkListenerRecords } from '../foundation/listener-records';
+import { runtimeAcceptsWork, runtimeStateIsReady } from '../foundation/runtime-state-projections';
+import { rewriteServiceAuthorityOwner } from '../foundation/service-authority-payload-codec';
+import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
+import {
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
+import {
+  MeshPeerRuntimeState,
+  OperationKind,
+  ReceiveKind,
+  type ReadyRecord,
+  type ReceiveRecord
+} from '../foundation/service-runtime-contracts';
+import type {
+  ServiceAsyncInstanceActivationAuthority,
+  ServiceInstanceApplicationLifecycle
+} from '../foundation/service-stateful-runtime';
+import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
+import {
+  createInternalFrameworkException,
+  internalFrameworkWireReply,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import {
+  ZLinkAuthoritySpotRouteResolver,
+  ZLinkOwnerCleanupError,
+  type ZLinkLocationRuntime,
+  type ZLinkStoreLocationResolvers
+} from '../locations';
+import {
+  decodeFrameworkCreationPayload,
+  encodeFrameworkCreationPayload
+} from '../messaging/creation-payload-codec';
+import {
+  decodeFrameworkPayloadMessage,
+  encodeFrameworkPayloadMessage
+} from '../messaging/payload-codec';
+import { ZLinkSubmitStatus } from '../messaging/submission-result';
+import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   DefaultZLinkSpotManager,
   ZLinkPublicSpotManager,
@@ -132,92 +171,52 @@ import {
   type ZLinkDetachedTaskRunner,
   type ZLinkSpotManagerOptions
 } from '../spots';
-import type { DefaultZLinkActorManager, ZLinkActorManagerOptions } from '../actors';
-import { messageFollowOwnerNodeRid, ownerFence } from '../actors/actor-message-follow-context';
-import {
-  DefaultZLinkActorClient,
-  ZLinkActorHandoffCoordinator,
-  ZLinkActorTransferRegistry,
-  decodeRemoteActorSourceLeaveTerminal,
-  isActorAuthorityPayload,
-  publishInitialActorAuthority,
-  rewriteActorAuthorityOwner
-} from '../actors';
+import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkBoundSessionFactory,
-  type DefaultZLinkBoundSession,
-  type ZLinkStreamPayloadCodec,
   ZLinkStreamBindingRuntime,
-  ZLinkStreamRuntimeManager
+  ZLinkStreamRuntimeManager,
+  type DefaultZLinkBoundSession,
+  type ZLinkStreamPayloadCodec
 } from '../streams';
-import {
-  ZLinkOwnerCleanupError,
-  ZLinkAuthoritySpotRouteResolver,
-  type ZLinkLocationRuntime,
-  type ZLinkStoreLocationResolvers
-} from '../locations';
-import {
-  zlinkDefaultLocationOptions,
-  type ZLinkLocationRuntimeQuery
-} from '../../contracts/Locations';
-import { ZLinkActorRuntimeOptionsFactory } from './actor-runtime-options-factory';
-import { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
-import { ZLinkActorTransferAuthorityRuntime } from './actor-transfer-authority-runtime';
-import { ZLinkEntryActorRuntimeService } from './entry-actor-runtime';
-import { ZLinkLocationRuntimeOwner } from './location-runtime-owner';
-import { MeshRouterResolver } from './mesh-router-resolver';
-import { ZLinkBoundSessionRelay } from './bound-session-relay';
-import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import { rewriteServiceAuthorityOwner } from '../foundation/service-authority-payload-codec';
-import {
-  replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
-} from '../foundation/service-relocation-runtime';
-import { ZLinkSpotRuntimeOptionsFactory } from './spot-runtime-options-factory';
-import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-factory';
-import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
-import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
-import { ZLinkRuntimeAdmissionGate } from '../admission';
-import { ZLinkActivationAdmission } from '../activation-admission';
-import {
-  ZLinkDrainingStatePublishError,
-  ZLinkRetiringRollbackError,
-  ZLinkRouteMeshRuntimeCoordinator
-} from './route-mesh-runtime';
-import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
-import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
-import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
-import { ZLinkInstanceActivationAuthority } from './instance-activation-authority';
-import type {
-  ServiceAsyncInstanceActivationAuthority,
-  ServiceInstanceApplicationLifecycle
-} from '../foundation/service-stateful-runtime';
-import { hasObjectClientCapability, ZLinkHostSpotAddressTransport } from './spot-address-transport';
-import { ZLinkUserSpotCreationCoordinator } from './user-spot-creation-coordinator';
 import { ZLinkActorPlacementCoordinator } from './actor-placement-coordinator';
-import {
-  decodeFrameworkPayloadMessage,
-  encodeFrameworkPayloadMessage
-} from '../messaging/payload-codec';
-import {
-  decodeFrameworkCreationPayload,
-  encodeFrameworkCreationPayload
-} from '../messaging/creation-payload-codec';
-import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
-import {
-  ZLinkHostServiceRelocationRuntime,
-  ZLinkRelocationStateIncompatibleError
-} from './service-relocation-host-runtime';
+import { ZLinkActorRuntimeOptionsFactory } from './actor-runtime-options-factory';
+import { ZLinkActorTransferAuthorityRuntime } from './actor-transfer-authority-runtime';
+import { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import {
   ApplicationJobQueue,
   nodeEffectiveProcessorCount,
   resolveApplicationJobQueueConfiguration
 } from './application-job-queue';
-import {
-  releaseApplicationJobPermitBeforeHandler,
-  runWithApplicationJobPermit
-} from '../application-jobs/application-job-queue-scope';
+import { ZLinkBoundSessionRelay } from './bound-session-relay';
+import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-factory';
+import { ZLinkEntryActorRuntimeService } from './entry-actor-runtime';
 import { HostCapacityStatusProjection } from './host-capacity-status';
+import { ZLinkInstanceActivationAuthority } from './instance-activation-authority';
+import { ZLinkLocationRuntimeOwner } from './location-runtime-owner';
+import { MeshRouterResolver } from './mesh-router-resolver';
+import {
+  ZLinkDrainingStatePublishError,
+  ZLinkRetiringRollbackError,
+  ZLinkRouteMeshRuntimeCoordinator
+} from './route-mesh-runtime';
+import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
+import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
+import {
+  ZLinkHostServiceRelocationRuntime,
+  ZLinkRelocationStateIncompatibleError
+} from './service-relocation-host-runtime';
+import { hasObjectClientCapability, ZLinkHostSpotAddressTransport } from './spot-address-transport';
+import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
+import { ZLinkSpotRuntimeOptionsFactory } from './spot-runtime-options-factory';
+import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
+import { ZLinkUserSpotCreationCoordinator } from './user-spot-creation-coordinator';
+
+const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
+const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
+const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
+
+const LEGACY_MESH_SEND_TIMEOUT_MS = 1000;
 
 export interface ZLinkFrameworkRuntimeLifecycle {
   readonly isStarted: boolean;

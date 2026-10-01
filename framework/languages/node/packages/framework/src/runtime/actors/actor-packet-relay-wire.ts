@@ -1,12 +1,12 @@
+import { type ActorRef, type RoutingId, ZLinkSpotKind } from '../../contracts';
+
 import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
-import type { ActorRef, RoutingId } from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
-import type { ZLinkRemoteActorPacketTarget } from './actor-runtime-state';
 import {
   decodeActorMessageFollowContext,
   type ZLinkActorMessageFollowContext
 } from './actor-message-follow-context';
+import type { ZLinkRemoteActorPacketTarget } from './actor-runtime-state';
 
 export const ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET = '__zlink.actor.packet.relay';
 export const ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET =

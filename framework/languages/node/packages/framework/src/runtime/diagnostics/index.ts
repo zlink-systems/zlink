@@ -1,37 +1,41 @@
+import { AsyncResource } from 'node:async_hooks';
 import type {
   ZLinkLocationRuntimeQuery,
   ZLinkLocationRuntimeStatus,
-  ZLinkLocationTopologyEntry,
-  ZLinkLocationServiceSummary
+  ZLinkLocationServiceSummary,
+  ZLinkLocationTopologyEntry
 } from '../../contracts';
-import type {
-  ZLinkActorLocation,
-  ZLinkPeerLocation,
-  ZLinkRouteLocation,
-  ZLinkSpotLocation
-} from '../../contracts/Locations/Rows';
 import type {
   ZLinkActorLocationKey,
   ZLinkLocationKey,
   ZLinkRouteLocationKey,
   ZLinkSpotLocationKey
 } from '../../contracts/Locations/Keys';
+import type {
+  ZLinkActorLocation,
+  ZLinkPeerLocation,
+  ZLinkRouteLocation,
+  ZLinkSpotLocation
+} from '../../contracts/Locations/Rows';
+import type { ZLinkBackendSocketMonitor, ZLinkBackendSocketMonitorEvent } from '../backend';
+import { ZLinkStateLane } from '../execution/state-lane';
+import { normalizeOpaqueRoutingId } from '../routing-id';
 import {
-  ZLinkLocationRuntimeEventKind as LocationRuntimeEventKind,
   ZLinkLocationActorEventKind as ActorLocationEventKind,
+  ZLinkLocationRuntimeEventKind as LocationRuntimeEventKind,
   ZLinkLocationPeerEventKind as PeerLocationEventKind,
   ZLinkLocationRouteEventKind as RouteLocationEventKind,
-  ZLinkLocationSpotEventKind as SpotLocationEventKind,
   ZLinkSocketEventKind as SocketEventKind,
-  ZLinkSocketNativeEventType,
   ZLinkSocketNativeEventType as SocketNativeEventType,
+  ZLinkLocationSpotEventKind as SpotLocationEventKind,
+  ZLinkSocketNativeEventType,
   type ZLinkAutoConnectDesiredSetChange,
   type ZLinkLocationActorEvent,
   type ZLinkLocationMonitoringRegistration,
   type ZLinkLocationPeerEvent,
+  type ZLinkLocationRouteEvent,
   type ZLinkLocationRuntimeEvent,
   type ZLinkLocationRuntimeEventKind,
-  type ZLinkLocationRouteEvent,
   type ZLinkLocationSpotEvent,
   type ZLinkPollingMonitoringRegistration,
   type ZLinkRuntimeEvent,
@@ -40,6 +44,7 @@ import {
   type ZLinkSocketEventKind,
   type ZLinkSocketMonitoringRegistration
 } from './internal-event-contracts';
+
 export {
   ZLinkLocationActorEventKind,
   ZLinkLocationPeerEventKind,
@@ -47,10 +52,6 @@ export {
   ZLinkLocationSpotEventKind,
   ZLinkSocketNativeEventType
 } from './internal-event-contracts';
-import type { ZLinkBackendSocketMonitor, ZLinkBackendSocketMonitorEvent } from '../backend';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { normalizeOpaqueRoutingId } from '../routing-id';
 
 const ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED = 3;
 const detachedStateLaneResource = new AsyncResource('zlink:location-runtime-monitoring-source');

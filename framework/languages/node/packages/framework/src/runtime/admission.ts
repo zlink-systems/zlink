@@ -1,3 +1,7 @@
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from './framework-errors-internal';
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
@@ -5,10 +9,6 @@ export function shouldCompactBackingArray(head: number, length: number): boolean
   return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
 }
 
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from './framework-errors-internal';
 export class ZLinkRuntimeAdmissionGate {
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 

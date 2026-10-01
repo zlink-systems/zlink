@@ -1,7 +1,9 @@
 import { constants as osConstants } from 'node:os';
-const nativeErrnoValues = osConstants.errno;
-import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
-const LEGACY_ROUTE_NOT_REQUIRED_REJECT_REASON = 4;
+import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawHostPort,
@@ -9,23 +11,26 @@ import type {
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
 import { RequestResult, SubmitResult } from '../backend/runtime-values';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
+import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
 import { ServiceMailbox, type ServiceMailboxRecord } from './service-mailbox';
 import {
-  ServiceTopologyRegistry,
   sameServiceNodeDescriptor,
+  ServiceTopologyRegistry,
   validateDescriptor,
   type AdmittedServicePeer,
   type PeerAdmissionResult,
-  type ServicePeerAdmissionExpectation,
-  type ServiceNodeDescriptor
+  type ServiceNodeDescriptor,
+  type ServicePeerAdmissionExpectation
 } from './service-topology-registry';
+import { createServiceWireCodec } from './service-wire-codec';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  ServiceWireCommand,
+  ServiceWireFrameworkErrorCode
+} from './service-wire-constants.generated';
 import {
   decodeApplicationPayloadView,
   decodeChannelRequestHeader,
@@ -44,16 +49,11 @@ import {
   encodeReplyHeader,
   encodeRouteMeshAdmission,
   M6aServiceWireCommand,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
+  ServiceWireProtocolError,
+  type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-import { createServiceWireCodec } from './service-wire-codec';
-import {
-  SERVICE_WIRE_MAGIC,
-  SERVICE_WIRE_MAJOR,
-  ServiceWireCommand,
-  ServiceWireFrameworkErrorCode
-} from './service-wire-constants.generated';
+const nativeErrnoValues = osConstants.errno;
+const LEGACY_ROUTE_NOT_REQUIRED_REJECT_REASON = 4;
 
 export type RawServicePumpResult =
   'noData' | 'infrastructure' | 'application' | 'dropped' | 'protocolError';

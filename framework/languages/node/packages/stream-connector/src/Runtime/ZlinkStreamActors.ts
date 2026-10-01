@@ -3,23 +3,24 @@ import {
   decodeStreamWireActorBoundPayload,
   decodeStreamWireActorUnboundPayload
 } from '@zlink-systems/stream-wire';
-import type {
-  Disposable,
-  ZlinkStreamActor,
-  ZlinkStreamEncodedPayload,
-  ZlinkStreamMessage,
-  ZlinkStreamRequestCall,
-  ZlinkStreamSendCall
+import {
+  type Disposable,
+  type ZlinkStreamActor,
+  type ZlinkStreamEncodedPayload,
+  type ZlinkStreamMessage,
+  type ZlinkStreamRequestCall,
+  type ZlinkStreamSendCall,
+  ZlinkStreamErrorCode
 } from '../Contracts';
-import { ZlinkStreamErrorCode } from '../Contracts';
+
+import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
+import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import {
   connectorError,
   currentRegistrations,
   registerHandler,
   type HandlerRegistration
 } from './ZlinkStreamSupport';
-import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
-import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 
 const ACTOR_BOUND = ZlinkStreamControlPacket.ActorBound;
 const ACTOR_UNBOUND = ZlinkStreamControlPacket.ActorUnbound;

@@ -1,18 +1,19 @@
+import {
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActor,
+  type ZLinkActorContext,
+  type ZLinkSpot,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import { isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkActorContext,
-  ZLinkSpot
-} from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import { routingIdsEqual } from '../routing-id';
 import { lookupNativeActorRef } from './actor-native-lookup';
 

@@ -1,14 +1,13 @@
-import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
-import { SERVICE_WIRE_TEXT8_MAX_BYTES } from './service-wire-binary-primitives';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { ZLinkSpotKind, zlinkSpotKindToWire } from '../../contracts';
+import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
+import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
+import { crc32c } from './service-relocation-runtime';
+import { SERVICE_WIRE_TEXT8_MAX_BYTES } from './service-wire-binary-primitives';
 const SPOT_AUTHORITY_OBJECT_KIND = 2;
 const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
 const INSTANCE_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Instance);
 const AUTHORITY_TEXT16_MAX_BYTES = 0xffff;
-
-import { crc32c } from './service-relocation-runtime';
-import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
 
 const AUTHORITY_MAGIC = Buffer.from([0x5a, 0x4c, 0x41, 0x55]);
 const AUTHORITY_FORMAT_VERSION = 1;

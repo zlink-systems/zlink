@@ -1,15 +1,14 @@
+import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
   ZLINK_MAX_PUBLIC_WEIGHT,
-  isValidPublicWeight,
   isValidCapacity,
-  isValidPositiveCapacity
+  isValidPositiveCapacity,
+  isValidPublicWeight
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
-import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
-const LOCAL_DIAGNOSTIC_CONNECTION_ID = 'local';
-
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
+const LOCAL_DIAGNOSTIC_CONNECTION_ID = 'local';
 
 export type ServiceNodeState =
   'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';

@@ -1,15 +1,16 @@
-const ROUTE_CACHE_FOLLOW_MARGIN_MS = 5000;
-
-import { requirePublicWeight } from './RegistrationBuilderPolicy';
 import type { Type, ZLinkSpot } from '../../contracts';
+import { zlinkDefaultLocationOptions } from '../Locations';
 import { ZLinkConfigurationException } from './ConfigurationException';
+import { requirePublicFanoutTopic } from './FanoutTopic';
+import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from './InternalDefaults';
+import { requirePublicWeight } from './RegistrationBuilderPolicy';
 import { requirePositiveInteger } from './RegistrationNormalizers';
 import type {
   ZLinkFrameworkRegistration,
   ZLinkFrameworkRegistrationOptions,
+  ZLinkMeshChannelOptions,
   ZLinkRouteChannelOptions,
   ZLinkRouteMeshChannelOptions,
-  ZLinkMeshChannelOptions,
   ZLinkSpotNodeOptions,
   ZLinkSpotPubSubCapabilityOptions,
   ZLinkSpotRouterCapabilityOptions,
@@ -17,11 +18,9 @@ import type {
   ZLinkWorkerOptions
 } from './RegistrationTypes';
 import { isRouteClientEnabled, isRouteTransportDeclared } from './RouteChannelInternalState';
-import { validateTimerRegistration } from './TimerRegistrationValidator';
-import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
-import { requirePublicFanoutTopic } from './FanoutTopic';
-import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from './InternalDefaults';
+import { validateTimerRegistration } from './TimerRegistrationValidator';
+const ROUTE_CACHE_FOLLOW_MARGIN_MS = 5000;
 
 export function validateFrameworkRegistration(
   registration: ZLinkFrameworkRegistration,

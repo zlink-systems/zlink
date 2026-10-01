@@ -1,10 +1,10 @@
-import {
-  SERVICE_WIRE_MAJOR_OFFSET,
-  SERVICE_WIRE_COMMAND_OFFSET,
-  SERVICE_WIRE_FLAGS_OFFSET
-} from './service-wire-binary-primitives';
-import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import {
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET,
+  SERVICE_WIRE_MAJOR_OFFSET,
+  SERVICE_WIRE_PREFIX_SIZE
+} from './service-wire-binary-primitives';
 const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const LIVENESS_FRAME_SIZE = PREFIX_SIZE + 8;
 

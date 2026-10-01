@@ -1,8 +1,11 @@
-import { splitStreamWireFrames } from '@zlink-systems/stream-wire';
+import {
+  decodeStreamWireFrame,
+  encodeStreamWireFrame,
+  splitStreamWireFrames
+} from '@zlink-systems/stream-wire';
 import { ZlinkStreamErrorCode } from '../../Contracts';
-import { decodeStreamWireFrame, encodeStreamWireFrame } from '@zlink-systems/stream-wire';
-import { connectorError } from '../ZlinkStreamSupport';
 import { ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../ZlinkStreamConnectorOptions';
+import { connectorError } from '../ZlinkStreamSupport';
 
 export class ZlinkStreamFrameCodec {
   static encode(

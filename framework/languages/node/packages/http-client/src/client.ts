@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { HttpHeaderName } from './runtime/text';
+import {
+  HttpHeaderName,
+  basicAuthorization,
+  requireNonBlank,
+  requirePositiveTimeout
+} from './runtime/text';
 
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
-import { HttpClientRuntime } from './runtime/runtime';
-import type { HttpClientOptions } from './runtime/options';
-import { basicAuthorization, requireNonBlank, requirePositiveTimeout } from './runtime/text';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import { createZLinkHttpRequestBuilder, ZLinkHttpRequestBuilder } from './request-builder';
+import type { HttpClientOptions } from './runtime/options';
+import { HttpClientRuntime } from './runtime/runtime';
+
 import type { ZLinkHttpExecutionScheduler } from './types';
 
 /**

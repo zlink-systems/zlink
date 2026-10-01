@@ -278,7 +278,9 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
     return [REDIS_STORE_TOKEN.Put, keyIndex.get(key), key, retentionMs ?? false];
   });
   if (encodedBytes > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
-    throw new RangeError('Location Store write exceeds 4 MiB encoded input.');
+    throw new RangeError(
+      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_BYTES / (1024 * 1024)} MiB encoded input.`
+    );
   }
   return { keys, conditions, mutations, expectedBytes, putBytes };
 }
@@ -342,7 +344,9 @@ function requireCursor(cursor: ZLinkStoreScanCursor): string {
 
 function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
   if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
-    throw new RangeError('Location Store value exceeds 1 MiB.');
+    throw new RangeError(
+      `Location Store value exceeds ${ZLINK_PROVIDER_MAX_VALUE_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   if (
     retentionMs !== undefined &&

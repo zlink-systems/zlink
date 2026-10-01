@@ -1,6 +1,5 @@
-const UNKNOWN_DIAGNOSTIC_CALLER = '<unknown caller>';
-
 import { AsyncLocalStorage } from 'node:async_hooks';
+const UNKNOWN_DIAGNOSTIC_CALLER = '<unknown caller>';
 
 type ZLinkStateLaneWork<T> = () => Promise<T> | T;
 

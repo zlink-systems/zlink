@@ -1,15 +1,22 @@
-const DEFAULT_ACTIVE_ACTIVATION_BATCH_SIZE = 64;
+import {
+  type RoutingId,
+  type Type,
+  type ZLinkSpot,
+  type ZLinkSpotInfo,
+  ZLinkSpotCloseReason,
+  ZLinkSpotCreateState
+} from '../../contracts';
 
+import { createAbortError } from '../abort';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import type { RoutingId, Type, ZLinkSpot, ZLinkSpotInfo } from '../../contracts';
-import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
-import { ZLinkSpotCreateState, ZLinkSpotCloseReason } from '../../contracts';
 import type { ZLinkSpotActivation } from './spot-activation-state';
-import { createAbortError } from '../abort';
 import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
+import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
+const DEFAULT_ACTIVE_ACTIVATION_BATCH_SIZE = 64;
+
 export { ZLinkSpotActivation } from './spot-activation-state';
 
 interface PendingSpotActivation {

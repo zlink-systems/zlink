@@ -1,20 +1,21 @@
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   type ZLinkDispatchFailure
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import {
-  ZLinkMessageFlowTracer,
+  type ZLinkRuntimeMetrics,
   DEFAULT_ZLINK_DIAGNOSTICS,
+  ZLinkMessageFlowTracer,
   type ZLinkDiagnosticsContext
 } from '../diagnostics';
-import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
+
 import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
+import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 
 export type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
 

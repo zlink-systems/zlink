@@ -1,6 +1,4 @@
-const MESSAGE_FLOW_EVENT_ID = 'zlink.message_flow';
-const DISPATCH_ERROR_EVENT_ID = 'zlink.dispatch_error';
-import { SpanStatusCode, trace as openTelemetryTrace, type Attributes } from '@opentelemetry/api';
+import { trace as openTelemetryTrace, SpanStatusCode, type Attributes } from '@opentelemetry/api';
 import { logs as openTelemetryLogs, SeverityNumber } from '@opentelemetry/api-logs';
 import {
   MESSAGE_FLOW_MODE_RANK,
@@ -12,12 +10,14 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  type ZLinkRuntimeMessageFlowResult,
-  type ZLinkRuntimeMessageFlowEvent
+  type ZLinkRuntimeMessageFlowEvent,
+  type ZLinkRuntimeMessageFlowResult
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { ERROR_MESSAGE_MAX_LENGTH } from './dispatch-error-details';
 import type { ZLinkDispatchErrorSink } from './dispatch-error-port';
 import { currentFlowContext, FLOW_ORIGIN_VALUES } from './flow-context';
-import { ERROR_MESSAGE_MAX_LENGTH } from './dispatch-error-details';
+const MESSAGE_FLOW_EVENT_ID = 'zlink.message_flow';
+const DISPATCH_ERROR_EVENT_ID = 'zlink.dispatch_error';
 
 export interface ZLinkMessageFlowModeCell {
   mode: ZLinkMessageFlowLogMode;
@@ -340,12 +340,6 @@ export class ZLinkMessageFlowTracer {
     }
   }
 }
-
-/**
- * Spec 27 §3 defines the flow_origin value set as lowercase
- * (`inbound|timer|application|lifecycle`); every language emits these exact
- * strings so records remain comparable across runtimes (spec 26 §3.1).
- */
 
 function toTelemetryRecord(
   flow: ZLinkRuntimeMessageFlowEvent,

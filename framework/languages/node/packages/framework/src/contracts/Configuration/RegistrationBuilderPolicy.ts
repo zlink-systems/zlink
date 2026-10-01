@@ -1,3 +1,6 @@
+import type { Type, ZLinkEntrySpot, ZLinkSpot } from '../../contracts';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../Common/CoreTypes';
+import { ZLinkConfigurationException } from './ConfigurationException';
 export const MAX_LISTENER_PORT = 65_535;
 export function isValidListenerPort(value: number): boolean {
   return Number.isInteger(value) && value >= 0 && value <= MAX_LISTENER_PORT;
@@ -10,10 +13,6 @@ export function isValidPositiveCapacity(value: number): boolean {
 export function isValidCapacity(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0 && value <= ZLINK_MAX_CAPACITY;
 }
-
-import { ZLINK_MAX_ROUTING_ID_BYTES } from '../Common/CoreTypes';
-import type { Type, ZLinkEntrySpot, ZLinkSpot } from '../../contracts';
-import { ZLinkConfigurationException } from './ConfigurationException';
 
 export const ZLINK_DEFAULT_PUBLIC_WEIGHT = 100;
 export const ZLINK_MAX_PUBLIC_WEIGHT = 10_000;

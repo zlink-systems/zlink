@@ -1,8 +1,11 @@
-import { shouldCompactBackingArray } from './Transport/BrowserWebSocketConnection';
 import { Disposable, ZlinkStreamEncodedPayload, ZlinkStreamMessage } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
-import { currentRegistrations, subscription } from './ZlinkStreamSupport';
+import {
+  currentRegistrations,
+  shouldCompactBackingArray,
+  subscription
+} from './ZlinkStreamSupport';
 import { zlinkStreamActorBinding, type DefaultZlinkStreamActor } from './ZlinkStreamActors';
 
 type EncodedMessageHandler = (

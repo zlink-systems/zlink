@@ -1,15 +1,15 @@
-import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
-import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
 import type {
   ZLinkBoundSessionSendCall,
   ZLinkSessionReplyCall,
   ZLinkSessionSendCall
 } from '../../contracts';
-import type { ZLinkSubmitResult } from '../messaging/submission-result';
-import { requireOneWayCompletion } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
+import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
 import { throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
+import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
+import { type ZLinkSubmitResult, requireOneWayCompletion } from '../messaging/submission-result';
+
 import {
   ensureSingleSubmit,
   resolvePacketName,

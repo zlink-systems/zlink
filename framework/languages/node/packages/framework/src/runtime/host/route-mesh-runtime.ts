@@ -1,36 +1,41 @@
-const DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS = 30_000;
-const MAX_ROUTE_MESH_OBSERVATION_WAIT_MS = 1000;
-const PLACEMENT_OBSERVATION_INTERVAL_MS = 100;
-
-import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
-import { isRelocationDebugEnabled } from '../diagnostics';
-import { isStructuralGuardEnabled } from '../execution/state-lane';
-import { ZLinkOwnerCleanupError } from '../locations/runtime';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type { RoutingId } from '../../contracts';
-import {
+  type RoutingId,
   ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
-  ZLinkTopologyState,
-  ZLinkTopologyReason,
+  ZLinkObjectRole,
   ZLinkPeerState,
+  ZLinkTopologyReason,
+  ZLinkTopologyState,
+  type ZLinkMeshNodeDescriptor,
   type ZLinkObservedStatus,
-  type ZLinkRouteMeshStatus,
-  type ZLinkRouteMeshRuntime
+  type ZLinkRouteMeshRuntime,
+  type ZLinkRouteMeshStatus
 } from '../../contracts';
+
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import { createDeadlineExceededError } from '../abort';
+import type { ZLinkActivationAdmission } from '../activation-admission';
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
+import type { ZLinkBackendMeshNode } from '../backend';
+import type { ZLinkSpotNodeOptions } from '../configuration';
+import { isRelocationDebugEnabled } from '../diagnostics';
 import {
   RuntimeEventQueue,
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
 } from '../diagnostics/runtime-observation-queue';
-import { createDeadlineExceededError } from '../abort';
-import { debugPendingWorkNames } from '../execution/state-lane';
+import { debugPendingWorkNames, isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   runtimeStateIsReady,
   topologyRuntimeIsReady
 } from '../foundation/runtime-state-projections';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import { ZLinkOwnerCleanupError } from '../locations/runtime';
+const DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS = 30_000;
+const MAX_ROUTE_MESH_OBSERVATION_WAIT_MS = 1000;
+const PLACEMENT_OBSERVATION_INTERVAL_MS = 100;
 
 type ZLinkDrainForceReason =
   'deadline_exceeded' | 'drain_state_publish_failed' | 'owner_cleanup_failed' | 'teardown_failed';
@@ -42,11 +47,6 @@ type ZLinkMeshDrainResult =
       readonly reason: ZLinkDrainForceReason;
       readonly error?: unknown;
     };
-import type { ZLinkBackendMeshNode } from '../backend';
-import type { ZLinkRuntimeAdmissionGate } from '../admission';
-import type { ZLinkActivationAdmission } from '../activation-admission';
-import type { ZLinkSpotNodeOptions } from '../configuration';
-import { ZLinkObjectRole, type ZLinkMeshNodeDescriptor } from '../../contracts';
 
 export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
   readonly meshNames: readonly string[];

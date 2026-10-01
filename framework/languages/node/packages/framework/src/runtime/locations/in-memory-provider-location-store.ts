@@ -1,12 +1,3 @@
-import {
-  ZLINK_PROVIDER_MAX_KEY_BYTES,
-  ZLINK_PROVIDER_MAX_VALUE_BYTES,
-  ZLINK_PROVIDER_MAX_WRITE_KEYS,
-  ZLINK_PROVIDER_MAX_WRITE_BYTES,
-  ZLINK_PROVIDER_MAX_PAGE_SIZE
-} from '../../contracts/Locations/Stores';
-export const PROVIDER_STORAGE_NAMESPACE_PREFIX = 'zlink:v11:';
-
 import type {
   ZLinkLocationStore,
   ZLinkStoreKey,
@@ -18,6 +9,14 @@ import type {
   ZLinkStoreWriteRequest,
   ZLinkStoreWriteResult
 } from '../../contracts';
+import {
+  ZLINK_PROVIDER_MAX_KEY_BYTES,
+  ZLINK_PROVIDER_MAX_PAGE_SIZE,
+  ZLINK_PROVIDER_MAX_VALUE_BYTES,
+  ZLINK_PROVIDER_MAX_WRITE_BYTES,
+  ZLINK_PROVIDER_MAX_WRITE_KEYS
+} from '../../contracts/Locations/Stores';
+export const PROVIDER_STORAGE_NAMESPACE_PREFIX = 'zlink:v11:';
 
 interface StoredValue {
   readonly bytes: Uint8Array;
@@ -188,7 +187,9 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
     new Set(mutationKeys).size !== mutationKeys.length ||
     keys.length > ZLINK_PROVIDER_MAX_WRITE_KEYS
   ) {
-    throw new RangeError('Location Store write keys must be unique and bounded to 2,048.');
+    throw new RangeError(
+      `Location Store write keys must be unique and bounded to ${ZLINK_PROVIDER_MAX_WRITE_KEYS.toLocaleString('en-US')}.`
+    );
   }
   for (const key of keys) requireKey(key);
   const encodedSize =
@@ -202,7 +203,9 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
       0
     );
   if (encodedSize > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
-    throw new RangeError('Location Store write exceeds 4 MiB.');
+    throw new RangeError(
+      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_BYTES / (1024 * 1024)} MiB.`
+    );
   }
 }
 
@@ -225,7 +228,9 @@ function requireScanRequest(request: ZLinkStoreScanRequest): void {
 
 function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
   if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
-    throw new RangeError('Location Store value exceeds 1 MiB.');
+    throw new RangeError(
+      `Location Store value exceeds ${ZLINK_PROVIDER_MAX_VALUE_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   if (
     retentionMs !== undefined &&

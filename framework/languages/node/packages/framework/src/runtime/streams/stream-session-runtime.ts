@@ -1,64 +1,66 @@
-import { shouldCompactBackingArray } from '../admission';
-import { DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type { ZLinkMessageSerializer, RoutingId, ZLinkSession } from '../../contracts';
+import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
-import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
-import { boundSessionErrorPayload } from './bound-session-response-target';
-import { flowIfEnabled } from '../diagnostics';
-import type { ZLinkRuntimeMetrics } from '../diagnostics';
-import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { type ZLinkApplicationWorkClaim, shouldCompactBackingArray } from '../admission';
+
+import {
+  releaseApplicationJobPermitBeforeHandler,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import type {
+  ZLinkBackendReadablePoller,
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent,
-  ZLinkBackendReadablePoller,
   ZLinkBackendStreamPacket,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
-import type { StreamSessionService } from '../foundation/service-runtime-contracts';
-import {
-  decodeStreamHeader,
-  messageToBytes,
-  streamCodecContentType,
-  type ZLinkStreamFrameHeader,
-  ZLINK_STREAM_HEARTBEAT_PING,
-  ZLINK_STREAM_HEARTBEAT_PONG,
-  ZLinkStreamCloseReasonCode,
-  ZLinkStreamMessageKind
-} from './protocol';
+import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
+import { type ZLinkRuntimeMetrics, flowIfEnabled } from '../diagnostics';
+
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
+import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
+import type { StreamSessionService } from '../foundation/service-runtime-contracts';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { boundSessionErrorPayload } from './bound-session-response-target';
 import {
   streamSessionIdFromRoutingId,
   ZLinkManagedStream,
   type ZLinkNativeSessionRoute
 } from './managed-stream';
+import {
+  decodeStreamHeader,
+  messageToBytes,
+  streamCodecContentType,
+  ZLINK_STREAM_HEARTBEAT_PING,
+  ZLINK_STREAM_HEARTBEAT_PONG,
+  ZLinkStreamCloseReasonCode,
+  ZLinkStreamMessageKind,
+  type ZLinkStreamFrameHeader
+} from './protocol';
 import { createSessionDispatchContext, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkSessionSerialExecutor } from './session-serial-executor';
-import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
-import type { ServiceActorRef } from '../foundation/service-stateful-registry';
-import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
-import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const ZLINK_RECV_DONT_WAIT = 1;

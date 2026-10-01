@@ -1,14 +1,14 @@
+import { metrics as openTelemetryMetrics } from '@opentelemetry/api';
+import {
+  type ZLinkHostCapacityStatus,
+  type ZLinkMeter,
+  type ZLinkMeterProvider,
+  type ZLinkMetricAttributes,
+  ZLinkMeters
+} from '../../contracts';
+
 export const MILLISECONDS_PER_SECOND = 1000;
 export const NANOSECONDS_PER_SECOND = 1e9;
-
-import type {
-  ZLinkHostCapacityStatus,
-  ZLinkMeter,
-  ZLinkMeterProvider,
-  ZLinkMetricAttributes
-} from '../../contracts';
-import { ZLinkMeters } from '../../contracts';
-import { metrics as openTelemetryMetrics } from '@opentelemetry/api';
 
 type CounterInstrument = ReturnType<ZLinkMeter['createCounter']>;
 type UpDownInstrument = ReturnType<ZLinkMeter['createUpDownCounter']>;

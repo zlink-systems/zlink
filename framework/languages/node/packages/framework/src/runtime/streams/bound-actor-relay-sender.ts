@@ -1,31 +1,30 @@
-export const DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS = 2000;
-
 import type { ZLinkMessage, ZLinkMessageSerializer, ZLinkSessionActor } from '../../contracts';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import {
-  encodeStreamHeader,
-  messageToBytes,
-  type ZLinkStreamFrameHeader,
-  ZLinkStreamMessageKind
-} from './protocol';
-import { throwIfAborted } from '../abort';
-import { flowIfEnabled } from '../diagnostics';
-import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { throwIfAborted } from '../abort';
+import type { ZLinkDispatchErrorReporter } from '../channels';
+import { flowIfEnabled } from '../diagnostics';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import {
   ZLinkActorSessionBindingRegistry,
   ZLinkActorSessionBindingTermination
 } from './actor-session-binding-registry';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import { ZLinkManagedStream } from './managed-stream';
+import {
+  encodeStreamHeader,
+  messageToBytes,
+  ZLinkStreamMessageKind,
+  type ZLinkStreamFrameHeader
+} from './protocol';
 import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
+export const DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS = 2000;
 
 export interface ZLinkBoundActorRelaySenderOptions {
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;

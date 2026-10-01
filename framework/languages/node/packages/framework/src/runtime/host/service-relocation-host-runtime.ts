@@ -1,76 +1,88 @@
-import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
-import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
-import { UINT64_MAX } from '@zlink-systems/stream-wire';
-import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
-import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
-const RELOCATION_ATTEMPT_TIMEOUT_MS = 250;
-
-const RELOCATION_AUTHORITY_RETRY_DELAY_MS = 25;
-
-const RELOCATION_MAX_SEND_ATTEMPTS = 120;
-
-const RELOCATION_AUTHORITY_POLL_INTERVAL_MS = 10;
-
-const RELOCATION_RESEND_DELAY_MS = 250;
-
-const RELOCATION_ABORTABLE_OPERATION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-
-const RELOCATION_OPERATION_TIMEOUT_MS = 30_000;
-
-import {
-  SNAPSHOT_RELOCATION_CONTENT_TYPE,
-  RECREATE_RELOCATION_CONTENT_TYPE
-} from '../foundation/actor-join-recovery-codec';
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
-import { isRelocationDebugEnabled, relocationDebug } from '../diagnostics';
-import { isStructuralGuardEnabled } from '../execution/state-lane';
+import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
-import { trackDiagnosticCompletion } from '../execution/state-lane';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
-import type {
-  RoutingId,
-  Type,
-  ZLinkActor,
-  ZLinkActorRelocationAdapter,
-  ZLinkMeshNodeDescriptor,
-  ZLinkSpot,
-  ZLinkSpotRelocationAdapter,
-  ZLinkInstanceSpot
-} from '../../contracts';
-import type {
-  ZLinkAuthorityKey,
-  ZLinkAuthorityScanCursor,
-  ZLinkAuthoritySnapshot,
-  ZLinkCapacityVector,
-  ZLinkLocationOwnerToken
-} from '../locations/internal-location-contracts';
 import {
+  type RoutingId,
+  type Type,
+  type ZLinkActor,
+  type ZLinkActorRelocationAdapter,
+  type ZLinkInstanceSpot,
+  type ZLinkMeshNodeDescriptor,
+  type ZLinkSpot,
+  type ZLinkSpotRelocationAdapter,
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
+  ZLinkSpotKind,
   ZLinkSpotRelocationCoordinationMode,
   ZLinkSpotRelocationReadyOutcome,
-  ZLinkSpotKind,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
-import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
-import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
+
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkRuntimeEventPublisher, ZLinkRuntimeMetrics } from '../diagnostics';
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import type { ZLinkActivationAdmission } from '../activation-admission';
-import type { ZLinkFrameworkRegistration } from '../configuration';
+import type { DefaultZLinkActorManager } from '../actors';
+import {
+  decodeRelocatingActorAuthorityIdentity,
+  rewriteActorAuthorityRoute
+} from '../actors/actor-authority-publication';
+import {
+  replayActorHandoffBacklog,
+  type ZLinkActorHandoffPacket,
+  type ZLinkActorHandoffResult
+} from '../actors/actor-handoff';
+import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
+import {
+  ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL,
+  decodeRemoteActorSourceLeaveTerminal
+} from '../actors/actor-remote-wire';
+import {
+  toFrameworkActorRef,
+  type ZLinkActorRuntimeState,
+  type ZLinkRemoteBoundSessionTarget
+} from '../actors/actor-runtime-state';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
-import { ReceiveKind, type ReceiveRecord } from '../foundation/service-runtime-contracts';
-import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
-import type { ServiceSpotMessageFollowSeal } from '../foundation/service-stateful-runtime';
+import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import type { ZLinkFrameworkRegistration } from '../configuration';
+import {
+  type ZLinkRuntimeEventPublisher,
+  type ZLinkRuntimeMetrics,
+  isRelocationDebugEnabled,
+  relocationDebug
+} from '../diagnostics';
+
+import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import { isStructuralGuardEnabled, trackDiagnosticCompletion } from '../execution/state-lane';
+import {
+  RECREATE_RELOCATION_CONTENT_TYPE,
+  SNAPSHOT_RELOCATION_CONTENT_TYPE,
+  decodeCanonicalActorJoinRecoverySavedWork,
+  encodeCanonicalActorJoinRecoverySavedWork,
+  type CanonicalActorJoinRecovery
+} from '../foundation/actor-join-recovery-codec';
+import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
+import { rewriteServiceAuthorityRoute } from '../foundation/service-authority-payload-codec';
+import { ServiceMaintenanceRuntime } from '../foundation/service-maintenance-runtime';
+import {
+  ServiceRelocationAggregateCommitter,
+  type ServicePreparedRelocationAggregate,
+  type ServiceRelocationAggregatePlan
+} from '../foundation/service-relocation-aggregate-committer';
+import {
+  ServiceRelocationAuthorityError,
+  ServiceRelocationPostCommitError
+} from '../foundation/service-relocation-coordinator';
+import {
+  ServiceRelocationObjectCaptureOwner,
+  ServiceRelocationObjectRestoreOwner,
+  type ServiceCapturedObjectRelocation,
+  type ServiceObjectRelocationStaging,
+  type ServiceRelocationCaptureUnit,
+  type ServiceRelocationHiddenObject,
+  type ServiceRelocationTargetObjectPort
+} from '../foundation/service-relocation-object-owner';
 import {
   ServiceRelocationAuthorityPayloadCodec,
   crc32c,
@@ -89,6 +101,68 @@ import {
   type ServiceRelocationTimer
 } from '../foundation/service-relocation-runtime';
 import {
+  MeshPeerRuntimeState,
+  ReceiveKind,
+  type ReceiveRecord
+} from '../foundation/service-runtime-contracts';
+import type { ServiceSpotMessageFollowSeal } from '../foundation/service-stateful-runtime';
+import {
+  M6bServiceWireCommand,
+  decodeMaintenanceReplyRelay,
+  decodeMaintenanceReplyRelayAck,
+  decodeServiceWireFrozenRecord,
+  decodeSessionRelocationRoute,
+  decodeSessionRelocationSeal,
+  decodeSessionRelocationSealed,
+  encodeMaintenanceReplyRelay,
+  encodeMaintenanceReplyRelayAck,
+  encodeServiceWireFrozenActorApplicationRecord,
+  encodeSessionRelocationRoute,
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationSealed,
+  serviceSessionRelocationIdentityKey,
+  type ServiceMaintenanceRelocationControl,
+  type ServiceMaintenanceRelocationCutover,
+  type ServiceMaintenanceRelocationData,
+  type ServiceMaintenanceRelocationFailed,
+  type ServiceMaintenanceRelocationPrepare,
+  type ServiceMaintenanceRelocationReady,
+  type ServiceMaintenanceRelocationState,
+  type ServiceMaintenanceReplyRelay,
+  type ServiceMaintenanceReplyRelayAck,
+  type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationSeal,
+  type ServiceSessionRelocationSealed,
+  type ServiceWireOperationId,
+  type ServiceWireRelocationCoordinatorFence,
+  type ServiceWireRelocationObject,
+  type ServiceWireRelocationTarget,
+  type ServiceWireRequestSourceFence
+} from '../foundation/service-stateful-wire-codec';
+import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
+import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
+import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkAuthorityScanCursor,
+  ZLinkAuthoritySnapshot,
+  ZLinkCapacityVector,
+  ZLinkLocationOwnerToken
+} from '../locations/internal-location-contracts';
+import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
+import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
+import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
+import { createProviderInstance } from '../spots/spot-provider';
+import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
+import { committedActorOwnerFence, type ZLinkActorTransferRuntime } from './actor-transfer-runtime';
+import { BoundedReplayMap } from './bounded-replay-map';
+import {
   ZLinkRelocationInFlightBudget,
   ZLinkRelocationPayloadAssembly,
   effectiveActorJoinChunkLimitBytes,
@@ -97,51 +171,14 @@ import {
   relocationChunkAt
 } from './relocation-direct-transfer';
 import {
+  ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE,
+  type ZLinkInternalRelocationIntegrityFaultGate
+} from './relocation-integrity-fault-gate';
+import {
   captureRelocationAdapterState,
   restoreRelocationAdapterState,
   type ZLinkRelocationStateAdapterLike
 } from './relocation-state-adapter';
-import {
-  ServiceRelocationAuthorityError,
-  ServiceRelocationPostCommitError
-} from '../foundation/service-relocation-coordinator';
-import { ServiceMaintenanceRuntime } from '../foundation/service-maintenance-runtime';
-import {
-  ServiceRelocationObjectCaptureOwner,
-  ServiceRelocationObjectRestoreOwner,
-  type ServiceCapturedObjectRelocation,
-  type ServiceObjectRelocationStaging,
-  type ServiceRelocationCaptureUnit,
-  type ServiceRelocationHiddenObject,
-  type ServiceRelocationTargetObjectPort
-} from '../foundation/service-relocation-object-owner';
-import {
-  ServiceRelocationAggregateCommitter,
-  type ServicePreparedRelocationAggregate,
-  type ServiceRelocationAggregatePlan
-} from '../foundation/service-relocation-aggregate-committer';
-import { createProviderInstance } from '../spots/spot-provider';
-import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
-import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
-import type { DefaultZLinkActorManager } from '../actors';
-import {
-  toFrameworkActorRef,
-  type ZLinkActorRuntimeState,
-  type ZLinkRemoteBoundSessionTarget
-} from '../actors/actor-runtime-state';
-import {
-  replayActorHandoffBacklog,
-  type ZLinkActorHandoffPacket,
-  type ZLinkActorHandoffResult
-} from '../actors/actor-handoff';
-import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
-import {
-  decodeRelocatingActorAuthorityIdentity,
-  rewriteActorAuthorityRoute
-} from '../actors/actor-authority-publication';
-import { rewriteServiceAuthorityRoute } from '../foundation/service-authority-payload-codec';
-import { committedActorOwnerFence, type ZLinkActorTransferRuntime } from './actor-transfer-runtime';
-import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   decodeServiceRelocationControlRequest,
   decodeServiceRelocationControlResponse,
@@ -150,55 +187,19 @@ import {
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
 } from './service-relocation-control';
-import {
-  decodeMaintenanceReplyRelay,
-  decodeMaintenanceReplyRelayAck,
-  decodeSessionRelocationRoute,
-  decodeSessionRelocationSeal,
-  decodeSessionRelocationSealed,
-  encodeMaintenanceReplyRelay,
-  encodeMaintenanceReplyRelayAck,
-  encodeSessionRelocationRoute,
-  encodeSessionRelocationSeal,
-  encodeSessionRelocationSealed,
-  serviceSessionRelocationIdentityKey,
-  decodeServiceWireFrozenRecord,
-  encodeServiceWireFrozenActorApplicationRecord,
-  M6bServiceWireCommand,
-  type ServiceMaintenanceReplyRelay,
-  type ServiceMaintenanceReplyRelayAck,
-  type ServiceMaintenanceRelocationControl,
-  type ServiceMaintenanceRelocationCutover,
-  type ServiceMaintenanceRelocationData,
-  type ServiceMaintenanceRelocationFailed,
-  type ServiceMaintenanceRelocationReady,
-  type ServiceMaintenanceRelocationPrepare,
-  type ServiceMaintenanceRelocationState,
-  type ServiceSessionRelocationRoute,
-  type ServiceSessionRelocationSeal,
-  type ServiceSessionRelocationSealed,
-  type ServiceWireOperationId,
-  type ServiceWireRequestSourceFence,
-  type ServiceWireRelocationTarget,
-  type ServiceWireRelocationCoordinatorFence,
-  type ServiceWireRelocationObject
-} from '../foundation/service-stateful-wire-codec';
-import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
-import { BoundedReplayMap } from './bounded-replay-map';
-import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
-import {
-  ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE,
-  type ZLinkInternalRelocationIntegrityFaultGate
-} from './relocation-integrity-fault-gate';
-import {
-  decodeRemoteActorSourceLeaveTerminal,
-  ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL
-} from '../actors/actor-remote-wire';
-import {
-  decodeCanonicalActorJoinRecoverySavedWork,
-  encodeCanonicalActorJoinRecoverySavedWork,
-  type CanonicalActorJoinRecovery
-} from '../foundation/actor-join-recovery-codec';
+const RELOCATION_ATTEMPT_TIMEOUT_MS = 250;
+
+const RELOCATION_AUTHORITY_RETRY_DELAY_MS = 25;
+
+const RELOCATION_MAX_SEND_ATTEMPTS = 120;
+
+const RELOCATION_AUTHORITY_POLL_INTERVAL_MS = 10;
+
+const RELOCATION_RESEND_DELAY_MS = 250;
+
+const RELOCATION_ABORTABLE_OPERATION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+const RELOCATION_OPERATION_TIMEOUT_MS = 30_000;
 
 export class ZLinkRelocationStateIncompatibleError extends Error {
   constructor(message: string) {
@@ -2572,7 +2573,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       (value) =>
         value.routingId !== null && String(value.routingId) === String(window.targetNodeRid)
     );
-    // Backend peer state 3 is Ready.
     if (peer !== undefined && peer.state !== MeshPeerRuntimeState.Serving) {
       window.resendPending = true;
       return;
@@ -5968,12 +5968,6 @@ function toServiceTimer(
   };
 }
 
-/**
- * NODE-INTERNAL Prepare sideband. Frame zero remains the exact canonical
- * command-40 schema record; each following ZLNI frame carries one sealed
- * actor-session journal keyed by its canonical participant authority key.
- * Sessionless relocation remains a single-frame, wire-identical Prepare.
- */
 const PREPARE_SIDEBAND_MAGIC = 'ZLNI';
 const PREPARE_SIDEBAND_VERSION = 1;
 const PREPARE_SIDEBAND_HEADER_BYTES = 11;
@@ -5983,6 +5977,12 @@ const PREPARE_SIDEBAND_PAYLOAD_LENGTH_OFFSET = 7;
 const ACTOR_SESSION_JOURNAL_VERSION = 1;
 const SERVICE_RELOCATION_REPLY_PACKET_NAME = 'zlink.relocation.reply';
 
+/**
+ * NODE-INTERNAL Prepare sideband. Frame zero remains the exact canonical
+ * command-40 schema record; each following ZLNI frame carries one sealed
+ * actor-session journal keyed by its canonical participant authority key.
+ * Sessionless relocation remains a single-frame, wire-identical Prepare.
+ */
 function encodePrepareSideband(envelope: ServiceRelocationEnvelope): readonly Buffer[] {
   return envelope.participants
     .filter((participant) => participant.boundSessionState.byteLength !== 0)

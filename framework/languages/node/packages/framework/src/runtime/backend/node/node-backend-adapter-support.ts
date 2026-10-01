@@ -1,8 +1,8 @@
 import { constants as osConstants } from 'node:os';
-const nativeErrnoValues = osConstants.errno;
+import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
 import { loadBinding } from '../node-backend-adapter';
 import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
-import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
+const nativeErrnoValues = osConstants.errno;
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;

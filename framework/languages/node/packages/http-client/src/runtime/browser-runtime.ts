@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { HttpHeaderName } from './text';
-import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { HttpContentType, HttpHeaderName } from './text';
 
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { HttpClientOptions } from './options';
@@ -91,7 +90,7 @@ export class HttpClientRuntime {
     hasBody: boolean
   ): Record<string, string> {
     const headers: Record<string, string> = {
-      [HttpHeaderName.Accept]: ZlinkStreamContentType.Json
+      [HttpHeaderName.Accept]: HttpContentType.Json
     };
     applyHeaders(headers, this.options.headers, keepAuthorization);
     applyHeaders(headers, spec.headers, keepAuthorization);

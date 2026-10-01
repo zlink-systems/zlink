@@ -1,7 +1,15 @@
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
-import type { RoutingId } from '../../contracts';
-import { ZLinkSpotKind, zlinkSpotKindFromWire, zlinkSpotKindToWire } from '../../contracts';
+import {
+  type RoutingId,
+  ZLinkSpotKind,
+  zlinkSpotKindFromWire,
+  zlinkSpotKindToWire
+} from '../../contracts';
+
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { crc32c } from '../foundation/service-relocation-runtime';
+import { SERVICE_WIRE_TEXT8_MAX_BYTES } from '../foundation/service-wire-binary-primitives';
 import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 const AUTHORITY_MAGIC = Buffer.from([0x5a, 0x4c, 0x41, 0x55]);
@@ -14,11 +22,8 @@ const ACTOR_RELOCATION_VERSION_WITHOUT_SESSION_FENCE = 5;
 const ACTOR_RELOCATION_VERSION_WITH_SESSION_FENCE = 6;
 const ACTOR_RELOCATION_FIRST_PHASE = 1;
 const ACTOR_RELOCATION_STEADY_PHASE = 4;
-import { SERVICE_WIRE_TEXT8_MAX_BYTES } from '../foundation/service-wire-binary-primitives';
-import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
 const ENTRY_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.Entry);
 const USER_SPOT_WIRE_KIND = zlinkSpotKindToWire(ZLinkSpotKind.User);
-import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export type ZLinkActorAuthorityState = 'creating' | 'ready';

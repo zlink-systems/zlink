@@ -165,7 +165,7 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
     ]
   ]);
 
-const LEGACY_ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE =
+const ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE =
   ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[
     ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable
   ] + 1;
@@ -173,7 +173,7 @@ const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Ma
   ...Object.entries(ServiceWireExactTerminalByFailureCode).map(
     ([code, terminal]) => [Number(code), terminal] as const
   ),
-  [LEGACY_ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE, RequestResult.InternalError]
+  [ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE, RequestResult.InternalError]
 ]);
 
 const INTERNAL_KIND = new WeakMap<ZLinkFrameworkException, ZLinkFrameworkInternalErrorKind>();

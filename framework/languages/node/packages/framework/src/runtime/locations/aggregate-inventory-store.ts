@@ -1,12 +1,11 @@
-import { PROVIDER_STORAGE_NAMESPACE_PREFIX } from './in-memory-provider-location-store';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import type { ZLinkLocationStore, ZLinkStoreKey, ZLinkStoreReadResult } from '../../contracts';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
+import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
 import type {
   ZLinkAggregateFence,
   ZLinkAggregatePrepareRequest
 } from './internal-location-contracts';
-import { storeKey } from './in-memory-provider-location-store';
 
 const INVENTORY_PAGE_KIND = 'aggregate-inventory-page-v1';
 const INVENTORY_ROOT_KIND = 'aggregate-inventory-root-v1';
