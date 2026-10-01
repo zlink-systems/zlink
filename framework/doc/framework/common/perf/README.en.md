@@ -98,8 +98,7 @@ runs are separate smoke results.
 | warmup | Executes the same calls on every connector or logical stream in the cell | Excluded |
 | reset | Stops submission, terminates remaining work and confirms the same resetSeq from all participants | Excluded |
 | measured | Owners past the start barrier run load for a monotonic duration | Included |
-| settle | Observes remaining results for a bounded time without new measured operations | Separate |
-| report | Collects owner originals and histograms into a cell result | Excluded |
+| report | When the window ends, collects owner originals and histograms into a cell result without new operations | Excluded |
 | cleanup | Stops clients/servers owned by this cell and cleans up run-owned resources | Excluded |
 
 ### 4.1 Windows and reset
@@ -115,16 +114,16 @@ across processes.
 - **Open the start barrier only after every role and CS client acknowledges the same resetSeq.**
   Reset calls are not atomic across processes. Record application-counter reset separately from
   public `ResetCapacityMetrics` results ([metric epoch contract][metrics]).
-- **Start no new operation after the measured interval.** Settle observes this cohort's outcomes.
-  Preserve the first result in §13; do not change it with a new deadline or retry after timeout.
-- **Preserve failed originals if warmup drain or settle exceeds its bound.** Recreating connections
+- **Count only operations whose terminal is inside the window.** When the window ends, the owner starts
+  no new operation and finalizes its originals. Operations not yet terminal are counted only as
+  `messages.inflightAtEnd`, never as success, failure or latency. Processes stop when the cell ends, so
+  remaining work is not awaited.
+- **Preserve failed originals if warmup drain exceeds its bound.** Recreating connections
   or adding arbitrary sleeps would hide unfinished work and invalidate comparisons.
 
 `messages.completed` counts cohort successes whose validation also ends inside the window.
-Successes finishing after the window but within settle use `messages.settleCompleted` and a
-separate histogram. The throughput denominator excludes settle time. Operations unresolved at
-settle end use `messages.unresolved`: this is the harness observation boundary, not a
-reclassification of a Framework timeout ([completion contract][submit]).
+The terminal test compares `terminalTicks < endTicks` on the owner's monotonic clock. Preserve the
+first result; do not change it with a new deadline or retry after timeout ([completion contract][submit]).
 
 ### 4.2 Server-driven load
 
@@ -140,8 +139,14 @@ A phase starts once; duplicate triggers return the same start acknowledgement.
 For cells measuring an outbound call inside a Spot handler, an application driver in the same
 process invokes the handler through public Spot request/send. It reserves the stream's in-flight
 slot before the call and holds it through the final echo outcome. Local driver calls are not
-additional KOPS. The primary latency in §10.5 starts immediately before the handler's remote call
+additional KOPS. The driver call deadline is `driverTimeoutMs` from §5.2. The driver call wraps the
+measured remote call, so it must be able to receive that call's result even when the remote call ends
+at its own deadline.
+The primary latency in §10.5 starts immediately before the handler's remote call
 and ends at completion; the whole driver interval is recorded separately as `driver.latency.*`.
+`driver.latency.*` samples only operations whose measured result was validated as a success, and
+`driver.failed` counts only failures of the driver call itself. The handler records a measured
+operation's failure exactly once.
 Each interval includes source-admission waiting from its public-call start.
 A local driver request arriving after measured end starts no outbound call, returns
 `PerfDriveReply.started=false`, and increments `driver.notStarted`.
@@ -227,9 +232,10 @@ Each subscriber has an entry with `role=subscriber`, `roleInstance=subscriberId`
 ### 5.2 Common workload values
 
 Standard echo role config records `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
-`settleTimeoutMs=5000`, `setupTimeoutMs=30000`, and `adminTimeoutMs=5000`.
-Consumers are respectively public request calls, harness correlations, phase owners, shared-runner/setup
-callers and HTTP clients. Record effective family send timeouts from public socket configuration
+`driverTimeoutMs=2000`, `setupTimeoutMs=30000`, and `adminTimeoutMs=5000`.
+Consumers are respectively public request calls, harness correlations, §4.2 local driver calls,
+shared-runner/setup callers and HTTP clients. The shared runner owns these values; roles and clients
+only read them from role config. Record effective family send timeouts from public socket configuration
 (standard: 1000ms; [owning contract][submit]).
 
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
@@ -360,11 +366,15 @@ processes of the same executable, each with a distinct `roleInstance` and metric
 - **Perf references the Framework and bindings packages published to the public registries.** It uses
   the same mechanism as the sample user mode ([Framework workspace §2][workspace]). A result maps to a
   release only when it measures the artifacts users receive.
+- **Fix only one Framework version per language.** Keep it in `framework/perf/schema/packages.json`
+  alone; bindings and Core follow the dependencies that Framework package declares. That is the
+  combination users receive when they install the Framework. When a new Framework release is
+  published, change only this file.
 
 ```text
 framework/perf/
 |-- runner/        # §4 phases, §15 collection·aggregation, §19 provenance
-|-- schema/        # §15 result schema, §15.3 histogram bounds, §14 metric catalog
+|-- schema/        # §15 result schema, §15.3 histogram bounds, §14 metric catalog, measured Framework versions
 `-- tests/
 ```
 
@@ -412,7 +422,7 @@ record start immediately before the measured public call
 invoke the public request or initial send once
 observe the first request terminal or harness echo outcome
 validate the echoed identity and payload
-record window/settle outcome; release the slot
+record the outcome if its terminal is inside the window; release the slot
 ```
 
 Send/send keeps correlation registration and the return handler visible.
@@ -497,7 +507,7 @@ same local object node, through the [session binding and original-reply contract
 | Roles/processes | CS Client × clientCount, SessionActorLocal × 1; session Actor route and Actor owner share the same local object node |
 | Load/mode | Physical connectors; `request`, ordinary; representative 1024 bytes |
 | Completion/owner | Client: immediately before public request through validated typed echo on the original STREAM request |
-| Preparation | Public manager prepares one Actor per connector ID; bind its Ref to that session |
+| Preparation | Public manager prepares one Actor per connector ID; bind its Ref to that session; the session handler creates and binds through the public API when it receives the setup probe, then relays that probe |
 | Location Store/Docker | Required for Object Server; run-dedicated Docker Redis |
 | Null/unsupported | `actor.sourceAdmission.*` inapplicable without direct send; internal Spot metrics lack public observations; worker/fanout inapplicable |
 
@@ -897,7 +907,7 @@ Register send/send correlation immediately before the first public send and fix 
 | Observation | Harness record |
 |---|---|
 | Successful first-send admission | `messages.admitted`; AC also records sourceAdmissionMs; not echo success yet |
-| First valid reply to a pending correlation | One echo success; §4 separates window/settle |
+| First valid reply to a pending correlation | One echo success; window test in §4.1 |
 | First-send failure while pending | That public failure is final; do not count expiry afterwards |
 | Deadline reached while pending | One `messages.timeout` and its subset `messages.expired`; harness `CorrelationExpired` |
 | Additional reply to a successfully closed correlation | `messages.duplicateReply`; success count/histogram unchanged |
@@ -913,19 +923,18 @@ are each counted once in `messages.timeout`, in separate Framework/harness error
 Reconcile an echo cohort with this equation. Counts use §15 decimal strings.
 
 ```text
-messages.sent = messages.completed + messages.settleCompleted
-              + messages.failed + messages.timeout
-              + messages.cancelled + messages.unresolved
+messages.sent = messages.completed + messages.failed + messages.timeout
+              + messages.cancelled + messages.inflightAtEnd
 messages.expired <= messages.timeout
 ```
 
 `sent` counts logical measured-call starts, not successful physical transmissions.
-Section 15.4 separately reconciles publications. Failed/unresolved operations do not enter success latency.
+Section 15.4 separately reconciles publications. Failed operations and `inflightAtEnd` do not enter success latency.
 
 If send/send echo arrives before the first-send terminal, preserve its echo timestamp. Release the
 in-flight slot only after observing both the final echo outcome and first-send terminal, so a new
-operation does not overlap a public call still awaiting admission. If that terminal remains absent at
-the settle bound, do not count the echo again; fail the cell with a separate collection failure.
+operation does not overlap a public call still awaiting admission. If the echo or the first-send
+terminal is still missing when the window ends, the operation is `inflightAtEnd`.
 
 ## 14. Metrics
 
@@ -940,8 +949,9 @@ object with dotted keys.
 | `load.logicalStreams`, `load.inflightPerStream`, `load.inflight.max` | count, U64 string | Server-driven streams, configured per-stream cap and maximum total outstanding observed by the application |
 | `messages.sent` | count, U64 string | Logical operations starting a measured public call inside the window |
 | `messages.admitted` | count, U64 string | Successful public admission terminals of initial one-way sends; null for requests |
-| `messages.completed`, `messages.settleCompleted` | count, U64 string | Window/settle successes in §4 |
-| `messages.failed/timeout/cancelled/unresolved` | count, U64 string | Mutually exclusive cohort outcomes in §13 |
+| `messages.completed` | count, U64 string | Window successes in §4.1 |
+| `messages.failed/timeout/cancelled` | count, U64 string | Mutually exclusive cohort outcomes in §13 |
+| `messages.inflightAtEnd` | count, U64 string | Operations started inside the window and not terminal when it ends; not a failure |
 | `messages.expired/duplicateReply/lateReply/unknownCorrelation` | count, U64 string | Send/send correlation outcomes and additional observations; inapplicable to requests |
 | `applicationMessages.request/send/reply/event` | count, U64 string | Public call starts or typed reply returns on the measured application path inside the window; not wire frames |
 | `applicationPayloadBytes.request/send/reply/event` | bytes, U64 string | Logical payload bytes corresponding to each observation above |
@@ -949,7 +959,6 @@ object with dotted keys.
 | `throughput.messagesPerSec` | number, message/s | Sum of application message counts/sec; excludes native attempts, headers, fragments, handshakes, drivers and admin |
 | `throughput.megabytesPerSec` | number, MiB/s | Sum of directional logical payload bytes/sec/1048576; includes both echo directions, not wire bandwidth |
 | `latency.meanMs/p50Ms/p95Ms/p99Ms/maxMs` | number or null, ms | Window echo-success histogram `latencyMs` |
-| `settle.latency.*` | number or null, ms | Settle echo-success histogram `settleLatencyMs` |
 | `actor.sourceAdmission.latency.*` | number or null, ms | AC send start→successful source admission, derived from `sourceAdmissionMs` |
 | `spot.remoteCallLatency.*` | number or null, ms | §10.5 call start→validated reply, including gate reacquisition/continuation; same interval as `latencyMs` |
 | `spot.applicationYieldCalls` | count, U64 string | Actual Yield invocations in application handlers, not turn suspension count |
@@ -960,16 +969,15 @@ object with dotted keys.
 | `worker.submitToStart.*` | number or null, ms | Same-clock-domain worker call start→callback start, including admission/dispatch |
 | `worker.taskLatency.*` | number or null, ms | Callback monotonic start→end |
 | `worker.resultToContinuation.*` | number or null, ms | Callback end→caller resumption, including result delivery/gate reacquisition |
-| `messages.published/publishedInWindow/settlePublished` | count, U64 string | All/window/settle successful publications in the PS cohort; §15.4 |
+| `messages.publishedInWindow` | count, U64 string | PS cohort publications whose admission succeeded inside the window; §15.4 |
 | `fanout.subscriberCount` | count, U64 string | Independent Subscriber process count |
-| `fanout.uniqueDelivered/deliveredInWindow/settleDelivered` | count, U64 string | Per-subscriber validated unique receipts in the publisher window-success set; §15.4 |
+| `fanout.deliveredInWindow` | count, U64 string | Per-subscriber validated unique receipts in the publisher window-success set; §15.4 |
 | `fanout.duplicateEvents` | count, U64 string | Additional receipts with the same measured identity; diagnostic independent of publisher-success intersection |
 | `fanout.outOfCohortEvents` | count, U64 string | Unique sequences outside the final publisher window-success set; excluded from delivery numerator |
-| `fanout.deliveryRatio` | number or null, ratio | Minimum per-subscriber uniqueDelivered/publishedInWindow |
+| `fanout.deliveryRatio` | number or null, ratio | Minimum per-subscriber deliveredInWindow/publishedInWindow |
 | `fanout.publishOpsPerSec` | number or null, op/s | publishedInWindow/publisher measuredSeconds |
 | `fanout.deliveryOpsPerSec` | number or null, event/s | Per-subscriber deliveredInWindow/its measuredSeconds; aggregate is the sum |
 | `fanout.deliveryLatency.*` | number or null, ms | Just before publish call→subscriber handler entry, only with a verified shared clock domain |
-| `fanout.settleDeliveryLatency.*` | number or null, ms | Same fanout interval for settle receipts, separate from window histogram |
 | `process.cpuPercent` | number or null, % | Process CPU-time delta/monotonic measured time×100; one core is 100%, values may exceed 100% |
 | `process.rssMb` | number or null, MiB | Maximum 100ms process RSS sample; actual sampling interval also recorded |
 | `process.allocatedMb` | number or null, MiB | Measured allocation delta exposed by the runtime |
@@ -1007,7 +1015,7 @@ numeric value and normalize to `NotFound`, `AlreadyExists`, `TypeMismatch`, `Not
 Do not reconstruct internal route/worker causes through string parsing.
 
 Harness keys are `CorrelationExpired`, `PayloadMismatch`, `IdentityMismatch`, `UnknownCorrelation`,
-`DuplicateReply`, `SettleIncomplete`, `PhaseMismatch`, `SchemaMismatch`, `CollectionFailure`.
+`DuplicateReply`, `PhaseMismatch`, `SchemaMismatch`, `CollectionFailure`.
 These are not Framework enums. Synchronous language errors without a public kind use `errors.language`.
 If caller and target both observe a remote failure, result totals use only the §15 owner's
 observation; target diagnostics remain in its original role file.
@@ -1173,25 +1181,30 @@ with these application histograms.
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-  "counts": ["0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
+  "bounds": [0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, …, 800, 1000],
+  "counts": ["0", …],
   "overflow": "0",
   "count": "0",
   "sumNs": "0",
   "maxNs": null,
-  "percentileMethod": "nearest-rank-bucket-upper-bound"
+  "percentileMethod": "nearest-rank-bucket-upper-bound-capped-by-max"
 }
 ```
 
+- **`framework/perf/schema/histogram-bounds.json` alone owns the bounds.** Starting at 0.01ms, each
+  decade uses multipliers `1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8` up to 800ms, and the last bound is
+  1000ms (51 bounds). Adjacent bounds differ by at most 1.25x, so percentile error stays within 25%.
+  The runner and language roles read this file and never restate the values.
 - **Buckets are `[0,b0]`, then `(b[i-1],b[i]]`, with noncumulative counts.** Every sample must enter
   exactly one bucket or overflow to support aggregation.
-- **Estimate a percentile from the upper bound of its nearest-rank bucket.** Use the first bucket
-  containing sample rank `ceil(p*count)`. Compute p50/p95/p99 rank with integer arithmetic
+- **Estimate a percentile as the smaller of its nearest-rank bucket's upper bound and the max.** Find
+  the first bucket containing sample rank `ceil(p*count)`; if its upper bound exceeds `maxMs`, use
+  `maxMs`. Every sample is at most the max, so this value is still an upper bound of the true
+  percentile, and a percentile never exceeds the max. Compute p50/p95/p99 rank with integer arithmetic
   `ceil(q*count/100)` for `q=50,95,99`, without narrowing count to floating point.
-  Even a p50 below 0.1ms is reported as a quantized `0.1`
-  estimate, not an exact observation.
+  The result is a quantized estimate, not an exact observation.
 - **If the selected rank is in overflow, the percentile is null.** Capping it at the last bound
-  would understate the tail. Record `HISTOGRAM_OVERFLOW` and `lowerBoundMs=1024`.
+  would understate the tail. Record `HISTOGRAM_OVERFLOW` with the last bound as `lowerBoundMs`.
 - **Do not reconstruct mean/max from buckets.** Compute them from exact integer `sumNs`, `count`
   and `maxNs` over all valid samples, including overflow.
 
@@ -1203,24 +1216,25 @@ When sample count is zero, all percentiles, mean and max are null with `NO_SAMPL
 
 Merge counts/sums and take the maximum of max values only for matching units, bounds, cohorts and
 intervals. Do not average process percentiles or means. Differing bucket originals fail with
-`SchemaMismatch`. Keep `latencyMs` separate from `settleLatencyMs`.
+`SchemaMismatch`.
 Derive `spot.remoteCallLatency.*` from the identical §10.5 `latencyMs` interval without maintaining
 a second histogram. Preserve other intervals with these histogram keys. One mapping of latency
 keys to sample sets prevents collectors from merging different intervals.
 
 | Histogram key | Metric prefix and samples |
 |---|---|
-| `latencyMs` / `settleLatencyMs` | `latency.*` / `settle.latency.*`; window/settle echo successes |
+| `latencyMs` | `latency.*`; window echo successes |
 | `sourceAdmissionMs` | `actor.sourceAdmission.latency.*`; AC initial-send admission terminals inside window |
 | `driverLatencyMs` | `driver.latency.*`; local driver completions inside window |
 | `workerCallLatencyMs` | `worker.callLatency.*`; worker calls completing inside window |
 | `workerSubmitToStartMs` | `worker.submitToStart.*`; the same callbacks as those worker calls |
 | `workerTaskLatencyMs` | `worker.taskLatency.*`; the same callbacks as those worker calls |
 | `workerResultToContinuationMs` | `worker.resultToContinuation.*`; the same callbacks as those worker calls |
-| `fanoutDeliveryLatencyMs` / `fanoutSettleDeliveryLatencyMs` | `fanout.deliveryLatency.*` / `fanout.settleDeliveryLatency.*`; §15.4 window/settle unique intersections |
+| `fanoutDeliveryLatencyMs` | `fanout.deliveryLatency.*`; §15.4 window unique intersections |
 
-All successful samples above belong to the measured cohort. Do not mix auxiliary settle samples
-into primary echo histograms. Inapplicable histograms also carry null plus a reason.
+All successful samples above belong to the measured cohort and ended inside the window. An auxiliary
+histogram takes a sample only when the same operation was confirmed as a primary success. Inapplicable
+histograms also carry null plus a reason.
 
 ### 15.4 Aggregation Owners and Result Schema
 
@@ -1250,14 +1264,13 @@ PerfMetricsSnapshot {
   language: "dotnet" | "cpp" | "java" | "kotlin" | "node"
   role: Text; roleInstance: Index
   configHash: Text
-  phase: "setup" | "warmup" | "reset" | "measured" | "settle" | "complete"
+  phase: "setup" | "warmup" | "reset" | "measured" | "complete"
   window: {
     startedAtUnixMs: I64 | null         // Display only; null before start
     endedAtUnixMs: I64 | null
     startTicks: I64 | null
     endTicks: I64 | null
     measuredSeconds: Number | null     // (endTicks-startTicks)/1e9 on the same owner clock
-    settleSeconds: Number | null
   }
   clock: ClockMetadata                 // §15.2
   serializedMessageBytes: Object[]      // Typed rows defined in §15.2
@@ -1298,8 +1311,8 @@ Do not change histograms, labels or units and export them as the same provider m
 The run summary has one row per cell and no cross-cell throughput total.
 
 The PS Publisher preserves the measured starting-sequence range and successful publication set.
-`published=publishedInWindow+settlePublished`; both are successful public admissions of the measured cohort.
-Reconcile `sent=published+failed+timeout+cancelled+unresolved`.
+`publishedInWindow` counts measured-cohort publications whose public admission succeeded inside the window.
+Reconcile `sent=publishedInWindow+failed+timeout+cancelled+inflightAtEnd`.
 `messages.completed`, echo `latency.*` and `throughput.kops` are null with `NOT_APPLICABLE`.
 
 Sequence files use the measured Identity from §15.2. Each range is inclusive, sorted,
@@ -1310,12 +1323,10 @@ Range { first: U64; last: U64 }
 PublisherSequences extends Identity {
   attemptedRanges: Range[]              // All publish calls started during measurement
   windowSuccessRanges: Range[]          // Admission successful inside publisher window
-  settleSuccessRanges: Range[]          // Admission successful in settle; excluded from ratio denominator
 }
 SubscriberSequences extends Identity {
   subscriberId: Index
   windowRanges: Range[]                 // Validated first receipt inside subscriber window
-  settleRanges: Range[]                 // First receipt in settle; disjoint from windowRanges
   duplicateEvents: U64
   nullReasons: Object                  // §15.5 JSON pointers and reasons
   timingEvidence: ReceiptTiming[] | null // Null plus reason without a verified common clock domain
@@ -1324,22 +1335,21 @@ ReceiptTiming {
   sequence: U64
   sentTicks: I64; publisherClockDomainId: Text
   receivedTicks: I64; subscriberClockDomainId: Text
-  receivedIn: "window" | "settle"
 }
 ```
 
 Publisher success sets exclude failed sequences. Final delivery aggregation intersects each
-subscriber's windowRanges/settleRanges **only with windowSuccessRanges**. The ratio denominator
-is `publishedInWindow`. Preserve settle publish successes separately without adding them to this denominator.
-Per-subscriber `uniqueDelivered=deliveredInWindow+settleDelivered` is the size of that intersection.
-If the same sequence arrives in both intervals, only the first receipt is unique; later receipts are duplicates.
+subscriber's windowRanges **only with windowSuccessRanges**. The ratio denominator is `publishedInWindow`.
+Per-subscriber `deliveredInWindow` is the size of that intersection. A sequence published just before the
+window ended and still in transit appears as not received; this error is small relative to the window length.
+If the same sequence arrives again, only the first receipt is unique; later receipts are duplicates.
 Out-of-cohort receipts are outOfCohortEvents, outside unique delivery and histograms.
-Each subscriber uses its monotonic window/settle intervals and retains evidence bounding start skew.
+A subscriber compares the monotonic handler-entry time with its own `[startTicks, endTicks)` to decide window receipts, and retains evidence bounding start skew.
 Zero denominator produces null with `ZERO_DENOMINATOR` and an `invalid` cell.
 Missing delivery alone creates no Framework error.
 
-Timing evidence has one row per unique receipt. Final latency histograms use only that intersection
-and separate window/settle. Include evidence cost in actual subscriber resource use and record
+Only with a verified common clock domain is timing evidence kept as one row per unique receipt, and
+final latency histograms use only that intersection. Include evidence cost in actual subscriber resource use and record
 collection method and retained bytes in provenance.
 
 ### 15.5 Null and Reason
@@ -1433,7 +1443,7 @@ The exact public status/reset interfaces belong to [.NET][d-status], [C++][c-sta
 [Kotlin][k-status] and [Node.js][n-status]. A trigger client without Framework records only application
 and process values.
 
-A snapshot includes requested cell/resetSeq, phase, window/settle counters and histograms, public
+A snapshot includes requested cell/resetSeq, phase, window counters and histograms, public
 capacity and process figures. A low-cost sampler collects during measurement; serialize HTTP snapshots
 and merge histograms during report. Admin endpoint failures remain collection failures.
 
@@ -1578,7 +1588,7 @@ not claims that execution or performance validation has completed.
 
 1. Implement typed JSON DTOs, clocks, histogram recording, error mapping and the entry-point scripts to
    the shared runner.
-2. Connect public-status readiness, reset barriers, application triggers and window/settle recording.
+2. Connect public-status readiness, reset barriers, application triggers and window recording.
 3. Validate connector, phase and aggregation behavior with `session-echo-only`.
 4. Configure `cs-local-session-actor-echo` and `cs-remote-session-actor-echo`.
 5. Configure both required RouteMesh and ClientServer cells of `channel-echo-only`.
@@ -1612,7 +1622,7 @@ deadlines, Spot/Actor mapping, topology/discovery and worker settings.
 | `invalid` | Comparison premises fail, such as zero denominator, inadequate preparation or incompatible schemas |
 | `unsupported` | Required public calls/declarations could not be confirmed/executed in that language; not counted complete |
 
-Only `valid` echo cells with zero failure, timeout, cancellation, unresolved and validation errors
+Only `valid` echo cells with zero failure, timeout, cancellation and validation errors
 are adopted as successful echo baselines with `baselineEligible=true`.
 PS has no lossless contract, so missing delivery alone is not an error; a valid publish denominator
 and subscriber originals support comparison with the recorded ratio.
@@ -1687,7 +1697,7 @@ transport implementation state.
 
 - Requesting reset while warmup calls remain produces no measured-start acknowledgement.
 - Starting measured load after all participants return the same resetSeq exposes that identity and a monotonic window in every original.
-- Echoes completing after window end increment only settle counts/histograms and do not change throughput completion counts.
+- Operations not terminal when the window ends count only toward `inflightAtEnd`, never toward success, failure, histograms or throughput.
 - Observing a valid reply, public failure and expiry for one correlation reconciles to one final outcome, with additional replies in separate counters.
 - An explicit parameter without a consumer in that cell, or an invalid mode/codec input, returns a preflight error.
 - Running different cells produces independent config/result/original files; reusing a cell path returns an overwrite error.
@@ -1720,7 +1730,7 @@ inputs for the same value. The manifest identifies these inputs and consumers.
 | `scenario`, `payloadDistribution`, `requestOneWayRatio` | Application generator: packet-kind/logical-byte proportions |
 | `logicalStreams` or `connections`, `inflight`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | Corresponding CS/source generator: steady/burst load |
 | `handlerCpuWork`, `handlerIoWork` | Public application handler/worker: fixed CPU/I/O ratio |
-| `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, deadlines and settle values | Phase owner; recorded explicit inputs |
+| `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, deadline values | Phase owner; recorded explicit inputs |
 | `requestedProcessors=[4,8,16]`, `cpuQuota`, `cpuset`, `executorMaximum` | Process/container execution and public executor configuration |
 | `memoryLimitBytes`, `runtimeOptions`, `gcOptions` | Process/container execution |
 | `coreProfiles`, `coreBudgetCandidatesBytes`, `applicationQueueProfiles`, `manualQueueCandidates` | Public host configuration builder |
@@ -1749,7 +1759,7 @@ pre-bind ordering. Confirm Core manual/profile precedence through public effecti
 
 ### 23.2 Measurement Phases And Reset Baseline
 
-Each repetition follows §4 warmup drain→reset acknowledgement→measured→settle.
+Each repetition follows §4 warmup drain→reset acknowledgement→measured→report.
 Run at least 30s warmup and 60s measurement five times, with steady/burst intervals fixed in the manifest.
 If the coefficient of variation exceeds 5%, mark results unstable and retain originals.
 Do not extend the same run's duration/timeouts to turn it into a pass.
