@@ -1,5 +1,5 @@
 export * from './ActorRef';
-export * from './CoreTypes';
+export type { Type, RoutingId, ActorId, SpotId } from './CoreTypes';
 export * from './ZLinkEncodedPayload';
 export * from './ZLinkMessageMetadata';
 export { ZLinkMessage, isZLinkMessage } from './ZLinkMessage';

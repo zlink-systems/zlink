@@ -1,3 +1,5 @@
+import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
@@ -278,7 +280,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       let cursor: ZLinkAuthorityScanCursor | undefined;
       let expired = false;
       do {
-        const page = await this.stores.authorityStore.listAuthorities('', cursor, 1000, signal);
+        const page = await this.stores.authorityStore.listAuthorities(
+          '',
+          cursor,
+          ZLINK_PROVIDER_MAX_PAGE_SIZE,
+          signal
+        );
         if (page.kind === 'scanExpired') {
           expired = true;
           break;
@@ -1154,7 +1161,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const delayMs = Math.max(0, scheduledAt - this.monotonicNowMs());
     this.heartbeatTimer = this.setTimer(() => {
       this.heartbeatTimer = undefined;
-      const lateness = Math.max(0, this.monotonicNowMs() - scheduledAt) / 1000;
+      const lateness = Math.max(0, this.monotonicNowMs() - scheduledAt) / MILLISECONDS_PER_SECOND;
       for (const scope of this.leaseScopes) {
         this.metrics?.recordOwnerLeaseRenewLateness(lateness, scope.kind, scope.name);
       }

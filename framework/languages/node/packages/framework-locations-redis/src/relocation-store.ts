@@ -1,3 +1,4 @@
+import { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from './framework-internal';
 import type {
   ZLinkBlobPutResult,
   ZLinkBlobReadResult,
@@ -7,7 +8,12 @@ import type {
 } from '@zlink-systems/framework';
 import type { ZLinkRedisRelocationOptions } from './redis-options';
 import { RedisConnection } from './redis-connection';
-import { BLOB_PUT_SCRIPT, BLOB_READ_SCRIPT, BLOB_RENEW_SCRIPT } from './opaque-redis-scripts';
+import {
+  REDIS_STORE_TOKEN,
+  BLOB_PUT_SCRIPT,
+  BLOB_READ_SCRIPT,
+  BLOB_RENEW_SCRIPT
+} from './opaque-redis-scripts';
 import { asArray, asString, toNumber } from './redis-values';
 
 const MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
@@ -42,11 +48,11 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
         signal
       )
     );
-    const kind = asString(result[0]);
+    const outcome = asString(result[0]);
     const storeNow = fromUnixMs(toNumber(result[1]));
-    if (kind === 'conflict') return { kind, storeNow };
+    if (outcome === REDIS_STORE_TOKEN.Conflict) return { kind: 'conflict', storeNow };
     return {
-      kind: kind === 'alreadyStored' ? 'alreadyStored' : 'stored',
+      kind: outcome === REDIS_STORE_TOKEN.AlreadyStored ? 'alreadyStored' : 'stored',
       storeNow,
       expiresAt: fromUnixMs(toNumber(result[2]))
     };
@@ -108,15 +114,19 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
 function requireReference(reference: ZLinkBlobReference): string {
   const value = reference.value;
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > 4_096) {
-    throw new RangeError('Relocation Store reference must contain 1..4,096 UTF-8 bytes.');
+  if (bytes < 1 || bytes > ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES) {
+    throw new RangeError(
+      `Relocation Store reference must contain 1..${ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+    );
   }
   return value;
 }
 
 function requirePayload(payload: Uint8Array): void {
   if (payload.byteLength > MAX_ENCODED_BLOB_BYTES) {
-    throw new RangeError('Relocation Store encoded blob exceeds 64 MiB + 23 bytes.');
+    throw new RangeError(
+      `Relocation Store encoded blob exceeds ${Math.floor(MAX_ENCODED_BLOB_BYTES / (1024 * 1024))} MiB + ${MAX_ENCODED_BLOB_BYTES % (1024 * 1024)} bytes.`
+    );
   }
 }
 

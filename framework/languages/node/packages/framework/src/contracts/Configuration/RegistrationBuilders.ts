@@ -1,64 +1,84 @@
+import { AutoHwmProfile } from '@zlink-systems/zlink';
 import type {
   RoutingId,
   Type,
   ZLinkActor,
   ZLinkActorFactory,
+  ZLinkClientServerChannelClientBuilder,
+  ZLinkClientServerChannelRoleBuilder,
+  ZLinkClientServerChannelServerBuilder,
   ZLinkEntrySpot,
   ZLinkFanoutChannelBuilder,
   ZLinkFrameworkOptions,
+  ZLinkHandlerFilter,
+  ZLinkInstanceSpot,
+  ZLinkLocationOptionValues,
   ZLinkMeshChannelBuilder,
   ZLinkMeshChannelClientBuilder,
   ZLinkMeshChannelServerBuilder,
   ZLinkMeshNodeBuilder,
+  ZLinkMeshNodeSocketConfig,
   ZLinkMeshObjectClientBuilder,
   ZLinkMeshObjectRoleBuilder,
   ZLinkMeshObjectServerBuilder,
-  ZLinkMeshNodeSocketConfig,
-  ZLinkNetworkOptions,
   ZLinkMeshPeerConnection,
   ZLinkMeshPeerConnections,
-  ZLinkLocationOptionValues,
-  ZLinkSpotPublisherConfig,
-  ZLinkHandlerFilter,
-  ZLinkInstanceSpot,
+  ZLinkNetworkOptions,
+  ZLinkSession,
+  ZLinkSessionFactory,
   ZLinkSpot,
-  ZLinkClientServerChannelClientBuilder,
-  ZLinkClientServerChannelRoleBuilder,
-  ZLinkClientServerChannelServerBuilder,
+  ZLinkSpotPublisherConfig,
   ZLinkStreamCompressionBuilder,
   ZLinkStreamCompressionCodec,
-  ZLinkStreamSocketConfig,
   ZLinkStreamNodeBuilder,
-  ZLinkSession,
-  ZLinkSessionFactory
+  ZLinkStreamSocketConfig
 } from '../../contracts';
-import type {
-  ZLinkActorFactoryBuilder,
-  ZLinkActorRelocationAdapter,
-  ZLinkInstanceSpotFactoryBuilder,
-  ZLinkSpotRelocationAdapter,
-  ZLinkUserSpotFactoryBuilder
-} from './ObjectRoles';
-import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from './ObjectRoles';
-import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
-import { readZLinkDecoratorMetadata } from '../Handlers/Attributes';
 import type { ZLinkCodecRegistryBuilder } from '../Codecs';
-import type {
-  ZLinkDispatchOptions,
-  ZLinkDispatchOptionsBuilder,
-  ZLinkInboundDispatchOptions,
-  ZLinkMessageFlowLogMode
-} from '../Dispatch';
+import { ZLINK_MAX_STABLE_TYPE_BYTES } from '../Common/CoreTypes';
 import {
+  type ZLinkDispatchOptions,
+  type ZLinkDispatchOptionsBuilder,
+  type ZLinkInboundDispatchOptions,
+  type ZLinkMessageFlowLogMode,
   ZLinkApplicationJobQueueProfile,
   ZLinkCoreHwmProfile,
   ZLinkUnhandledDispatchAction
 } from '../Dispatch';
-import { AutoHwmProfile } from '@zlink-systems/zlink';
-import { endpointConnections } from './RuntimeEndpointConnections';
-import type { ZLinkEndpointConnections } from './Connections';
+
+import { readZLinkDecoratorMetadata } from '../Handlers/Attributes';
 import type { ZLinkLocationOptions, ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
+import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
 import { ZLinkConfigurationException } from './ConfigurationException';
+import type { ZLinkEndpointConnections } from './Connections';
+import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
+import { normalizeEndpoint } from './EndpointNotation';
+import { requirePublicFanoutTopic } from './FanoutTopic';
+import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
+import {
+  type ZLinkActorFactoryBuilder,
+  type ZLinkActorRelocationAdapter,
+  type ZLinkInstanceSpotFactoryBuilder,
+  type ZLinkSpotRelocationAdapter,
+  type ZLinkUserSpotFactoryBuilder,
+  ZLinkSpotRelocationCoordinationMode,
+  ZLinkUserSpotExecutionMode
+} from './ObjectRoles';
+
+import {
+  MAX_LISTENER_PORT,
+  ZLINK_MAX_CAPACITY,
+  isValidCapacity,
+  isValidListenerPort,
+  isValidPositiveCapacity,
+  registerActorFactory,
+  registerEntrySpot,
+  registerSpotFactory,
+  requirePublicWeight,
+  validateActorTransferTimeout,
+  validateMessageFollowDuration,
+  validateRoutingIdPrefix,
+  validateSessionReplacementCallbackTimeout
+} from './RegistrationBuilderPolicy';
 import {
   RegistrationCodecRegistryBuilder,
   type MutableCodecRegistryOptions
@@ -68,14 +88,12 @@ import {
   normalizeOptionalPositiveInteger,
   typeMapToRecord
 } from './RegistrationNormalizers';
-import { normalizeEndpoint } from './EndpointNotation';
-import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import type {
-  ZLinkChannelPublishHandlerRegistration,
   ZLinkActorFactoryConfiguration,
   ZLinkApplicationJobQueueOptions,
-  ZLinkFrameworkRegistrationOptions,
+  ZLinkChannelPublishHandlerRegistration,
   ZLinkCoreHwmOptions,
+  ZLinkFrameworkRegistrationOptions,
   ZLinkInstanceSpotFactoryConfiguration,
   ZLinkRelocationConfiguration,
   ZLinkSpotRouterPeerConnectionOptions,
@@ -83,17 +101,7 @@ import type {
   ZLinkUserSpotFactoryConfiguration,
   ZLinkWorkerOptions
 } from './RegistrationTypes';
-import {
-  validateRoutingIdPrefix,
-  registerActorFactory,
-  registerEntrySpot,
-  registerSpotFactory,
-  validateActorTransferTimeout,
-  validateMessageFollowDuration,
-  validateSessionReplacementCallbackTimeout
-} from './RegistrationBuilderPolicy';
-import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
-import { requirePublicFanoutTopic } from './FanoutTopic';
+import { endpointConnections } from './RuntimeEndpointConnections';
 
 export function createFrameworkOptions(
   configure: (options: ZLinkFrameworkOptions) => void
@@ -617,9 +625,9 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
   ) {}
 
   listen(port = 0): this {
-    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    if (!isValidListenerPort(port)) {
       throw new ZLinkConfigurationException(
-        `ClientServer channel '${this.name}' port must be between 0 and 65535.`
+        `ClientServer channel '${this.name}' port must be between 0 and ${MAX_LISTENER_PORT}.`
       );
     }
     this.server.port = port;
@@ -894,9 +902,9 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
       this.node.router.port = undefined;
       return this;
     }
-    if (!Number.isInteger(endpointOrPort) || endpointOrPort < 0 || endpointOrPort > 65_535) {
+    if (!isValidListenerPort(endpointOrPort)) {
       throw new ZLinkConfigurationException(
-        `RouteMesh '${this.name}' port must be between 0 and 65535.`
+        `RouteMesh '${this.name}' port must be between 0 and ${MAX_LISTENER_PORT}.`
       );
     }
     this.node.router.port = endpointOrPort;
@@ -1431,22 +1439,28 @@ function endpointList(endpoint: string | readonly string[]): string[] {
 
 function requireStableObjectType(value: string, label: string): string {
   const byteLength = Buffer.byteLength(value, 'utf8');
-  if (byteLength < 1 || byteLength > 255 || value.includes('\0')) {
-    throw new ZLinkConfigurationException(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
+  if (byteLength < 1 || byteLength > ZLINK_MAX_STABLE_TYPE_BYTES || value.includes('\0')) {
+    throw new ZLinkConfigurationException(
+      `${label} must contain 1..${ZLINK_MAX_STABLE_TYPE_BYTES} UTF-8 bytes and no NUL.`
+    );
   }
   return value;
 }
 
 function requirePositiveCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 1..2147483647.`);
+  if (!isValidPositiveCapacity(value)) {
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 1..${ZLINK_MAX_CAPACITY}.`
+    );
   }
   return value;
 }
 
 function requireCapacity(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 0x7fff_ffff) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..2147483647.`);
+  if (!isValidCapacity(value)) {
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 0..${ZLINK_MAX_CAPACITY}.`
+    );
   }
   return value;
 }
@@ -1454,13 +1468,6 @@ function requireCapacity(value: number, label: string): number {
 function requireNonNegativeSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new ZLinkConfigurationException(`${label} must be a non-negative safe integer.`);
-  }
-  return value;
-}
-
-function requirePublicWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
   }
   return value;
 }
@@ -1502,9 +1509,9 @@ function validateUserSpotFactoryOptions(
 }
 
 function validateStableTypeLimit(value: number | undefined): void {
-  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
+  if (value !== undefined && !isValidCapacity(value)) {
     throw new ZLinkConfigurationException(
-      'stableTypeLimit must be an integer from 0 through 2147483647.'
+      `stableTypeLimit must be an integer from 0 through ${ZLINK_MAX_CAPACITY}.`
     );
   }
 }
@@ -1706,8 +1713,8 @@ function requireRegistrationName(value: string, label: string): void {
 }
 
 function requireListenerPort(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
-    throw new ZLinkConfigurationException(`${label} must be between 0 and 65535.`);
+  if (!isValidListenerPort(value)) {
+    throw new ZLinkConfigurationException(`${label} must be between 0 and ${MAX_LISTENER_PORT}.`);
   }
   return value;
 }

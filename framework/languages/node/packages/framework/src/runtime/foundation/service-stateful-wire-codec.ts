@@ -1,24 +1,6 @@
-import type {
-  ServiceActorRef,
-  ServiceSessionBinding,
-  ServiceSpotRef
-} from './service-stateful-registry';
-import { operationRequiresReply } from './service-runtime-contracts';
-import { ServiceWireProtocolError } from './service-wire-m6a-codec';
+import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
-import { routingIdsEqual } from '../routing-id';
-import {
-  SERVICE_WIRE_MAGIC,
-  SERVICE_WIRE_MAJOR,
-  ServiceWireCommand,
-  ServiceWireFlag
-} from './service-wire-constants.generated';
-import {
-  decodeCanonicalServiceWireText,
-  decodeServiceWireRoutingId,
-  encodeCanonicalServiceWireText,
-  encodeServiceWireRoutingId
-} from './service-wire-binary-primitives';
 import {
   decodeActorRequestCommand,
   decodeActorSendCommand,
@@ -33,8 +15,8 @@ import {
   type ServiceWireDecoderContext
 } from '../protocol/service_wire_codec.generated';
 import {
-  decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeActorJoin28,
+  decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeRelocationCutover34 as decodeGeneratedRelocationCutover34,
   decodeRelocationData31 as decodeGeneratedRelocationData31,
   decodeRelocationFailed53 as decodeGeneratedRelocationFailed53,
@@ -63,20 +45,45 @@ import {
   encodeUserSpotClose48 as encodeGeneratedUserSpotClose48,
   encodeUserSpotCreate47 as encodeGeneratedUserSpotCreate47,
   type ActorCreate49 as GeneratedActorCreate49,
+  type ServiceWireCoordinatorFence as GeneratedCoordinatorFence,
   type RelocationObjectIdentity as GeneratedRelocationObjectIdentity,
   type ReplyRelay33 as GeneratedReplyRelay33,
-  type ServiceWireCoordinatorFence as GeneratedCoordinatorFence,
   type ServiceWireRequestSourceFence as GeneratedRequestSourceFence,
   type ServiceWireRouteFence as GeneratedRouteFence,
-  type ServiceWireTargetFence as GeneratedTargetFence,
   type SessionRelocationRoute44 as GeneratedSessionRelocationRoute44,
   type SessionRelocationSeal42 as GeneratedSessionRelocationSeal42,
   type SessionRelocationSealed43 as GeneratedSessionRelocationSealed43,
+  type ServiceWireTargetFence as GeneratedTargetFence,
   type UserSpotClose48 as GeneratedUserSpotClose48,
   type UserSpotCreate47 as GeneratedUserSpotCreate47
 } from '../protocol/service_wire_pilot_codec.generated';
+import { routingIdsEqual } from '../routing-id';
+import { operationRequiresReply } from './service-runtime-contracts';
+import type {
+  ServiceActorRef,
+  ServiceSessionBinding,
+  ServiceSpotRef
+} from './service-stateful-registry';
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId,
+  SERVICE_WIRE_PREFIX_SIZE
+} from './service-wire-binary-primitives';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  ServiceWireCommand,
+  ServiceWireFlag
+} from './service-wire-constants.generated';
+import { APPLICATION_PAYLOAD_VERSION, ServiceWireProtocolError } from './service-wire-m6a-codec';
+const MESSAGE_FOLLOW_MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MESSAGE_FOLLOW_VERSION = 1;
+const INSTANCE_ROUTE_VERSION = 1;
+const INSTANCE_ACTIVATION_VERSION = 2;
 
-const PREFIX_SIZE = 5;
+const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
 const MAGIC_1 = SERVICE_WIRE_MAGIC[1];
 const MAJOR = SERVICE_WIRE_MAJOR;
@@ -161,7 +168,7 @@ export type ServiceWireRelocationObject =
 /** Shared CRC-32C wire bounds for the direct relocation payload transfer. */
 export const RELOCATION_PAYLOAD_TOTAL_LENGTH_MAX = 274_877_906_944n;
 export const RELOCATION_PAYLOAD_CHUNK_COUNT_MAX = 4096;
-export const RELOCATION_STATE_CHUNK_DATA_MAX_BYTES = 67_108_864;
+export { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 
 interface ServiceWireRelocationBase {
   readonly relocation: ServiceWireOperationId;
@@ -1161,7 +1168,7 @@ const STATEFUL_MESSAGE_CONTEXT: ServiceWireDecoderContext = {
 };
 const STATEFUL_HEADER_PAYLOAD = {
   packetName: 'wire',
-  contentType: 'application/json',
+  contentType: ZlinkStreamContentType.Json,
   payload: Buffer.from('{}')
 };
 
@@ -1407,7 +1414,7 @@ export function encodeInstanceSpotHeader(
   }
   return concat(
     prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
-    Buffer.of(1),
+    Buffer.of(INSTANCE_ROUTE_VERSION),
     u16(routeBody.byteLength),
     routeBody,
     u64Any(sourceNodeGeneration),
@@ -1449,7 +1456,7 @@ export function encodeInstanceSpotActivationHeader(
   );
   return concat(
     prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
-    Buffer.of(2),
+    Buffer.of(INSTANCE_ACTIVATION_VERSION),
     u16(targetBody.byteLength),
     targetBody,
     u64Any(sourceNodeGeneration),
@@ -1493,12 +1500,14 @@ export function encodeMessageFollowHeader(
     u64Any(record.originalOperation.low),
     u64Any(record.originalReplyRouteId)
   );
-  if (body.byteLength > 16 * 1024 * 1024) {
-    throw new RangeError('Message Follow body exceeds 16 MiB.');
+  if (body.byteLength > MESSAGE_FOLLOW_MAX_BODY_BYTES) {
+    throw new RangeError(
+      `Message Follow body exceeds ${MESSAGE_FOLLOW_MAX_BODY_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   return concat(
     prefix(M6bServiceWireCommand.messageFollow),
-    Buffer.of(1),
+    Buffer.of(MESSAGE_FOLLOW_VERSION),
     u32(body.byteLength, 'messageFollow.length'),
     body
   );
@@ -1725,7 +1734,8 @@ export function decodeStatefulHeader(
         fail(`Invalid command flags '${command.flags}'.`);
       }
       const version = reader.u8('instanceRoute.version');
-      if (version !== 1 && version !== 2) fail('Unsupported Instance route version.');
+      if (version !== INSTANCE_ROUTE_VERSION && version !== INSTANCE_ACTIVATION_VERSION)
+        fail('Unsupported Instance route version.');
       const routeLength = reader.u16('instanceRoute.length');
       const routeEnd = reader.offset + routeLength;
       const commonTarget = {
@@ -1734,7 +1744,7 @@ export function decodeStatefulHeader(
         targetSpotId: reader.rid('targetSpotId')
       };
       const route: ServiceInstanceRouteFence | undefined =
-        version === 1
+        version === INSTANCE_ROUTE_VERSION
           ? {
               ...commonTarget,
               objectGeneration: reader.nonZeroU64('objectGeneration'),
@@ -1745,7 +1755,7 @@ export function decodeStatefulHeader(
             }
           : undefined;
       const target: ServiceInstanceActivationTarget | undefined =
-        version === 2
+        version === INSTANCE_ACTIVATION_VERSION
           ? {
               ...commonTarget,
               stableType: reader.text16('stableType'),
@@ -1764,16 +1774,21 @@ export function decodeStatefulHeader(
       };
       const operationKind = operationValue === 1 ? ('send' as const) : ('request' as const);
       if (
-        version === 1 &&
+        version === INSTANCE_ROUTE_VERSION &&
         ((operationKind === 'send' && (operation.high !== 0n || operation.low !== 0n)) ||
           (operationKind === 'request' && operation.high === 0n && operation.low === 0n))
       ) {
         fail('Invalid Instance operation identity.');
       }
-      if (version === 2 && operation.high === 0n && operation.low === 0n) {
+      if (
+        version === INSTANCE_ACTIVATION_VERSION &&
+        operation.high === 0n &&
+        operation.low === 0n
+      ) {
         fail('Instance activation requires a non-zero operation identity.');
       }
-      const deadlineUnixMs = version === 2 ? reader.nonZeroU64('deadlineUnixMs') : undefined;
+      const deadlineUnixMs =
+        version === INSTANCE_ACTIVATION_VERSION ? reader.nonZeroU64('deadlineUnixMs') : undefined;
       const replyRouteId =
         operationKind === 'request' ? reader.nonZeroU64('replyRouteId') : undefined;
       reader.end();
@@ -1786,7 +1801,7 @@ export function decodeStatefulHeader(
         operation,
         ...(replyRouteId === undefined ? {} : { replyRouteId })
       };
-      return version === 1
+      return version === INSTANCE_ROUTE_VERSION
         ? { ...common, activation: 'ready', route: route! }
         : {
             ...common,
@@ -1797,12 +1812,12 @@ export function decodeStatefulHeader(
     }
     case M6bServiceWireCommand.messageFollow: {
       requireFlags(command.flags, 0);
-      if (reader.u8('messageFollow.version') !== 1) {
+      if (reader.u8('messageFollow.version') !== MESSAGE_FOLLOW_VERSION) {
         fail('Unsupported Message Follow version.');
       }
       const length = reader.u32('messageFollow.length');
       const end = reader.offset + length;
-      if (length > 16 * 1024 * 1024 || end > reader.bytes.byteLength) {
+      if (length > MESSAGE_FOLLOW_MAX_BODY_BYTES || end > reader.bytes.byteLength) {
         fail('Invalid Message Follow body length.');
       }
       const record: ServiceMessageFollowRecord = {
@@ -2231,7 +2246,11 @@ function applicationPayload(value: NonNullable<ServiceMaintenanceReplyRelay['pay
     u32(value.bytes.byteLength, 'payload.length'),
     value.bytes
   );
-  return concat(Buffer.of(1), u32(body.byteLength, 'applicationPayload.length'), body);
+  return concat(
+    Buffer.of(APPLICATION_PAYLOAD_VERSION),
+    u32(body.byteLength, 'applicationPayload.length'),
+    body
+  );
 }
 
 function prefix(command: number, flags = 0): Buffer {
@@ -2316,7 +2335,7 @@ function validateMessageFollowRecord(
   if (value.originalOperation.high === 0n && value.originalOperation.low === 0n) {
     invalid('Message Follow originalOperation must not be zero.');
   }
-  if (value.originalReplyRouteId < 0n || value.originalReplyRouteId > 0xffff_ffff_ffff_ffffn) {
+  if (value.originalReplyRouteId < 0n || value.originalReplyRouteId > UINT64_MAX) {
     invalid('Message Follow originalReplyRouteId must be a u64.');
   }
 }
@@ -2376,7 +2395,7 @@ function u64(value: bigint): Buffer {
 }
 
 function u64Any(value: bigint): Buffer {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value < 0n || value > UINT64_MAX) {
     throw new RangeError('u64 value is out of range.');
   }
   const result = Buffer.alloc(8);
@@ -2385,7 +2404,7 @@ function u64Any(value: bigint): Buffer {
 }
 
 function requirePositive(value: bigint | undefined, name: string): bigint {
-  if (value === undefined || value < 1n || value > 0xffff_ffff_ffff_ffffn) {
+  if (value === undefined || value < 1n || value > UINT64_MAX) {
     throw new RangeError(`${name} must be a non-zero u64.`);
   }
   return value;
@@ -2909,7 +2928,7 @@ class FrozenReader {
   }
 
   applicationPayload(): NonNullable<ServiceMaintenanceReplyRelay['payload']> {
-    if (this.u8('applicationPayload.version') !== 1) {
+    if (this.u8('applicationPayload.version') !== APPLICATION_PAYLOAD_VERSION) {
       fail('Application payload envelope version must be one.');
     }
     const body = this.body32('application payload');

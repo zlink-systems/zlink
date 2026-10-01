@@ -109,20 +109,45 @@ test('deadline uses the closed snake_case force reason and terminal event exactl
 
 test('drain classifies publish, owner cleanup, and teardown failures with closed snake_case reasons', async () => {
   const cases = [
-    ['ZLinkDrainingStatePublishError', 'drain_state_publish_failed', 'publishDraining'],
-    ['ZLinkOwnerCleanupError', 'owner_cleanup_failed', 'drainResources'],
-    ['Error', 'teardown_failed', 'drainResources']
+    [framework.ZLinkDrainingStatePublishError, 'drain_state_publish_failed', 'publishDraining'],
+    [framework.ZLinkOwnerCleanupError, 'owner_cleanup_failed', 'drainResources'],
+    [Error, 'teardown_failed', 'drainResources']
   ];
-  for (const [errorName, reason, phase] of cases) {
+  for (const [ErrorType, reason, phase] of cases) {
     const gate = new framework.ZLinkRuntimeAdmissionGate();
-    const failure = new Error(reason);
-    failure.name = errorName;
+    const failure = new ErrorType(reason);
     const runtime = createRuntime(gate, {
       async publishDraining() {
         if (phase === 'publishDraining') throw failure;
       },
       async drainResources() {
         if (phase === 'drainResources') throw failure;
+      }
+    });
+    assert.deepEqual(await runtime.drain('game'), { kind: 'forceStopped', reason });
+  }
+});
+
+test('drain error classification uses actual types despite changed or impersonated names', async () => {
+  const actual = new framework.ZLinkOwnerCleanupError(new Error('cleanup failed'));
+  actual.name = 'renamed-by-observer';
+  const published = new framework.ZLinkDrainingStatePublishError(new Error('publication failed'));
+  published.name = 'renamed-by-observer';
+  const publishImpersonated = new Error('ordinary failure');
+  publishImpersonated.name = 'ZLinkDrainingStatePublishError';
+  const impersonated = new Error('ordinary failure');
+  impersonated.name = 'ZLinkOwnerCleanupError';
+  for (const [failure, reason] of [
+    [actual, 'owner_cleanup_failed'],
+    [published, 'drain_state_publish_failed'],
+    [publishImpersonated, 'teardown_failed'],
+    [new AggregateError([actual]), 'owner_cleanup_failed'],
+    [impersonated, 'teardown_failed'],
+    [new AggregateError([impersonated]), 'teardown_failed']
+  ]) {
+    const runtime = createRuntime(new framework.ZLinkRuntimeAdmissionGate(), {
+      async drainResources() {
+        throw failure;
       }
     });
     assert.deepEqual(await runtime.drain('game'), { kind: 'forceStopped', reason });

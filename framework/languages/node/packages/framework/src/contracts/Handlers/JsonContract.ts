@@ -1,3 +1,5 @@
+const MAX_CONTRACT_SCHEMA_DEPTH = 64;
+
 /** Describes the fields accepted by the default framework-json-v1 serializer. */
 export type ZLinkJsonSchema =
   | { readonly type: 'boolean' }
@@ -75,9 +77,13 @@ function normalizeJsonSchema(
   // Keep the runtime boundary defensive for JavaScript callers even though
   // the TypeScript signature describes the accepted shape.
   const runtimeSchema: unknown = schema;
-  if (typeof runtimeSchema !== 'object' || runtimeSchema === null || depth > 64) {
+  if (
+    typeof runtimeSchema !== 'object' ||
+    runtimeSchema === null ||
+    depth > MAX_CONTRACT_SCHEMA_DEPTH
+  ) {
     throw new TypeError(
-      'ZLink packet JSON schema must be an acyclic object with at most 64 levels.'
+      `ZLink packet JSON schema must be an acyclic object with at most ${MAX_CONTRACT_SCHEMA_DEPTH} levels.`
     );
   }
   const normalizedSchema = runtimeSchema as ZLinkJsonSchema;
@@ -147,7 +153,7 @@ function normalizeJsonSchema(
       for (const [name, property] of Object.entries(
         runtimeProperties as Record<string, ZLinkJsonSchema>
       )) {
-        if (name === '__proto__' || name === 'prototype' || name === 'constructor') {
+        if (isPrototypeKey(name)) {
           throw new TypeError(`ZLink packet JSON property '${name}' is not allowed.`);
         }
         properties[name] = normalizeJsonSchema(property, nextParents, depth + 1);
@@ -156,7 +162,7 @@ function normalizeJsonSchema(
         throw new TypeError('ZLink packet JSON required properties must be unique.');
       }
       for (const name of normalizedSchema.required) {
-        if (name === '__proto__' || name === 'prototype' || name === 'constructor') {
+        if (isPrototypeKey(name)) {
           throw new TypeError(`ZLink packet JSON property '${name}' is not allowed.`);
         }
         if (!Object.prototype.hasOwnProperty.call(properties, name)) {
@@ -203,4 +209,8 @@ function canonicalContract(value: unknown): string {
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, item]) => `${JSON.stringify(key)}:${canonicalContract(item)}`)
     .join(',')}}`;
+}
+
+function isPrototypeKey(name: string): boolean {
+  return name === '__proto__' || name === 'prototype' || name === 'constructor';
 }

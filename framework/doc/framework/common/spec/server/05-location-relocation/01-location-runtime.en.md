@@ -1082,7 +1082,7 @@ status and isn't used as an application message's target list or placement condi
   build a `Missing` entry.
 - A paged list requires object kind as a filter, and accepts stable type and MeshName as
   optional filters.
-- One page returns `1..1000` entries.
+- One page returns `1..1000` entries. When the caller doesn't set the size, it's 100.
 - One encoded page is at most 4 MiB. If adding the next entry would cross the limit, that
   entry begins the next continuation page. Existing field-length limits keep one entry
   within this bound.
@@ -1474,7 +1474,7 @@ whether the Store changed is unknown. In this case the Framework re-reads the sa
 and expected `StoreVersion` to confirm the result, and only retries if needed.
 
 A Relocation Store write must support being read or stored again using the same reference
-the Framework fixed in advance. Payload not pointed to by the Location Store is deleted
+the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Payload not pointed to by the Location Store is deleted
 after retention ends. If a provider keeps input bytes even after an async request finishes,
 it must make a copy. Bytes returned as a success result must not change afterward.
 

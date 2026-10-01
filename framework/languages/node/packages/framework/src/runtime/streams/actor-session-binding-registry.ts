@@ -1,14 +1,16 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import { createAbortError, throwIfAborted } from '../abort';
 import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../contracts/Errors/ZLinkFrameworkException';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { createAbortError, throwIfAborted } from '../abort';
+import { ZLinkStateLane } from '../execution/state-lane';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+export const DEFAULT_TERMINAL_RELOCATION_CAPACITY = 4096;
 
 const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
@@ -144,14 +146,14 @@ export class ZLinkActorSessionBindingRegistry<
   private readonly terminalRelocations = new Map<ZLinkActorSessionRelocationState, true>();
 
   constructor(
-    private readonly terminalRelocationCapacity = 4096,
+    private readonly terminalRelocationCapacity: number = DEFAULT_TERMINAL_RELOCATION_CAPACITY,
     //  Spec 06 — SessionRelocationSealTimeout bounds how long a session
     //  relocation seal may hold ingress (default 3,000 ms, finite only).
     //  Every wait on the seal (accept paths) and on active-frame drain
     //  (the sealing side) must observe that bound; an unbounded wait here
     //  turns a lost control or a lifecycle interlock into a silent stall
     //  (spec 48:205 — transport/deadline limits apply during relocation).
-    private readonly sealWaitTimeoutMs = 3_000,
+    private readonly sealWaitTimeoutMs: number = zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
     private readonly errorSink?: () =>
       { reportRuntimeTaskException(taskName: string, error: unknown): void } | undefined
   ) {
