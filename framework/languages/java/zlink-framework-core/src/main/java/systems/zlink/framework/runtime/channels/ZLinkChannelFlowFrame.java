@@ -3,24 +3,17 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 final class ZLinkChannelFlowFrame {
-    private static final String PREFIX = "__zlink.flow\n";
 
     private ZLinkChannelFlowFrame() {}
 
     static Message current() {
         ZLinkFlowContext.State state = ZLinkFlowContext.current();
-        return state == null
-                ? null
-                : Message.from(
-                        (PREFIX + state.flowId() + "\n" + state.origin().name())
-                                .getBytes(StandardCharsets.UTF_8));
+        return ZLinkFlowContext.encodeLegacyFrame(state);
     }
 
     static ZLinkFlowContext.State fromEnvelopeHeader(
@@ -47,28 +40,14 @@ final class ZLinkChannelFlowFrame {
         }
         for (int index = 2; index < parts.size(); index++) {
             String value = parts.get(index).toUtf8String();
-            if (!value.startsWith(PREFIX)) {
-                continue;
-            }
-            String[] fields = value.split("\n", -1);
-            if (fields.length != 3 || fields[1].isBlank()) {
-                throw invalidFlow("Channel flow fields are malformed");
-            }
-            if (!ZLinkFlowContext.isValidFlowId(fields[1])) {
-                throw invalidFlow("Channel flow id must be UUIDv7");
-            }
-            try {
-                return new ZLinkFlowContext.State(
-                        fields[1], ZLinkFlowOrigin.valueOf(fields[2]), null);
-            } catch (IllegalArgumentException invalidOrigin) {
-                throw invalidFlow("Channel flow origin is invalid", invalidOrigin);
+            ZLinkFlowContext.State state =
+                    ZLinkFlowContext.decodeLegacyFrame(
+                            value, "Channel", ZLinkChannelFlowFrame::invalidFlow);
+            if (state != null) {
+                return state;
             }
         }
         return null;
-    }
-
-    private static PayloadDecodeDispatchException invalidFlow(String message) {
-        return invalidFlow(message, null);
     }
 
     private static PayloadDecodeDispatchException invalidFlow(String message, Throwable cause) {

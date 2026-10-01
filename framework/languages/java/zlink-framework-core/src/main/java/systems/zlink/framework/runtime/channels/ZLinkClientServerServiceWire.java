@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -14,19 +15,12 @@ import java.util.Arrays;
 import java.util.Objects;
 
 final class ZLinkClientServerServiceWire {
-    private static final int MAGIC_0 = 0x5a;
-    private static final int MAGIC_1 = 0x4d;
-    private static final int WIRE_MAJOR = 1;
+    private static final int MIN_REJECT_REASON = 1;
+    private static final int MAX_REJECT_REASON = 12;
     private static final int TOPOLOGY_CLIENT_SERVER = 2;
     private static final int ROLE_CLIENT = 1;
     private static final int ROLE_SERVER = 2;
     private static final int DIRECTION_CLIENT_TO_SERVER = 1;
-    private static final int COMMAND_HELLO = 1;
-    private static final int COMMAND_ADMIT = 2;
-    private static final int COMMAND_REJECT = 3;
-    private static final int COMMAND_UPDATE = 4;
-    private static final int COMMAND_LIVENESS_PROBE = 5;
-    private static final int COMMAND_LIVENESS_ACK = 6;
     private static final int MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 
     private ZLinkClientServerServiceWire() {}
@@ -38,43 +32,50 @@ final class ZLinkClientServerServiceWire {
         body.text8(value.securityIdentity(), "securityIdentity");
         body.positiveU32(
                 value.normalizedEffectiveMaxMessageBytes(), "normalizedEffectiveMaxMessageBytes");
-        return encodeAdmission(COMMAND_HELLO, ROLE_CLIENT, body.toByteArray());
+        return encodeAdmission(ServiceWireConstants.COMMAND_HELLO, ROLE_CLIENT, body.toByteArray());
     }
 
     static byte[] encodeAdmit(
             ZLinkClientServerServerDescriptor descriptor, int normalizedEffectiveMaxMessageBytes) {
-        return encodeServerAdmission(COMMAND_ADMIT, descriptor, normalizedEffectiveMaxMessageBytes);
+        return encodeServerAdmission(
+                ServiceWireConstants.COMMAND_ADMIT, descriptor, normalizedEffectiveMaxMessageBytes);
     }
 
     static byte[] encodeUpdate(
             ZLinkClientServerServerDescriptor descriptor, int normalizedEffectiveMaxMessageBytes) {
         return encodeServerAdmission(
-                COMMAND_UPDATE, descriptor, normalizedEffectiveMaxMessageBytes);
+                ServiceWireConstants.COMMAND_UPDATE,
+                descriptor,
+                normalizedEffectiveMaxMessageBytes);
     }
 
     static byte[] encodeReject(int reason) {
-        if (reason < 1 || reason > 12) {
-            throw protocol("ClientServer reject reason must be in 1..12");
+        if (reason < MIN_REJECT_REASON || reason > MAX_REJECT_REASON) {
+            throw protocol(
+                    "ClientServer reject reason must be in "
+                            + MIN_REJECT_REASON
+                            + ".."
+                            + MAX_REJECT_REASON);
         }
-        Writer result = prefix(COMMAND_REJECT);
+        Writer result = prefix(ServiceWireConstants.COMMAND_REJECT);
         result.u32(reason);
         return result.toByteArray();
     }
 
     static byte[] encodeLivenessProbe(long probeId) {
-        return encodeLiveness(COMMAND_LIVENESS_PROBE, probeId);
+        return encodeLiveness(ServiceWireConstants.COMMAND_LIVENESS_PROBE, probeId);
     }
 
     static byte[] encodeLivenessAck(long probeId) {
-        return encodeLiveness(COMMAND_LIVENESS_ACK, probeId);
+        return encodeLiveness(ServiceWireConstants.COMMAND_LIVENESS_ACK, probeId);
     }
 
     static boolean isControlFrame(byte[] frame) {
         return frame != null
                 && frame.length >= 5
-                && Byte.toUnsignedInt(frame[0]) == MAGIC_0
-                && Byte.toUnsignedInt(frame[1]) == MAGIC_1
-                && Byte.toUnsignedInt(frame[2]) == WIRE_MAJOR;
+                && Byte.toUnsignedInt(frame[0]) == ServiceWireConstants.MAGIC_0
+                && Byte.toUnsignedInt(frame[1]) == ServiceWireConstants.MAGIC_1
+                && Byte.toUnsignedInt(frame[2]) == ServiceWireConstants.WIRE_MAJOR;
     }
 
     static Control decode(byte[] frame) {
@@ -82,31 +83,34 @@ final class ZLinkClientServerServiceWire {
             throw protocol("ClientServer control record is oversized");
         }
         Reader reader = new Reader(frame);
-        if (reader.u8("magic[0]") != MAGIC_0
-                || reader.u8("magic[1]") != MAGIC_1
-                || reader.u8("wireMajor") != WIRE_MAJOR) {
+        if (reader.u8("magic[0]") != ServiceWireConstants.MAGIC_0
+                || reader.u8("magic[1]") != ServiceWireConstants.MAGIC_1
+                || reader.u8("wireMajor") != ServiceWireConstants.WIRE_MAJOR) {
             throw protocol("ClientServer control record prefix is invalid");
         }
         int command = reader.u8("command");
         if (reader.u8("flags") != 0) {
             throw protocol("ClientServer control flags are invalid");
         }
-        if (command == COMMAND_REJECT) {
+        if (command == ServiceWireConstants.COMMAND_REJECT) {
             int reason = reader.intU32("reason");
             reader.end();
-            if (reason < 1 || reason > 12) {
+            if (reason < MIN_REJECT_REASON || reason > MAX_REJECT_REASON) {
                 throw protocol("ClientServer reject reason is invalid");
             }
             return new Reject(reason);
         }
-        if (command == COMMAND_LIVENESS_PROBE || command == COMMAND_LIVENESS_ACK) {
+        if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
+                || command == ServiceWireConstants.COMMAND_LIVENESS_ACK) {
             long probeId = reader.nonzeroU64("probeId");
             reader.end();
-            return command == COMMAND_LIVENESS_PROBE
+            return command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
                     ? new LivenessProbe(probeId)
                     : new LivenessAck(probeId);
         }
-        if (command != COMMAND_HELLO && command != COMMAND_ADMIT && command != COMMAND_UPDATE) {
+        if (command != ServiceWireConstants.COMMAND_HELLO
+                && command != ServiceWireConstants.COMMAND_ADMIT
+                && command != ServiceWireConstants.COMMAND_UPDATE) {
             throw protocol("ClientServer control command is invalid");
         }
         if (reader.u8("topologyKind") != TOPOLOGY_CLIENT_SERVER) {
@@ -120,7 +124,7 @@ final class ZLinkClientServerServiceWire {
         if (reader.u16("roleLength") != reader.remaining()) {
             throw protocol("ClientServer role body length is invalid");
         }
-        if (command == COMMAND_HELLO) {
+        if (command == ServiceWireConstants.COMMAND_HELLO) {
             if (role != ROLE_CLIENT) {
                 throw protocol("ClientServer hello role is invalid");
             }
@@ -149,7 +153,9 @@ final class ZLinkClientServerServiceWire {
                         reader.positiveU32("normalizedEffectiveMaxMessageBytes"),
                         reader.text16("advertisedEndpoint"));
         reader.end();
-        return command == COMMAND_ADMIT ? new Admit(admission) : new Update(admission);
+        return command == ServiceWireConstants.COMMAND_ADMIT
+                ? new Admit(admission)
+                : new Update(admission);
     }
 
     private static byte[] encodeServerAdmission(
@@ -197,9 +203,9 @@ final class ZLinkClientServerServiceWire {
 
     private static Writer prefix(int command) {
         Writer result = new Writer();
-        result.u8(MAGIC_0);
-        result.u8(MAGIC_1);
-        result.u8(WIRE_MAJOR);
+        result.u8(ServiceWireConstants.MAGIC_0);
+        result.u8(ServiceWireConstants.MAGIC_1);
+        result.u8(ServiceWireConstants.WIRE_MAJOR);
         result.u8(command);
         result.u8(0);
         return result;

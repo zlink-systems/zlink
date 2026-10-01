@@ -1,22 +1,31 @@
 package systems.zlink.framework.runtime.internal.backend;
 
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 public enum ZLinkBackendRequestResult {
-    OK,
-    TIMED_OUT,
-    NOT_FOUND,
-    TERMINATED,
-    PROTOCOL_ERROR,
-    INTERNAL_ERROR,
-    REJECTED,
-    CONFLICT,
-    BUSY,
-    NOT_CONNECTED,
-    INVALID_ARGUMENT,
-    INVALID_STATE,
-    NOT_SUPPORTED,
-    BACKPRESSURED;
+    OK(RequestResult.OK),
+    TIMED_OUT(RequestResult.TIMED_OUT),
+    NOT_FOUND(RequestResult.NOT_FOUND),
+    TERMINATED(RequestResult.TERMINATED),
+    PROTOCOL_ERROR(RequestResult.PROTOCOL_ERROR),
+    INTERNAL_ERROR(RequestResult.INTERNAL_ERROR),
+    REJECTED(RequestResult.REJECTED),
+    CONFLICT(RequestResult.CONFLICT),
+    BUSY(RequestResult.BUSY),
+    NOT_CONNECTED(RequestResult.NOT_CONNECTED),
+    INVALID_ARGUMENT(RequestResult.INVALID_ARGUMENT),
+    INVALID_STATE(RequestResult.INVALID_STATE),
+    NOT_SUPPORTED(RequestResult.NOT_SUPPORTED),
+    BACKPRESSURED(RequestResult.BACKPRESSURED);
+
+    private static final ZLinkBackendRequestResult[] VALUES = values();
+    private final RequestResult bindingResult;
+
+    ZLinkBackendRequestResult(RequestResult bindingResult) {
+        this.bindingResult = bindingResult;
+    }
 
     /**
      * Maps a non-OK backend request terminal (decoded from a remote reply) to the public framework
@@ -60,11 +69,8 @@ public enum ZLinkBackendRequestResult {
      * identically. An unknown terminal is a ProtocolError.
      */
     public static ZLinkBackendRequestResult fromWireTerminal(int wireTerminal) {
-        if (wireTerminal == 0) {
-            return OK;
-        }
-        for (ZLinkBackendRequestResult value : values()) {
-            if (value.ordinal() >= 1 && wireTerminal == 101 + value.ordinal() - 1) {
+        for (ZLinkBackendRequestResult value : VALUES) {
+            if (wireTerminal == value.bindingResult.value()) {
                 return value;
             }
         }
@@ -74,24 +80,42 @@ public enum ZLinkBackendRequestResult {
     private static ZLinkFrameworkErrorKind failureCodeErrorKind(int failureCode) {
         return switch (failureCode) {
             //  actorAlreadyExists(3)
-            case 3 -> ZLinkFrameworkErrorKind.ALREADY_EXISTS;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS ->
+                    ZLinkFrameworkErrorKind.ALREADY_EXISTS;
             //  actorTypeMismatch(4), spotTypeMismatch(7)
-            case 4, 7 -> ZLinkFrameworkErrorKind.TYPE_MISMATCH;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH ->
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH;
             //  actorSessionNotBound(8)
-            case 8 -> ZLinkFrameworkErrorKind.INVALID_OPERATION;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_SESSION_NOT_BOUND ->
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION;
             //  routeHandlerNotFound(9), requestTargetNotFound(14)
-            case 9, 14 -> ZLinkFrameworkErrorKind.NOT_FOUND;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND ->
+                    ZLinkFrameworkErrorKind.NOT_FOUND;
             //  payloadDecodeFailed(12), requestProtocolError(16)
-            case 12, 16 -> ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_PAYLOAD_DECODE_FAILED,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR ->
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
             //  routeNotConnected(13), actorLocationStale(21), spotMoving(34),
             //  workerQueueFull(18: remote queue full is Unavailable, spec 32:99)
-            case 13, 18, 21, 34 -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case 15 -> ZLinkFrameworkErrorKind.REJECTED; // requestRejected
-            case 19 -> ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED; // workerTimedOut
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING ->
+                    ZLinkFrameworkErrorKind.UNAVAILABLE;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED ->
+                    ZLinkFrameworkErrorKind.REJECTED; // requestRejected
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT ->
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED; // workerTimedOut
             //  requestFailed(17), workerFailed(20)
-            case 17, 20 -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-            case 33 -> ZLinkFrameworkErrorKind.INVALID_OPERATION; // spotGenerationStale
-            case 35 -> ZLinkFrameworkErrorKind.DATA_LOST; // relocationDataLost
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_FAILED ->
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION; // spotGenerationStale
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST ->
+                    ZLinkFrameworkErrorKind.DATA_LOST; // relocationDataLost
             default -> null;
         };
     }

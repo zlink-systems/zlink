@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 final class ZLinkRouteMeshRuntimeView
         implements ZLinkRouteMeshRuntime, ZLinkRouteMeshRuntimeOptions, AutoCloseable {
     private static final long MONITOR_IDLE_NANOS = 10_000_000L;
+    private static final long LOCATION_HEALTH_QUERY_TIMEOUT_MILLIS = 500;
     private final ZLinkFrameworkRuntime runtime;
     private final ZLinkTopologyStatusSource<ZLinkMeshNodeSnapshot> statuses;
     private final ConcurrentHashMap<String, SignalHub> signalHubs = new ConcurrentHashMap<>();
@@ -285,7 +286,7 @@ final class ZLinkRouteMeshRuntimeView
             return runtime.monitoringLocationRuntimeQuery()
                     .getStatus()
                     .toCompletableFuture()
-                    .orTimeout(500, TimeUnit.MILLISECONDS)
+                    .orTimeout(LOCATION_HEALTH_QUERY_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
                     .join()
                     .storeHealthy();
         } catch (ZLinkConfigurationException notConfigured) {

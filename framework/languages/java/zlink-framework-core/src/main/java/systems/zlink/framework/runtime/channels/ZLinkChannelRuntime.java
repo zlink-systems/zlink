@@ -47,6 +47,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -89,6 +90,8 @@ public final class ZLinkChannelRuntime
                 ZLinkRouteClient,
                 ZLinkChannelRuntimeOptions,
                 AutoCloseable {
+    private static final int DESCRIPTOR_SCAN_PAGE_SIZE = 1000;
+    private static final long CLIENT_SERVER_LIVENESS_TICK_MILLIS = 100;
     private static final Logger LOGGER = Logger.getLogger(ZLinkChannelRuntime.class.getName());
     private static final String SPOT_ROUTE_BRIDGE_SEND_PACKET_NAME =
             "__zlink.routed_spot.egress.send";
@@ -580,8 +583,8 @@ public final class ZLinkChannelRuntime
             attachProcessLocalClientServerAdmissions(registration.channels());
             scheduleInfrastructureAtFixedRate(
                     () -> sockets.tickClientServerLiveness(System.nanoTime()),
-                    100,
-                    100,
+                    CLIENT_SERVER_LIVENESS_TICK_MILLIS,
+                    CLIENT_SERVER_LIVENESS_TICK_MILLIS,
                     TimeUnit.MILLISECONDS);
         }
         installClientServerLocationRuntime(handlerFactory);
@@ -635,7 +638,7 @@ public final class ZLinkChannelRuntime
                         timeoutExecutor,
                         infrastructureExecutor,
                         configuration.options().pollingInterval(),
-                        1000);
+                        DESCRIPTOR_SCAN_PAGE_SIZE);
         clientServerLocationRuntime = runtime;
         List<AutoConnectSurface> surfaces = autoConnectSurfaces();
         configuration.install(
@@ -719,7 +722,7 @@ public final class ZLinkChannelRuntime
                         timeoutExecutor,
                         infrastructureExecutor,
                         configuration.options().pollingInterval(),
-                        1000,
+                        DESCRIPTOR_SCAN_PAGE_SIZE,
                         messageDispatcher::dispatchPublish,
                         fanoutApplicationTopics);
         fanoutLocationRuntime = runtime;
@@ -876,7 +879,7 @@ public final class ZLinkChannelRuntime
                         endpoint,
                         0,
                         ZLinkFrameworkRuntimeState.PREPARING,
-                        "default",
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                         "manual",
                         1,
                         Instant.EPOCH);
@@ -929,7 +932,9 @@ public final class ZLinkChannelRuntime
         byte[] hello =
                 ZLinkClientServerServiceWire.encodeHello(
                         new ZLinkClientServerServiceWire.Hello(
-                                channelName, "default", Integer.MAX_VALUE));
+                                channelName,
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                                Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
             dealer.request(List.of(message), defaultRequestTimeout(channelName))
                     .whenComplete(
@@ -982,7 +987,9 @@ public final class ZLinkChannelRuntime
                     ZLinkClientServerServiceWire.decode(reply.parts().get(0).toByteArray());
             if (!(control instanceof ZLinkClientServerServiceWire.Admit admit)
                     || !admit.admission().channelName().equals(channelName)
-                    || !admit.admission().securityIdentity().equals("default")) {
+                    || !admit.admission()
+                            .securityIdentity()
+                            .equals(ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY)) {
                 sockets.restartClientServerAdmission(connectionId, fence);
                 return;
             }

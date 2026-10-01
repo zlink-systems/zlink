@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 
 /** Owns one classic fanout receive path for each configured manual endpoint. */
 final class ZLinkManualFanoutRuntime implements AutoCloseable {
+    private static final long DISCOVERY_TICK_MILLIS = 10;
     private static final Logger LOGGER = Logger.getLogger(ZLinkManualFanoutRuntime.class.getName());
 
     private final ZLinkChannelBackendAdapter backend;
@@ -147,7 +148,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                                 endpoints.forEach(endpoint -> open(channel, endpoint, null)));
         ScheduledFuture<?> scheduled =
                 scheduler.scheduleAtFixedRate(
-                        () -> signalTick(start.epoch()), 0, 10, TimeUnit.MILLISECONDS);
+                        () -> signalTick(start.epoch()),
+                        0,
+                        DISCOVERY_TICK_MILLIS,
+                        TimeUnit.MILLISECONDS);
         boolean cancel =
                 inStateLane(
                         () -> {

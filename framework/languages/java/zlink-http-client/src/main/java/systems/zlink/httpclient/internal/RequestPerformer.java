@@ -127,12 +127,14 @@ public final class RequestPerformer {
             HttpResponse<InputStream> response) {
         int status = response.statusCode();
         if (options.cookies()) {
-            for (String setCookie : response.headers().allValues("set-cookie")) {
+            for (String setCookie :
+                    response.headers().allValues(HttpClientText.Header.SET_COOKIE.wire())) {
                 cookieJar.store(current.getHost(), setCookie);
             }
         }
 
-        String location = response.headers().firstValue("location").orElse(null);
+        String location =
+                response.headers().firstValue(HttpClientText.Header.LOCATION.wire()).orElse(null);
         if (options.followRedirects() > 0
                 && RedirectPolicy.isRedirect(status)
                 && location != null
@@ -283,26 +285,28 @@ public final class RequestPerformer {
         }
 
         Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("user-agent", HttpClientVersion.USER_AGENT);
-        headers.put("accept", "application/json");
+        headers.put(HttpClientText.Header.USER_AGENT.wire(), HttpClientVersion.USER_AGENT);
+        headers.put(HttpClientText.Header.ACCEPT.wire(), HttpClientText.JSON_CONTENT_TYPE);
         if (options.compression()) {
-            headers.put("accept-encoding", "gzip, deflate");
+            headers.put(
+                    HttpClientText.Header.ACCEPT_ENCODING.wire(),
+                    ResponseCompression.ACCEPT_ENCODING);
         }
         mergeHeaders(headers, options.headers(), keepAuthorization);
         mergeHeaders(headers, spec.headers(), keepAuthorization);
         if (body == null && bodyProvider == null) {
             // A body source dropped by a redirect must not leave stale content-type metadata
             // behind.
-            headers.remove("content-type");
+            headers.remove(HttpClientText.Header.CONTENT_TYPE.wire());
         }
         if (options.cookies()) {
             String cookieHeader =
                     cookieJar.headerFor(
                             current.getHost(),
                             RedirectPolicy.pathOf(current),
-                            "https".equals(current.getScheme()));
+                            HttpClientText.isSecureScheme(current.getScheme()));
             if (!cookieHeader.isEmpty()) {
-                headers.put("cookie", cookieHeader);
+                headers.put(HttpClientText.Header.COOKIE.wire(), cookieHeader);
             }
         }
 
@@ -324,7 +328,7 @@ public final class RequestPerformer {
             Map<String, String> target, Map<String, String> headers, boolean keepAuthorization) {
         for (Map.Entry<String, String> entry : headers.entrySet()) {
             String name = entry.getKey().toLowerCase(Locale.ROOT);
-            if (!keepAuthorization && name.equals("authorization")) {
+            if (!keepAuthorization && name.equals(HttpClientText.Header.AUTHORIZATION.wire())) {
                 continue;
             }
             target.put(name, entry.getValue());

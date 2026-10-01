@@ -21,6 +21,58 @@ import java.util.function.Function;
  * blob store), so they use a byte[] value codec. See {@link #forBytes}.
  */
 final class ZLinkRedisLocationConnection<V> {
+    private static final String SCHEMA_FORMAT = "location-authority-hybrid-v1";
+    private static final int SCHEMA_EPOCH = 1;
+
+    private enum ScriptToken {
+        READY("ready"),
+        INCOMPATIBLE("incompatible");
+
+        private static final java.util.Map<String, ScriptToken> BY_WIRE =
+                java.util.Arrays.stream(values())
+                        .collect(
+                                java.util.stream.Collectors.toUnmodifiableMap(
+                                        token -> token.wire, token -> token));
+        private final String wire;
+
+        ScriptToken(String wire) {
+            this.wire = wire;
+        }
+
+        static ScriptToken decode(Object value) {
+            return BY_WIRE.get(text(value));
+        }
+    }
+
+    private static final String SCHEMA_SCRIPT =
+            script(
+                    """
+                                    local format = redis.call(
+                                        'HGET', KEYS[1], 'format')
+                                    local epoch = redis.call(
+                                        'HGET', KEYS[1], 'epoch')
+                                    if redis.call('EXISTS', KEYS[1]) == 0 then
+                                        redis.call('HSET', KEYS[1],
+                                            'format', ARGV[1],
+                                            'epoch', ARGV[2])
+                                        return {'${READY}'}
+                                    end
+                                    if format == ARGV[1]
+                                        and epoch == ARGV[2] then
+                                        return {'${READY}'}
+                                    end
+                                    return {'${INCOMPATIBLE}',
+                                        format or '', epoch or ''}
+                                    """,
+                    ScriptToken.BY_WIRE);
+
+    static String script(String template, java.util.Map<String, ? extends Enum<?>> tokens) {
+        for (var token : tokens.entrySet()) {
+            template = template.replace("${" + token.getValue().name() + "}", token.getKey());
+        }
+        return template;
+    }
+
     private final RedisURI redisUri;
     private final RedisClient client;
     private final String schemaKey;
@@ -115,31 +167,15 @@ final class ZLinkRedisLocationConnection<V> {
                     connected
                             .async()
                             .<List<Object>>eval(
-                                    """
-                                    local format = redis.call(
-                                        'HGET', KEYS[1], 'format')
-                                    local epoch = redis.call(
-                                        'HGET', KEYS[1], 'epoch')
-                                    if redis.call('EXISTS', KEYS[1]) == 0 then
-                                        redis.call('HSET', KEYS[1],
-                                            'format', ARGV[1],
-                                            'epoch', ARGV[2])
-                                        return {'ready'}
-                                    end
-                                    if format == ARGV[1]
-                                        and epoch == ARGV[2] then
-                                        return {'ready'}
-                                    end
-                                    return {'incompatible',
-                                        format or '', epoch or ''}
-                                    """,
+                                    SCHEMA_SCRIPT,
                                     ScriptOutputType.MULTI,
                                     new String[] {schemaKey},
-                                    literal.apply("location-authority-hybrid-v1"),
-                                    literal.apply("1"))
+                                    literal.apply(SCHEMA_FORMAT),
+                                    literal.apply(Integer.toString(SCHEMA_EPOCH)))
                             .thenApply(
                                     result -> {
-                                        if (!"ready".equals(text(result.getFirst()))) {
+                                        if (ScriptToken.decode(result.getFirst())
+                                                != ScriptToken.READY) {
                                             throw new IllegalStateException(
                                                     "Redis location schema is incompatible: "
                                                             + result);

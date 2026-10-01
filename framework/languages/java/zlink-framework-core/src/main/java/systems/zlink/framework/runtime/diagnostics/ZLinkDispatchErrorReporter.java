@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.diagnostics;
 
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
@@ -176,12 +175,6 @@ public final class ZLinkDispatchErrorReporter {
         while ((current instanceof CompletionException
                         || current instanceof InvocationTargetException)
                 && current.getCause() != null) {
-            current = current.getCause();
-        }
-        if (current instanceof ZLinkConfigurationException
-                && current.getCause() != null
-                && current.getMessage() != null
-                && current.getMessage().startsWith("failed to invoke ")) {
             current = current.getCause();
         }
         String message = current.getMessage();

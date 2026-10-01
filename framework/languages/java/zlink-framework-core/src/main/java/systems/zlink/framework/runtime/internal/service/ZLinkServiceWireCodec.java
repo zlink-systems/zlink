@@ -19,7 +19,7 @@ public final class ZLinkServiceWireCodec {
                     | ServiceWireConstants.FLAG_BOUND_SESSION
                     | ServiceWireConstants.FLAG_SOURCE_SPOT_ID
                     | ServiceWireConstants.FLAG_EXTENSION;
-    private static final int PREFIX_BYTES = 5;
+    static final int PREFIX_BYTES = 5;
 
     public List<byte[]> encode(ZLinkServiceWireFrame record) {
         Objects.requireNonNull(record, "record");

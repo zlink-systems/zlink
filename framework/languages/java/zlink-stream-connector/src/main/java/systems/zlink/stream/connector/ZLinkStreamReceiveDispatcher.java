@@ -16,8 +16,8 @@ import java.util.function.Supplier;
 
 final class ZLinkStreamReceiveDispatcher {
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
-    private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
-    private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
+    static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
+    static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
 
     private final ZLinkStreamConnectorConfiguration configuration;
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers;
@@ -106,39 +106,52 @@ final class ZLinkStreamReceiveDispatcher {
         }
     }
 
+    enum Control {
+        ACTOR_BOUND,
+        ACTOR_UNBOUND,
+        SESSION_CLOSING,
+        HEARTBEAT_PING,
+        HEARTBEAT_PONG,
+        UNKNOWN;
+
+        static Control decode(String name) {
+            if (ZLinkStreamActorRegistry.BOUND.equals(name)) return ACTOR_BOUND;
+            if (ZLinkStreamActorRegistry.UNBOUND.equals(name)) return ACTOR_UNBOUND;
+            if (ZLinkSessionClosingControl.NAME.equals(name)) return SESSION_CLOSING;
+            if (HEARTBEAT_PING_NAME.equals(name)) return HEARTBEAT_PING;
+            if (HEARTBEAT_PONG_NAME.equals(name)) return HEARTBEAT_PONG;
+            return UNKNOWN;
+        }
+    }
+
     private void dispatchControl(ZLinkStreamWireProtocol.Header header, byte[] payload) {
-        if (ZLinkStreamActorRegistry.BOUND.equals(header.name())) {
-            actors.bound(payload);
-            return;
+        Control control = Control.decode(header.name());
+        switch (control) {
+            case ACTOR_BOUND -> actors.bound(payload);
+            case ACTOR_UNBOUND -> actors.unbound(payload);
+            case SESSION_CLOSING -> {
+                // An invalid payload ends the receive path as a protocol violation (spec 32 §9).
+                ZLinkStreamCloseReason reason = ZLinkSessionClosingControl.decode(payload);
+                DefaultZLinkStreamConnector.trace(
+                        () ->
+                                "connector session-closing version="
+                                        + ZLinkSessionClosingControl.VERSION
+                                        + " reason="
+                                        + reason.name().toLowerCase());
+                sessionClosing.accept(reason);
+            }
+            case HEARTBEAT_PING, HEARTBEAT_PONG, UNKNOWN -> {
+                if (payload.length != 0) {
+                    throw new IllegalArgumentException(
+                            "heartbeat control packet payload must be empty");
+                }
+                if (control == Control.HEARTBEAT_PING) {
+                    controlSender.apply(HEARTBEAT_PONG_NAME);
+                } else if (control == Control.UNKNOWN) {
+                    throw new IllegalArgumentException("unknown control packet");
+                }
+            }
         }
-        if (ZLinkStreamActorRegistry.UNBOUND.equals(header.name())) {
-            actors.unbound(payload);
-            return;
-        }
-        if (ZLinkSessionClosingControl.NAME.equals(header.name())) {
-            //  An invalid payload throws, and the receive path ends the connection as a
-            //  protocol violation (spec 32 9).
-            ZLinkStreamCloseReason reason = ZLinkSessionClosingControl.decode(payload);
-            DefaultZLinkStreamConnector.trace(
-                    () ->
-                            "connector session-closing version="
-                                    + ZLinkSessionClosingControl.VERSION
-                                    + " reason="
-                                    + reason.name().toLowerCase());
-            sessionClosing.accept(reason);
-            return;
-        }
-        if (payload.length != 0) {
-            throw new IllegalArgumentException("heartbeat control packet payload must be empty");
-        }
-        if (HEARTBEAT_PING_NAME.equals(header.name())) {
-            controlSender.apply(HEARTBEAT_PONG_NAME);
-            return;
-        }
-        if (HEARTBEAT_PONG_NAME.equals(header.name())) {
-            return;
-        }
-        throw new IllegalArgumentException("unknown control packet");
     }
 
     private void completeResponse(ZLinkStreamWireProtocol.Header header, byte[] payload) {

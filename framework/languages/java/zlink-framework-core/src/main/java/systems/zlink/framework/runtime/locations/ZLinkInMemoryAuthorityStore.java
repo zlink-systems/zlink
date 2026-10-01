@@ -7,7 +7,6 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -582,11 +581,6 @@ final class ZLinkInMemoryAuthorityStore {
                         }
                     }
                     if (!ownerLeaseIsLive.test(request.targetOwner())) {
-                        return completed(new ZLinkAggregateConflict());
-                    }
-                    if (request.participants().isEmpty()
-                            || request.inventoryDigest().length != 32
-                            || !aggregateParticipantsAreCanonical(request.participants())) {
                         return completed(new ZLinkAggregateConflict());
                     }
                     int ownerGenerationCount =
@@ -1257,19 +1251,6 @@ final class ZLinkInMemoryAuthorityStore {
                     || !Arrays.equals(first.membershipMutation(), second.membershipMutation())) {
                 return false;
             }
-        }
-        return true;
-    }
-
-    private static boolean aggregateParticipantsAreCanonical(
-            List<ZLinkAggregateParticipant> participants) {
-        byte[] previous = null;
-        for (ZLinkAggregateParticipant participant : participants) {
-            byte[] current = participant.authorityKey().getBytes(StandardCharsets.UTF_8);
-            if (previous != null && Arrays.compareUnsigned(previous, current) >= 0) {
-                return false;
-            }
-            previous = current;
         }
         return true;
     }
