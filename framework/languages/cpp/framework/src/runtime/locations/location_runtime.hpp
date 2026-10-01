@@ -276,9 +276,23 @@ class location_runtime_t
     {
         const auto deadline_at = requested_deadline_at.value_or (
           std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
-        auto attempt = std::make_shared<heartbeat_attempt_t> (
-          this, deadline_at, std::weak_ptr<heartbeat_owner_t>{}, cancellation);
-        auto outcome = heartbeat_renew_once_async (attempt).result ().value ();
+        auto heartbeat = std::make_shared<heartbeat_owner_t> ();
+        auto attempt =
+          std::make_shared<heartbeat_attempt_t> (this, deadline_at, heartbeat, cancellation);
+        auto pending = heartbeat_renew_once_async (attempt);
+        auto completed = pending.result_for (remaining_until (deadline_at), cancellation);
+        if (!completed) {
+            std::function<void ()> expire;
+            {
+                std::lock_guard lock (heartbeat->gate);
+                heartbeat->stop.store (true, std::memory_order_release);
+                expire = std::move (attempt->expire);
+            }
+            if (expire)
+                expire ();
+            completed = pending.result ();
+        }
+        auto outcome = completed->value ();
         if (outcome.rejection)
             throw owner_lease_claim_rejected_error_t{*outcome.rejection, deadline_at,
                                                      std::move (outcome.message)};
@@ -336,11 +350,6 @@ class location_runtime_t
     static auto lease_lane (const std::shared_ptr<heartbeat_attempt_t> &attempt,
                             Work work) -> task_t<std::invoke_result_t<Work &>>
     {
-        using value_t = std::invoke_result_t<Work &>;
-        if (attempt->heartbeat.expired ()) {
-            return task_t<value_t> (result_t<value_t>::success (
-              attempt->runtime->_lane.run_checked (std::move (work)).get ()));
-        }
         return attempt->runtime->_lane.run_task (std::move (work));
     }
 
@@ -350,12 +359,9 @@ class location_runtime_t
     {
         auto attempt = weak_attempt.lock ();
         auto heartbeat = attempt ? attempt->heartbeat.lock () : nullptr;
-        if (!attempt || (heartbeat && heartbeat->stop.load (std::memory_order_acquire))
+        if (!attempt || !heartbeat || heartbeat->stop.load (std::memory_order_acquire)
             || remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ())
             co_return std::nullopt;
-        if (!heartbeat)
-            co_return detail::observe_task_result_for (
-              pending, remaining_until (attempt->deadline_at), attempt->cancellation);
         auto completion = std::make_shared<task_completion_source_t<std::optional<result_t<T>>>> ();
         auto ready = completion->task ();
         {
@@ -603,13 +609,17 @@ class location_runtime_t
                 co_return outcome;
             }
             if (std::holds_alternative<owner_lease_generation_exhausted_t> (*claim)) {
-                if (attempt->heartbeat.lock ())
-                    co_await heartbeat_failure (attempt, "owner lease generation is exhausted");
+                co_await heartbeat_failure (attempt, "owner lease generation is exhausted");
                 outcome.rejection = owner_lease_claim_rejection_t::generation_exhausted;
                 outcome.message = "owner lease generation is exhausted";
                 co_return outcome;
             }
+            bool scheduled_heartbeat = false;
             if (auto heartbeat = attempt->heartbeat.lock ()) {
+                std::lock_guard lock (heartbeat->gate);
+                scheduled_heartbeat = heartbeat->current == attempt;
+            }
+            if (scheduled_heartbeat) {
                 auto confirmed = co_await heartbeat_confirm (attempt, failure);
                 if (confirmed && confirmed->token.owner_id == runtime->_owner_id) {
                     co_await heartbeat_accept (attempt, confirmed->token,
@@ -619,9 +629,8 @@ class location_runtime_t
                       owner_lease_renewed_t{confirmed->lease_expires_at, confirmed->store_now};
                     co_return outcome;
                 }
-            }
-            if (attempt->heartbeat.lock ())
                 co_await heartbeat_failure (attempt, "owner lease claim was rejected");
+            }
             outcome.rejection = owner_lease_claim_rejection_t::conflict;
             outcome.message = "owner lease claim was rejected";
         }

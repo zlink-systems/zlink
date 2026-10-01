@@ -1,21 +1,31 @@
-import type {
-  Type,
-  ZLinkMessageSerializer,
-  ZLinkSpot,
-  ZLinkSpotPacketHandler,
-  ZLinkSpotRequestHandler
+import {
+  type Type,
+  type ZLinkMessageSerializer,
+  type ZLinkSpot,
+  type ZLinkSpotPacketHandler,
+  type ZLinkSpotRequestHandler,
+  ZLinkFrameworkException,
+  zlinkMessageMetadata
 } from '../../contracts';
+
+import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import {
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+  ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
+  ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
+  ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET
+} from '../actors';
+import type { ZLinkApplicationWorkClaim } from '../admission';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
-import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
   decodeChannelEnvelope,
@@ -27,25 +37,18 @@ import {
   ZLinkChannelMessageKind,
   type ZLinkChannelEnvelopeCodecRegistry
 } from '../channels/channel-envelope';
+import { SPOT_DIRECT_ENVELOPE } from '../channels/spot-direct-envelope';
+import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
+import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import {
-  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-  ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
-  ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
-  ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET
-} from '../actors';
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
-import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import type { ZLinkApplicationWorkClaim } from '../admission';
-import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
 import { appendRouteReplyParts, hasReplyToken, submitRouteReply } from './spot-route-replies';
-import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  internalFrameworkErrorKind
-} from '../framework-errors-internal';
-import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 interface ZLinkSpotRoutePacketDispatchOptions {
   readonly packetHandlers: ReadonlyMap<string, readonly ZLinkSpotHandlerRegistration[]>;
@@ -57,8 +60,6 @@ interface ZLinkSpotRoutePacketDispatchOptions {
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly claimApplicationWork?: () => ZLinkApplicationWorkClaim;
 }
-
-const SPOT_DIRECT_ENVELOPE = 'zlink.framework.spot-direct.v1';
 
 /** D5: reply metadata attached only to framework-self-generated errors. */
 const FRAMEWORK_ORIGIN_REPLY_METADATA: Readonly<Record<string, string>> = Object.freeze({

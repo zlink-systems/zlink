@@ -1,16 +1,16 @@
-import type {
-  RequiredZlinkStreamConnectorOptions,
-  ZlinkStreamConnection,
-  ZlinkStreamError
-} from '../Contracts';
 import {
+  type RequiredZlinkStreamConnectorOptions,
+  type ZlinkStreamCloseReason,
+  type ZlinkStreamConnection,
+  type ZlinkStreamError,
   ZlinkStreamConnectionState,
   ZlinkStreamDispatchMode,
   ZlinkStreamErrorCode,
   ZlinkStreamException
 } from '../Contracts';
-import type { ZlinkStreamCloseReason } from '../Contracts';
+
 import { ZLINK_STREAM_HEARTBEAT_PING } from './Protocol/ZlinkStreamFrameProtocol';
+import type { ZlinkStreamActors } from './ZlinkStreamActors';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import type { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
@@ -21,7 +21,8 @@ import {
 } from './ZlinkStreamReceiveDispatcher';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
-import type { ZlinkStreamActors } from './ZlinkStreamActors';
+
+const RECONNECT_JITTER_FLOOR = 0.5;
 
 /**
  * Spec stream-connector 32 §6: the wait between attempts is a value picked in
@@ -30,7 +31,9 @@ import type { ZlinkStreamActors } from './ZlinkStreamActors';
  * the server is least able to take them.
  */
 function randomizedDelay(baseDelayMs: number): number {
-  return Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
+  return Math.round(
+    baseDelayMs * (RECONNECT_JITTER_FLOOR + Math.random() * (1 - RECONNECT_JITTER_FLOOR))
+  );
 }
 
 export class ZlinkStreamConnectorLifecycle {

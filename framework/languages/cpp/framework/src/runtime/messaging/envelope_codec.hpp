@@ -91,8 +91,12 @@ class envelope_codec_t
      * malformed observation fields can never fail a frame on an Off node.
      * Callers at a flow processing point pass capture_enabled(); callers that
      * never consume flow pass false. */
-    result_t<envelope_header_t> decode_header (const zlink::message_t &message,
-                                               bool capture_flow = true) const;
+    /* On rejection, the optional context retains only validated base fields;
+     * metadata stays empty. A parse abort may leave the context absent. */
+    result_t<envelope_header_t>
+    decode_header (const zlink::message_t &message,
+                   bool capture_flow = true,
+                   std::optional<envelope_header_t> *rejection_context = nullptr) const;
     result_t<envelope_header_t> decode_header (const message_parts_t &parts,
                                                bool capture_flow = true) const;
     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;

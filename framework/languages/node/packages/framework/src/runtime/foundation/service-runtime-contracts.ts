@@ -1,16 +1,29 @@
-import type { Message } from '../../contracts/Common/Message';
-import type {
-  RequestResult,
-  SubmitResult,
-  ZLinkBackendMessageLike as MessageLike
-} from '../backend/runtime-values';
 import type { RoutingId } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
+import type {
+  ZLinkBackendMessageLike as MessageLike,
+  RequestResult,
+  SubmitResult
+} from '../backend/runtime-values';
 import type { ServiceActorRef } from './service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
   ServiceRetiredBoundSessionRouteFence
 } from './service-stateful-wire-codec';
+export enum StreamSessionRuntimeState {
+  Created = 1,
+  Started = 2,
+  Closed = 5
+}
+
+export enum MeshPeerRuntimeState {
+  Preparing = 2,
+  Serving = 3,
+  Draining = 4,
+  Closed = 5,
+  NotRequired = 6
+}
 
 export interface MeshOperationId {
   readonly high: bigint;

@@ -29,3 +29,17 @@ export * from './runtime/foundation';
 export * from './runtime/foundation/service-authority-payload-codec';
 export * from './runtime/framework-errors-internal';
 export * from './contracts/Configuration/Registration';
+
+export * from './contracts/Locations/Stores';
+export { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from './contracts/Configuration/InternalDefaults';
+export { ZLINK_MAX_STABLE_TYPE_BYTES } from './contracts/Common/CoreTypes';
+export {
+  MAX_LISTENER_PORT,
+  ZLINK_MAX_PUBLIC_WEIGHT,
+  ZLINK_MAX_CAPACITY,
+  isValidPublicWeight,
+  isValidPositiveCapacity,
+  isValidListenerPort,
+  isValidCapacity,
+  requirePublicWeight
+} from './contracts/Configuration/RegistrationBuilderPolicy';

@@ -151,8 +151,8 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv (
 
 `parts_out_` and `part_count_out_` are required. `source_rid_out_` is optional. On success, it receives a
 Core-owned borrowed view—a reference for temporarily reading memory owned by
-Core—of the source client's routing ID. Copy this view before entry to the next
-data-recv API on the same socket if it must remain valid after that receive.
+Core—of the source client's routing ID. The view's lifetime and invalidation conditions follow
+the [Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv).
 
 Each RAW receive record has one part. On success, `*part_count_out_ == 1` and ownership of the first
 slot transfers to the caller, which releases it with `zlink_multipart_close()`. Failure does not
@@ -207,9 +207,8 @@ both messages must be initialized and empty before the call. A NULL required out
 Successful receive transfers the source-RID borrowed view and ownership of header and body to the
 caller, which closes each message exactly once or moves it to another owner. A `0 + 0` packet still
 returns two valid zero-length messages. `NO_DATA` and every failure leave the source pointer and both
-messages unchanged. The RID view remains valid until entry to the next data-recv API on the same
-socket or close; poller wait, completion recv, monitor recv, and data recv on another socket do not
-invalidate it.
+messages unchanged. The RID view's lifetime and invalidation conditions follow the
+[Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv).
 
 `NONE` snapshots `RCVTIMEO` on entry. DONTWAIT and timeout return `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 A blocking PACKET receive observes context termination at the start of every receive turn:
@@ -465,9 +464,8 @@ item maps to one test.
 - If `parts_capacity_ < 1`, the call returns the needed count `1` and
   `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` without consuming the record.
 - DONTWAIT or a `NONE` timeout with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
-- The borrowed view from `source_rid_out_` remains valid until entry to the next data recv on the
-  same socket or close; poller, completion, and monitor recv and data recv on another socket do not
-  invalidate it.
+- The lifetime and invalidation conditions of the borrowed view from `source_rid_out_` follow the
+  [Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv).
 
 **Packet receive**
 

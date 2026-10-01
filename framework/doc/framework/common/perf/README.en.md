@@ -233,8 +233,10 @@ callers and HTTP clients. Record effective family send timeouts from public sock
 (standard: 1000ms; [owning contract][submit]).
 
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`maxQueueLength=4096`, `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`, and effective
-executor limits. Apply these only through each language's public worker options (§10.8).
+`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`, and effective executor limits. Apply
+these only through each language's public worker options (§10.8). The worker queue has no limit
+([Framework API](../spec/server/00-foundation/06-framework-api.en.md)). The Application job queue
+owns the limit on jobs a host accepts, and only the §23 manifest changes it.
 Ordinary workloads are closed-loop: a stream starts its next operation after completion.
 Inputs changing rate, bursts or Core/queue profiles belong only to the §23 manifest.
 

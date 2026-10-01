@@ -230,26 +230,30 @@ void validate_object_store_configuration (
             || !registration->spot_state)
             continue;
 
-        std::lock_guard<std::recursive_mutex> lock (registration->spot_state->mutex);
-        if (!registration->spot_state->snapshot.instance_spot_names.empty ()) {
-            requires_relocation_store = true;
-            break;
-        }
-        const auto relocatable_actor =
-          std::any_of (registration->spot_state->actor_factories.begin (),
-                       registration->spot_state->actor_factories.end (), [] (const auto &factory) {
-                           const auto policy = factory.second.relocation.kind;
-                           return policy == factory_relocation_kind_t::recreate
-                                  || policy == factory_relocation_kind_t::preserve_state;
-                       });
-        const auto relocatable_spot = std::any_of (
-          registration->spot_state->spot_factory_relocations.begin (),
-          registration->spot_state->spot_factory_relocations.end (), [] (const auto &factory) {
-              const auto policy = factory.second.kind;
-              return policy == factory_relocation_kind_t::recreate
-                     || policy == factory_relocation_kind_t::preserve_state;
-          });
-        if (relocatable_actor || relocatable_spot) {
+        const auto relocatable =
+          registration->spot_state->lane
+            .run_checked ([&] {
+                if (!registration->spot_state->snapshot.instance_spot_names.empty ())
+                    return true;
+                const auto relocatable_actor = std::any_of (
+                  registration->spot_state->actor_factories.begin (),
+                  registration->spot_state->actor_factories.end (), [] (const auto &factory) {
+                      const auto policy = factory.second.relocation.kind;
+                      return policy == factory_relocation_kind_t::recreate
+                             || policy == factory_relocation_kind_t::preserve_state;
+                  });
+                const auto relocatable_spot =
+                  std::any_of (registration->spot_state->spot_factory_relocations.begin (),
+                               registration->spot_state->spot_factory_relocations.end (),
+                               [] (const auto &factory) {
+                                   const auto policy = factory.second.kind;
+                                   return policy == factory_relocation_kind_t::recreate
+                                          || policy == factory_relocation_kind_t::preserve_state;
+                               });
+                return relocatable_actor || relocatable_spot;
+            })
+            .get ();
+        if (relocatable) {
             requires_relocation_store = true;
             break;
         }

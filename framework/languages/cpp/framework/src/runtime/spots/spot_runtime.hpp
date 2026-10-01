@@ -87,10 +87,6 @@ class spot_node_builder_state_t
     // configuring API returns (discovery 9).
     runtime::offload_executor_t lane_executor;
     runtime::state_lane_t lane;
-    // Compatibility gate for callers outside spots/** that still compile
-    // against the builder-state test seam. spot_runtime itself never acquires
-    // this mutex; all state it owns is serialized by lane.
-    mutable std::recursive_mutex mutex;
     spot_node_snapshot_t snapshot;
     std::map<std::string, std::type_index> spot_factories;
     // Configure callbacks receive a builder reference. Keep the sealed builder

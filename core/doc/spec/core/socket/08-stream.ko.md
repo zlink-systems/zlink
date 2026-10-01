@@ -144,7 +144,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv (
 
 `parts_out_`과 `part_count_out_`은 필수이고 `source_rid_out_`은 선택 사항이다. 성공하면 source client의 routing ID를 가리키는
 Core 소유 borrowed view — Core가 소유한 memory를 잠시 빌려 읽는 참조 — 를 받는다.
-이 view가 같은 socket의 다음 data recv API 진입 뒤에도 필요하면 그 전에 복사해야 한다.
+이 view의 수명과 무효화 조건은 [Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다.
 
 RAW 수신 record는 단일 part다. 성공하면 `*part_count_out_ == 1`이고 앞 슬롯의 소유권이
 호출자에게 이전되며 호출자는 `zlink_multipart_close()`로 해제한다. 실패하면 소유권이 이전되지
@@ -198,8 +198,8 @@ output이다. 두 message는 호출 전에 initialized empty 상태여야 한다
 Successful receive는 source RID borrowed view와 header/body ownership을 caller에게 옮긴다.
 Caller는 두 message를 각각 정확히 한 번 닫거나 다음 owner로 move한다. 길이 `0 + 0`인 packet도
 길이 0인 유효한 message 두 개로 반환한다. `NO_DATA`와 모든 실패는 source pointer와 두 message를
-변경하지 않는다. RID view는 같은 socket의 다음 data recv 진입 또는 close까지 유효하며 poller
-wait, completion recv, monitor recv와 다른 socket의 data recv는 무효화하지 않는다.
+변경하지 않는다. RID view의 수명과 무효화 조건은
+[Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다.
 
 `NONE`은 진입 시 `RCVTIMEO`를 snapshot하고, `DONTWAIT`과 timeout은
 `ZLINK_RECV_NO_DATA`+`EAGAIN`이다. Blocking PACKET receive는 각 receive turn 시작에서
@@ -430,8 +430,7 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
 - `parts_capacity_ < 1`이면 필요한 수 `1`과 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고
   record를 소비하지 않는다.
 - `DONTWAIT` 또는 `NONE` timeout에 데이터가 없으면 `ZLINK_RECV_NO_DATA`+`EAGAIN`이다.
-- `source_rid_out_`의 borrowed view는 같은 socket의 다음 data recv 진입 또는 close까지 유효하며,
-  poller/completion/monitor recv와 다른 socket의 data recv는 이를 무효화하지 않는다.
+- `source_rid_out_`의 borrowed view의 수명과 무효화 조건은 [Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다.
 
 **Packet receive**
 - `header_size == 0 && body_size == 0`인 packet도 길이 0인 initialized message 두 개로 성공한다.

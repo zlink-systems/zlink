@@ -431,9 +431,9 @@ int main ()
                                             &handler_t::on_context_command,
                                             {.packet_name = "context-command"});
     handlers.on_event<handler_t, event_t> (
-      "game", "event", &handler_t::on_event,
+      "game", &handler_t::on_event,
       {.packet_name = "event", .execution = zlink::framework::handler_execution_t::offload});
-    handlers.on_event<handler_t, event_t> ("game", "context-event", &handler_t::on_context_event,
+    handlers.on_event<handler_t, event_t> ("game", &handler_t::on_context_event,
                                            {.packet_name = "context-event"});
     handlers.on_request<handler_t, async_request_t, reply_t> (
       "game", "async", &handler_t::get_async_reply, {.packet_name = "async"});
@@ -447,7 +447,7 @@ int main ()
                                                         {.packet_name = "duplicate"});
     handlers.on_send<handler_t, command_t> ("game", "blocked-send", &handler_t::on_command,
                                             {.packet_name = "blocked-send"});
-    handlers.on_event<handler_t, event_t> ("game", "blocked-event", &handler_t::on_event,
+    handlers.on_event<handler_t, event_t> ("game", &handler_t::on_event,
                                            {.packet_name = "blocked-event"});
     handlers.use_filter<auditing_filter_t> ()
       .use_filter<short_circuit_filter_t> ()
@@ -583,6 +583,7 @@ int main ()
 
     auto publish_inbound = inbound;
     publish_inbound.source = "node-a";
+    publish_inbound.topic = "context-event";
     auto context_event_result =
       handlers.invoke ("game", "context-event", "context-event", provider, serializers,
                        zlink::message_t::from (std::string ("12")), publish_inbound);
@@ -595,15 +596,45 @@ int main ()
         return 41;
     }
 
-    zlink::framework::handler_registry_t topic_handlers;
-    topic_handlers.on_event<handler_t, event_t> ("game", "topic-a", &handler_t::on_event,
-                                                 {.packet_name = "topic-event"});
-    topic_handlers.on_event<handler_t, event_t> ("game", "topic-b", &handler_t::on_event,
-                                                 {.packet_name = "topic-event"});
-    if (topic_handlers.find ("game", "topic-a", "topic-event") == nullptr
-        || topic_handlers.find ("game", "topic-b", "topic-event") == nullptr
-        || topic_handlers.find ("game", "topic-c", "topic-event") != nullptr) {
+    constexpr const char *packet_event_name = "packet-event";
+    zlink::framework::handler_registry_t packet_event_handlers;
+    packet_event_handlers.on_event<handler_t, event_t> ("game", &handler_t::on_event,
+                                                        {.packet_name = packet_event_name});
+    auto packet_event_inbound = inbound;
+    packet_event_inbound.topic = "received-topic";
+    auto packet_event_result = packet_event_handlers.invoke (
+      "game", "received-topic", packet_event_name, provider, serializers,
+      zlink::message_t::from (std::string ("21")), packet_event_inbound);
+    if (!packet_event_result || handler.last_event != 21) {
+        return 43;
+    }
+
+    bool duplicate_event_failed = false;
+    try {
+        packet_event_handlers.on_event<handler_t, event_t> ("game", &handler_t::on_event,
+                                                            {.packet_name = packet_event_name});
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        duplicate_event_failed =
+          error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+    }
+    if (!duplicate_event_failed
+        || packet_event_handlers.find ("game", "received-topic", packet_event_name) == nullptr
+        || packet_event_handlers.find ("game", packet_event_name) == nullptr) {
         return 42;
+    }
+
+    packet_event_handlers.on_send<handler_t, command_t> (
+      "game", "send-topic", &handler_t::on_command, {.packet_name = packet_event_name});
+    auto same_packet_send_result =
+      packet_event_handlers.invoke ("game", "send-topic", packet_event_name, provider, serializers,
+                                    zlink::message_t::from (std::string ("22")));
+    const auto *same_packet_send =
+      packet_event_handlers.find ("game", "send-topic", packet_event_name);
+    if (!same_packet_send_result || handler.last_command != 22 || handler.last_event != 21
+        || same_packet_send == nullptr
+        || same_packet_send->kind != zlink::framework::handler_kind_t::send) {
+        return 44;
     }
 
     auto async_result = handlers.invoke ("game", "async", "async", provider, serializers,

@@ -738,8 +738,12 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     const auto node_rid = node_rid_t::from_string ("actor-leave-after-defer-node");
     const auto source_id = spot_id_t ("source-spot");
     const auto entry_id = spot_id_t ("entry-spot");
-    node->snapshot.entry_spot_name = "entry";
-    node->spot_ids_by_name.emplace ("entry", entry_id);
+    node->lane
+      .run_checked ([&] {
+          node->snapshot.entry_spot_name = "entry";
+          node->spot_ids_by_name.emplace ("entry", entry_id);
+      })
+      .get ();
 
     const auto make_state = [&] (spot_id_t spot_id, std::string spot_name, bool entry_spot) {
         auto state = std::make_shared<detail::spot_context_state_t> ();
@@ -776,23 +780,25 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
         joined_callbacks.fetch_add (1, std::memory_order_acq_rel);
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     };
-    node->spot_contexts_by_id.emplace (entry_id, detail::spot_context_access_t::create (entry));
     auto context = detail::spot_context_access_t::create (source);
 
     const auto actor_ref =
       ::zlink::framework::detail::actor_ref_access_t::make (node_rid, "test_actor", "actor-1", 1);
     const std::string key = "test_actor:actor-1";
-    {
-        std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        node->actor_spot_ids.emplace (key, source_id);
-        node->actor_generations.emplace (key, actor_ref.object_generation ());
-        node->actor_created_keys.emplace (key);
-        node->actor_instances.emplace (
-          key, std::shared_ptr<void> (std::addressof (actor), [] (void *) {}));
-        node->actor_instance_index.emplace (std::addressof (actor),
-                                            std::make_pair ("test_actor", "actor-1"));
-        source->actor_count = 1;
-    }
+    node->lane
+      .run_checked ([&] {
+          node->spot_contexts_by_id.emplace (entry_id,
+                                             detail::spot_context_access_t::create (entry));
+          node->actor_spot_ids.emplace (key, source_id);
+          node->actor_generations.emplace (key, actor_ref.object_generation ());
+          node->actor_created_keys.emplace (key);
+          node->actor_instances.emplace (
+            key, std::shared_ptr<void> (std::addressof (actor), [] (void *) {}));
+          node->actor_instance_index.emplace (std::addressof (actor),
+                                              std::make_pair ("test_actor", "actor-1"));
+          source->actor_count = 1;
+      })
+      .get ();
 
     const auto submitted = source->run_serial_sync ("actor-leave-with-relocation-fence", [&] {
         const auto left = context.leave_actor (actor_ref, actor).result ();
@@ -811,30 +817,32 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     std::string current_location;
     std::size_t source_actor_count = 0;
     std::size_t entry_actor_count = 0;
-    {
-        std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        const auto found = node->actor_spot_ids.find (key);
-        if (found != node->actor_spot_ids.end ()) {
-            current_location = found->second;
-        }
-        source_actor_count = source->actor_count;
-        entry_actor_count = entry->actor_count;
-    }
+    node->lane
+      .run_checked ([&] {
+          const auto found = node->actor_spot_ids.find (key);
+          if (found != node->actor_spot_ids.end ()) {
+              current_location = found->second;
+          }
+          source_actor_count = source->actor_count;
+          entry_actor_count = entry->actor_count;
+      })
+      .get ();
     test.require (submitted && completed && current_location == entry_id && source_actor_count == 0
                     && entry_actor_count == 1,
                   "actor leave deferred by a relocation-ready handler must run source and entry "
                   "lifecycle callbacks before the next relocation turn");
-    {
-        std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        node->spot_contexts_by_id.clear ();
-        node->spot_ids_by_name.clear ();
-        node->spot_names_by_id.clear ();
-        node->actor_spot_ids.clear ();
-        node->actor_generations.clear ();
-        node->actor_created_keys.clear ();
-        node->actor_instances.clear ();
-        node->actor_instance_index.clear ();
-    }
+    node->lane
+      .run_checked ([&] {
+          node->spot_contexts_by_id.clear ();
+          node->spot_ids_by_name.clear ();
+          node->spot_names_by_id.clear ();
+          node->actor_spot_ids.clear ();
+          node->actor_generations.clear ();
+          node->actor_created_keys.clear ();
+          node->actor_instances.clear ();
+          node->actor_instance_index.clear ();
+      })
+      .get ();
 }
 
 void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
@@ -3935,8 +3943,8 @@ class aggregate_materialized_spot_t final
     }
     zlink::framework::task_t<void> on_actor_joined (aggregate_materialized_actor_t &actor) override
     {
-        joined_saw_membership.store (membership_visible && membership_visible (),
-                                     std::memory_order_release);
+        const auto visible = membership_visible ? co_await membership_visible () : false;
+        joined_saw_membership.store (visible, std::memory_order_release);
         joined_saw_state.store (actor.value == 37, std::memory_order_release);
         joined_before_cas.store (authority_commit_count && authority_commit_count () == 0,
                                  std::memory_order_release);
@@ -3971,7 +3979,7 @@ class aggregate_materialized_spot_t final
     }
 
     int value = 19;
-    static inline std::function<bool ()> membership_visible;
+    static inline std::function<zlink::framework::task_t<bool> ()> membership_visible;
     static inline std::function<int ()> authority_commit_count;
     static inline stateful_object_runtime_t *target_objects = nullptr;
     static inline const object_ref_t *target_actor = nullptr;
@@ -4210,15 +4218,16 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     detail::actor_gateway_runtime_t source_actor_gateway;
     auto source_actor_context = source_actor_gateway.actor_context (application_actor_ref);
     std::shared_ptr<void> application_actor;
-    {
-        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
-        const auto factory =
-          source_state->spot_state->actor_factories.find ("production.aggregate.actor");
-        if (factory != source_state->spot_state->actor_factories.end ()) {
-            application_actor =
-              factory->second.create_context_instance (std::move (source_actor_context));
-        }
-    }
+    source_state->spot_state->lane
+      .run_checked ([&] {
+          const auto factory =
+            source_state->spot_state->actor_factories.find ("production.aggregate.actor");
+          if (factory != source_state->spot_state->actor_factories.end ()) {
+              application_actor =
+                factory->second.create_context_instance (std::move (source_actor_context));
+          }
+      })
+      .get ();
     test.require (static_cast<bool> (application_actor),
                   "production aggregate source Actor application must be materialized");
     if (!application_actor) {
@@ -4226,13 +4235,14 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
         target.stop ();
         return;
     }
-    {
-        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
-        const auto key = std::string ("production.aggregate.actor:") + joined_actor.key;
-        detail::record_actor_instance_index_unlocked (
-          *source_state->spot_state, application_actor_ref, application_actor.get ());
-        source_state->spot_state->actor_instances.emplace (key, application_actor);
-    }
+    source_state->spot_state->lane
+      .run_checked ([&] {
+          const auto key = std::string ("production.aggregate.actor:") + joined_actor.key;
+          detail::record_actor_instance_index_unlocked (
+            *source_state->spot_state, application_actor_ref, application_actor.get ());
+          source_state->spot_state->actor_instances.emplace (key, application_actor);
+      })
+      .get ();
     source_spots.record_actor_spot (application_actor_ref,
                                     framework::spot_id_t ("production-aggregate-spot"));
     test.require (source_objects.register_timer (*spot, {101, 1000, 250, 7})
@@ -4254,18 +4264,20 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     aggregate_materialized_spot_t::target_actor = &expected_actor;
     aggregate_materialized_spot_t::membership_visible = [target_state, expected_actor,
                                                          expected_spot] {
-        std::lock_guard<std::recursive_mutex> lock (target_state->spot_state->mutex);
-        const auto key = std::string ("production.aggregate.actor:") + expected_actor.key;
-        const auto spot_id = target_state->spot_state->actor_spot_ids.find (key);
-        const auto generation = target_state->spot_state->actor_generations.find (key);
-        const auto fence = target_state->spot_state->actor_authority_fences.find (key);
-        return spot_id != target_state->spot_state->actor_spot_ids.end ()
-               && std::string (spot_id->second) == expected_spot.key
-               && generation != target_state->spot_state->actor_generations.end ()
-               && generation->second == expected_actor.object_generation
-               && fence != target_state->spot_state->actor_authority_fences.end ()
-               && fence->second.authority_owner_generation
-                    == expected_actor.authority_owner_generation;
+        return target_state->spot_state->lane.run_task (
+          [target_state, expected_actor, expected_spot] {
+              const auto key = std::string ("production.aggregate.actor:") + expected_actor.key;
+              const auto spot_id = target_state->spot_state->actor_spot_ids.find (key);
+              const auto generation = target_state->spot_state->actor_generations.find (key);
+              const auto fence = target_state->spot_state->actor_authority_fences.find (key);
+              return spot_id != target_state->spot_state->actor_spot_ids.end ()
+                     && std::string (spot_id->second) == expected_spot.key
+                     && generation != target_state->spot_state->actor_generations.end ()
+                     && generation->second == expected_actor.object_generation
+                     && fence != target_state->spot_state->actor_authority_fences.end ()
+                     && fence->second.authority_owner_generation
+                          == expected_actor.authority_owner_generation;
+          });
     };
     try {
         const auto source_spot_state =

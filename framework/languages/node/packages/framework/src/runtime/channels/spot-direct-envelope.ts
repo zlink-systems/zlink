@@ -3,7 +3,7 @@ import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-
 import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkChannelMessageKind } from './channel-envelope';
 
-const SPOT_DIRECT_ENVELOPE = 'zlink.framework.spot-direct.v1';
+export const SPOT_DIRECT_ENVELOPE = 'zlink.framework.spot-direct.v1';
 
 export function encodeSpotDirectEnvelope(
   kind: ZLinkChannelMessageKind.Request | ZLinkChannelMessageKind.Command,

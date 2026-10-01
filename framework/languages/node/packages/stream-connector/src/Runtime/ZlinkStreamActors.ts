@@ -1,18 +1,29 @@
-import type {
-  Disposable,
-  ZlinkStreamActor,
-  ZlinkStreamEncodedPayload,
-  ZlinkStreamMessage,
-  ZlinkStreamRequestCall,
-  ZlinkStreamSendCall
+import {
+  ZlinkStreamControlPacket,
+  decodeStreamWireActorBoundPayload,
+  decodeStreamWireActorUnboundPayload
+} from '@zlink-systems/stream-wire';
+import {
+  type Disposable,
+  type ZlinkStreamActor,
+  type ZlinkStreamEncodedPayload,
+  type ZlinkStreamMessage,
+  type ZlinkStreamRequestCall,
+  type ZlinkStreamSendCall,
+  ZlinkStreamErrorCode
 } from '../Contracts';
-import { ZlinkStreamErrorCode } from '../Contracts';
-import { connectorError, subscription } from './ZlinkStreamSupport';
-import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
-import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 
-const ACTOR_BOUND = '$zlink.actor.bound';
-const ACTOR_UNBOUND = '$zlink.actor.unbound';
+import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
+import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
+import {
+  connectorError,
+  currentRegistrations,
+  registerHandler,
+  type HandlerRegistration
+} from './ZlinkStreamSupport';
+
+const ACTOR_BOUND = ZlinkStreamControlPacket.ActorBound;
+const ACTOR_UNBOUND = ZlinkStreamControlPacket.ActorUnbound;
 export const zlinkStreamActorBinding = Symbol('zlink.stream.actorBinding');
 
 interface ActorConnector {
@@ -82,12 +93,11 @@ export class DefaultZlinkStreamActor implements ZlinkStreamActor {
 export class ZlinkStreamActors {
   private readonly bySlot = new Map<number, DefaultZlinkStreamActor>();
   private readonly byId = new Map<string, DefaultZlinkStreamActor>();
-  private readonly issued: DefaultZlinkStreamActor[] = [];
   private readonly boundHandlers = new Set<
-    (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
   >();
   private readonly unboundHandlers = new Set<
-    (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+    HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
   >();
 
   constructor(
@@ -107,15 +117,13 @@ export class ZlinkStreamActors {
   onBound(
     handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
-    this.boundHandlers.add(handler);
-    return subscription(() => this.boundHandlers.delete(handler));
+    return registerHandler(this.boundHandlers, handler);
   }
 
   onUnbound(
     handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
-    this.unboundHandlers.add(handler);
-    return subscription(() => this.unboundHandlers.delete(handler));
+    return registerHandler(this.unboundHandlers, handler);
   }
 
   processControl(name: string, payload: Uint8Array, signal?: AbortSignal): boolean {
@@ -142,50 +150,45 @@ export class ZlinkStreamActors {
   }
 
   closeAll(signal?: AbortSignal): void {
-    for (const actor of this.issued) {
-      if (!actor.isBound) continue;
+    for (const actor of this.bySlot.values()) {
       this.bySlot.delete(actor.slot);
       this.byId.delete(actor.actorId);
       actor.close();
       this.queue(this.unboundHandlers, actor, signal);
     }
-    this.issued.length = 0;
   }
 
   private bind(payload: Uint8Array, signal?: AbortSignal): void {
-    if (payload.length < 5 || payload[0] !== 1) {
-      throw invalidControl('Actor bound payload is invalid.');
-    }
-    const slot = (payload[1] << 8) | payload[2];
-    const idLength = payload[3];
-    if (slot === 0 || idLength === 0 || payload.length !== 4 + idLength) {
-      throw invalidControl('Actor bound payload is invalid.');
-    }
-    let actorId: string;
+    let binding: ReturnType<typeof decodeStreamWireActorBoundPayload>;
     try {
-      actorId = new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(4));
+      binding = decodeStreamWireActorBoundPayload(payload);
     } catch (cause) {
       throw connectorError(
         ZlinkStreamErrorCode.FrameDecodeFailed,
-        'Actor id is not valid UTF-8.',
-        cause
+        cause instanceof Error ? cause.message : 'Actor bound payload is invalid.',
+        cause instanceof Error ? cause.cause : undefined
       );
     }
+    const { slot, actorId } = binding;
     if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
       throw invalidControl('Actor bound identity is already in use.');
     }
     const actor = new DefaultZlinkStreamActor(this.connector, actorId, slot);
     this.bySlot.set(slot, actor);
     this.byId.set(actorId, actor);
-    this.issued.push(actor);
     this.queue(this.boundHandlers, actor, signal);
   }
 
   private unbind(payload: Uint8Array, signal?: AbortSignal): void {
-    if (payload.length !== 3 || payload[0] !== 1) {
-      throw invalidControl('Actor unbound payload is invalid.');
+    let slot: number;
+    try {
+      slot = decodeStreamWireActorUnboundPayload(payload);
+    } catch (cause) {
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        cause instanceof Error ? cause.message : 'Actor unbound payload is invalid.'
+      );
     }
-    const slot = (payload[1] << 8) | payload[2];
     const actor = this.bySlot.get(slot);
     if (slot === 0 || actor === undefined) {
       throw invalidControl(`Actor slot '${slot}' is not bound.`);
@@ -197,13 +200,15 @@ export class ZlinkStreamActors {
   }
 
   private queue(
-    handlers: Set<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>,
+    handlers: Set<
+      HandlerRegistration<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>
+    >,
     actor: ZlinkStreamActor,
     signal?: AbortSignal
   ): void {
     this.receivedMessages.enqueueCallback(
       () => {
-        for (const handler of Array.from(handlers)) {
+        for (const { handler } of currentRegistrations(handlers)) {
           this.events.runUserCallback(
             () => handler(actor, signal),
             'Actor lifecycle handler failed.',

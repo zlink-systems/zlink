@@ -1,55 +1,31 @@
-import { ZlinkStreamErrorCode, ZlinkStreamMetadata, ZlinkStreamMetadataMap } from '../../Contracts';
-import { decodeStreamWireMetadata, encodeStreamWireMetadata } from '@zlink-systems/stream-wire';
+import {
+  streamWireMetadataSize,
+  ZLINK_STREAM_MAX_METADATA_BYTES
+} from '@zlink-systems/stream-wire';
+import { ZlinkStreamErrorCode, ZlinkStreamMetadata } from '../../Contracts';
 import { connectorError } from '../ZlinkStreamSupport';
 
-export const ZLINK_STREAM_MAX_METADATA_BYTES = 1024;
+export { ZLINK_STREAM_MAX_METADATA_BYTES } from '@zlink-systems/stream-wire';
 
 export class ZlinkStreamMetadataCodec {
   static size(metadata: ZlinkStreamMetadata): number {
+    let size: number;
     try {
-      const size = metadata.count === 0 ? 0 : encodeStreamWireMetadata(metadata.values).length;
-      if (size > ZLINK_STREAM_MAX_METADATA_BYTES) {
-        throw connectorError(
-          ZlinkStreamErrorCode.ValidationFailed,
-          `Metadata must not exceed ${ZLINK_STREAM_MAX_METADATA_BYTES} bytes.`
-        );
-      }
-      return size;
+      // An empty map omits the header section; standalone wire metadata still has a count byte.
+      size = metadata.count === 0 ? 0 : streamWireMetadataSize(metadata.values);
     } catch (cause) {
       throw connectorError(
         ZlinkStreamErrorCode.ValidationFailed,
-        streamWireErrorMessage(cause),
+        cause instanceof Error ? cause.message : 'Metadata is invalid.',
         cause
       );
     }
-  }
-
-  static write(metadata: ZlinkStreamMetadata, destination: Uint8Array): void {
-    try {
-      destination.set(encodeStreamWireMetadata(metadata.values));
-    } catch (cause) {
+    if (size > ZLINK_STREAM_MAX_METADATA_BYTES) {
       throw connectorError(
         ZlinkStreamErrorCode.ValidationFailed,
-        streamWireErrorMessage(cause),
-        cause
+        `Metadata must not exceed ${ZLINK_STREAM_MAX_METADATA_BYTES} bytes.`
       );
     }
+    return size;
   }
-
-  static decode(metadata: Uint8Array): ZlinkStreamMetadata {
-    try {
-      const values = decodeStreamWireMetadata(metadata);
-      return values.size === 0 ? ZlinkStreamMetadataMap.empty : ZlinkStreamMetadataMap.from(values);
-    } catch (cause) {
-      throw connectorError(
-        ZlinkStreamErrorCode.FrameDecodeFailed,
-        streamWireErrorMessage(cause),
-        cause
-      );
-    }
-  }
-}
-
-function streamWireErrorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : 'Metadata is invalid.';
 }

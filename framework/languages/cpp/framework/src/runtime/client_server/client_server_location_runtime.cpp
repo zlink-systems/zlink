@@ -695,14 +695,16 @@ void client_server_location_runtime_t::start_client (const channel_snapshot_t &c
     _channel_runtime.bind_client_server_transport (
       channel.name,
       [this, name = channel.name] (std::string packet_name, std::string content_type,
-                                   zlink::message_t message, std::chrono::milliseconds) {
-          return send (name, std::move (packet_name), std::move (content_type),
-                       std::move (message));
+                                   zlink::message_t message, std::chrono::milliseconds,
+                                   std::map<std::string, std::string> metadata) {
+          return send (name, std::move (packet_name), std::move (content_type), std::move (message),
+                       std::move (metadata));
       },
       [this, name = channel.name] (std::string packet_name, std::string content_type,
-                                   zlink::message_t message, std::chrono::milliseconds timeout) {
+                                   zlink::message_t message, std::chrono::milliseconds timeout,
+                                   std::map<std::string, std::string> metadata) {
           return request (name, std::move (packet_name), std::move (content_type),
-                          std::move (message), timeout);
+                          std::move (message), timeout, std::move (metadata));
       });
 }
 
@@ -1248,7 +1250,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                  * envelope: [JSON header, payload]. flow-correlation §4: at
                  * Off the wire flow pair is neither validated nor
                  * materialized at this ingress. */
-                const auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
+                auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
                   zlink::message_t::from (record.parts[0]),
                   detail::message_flow_tracer_t (_channel_runtime.dispatch_options_ref ())
                     .capture_enabled ());
@@ -1258,7 +1260,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                                                    ? envelope_header.error ()->what ()
                                                    : "ClientServer request envelope is malformed");
                 }
-                const auto &request_envelope = envelope_header.value ();
+                auto &request_envelope = envelope_header.value ();
                 const protocol::application_payload_t payload{
                   request_envelope.message_name, request_envelope.content_type, record.parts[1],
                   request_envelope.flow_id, request_envelope.flow_origin};
@@ -1268,6 +1270,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                 inbound.message.channel_name = record.owner;
                 inbound.message.packet_name = payload.packet_name;
                 inbound.message.content_type = payload.content_type;
+                inbound.message.metadata =
+                  message_metadata_t (std::move (request_envelope.metadata));
                 if (!request_envelope.correlation_id.empty ())
                     inbound.message.correlation_id = request_envelope.correlation_id;
                 detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
@@ -1405,6 +1409,22 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     (void) owner->reply (record, *pending_failure_reply);
             }
             catch (...) {
+                detail::dispatch_error_reporter_t (_channel_runtime.dispatch_options_ref ())
+                  .report_lazy ([&] {
+                      return message_dispatch_error_event_t{
+                        dispatch_error_surface_t::channel,
+                        dispatch_message_kind_t::request,
+                        dispatch_error_reason_t::reply_path_missing,
+                        dispatch_error_action_t::drop,
+                        std::nullopt,
+                        record.owner,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::current_exception ()};
+                  });
             }
         }
         (void) mailbox.release (*claim);
@@ -1416,11 +1436,14 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
 task_t<void> client_server_location_runtime_t::send (const std::string &channel_name,
                                                      std::string packet_name,
                                                      std::string content_type,
-                                                     zlink::message_t message)
+                                                     zlink::message_t message,
+                                                     std::map<std::string, std::string> metadata)
 {
     auto selected = co_await select_ready (channel_name);
-    const auto submitted = co_await selected->send (protocol::application_payload_t{
-      std::move (packet_name), std::move (content_type), message.to_bytes ()});
+    const auto submitted = co_await selected->send (
+      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
+                                      message.to_bytes ()},
+      std::move (metadata));
     if (submitted == zlink::submit_result_t::backpressured) {
         throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
                                                "ClientServer send timed out");
@@ -1437,7 +1460,8 @@ client_server_location_runtime_t::request (const std::string &channel_name,
                                            std::string packet_name,
                                            std::string content_type,
                                            zlink::message_t message,
-                                           std::chrono::milliseconds timeout)
+                                           std::chrono::milliseconds timeout,
+                                           std::map<std::string, std::string> metadata)
 {
     const auto effective =
       timeout > std::chrono::milliseconds::zero () ? timeout : std::chrono::seconds (30);
@@ -1451,7 +1475,7 @@ client_server_location_runtime_t::request (const std::string &channel_name,
     const auto completion = co_await selected->request (
       protocol::application_payload_t{std::move (packet_name), std::move (content_type),
                                       message.to_bytes ()},
-      effective);
+      effective, std::move (metadata));
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));

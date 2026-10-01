@@ -227,8 +227,10 @@ setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. 
 public socket 설정의 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`maxQueueLength=4096`, `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의
-실효 제한을 기록한다. 적용은 각 언어의 public worker options만 사용한다(§10.8).
+`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의 실효 제한을 기록한다.
+적용은 각 언어의 public worker options만 사용한다(§10.8). Worker queue에는 상한이 없다
+([Framework API](../spec/server/00-foundation/06-framework-api.ko.md)). Host가 받는 job의 상한은
+Application job queue가 소유하며 §23 manifest로만 바꾼다.
 일반 workload는 각 stream이 완료 뒤 다음 operation을 시작하는 closed-loop다.
 Rate·burst·Core/queue profile을 바꾸는 입력은 §23 manifest만 소유한다.
 

@@ -73,7 +73,6 @@ internal sealed class ZlinkStreamTaskRunner(CancellationToken shutdownToken)
             await state.Callback(state.ShutdownToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested) { }
-        catch { }
     }
 
     private sealed record TaskState(

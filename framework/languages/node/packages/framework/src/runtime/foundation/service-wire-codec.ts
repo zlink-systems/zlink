@@ -1,4 +1,11 @@
-const PREFIX_SIZE = 5;
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import {
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET,
+  SERVICE_WIRE_MAJOR_OFFSET,
+  SERVICE_WIRE_PREFIX_SIZE
+} from './service-wire-binary-primitives';
+const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const LIVENESS_FRAME_SIZE = PREFIX_SIZE + 8;
 
 export interface ServiceWireDefinition {
@@ -46,16 +53,16 @@ export function createServiceWireCodec(definition: ServiceWireDefinition): Servi
       ) {
         throw new RangeError('command must be a liveness command.');
       }
-      if (record.probeId <= 0n || record.probeId > 0xffff_ffff_ffff_ffffn) {
+      if (record.probeId <= 0n || record.probeId > UINT64_MAX) {
         throw new RangeError('probeId must be a non-zero unsigned 64-bit integer.');
       }
 
       const frame = Buffer.allocUnsafe(LIVENESS_FRAME_SIZE);
       frame[0] = definition.magic[0];
       frame[1] = definition.magic[1];
-      frame[2] = definition.major;
-      frame[3] = record.command;
-      frame[4] = 0;
+      frame[SERVICE_WIRE_MAJOR_OFFSET] = definition.major;
+      frame[SERVICE_WIRE_COMMAND_OFFSET] = record.command;
+      frame[SERVICE_WIRE_FLAGS_OFFSET] = 0;
       frame.writeBigUInt64BE(record.probeId, PREFIX_SIZE);
       return frame;
     },
@@ -64,9 +71,9 @@ export function createServiceWireCodec(definition: ServiceWireDefinition): Servi
       if (frame[0] !== definition.magic[0] || frame[1] !== definition.magic[1]) {
         fail('invalid-magic');
       }
-      if (frame[2] !== definition.major) fail('unsupported-major');
+      if (frame[SERVICE_WIRE_MAJOR_OFFSET] !== definition.major) fail('unsupported-major');
 
-      const command = frame[3];
+      const command = frame[SERVICE_WIRE_COMMAND_OFFSET];
       if (!knownCommands.has(command)) fail('unknown-command');
       if (
         command !== definition.commands.livenessProbe &&
@@ -74,7 +81,7 @@ export function createServiceWireCodec(definition: ServiceWireDefinition): Servi
       ) {
         fail('unknown-command');
       }
-      if (frame[4] !== 0) fail('forbidden-flag');
+      if (frame[SERVICE_WIRE_FLAGS_OFFSET] !== 0) fail('forbidden-flag');
       if (frame.byteLength < LIVENESS_FRAME_SIZE) fail('truncated-field');
       if (frame.byteLength > LIVENESS_FRAME_SIZE) fail('trailing-byte');
 

@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import {
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
@@ -27,7 +28,7 @@ export class ZlinkStreamPendingRequests {
   private readonly active = new Map<bigint, TrackedPendingRequest>();
 
   create(packetName: string, timeoutMs: number): PendingZlinkStreamRequest {
-    if (this.nextRequestSeq > 0xffff_ffff_ffff_ffffn) {
+    if (this.nextRequestSeq > UINT64_MAX) {
       throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Request sequence is exhausted.');
     }
     const requestSeq = this.nextRequestSeq++;

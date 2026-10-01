@@ -1736,7 +1736,7 @@ int main ()
       "sample", "context-topic", &named_handler_t::handle_context);
     handlers.on_send<named_handler_t, named_request_t> ("sample", "send-topic",
                                                         &named_handler_t::send_context);
-    handlers.on_event<named_handler_t, named_request_t> ("sample", "publish-topic",
+    handlers.on_event<named_handler_t, named_request_t> ("sample",
                                                          &named_handler_t::publish_context);
     const auto *descriptor = handlers.find ("sample", "topic", named_request_t::packet_name);
     if (descriptor == nullptr || descriptor->packet_name != named_request_t::packet_name) {

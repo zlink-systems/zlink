@@ -6427,13 +6427,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     }
     actor_cutover_probe_t::submit_bound_push_on_join.store (true, std::memory_order_release);
     actor_gateway_runtime_t source_actor_gateway;
-    {
-        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
-        source_state->spot_state->actor_instances.insert_or_assign (
-          "actor.cutover.probe:actor-cutover-probe",
-          std::make_shared<actor_cutover_probe_t> (source_actor_gateway.actor_context (actor),
-                                                   false));
-    }
+    source_state->spot_state->lane
+      .run_checked ([&] {
+          source_state->spot_state->actor_instances.insert_or_assign (
+            "actor.cutover.probe:actor-cutover-probe",
+            std::make_shared<actor_cutover_probe_t> (source_actor_gateway.actor_context (actor),
+                                                     false));
+      })
+      .get ();
     auto source_actor_object =
       source.native_node ().objects ().find (stateful::object_kind_t::actor, "actor-cutover-probe");
     auto source_spot_object = source.native_node ().objects ().find (
@@ -6745,10 +6746,14 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
     if (publications != 0 || !current || current->ref ().node_rid ().value () != "source-node") {
         return false;
     }
-    const std::lock_guard<std::recursive_mutex> lock (node->mutex);
-    const auto route = node->actor_routes.find ("player:remote-source-actor");
-    return route != node->actor_routes.end () && route->second.node_rid.value () == "target-node"
-           && route->second.spot_id == "target-spot";
+    return node->lane
+      .run_checked ([&] {
+          const auto route = node->actor_routes.find ("player:remote-source-actor");
+          return route != node->actor_routes.end ()
+                 && route->second.node_rid.value () == "target-node"
+                 && route->second.spot_id == "target-spot";
+      })
+      .get ();
 }
 
 // Handler turn and execution gate §5, §7: work a handler defers to its

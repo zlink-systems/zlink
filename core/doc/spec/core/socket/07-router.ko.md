@@ -49,9 +49,7 @@ Part는 caller-제공 `zlink_msg_t` 배열에 채운다. Capacity가 record의 p
 `*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환한다. 소유권·close·
 capacity 규칙은 [Socket 공통](README.ko.md#zlink_recv-와-zlink_router_recv)이 소유한다.
 
-반환한 RID는 socket-owned borrowed view다. 같은 socket의 다음 data recv API에 진입하거나 socket을
-close할 때까지 유효하다. Poller wait, completion recv, monitor recv와 다른 socket의 data recv는
-무효화하지 않는다. 더 오래 보관할 caller와 binding은 receive 직후 owned RID로 복사한다.
+반환한 RID는 socket-owned borrowed view다. 수명과 무효화 조건은 [Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다.
 
 ## 3. Whole-message ownership과 record 원자성
 
@@ -293,8 +291,8 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   선택에 이르므로, 요청자 Core도 그 pair를 선택에서 물러나게 할 때 그 REQUEST를
   [completion 표](README.ko.md#completion-pull과-ownership)대로 `ZLINK_REQUEST_NOT_CONNECTED`로 한 번 종결한다.
 - **`zlink_router_recv_route_generation()`은 마지막으로 성공한 `zlink_router_recv()`가 반환한 record의
-  route generation을 돌려준다.** 반환한 RID와 같은 수명(같은 socket의 다음 data recv 진입까지)이다.
-  다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. 그 RID에 선택 route 행이 없으면 그 record는
+  route generation을 돌려준다.** 반환한 RID와 같은 수명을 따른다.
+  진입이 허용된 다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. 그 RID에 선택 route 행이 없으면 그 record는
   후속 선택 없이 끝난 pipe가 남긴 것이며 선택 변경으로 버려진 것이 아니다. 그 REQUEST의 reply 결과는
   [§9](#9-raw-reply-submit)를 따른다.
 - **Socket마다 route 관찰자는 하나만 둔다.** Snapshot 호출과 `ZLINK_POLLROUTE` 처리는 같은 관찰자가
