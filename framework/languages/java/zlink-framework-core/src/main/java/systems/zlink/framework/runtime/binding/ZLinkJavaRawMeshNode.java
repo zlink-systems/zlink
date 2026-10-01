@@ -4472,12 +4472,7 @@ final class ZLinkJavaRawMeshNode
             if (command == ServiceWireConstants.COMMAND_REJECT) {
                 if (frames.size() == 1) {
                     try {
-                        int reason = wire.decodeReject(head);
-                        if (reason == 4) {
-                            disconnectAdmitted(inbound.source());
-                            notRequiredPeers.add(inbound.source());
-                            disconnectNotRequiredTransport(inbound.source());
-                        }
+                        wire.decodeReject(head);
                     } catch (RuntimeException ignored) {
                     }
                 }
@@ -6475,8 +6470,16 @@ final class ZLinkJavaRawMeshNode
                 disconnectAdmitted(inbound.source());
                 admissionControlReadyConnections.remove(inbound.source());
                 notRequiredPeers.add(inbound.source());
-                trySendAdmissionControl(
-                        inbound.source(), List.of(wire.encodeReject(4)), "route-not-required");
+                if (command == ServiceWireConstants.COMMAND_HELLO) {
+                    trySendAdmissionControl(
+                            inbound.source(),
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_ADMIT, localDescriptor)),
+                            "admit-response");
+                } else if (command == ServiceWireConstants.COMMAND_ADMIT) {
+                    disconnectNotRequiredTransport(inbound.source());
+                }
                 return;
             }
             notRequiredPeers.remove(inbound.source());

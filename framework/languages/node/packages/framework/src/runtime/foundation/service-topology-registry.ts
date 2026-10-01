@@ -207,21 +207,6 @@ export class ServiceTopologyRegistry {
     this.rebuildSelections();
   }
 
-  markNotRequired(descriptor: ServiceNodeDescriptor): void {
-    validateDescriptor(descriptor);
-    if (
-      descriptor.meshName !== this.local.meshName ||
-      descriptor.nodeRoutingId === this.local.nodeRoutingId ||
-      !descriptorConnectionNotRequired(this.local, descriptor)
-    ) {
-      return;
-    }
-    this.peersByRid.delete(descriptor.nodeRoutingId);
-    this.remember(descriptor);
-    this.notRequiredByRid.set(descriptor.nodeRoutingId, cloneDescriptor(descriptor));
-    this.rebuildSelections();
-  }
-
   forgetNotRequired(nodeRoutingId: string): void {
     if (this.notRequiredByRid.delete(nodeRoutingId)) this.rebuildSelections();
   }

@@ -44,6 +44,7 @@ import {
   ServiceWireProtocolError
 } from './service-wire-m6a-codec';
 import { createServiceWireCodec } from './service-wire-codec';
+import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import {
   ServiceWireCommand,
   ServiceWireFrameworkErrorCode
@@ -798,23 +799,7 @@ export class RawServiceMeshRuntime {
       }
       if (header.command === M6aServiceWireCommand.reject) {
         if (received.parts.length !== 1) return 'protocolError';
-        const reason = decodeReject(received.parts[0]!);
-        // Keep an already admitted peer: a reject of an earlier Hello on the
-        // same selected route does not end the admission that succeeded.
-        if (reason === 4 && this.topology.peer(received.sourceRid) === undefined) {
-          const expected = this.expectedPeers.get(received.sourceRid);
-          const local = this.topology.localDescriptor();
-          this.topology.markNotRequired({
-            ...local,
-            nodeRoutingId: received.sourceRid,
-            lifecycleGeneration: 1n,
-            descriptorRevision: 1n,
-            advertisedEndpoint: expected?.endpoint ?? local.advertisedEndpoint,
-            channels: [],
-            objectRole: 'client'
-          });
-          this.retireNotRequiredExpectedPeer(received.sourceRid);
-        }
+        decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
       const peer = this.topology.peer(received.sourceRid);
@@ -1378,17 +1363,13 @@ function immutableDescriptorMismatch(
   return undefined;
 }
 
-function admissionReason(result: PeerAdmissionResult): number {
+function admissionReason(result: Exclude<PeerAdmissionResult, 'admitted' | 'notRequired'>): number {
   switch (result) {
     case 'meshMismatch':
-      return 2;
+      return enumWireRejectReason('topologyMismatch');
     case 'staleDescriptor':
-      return 7;
+      return enumWireRejectReason('descriptorRevisionStale');
     case 'invalidDescriptor':
-      return 11;
-    case 'notRequired':
-      return 4;
-    case 'admitted':
-      return 1;
+      return enumWireRejectReason('invalidDescriptor');
   }
 }
