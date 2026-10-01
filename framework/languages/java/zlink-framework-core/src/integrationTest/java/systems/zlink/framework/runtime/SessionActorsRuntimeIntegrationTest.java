@@ -84,13 +84,14 @@ final class SessionActorsRuntimeIntegrationTest {
         try (ZLinkFrameworkRuntime runtime = startLocalManagedStreamRuntime();
                 Socket client = connectStream(runtime, "local")) {
             ZLinkActor actor = managedActor(runtime, "player-1", "player");
-            ZLinkSessionActor bound =
-                    runtime.sessionActors("local", connectedSession())
-                            .bind(actor)
-                            .toCompletableFuture()
-                            .join();
+            var sessionActors = runtime.sessionActors("local", connectedSession());
+            ZLinkSessionActor bound = sessionActors.bind(actor).toCompletableFuture().join();
 
-            relayWithHeader(bound, "ActorNotify", ZLinkMessage.of(new ActorNotifyMessage("hello")));
+            relayWithHeader(
+                    sessionActors,
+                    bound,
+                    "ActorNotify",
+                    ZLinkMessage.of(new ActorNotifyMessage("hello")));
 
             assertEquals("player-1:hello", awaitActorRelay("player-1:hello", 2, TimeUnit.SECONDS));
         }
@@ -456,46 +457,21 @@ final class SessionActorsRuntimeIntegrationTest {
         }
     }
 
-    static String relayUntilActorReceived(
-            ZLinkSessionActor bound,
-            byte[] payloadBytes,
-            String expected,
-            long timeout,
-            TimeUnit unit)
-            throws Exception {
-        long deadline = System.nanoTime() + unit.toNanos(timeout);
-        while (true) {
-            relayWithHeader(
-                    bound,
-                    "ActorNotify",
-                    ZLinkMessage.of(
-                            new ActorNotifyMessage(
-                                    new String(payloadBytes, StandardCharsets.UTF_8))));
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
-                throw new TimeoutException();
-            }
-            String received =
-                    actorRelayRequests.poll(
-                            Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)),
-                            TimeUnit.NANOSECONDS);
-            if (expected.equals(received)) {
-                return received;
-            }
-        }
-    }
-
     static String uniqueActorId(String prefix) {
         return prefix + "-" + Long.toUnsignedString(System.nanoTime(), 36);
     }
 
-    static void relayWithHeader(ZLinkSessionActor actor, String packetName, ZLinkMessage payload) {
-        ZLinkSessionActorsRuntime.enterRelayDispatch(
+    static void relayWithHeader(
+            ZLinkSessionActorsRuntime sessionActors,
+            ZLinkSessionActor actor,
+            String packetName,
+            ZLinkMessage payload) {
+        sessionActors.enterRelayDispatch(
                 new ZLinkStreamHeader(packetName, Map.of(), Optional.empty()));
         try {
             actor.relay(payload).toCompletableFuture().join();
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
+            sessionActors.exitRelayDispatch();
         }
     }
 
