@@ -22,10 +22,17 @@ import java.util.function.Supplier;
  */
 final class RetryPolicy {
 
+    private static final long BACKOFF_BASE_MILLIS = 50L;
+    private static final long BACKOFF_CAP_MILLIS = 1000L;
+    private static final int BACKOFF_MAX_SHIFT = 5;
+
     // Exponential backoff with full jitter: base 50ms, doubling per attempt, capped at 1s.
     // Fixed delays synchronize retries from many clients against an ailing server.
     private static long delayMillisFor(int attempt) {
-        long ceiling = Math.min(1000L, 50L << Math.min(attempt, 5));
+        long ceiling =
+                Math.min(
+                        BACKOFF_CAP_MILLIS,
+                        BACKOFF_BASE_MILLIS << Math.min(attempt, BACKOFF_MAX_SHIFT));
         return ThreadLocalRandom.current().nextLong(ceiling + 1);
     }
 

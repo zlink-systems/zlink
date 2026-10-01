@@ -44,6 +44,7 @@
         <Compile Include="Transport/ConnectionEndingTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
+        <Compile Include="Transport/R3RegressionTests.cs"/>
         <Compile Include="Transport/ReceiveQueueConcurrencyTests.cs"/>
         <Compile Include="Transport/ReviewRegressionTests.cs"/>
         <Compile Include="Transport/RequestHookTests.cs"/>

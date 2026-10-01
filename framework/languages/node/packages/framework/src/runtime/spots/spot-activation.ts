@@ -256,7 +256,7 @@ export class ZLinkSpotActivationLifecycle {
     const common = {
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       outbound,
       timers,
       serial,
@@ -406,7 +406,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createInstanceSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       handlers: instanceHandlers,
       outbound,
       timers,
@@ -599,7 +599,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(spotGeneration),
+      objectGeneration: spotGeneration,
       handlers,
       outbound,
       timers,
@@ -735,7 +735,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       handlers,
       outbound,
       timers,
@@ -1116,13 +1116,4 @@ export class ZLinkSpotActivationLifecycle {
       message.close();
     }
   }
-}
-
-function toContextGeneration(generation: bigint): number {
-  if (generation < 0n || generation > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new ZLinkConfigurationException(
-      `Spot object generation '${generation}' cannot be represented by the Node.js public context.`
-    );
-  }
-  return Number(generation);
 }

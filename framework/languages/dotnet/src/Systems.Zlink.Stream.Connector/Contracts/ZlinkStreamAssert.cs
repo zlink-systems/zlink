@@ -95,21 +95,14 @@ public static class ZlinkStreamAssert
             return true;
         }
 
-        for (var current = exception; current is not null; current = current.InnerException)
+        if (exception is TimeoutException)
         {
-            var code = current switch
-            {
-                TimeoutException => ZlinkStreamErrorCode.RequestTimeout,
-                ArgumentException => ZlinkStreamErrorCode.ValidationFailed,
-                HttpRequestException => ZlinkStreamErrorCode.Disconnected,
-                IOException => ZlinkStreamErrorCode.Disconnected,
-                _ => (ZlinkStreamErrorCode?)null,
-            };
-            if (code is { } knownCode)
-            {
-                error = new ZlinkStreamError(knownCode, exception.Message, exception);
-                return true;
-            }
+            error = new ZlinkStreamError(
+                ZlinkStreamErrorCode.RequestTimeout,
+                exception.Message,
+                exception
+            );
+            return true;
         }
 
         error = null!;

@@ -21,6 +21,7 @@ export class ZlinkStreamHeaderCodec {
   static encode(header: ZlinkStreamHeader): Uint8Array {
     const reply = isReplyKind(header.kind);
     if (!reply) validateName(header.name, header.kind === ZlinkStreamMessageKind.Control);
+    validateEncodeFlags(header.flags);
     validateHeaderSemantics(header);
     ZlinkStreamMetadataCodec.size(header.metadata);
     try {
@@ -121,7 +122,7 @@ export function buildHeader(
 }
 
 function validateHeaderSemantics(header: ZlinkStreamHeader): void {
-  validateEnum(header.kind, header.codec, header.flags);
+  validateEnum(header.kind, header.codec);
   const hasRequestSeq =
     header.requestSeq !== undefined || (header.flags & ZlinkStreamHeaderFlags.HasRequestSeq) !== 0;
   const hasMetadata =
@@ -172,17 +173,16 @@ function validateHeaderSemantics(header: ZlinkStreamHeader): void {
   }
 }
 
-function validateEnum(
-  kind: ZlinkStreamMessageKind,
-  codec: ZlinkStreamCodec,
-  flags: ZlinkStreamHeaderFlags
-): void {
+function validateEnum(kind: ZlinkStreamMessageKind, codec: ZlinkStreamCodec): void {
   if (!isStreamWireMessageKind(kind)) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream message kind.');
   }
   if (!isStreamWireCodec(codec)) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream codec.');
   }
+}
+
+function validateEncodeFlags(flags: ZlinkStreamHeaderFlags): void {
   const known =
     ZlinkStreamHeaderFlags.HasRequestSeq |
     ZlinkStreamHeaderFlags.HasMetadata |

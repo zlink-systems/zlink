@@ -217,24 +217,29 @@ public sealed partial class StreamConnectorTests
             "request failed",
             new HttpRequestException("connection refused")
         );
-        var disconnected = await ZlinkStreamAssert.ExpectFailureAsync(
-            _ => ValueTask.FromException(wrappedTransportFailure),
-            nameof(ZlinkStreamErrorCode.Disconnected)
+        var propagatedTransportWrapper = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () =>
+                await ZlinkStreamAssert.ExpectFailureAsync(
+                    _ => ValueTask.FromException(wrappedTransportFailure),
+                    nameof(ZlinkStreamErrorCode.Disconnected)
+                )
         );
-        Assert.Equal(ZlinkStreamErrorCode.Disconnected, disconnected.Code);
-        Assert.Same(wrappedTransportFailure, disconnected.Exception);
+        Assert.Same(wrappedTransportFailure, propagatedTransportWrapper);
 
         await ZlinkStreamAssert.ExpectTimeoutAsync(_ =>
             ValueTask.FromException(new TimeoutException("wait timed out"))
         );
-        await ZlinkStreamAssert.ExpectTimeoutAsync(_ =>
-            ValueTask.FromException(
-                new InvalidOperationException(
-                    "HTTP request exceeded timeout",
-                    new TimeoutException("HTTP request exceeded timeout")
-                )
-            )
+        var timeoutWrapper = new InvalidOperationException(
+            "HTTP request exceeded timeout",
+            new TimeoutException("HTTP request exceeded timeout")
         );
+        var propagatedTimeoutWrapper = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () =>
+                await ZlinkStreamAssert.ExpectTimeoutAsync(_ =>
+                    ValueTask.FromException(timeoutWrapper)
+                )
+        );
+        Assert.Same(timeoutWrapper, propagatedTimeoutWrapper);
         using var callerCanceled = new CancellationTokenSource();
         callerCanceled.Cancel();
         var cancellation = new OperationCanceledException(callerCanceled.Token);

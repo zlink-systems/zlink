@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -24,6 +25,7 @@ import java.util.function.Supplier;
  * returns a {@link CompletionStage}; no thread is parked while the request is in flight.
  */
 public final class ZLinkHttpRequestBuilder {
+    private static final int FIRST_ERROR_STATUS = 400;
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
@@ -139,7 +141,7 @@ public final class ZLinkHttpRequestBuilder {
 
     /** Submits the request and returns the raw response. */
     public CompletionStage<RawHttpResponse> submitRaw() {
-        return execute(null);
+        return execute(null, Function.identity());
     }
 
     /**
@@ -150,10 +152,11 @@ public final class ZLinkHttpRequestBuilder {
         if (sink == null) {
             throw HttpClientErrors.protocol("HTTP request download sink is required");
         }
-        return execute(sink);
+        return execute(sink, Function.identity());
     }
 
-    private CompletionStage<RawHttpResponse> execute(Consumer<byte[]> sink) {
+    private <T> CompletionStage<T> execute(
+            Consumer<byte[]> sink, Function<RawHttpResponse, T> transform) {
         var spec = makeRequest(sink);
         ZLinkHttpClient resolved = clientLease.acquire();
         try {
@@ -161,18 +164,21 @@ public final class ZLinkHttpRequestBuilder {
                     .executeAsync(spec)
                     .thenApply(
                             result ->
-                                    new RawHttpResponse(
-                                            result.status(), result.headers(), result.body()))
-                    .whenComplete((result, error) -> clientLease.release());
+                                    transform.apply(
+                                            new RawHttpResponse(
+                                                    result.status(),
+                                                    result.headers(),
+                                                    result.body())))
+                    .whenComplete((result, error) -> clientLease.release(error));
         } catch (RuntimeException error) {
-            clientLease.release();
+            clientLease.release(error);
             throw error;
         }
     }
 
     /** Submits the request and decodes the JSON body to {@code type}. */
     public <T> CompletionStage<HttpResponse<T>> submit(Class<T> type) {
-        return decode(submitRaw(), type);
+        return execute(null, raw -> decode(raw, type));
     }
 
     /** Submits the request and returns only the decoded JSON body. */
@@ -188,24 +194,20 @@ public final class ZLinkHttpRequestBuilder {
                                 callback.complete(error, error == null ? response : null));
     }
 
-    private static <T> CompletionStage<HttpResponse<T>> decode(
-            CompletionStage<RawHttpResponse> operation, Class<T> type) {
-        return operation.thenApply(
-                raw -> {
-                    if (raw.status() >= 400) {
-                        throw HttpClientErrors.internalFailure(
-                                "HTTP request failed with status " + raw.status());
-                    }
-                    if (raw.body().isEmpty()) {
-                        return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
-                    }
-                    try {
-                        T body = MAPPER.readValue(raw.body(), type);
-                        return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
-                    } catch (Exception cause) {
-                        throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
-                    }
-                });
+    private static <T> HttpResponse<T> decode(RawHttpResponse raw, Class<T> type) {
+        if (raw.status() >= FIRST_ERROR_STATUS) {
+            throw HttpClientErrors.internalFailure(
+                    "HTTP request failed with status " + raw.status());
+        }
+        if (raw.body().isEmpty()) {
+            return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
+        }
+        try {
+            T body = MAPPER.readValue(raw.body(), type);
+            return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
+        } catch (Exception cause) {
+            throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
+        }
     }
 
     private HttpRequestSpec makeRequest(Consumer<byte[]> sink) {
@@ -254,14 +256,16 @@ public final class ZLinkHttpRequestBuilder {
             return client;
         }
 
-        synchronized void release() {
+        synchronized void release(Throwable requestFailure) {
             if (!owned || client == null) {
                 return;
             }
             try {
                 client.close();
-            } catch (RuntimeException ignored) {
-                // Cleanup must not replace the request result.
+            } catch (RuntimeException closeFailure) {
+                if (requestFailure == null) {
+                    throw closeFailure;
+                }
             } finally {
                 client = null;
             }

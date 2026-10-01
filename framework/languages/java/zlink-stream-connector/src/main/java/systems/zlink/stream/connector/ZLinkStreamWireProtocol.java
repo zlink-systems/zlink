@@ -41,8 +41,7 @@ final class ZLinkStreamWireProtocol {
 
     static byte[] encodeHeader(Header header) {
         String wireName = isReply(header.kind()) ? "" : header.name();
-        validateHeader(header, wireName);
-        byte[] name = wireName.getBytes(StandardCharsets.UTF_8);
+        byte[] name = validateHeader(header, wireName);
         byte[] metadata =
                 header.metadata().isEmpty() ? new byte[0] : encodeMetadata(header.metadata());
         boolean hasCorrelationId =
@@ -313,12 +312,24 @@ final class ZLinkStreamWireProtocol {
         return Collections.unmodifiableMap(values);
     }
 
-    private static void validateHeader(Header header, String packetName) {
-        validateEnum(header.kind(), header.codec(), header.flags());
+    static byte[] validatePacketName(String packetName) {
+        if (packetName == null || packetName.isBlank()) {
+            throw new IllegalArgumentException("packetName is required");
+        }
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
-        if ((isReply(header.kind()) && name.length != 0)
-                || (!isReply(header.kind()) && name.length == 0)
-                || name.length > MAX_PACKET_NAME_BYTES) {
+        if (name.length > MAX_PACKET_NAME_BYTES) {
+            throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
+        }
+        return name;
+    }
+
+    private static byte[] validateHeader(Header header, String packetName) {
+        validateEnum(header.kind(), header.codec(), header.flags());
+        byte[] name =
+                isReply(header.kind())
+                        ? packetName.getBytes(StandardCharsets.UTF_8)
+                        : validatePacketName(packetName);
+        if (isReply(header.kind()) && name.length != 0) {
             throw new IllegalArgumentException("packet name is invalid");
         }
         boolean hasRequestSeq =
@@ -358,6 +369,7 @@ final class ZLinkStreamWireProtocol {
             throw new IllegalArgumentException(
                     "control packet must use raw codec and must not contain flags");
         }
+        return name;
     }
 
     private static boolean isReply(int kind) {

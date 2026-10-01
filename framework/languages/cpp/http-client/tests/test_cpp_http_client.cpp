@@ -1697,6 +1697,74 @@ TEST (ZLinkHttpClient, MapsDownloadSinkFailureToInternalFailure)
     EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
 }
 
+TEST (ZLinkHttpClient, MapsTransportShapedProviderFailureToInternalFailure)
+{
+    loopback_http_server_t server;
+    auto client = zlink::http_client::client_t::create (server.base_url ()).retry (1).build ();
+    int calls = 0;
+    const auto result = client.post ("/echo-content-type")
+                          .body_stream (
+                            [&] () -> std::optional<std::string> {
+                                ++calls;
+                                throw boost::system::system_error (boost::asio::error::timed_out);
+                            },
+                            "application/octet-stream")
+                          .submit_raw ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (calls, 1);
+}
+
+TEST (ZLinkHttpClient, MapsTransportShapedSinkFailureToInternalFailureWithoutReplay)
+{
+    loopback_http_server_t server;
+    auto client = zlink::http_client::client_t::create (server.base_url ()).retry (1).build ();
+    ASSERT_TRUE (client.get ("/big").submit_raw ());
+    int calls = 0;
+    const auto result =
+      client.get ("/big")
+        .download ([&] (std::string_view) {
+            ++calls;
+            throw boost::system::system_error (boost::asio::error::connection_reset);
+        })
+        .result ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (calls, 1);
+}
+
+TEST (ZLinkHttpClient, PreservesCodedProviderFailure)
+{
+    loopback_http_server_t server;
+    auto client = make_json_client (server.base_url ());
+    const auto result =
+      client.post ("/echo-content-type")
+        .body_stream (
+          [] () -> std::optional<std::string> {
+              throw zlink::framework::framework_exception_t (
+                zlink::framework::framework_error_kind_t::protocol_error, "coded provider failure");
+          },
+          "application/octet-stream")
+        .submit_raw ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
+}
+
+TEST (ZLinkHttpClient, PreservesCodedSinkFailure)
+{
+    loopback_http_server_t server;
+    auto client = make_json_client (server.base_url ());
+    const auto result =
+      client.get ("/big")
+        .download ([] (std::string_view) {
+            throw zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::protocol_error, "coded sink failure");
+        })
+        .result ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
+}
+
 TEST (ZLinkHttpClient, CoroutineDownloadSinkRunsOnExecuteSchedulerWorker)
 {
     loopback_http_server_t server;

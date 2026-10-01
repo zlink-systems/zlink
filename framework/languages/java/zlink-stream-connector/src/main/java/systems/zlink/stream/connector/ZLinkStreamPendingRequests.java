@@ -7,21 +7,41 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 final class ZLinkStreamPendingRequests {
     private final Map<Long, PendingRequest> requests = new ConcurrentHashMap<>();
 
-    CompletableFuture<ZLinkStreamEncodedPayload> add(long requestSeq, String packetName) {
-        CompletableFuture<ZLinkStreamEncodedPayload> pending = new CompletableFuture<>();
-        requests.put(requestSeq, new PendingRequest(packetName, pending));
+    void add(
+            long requestSeq,
+            String packetName,
+            CompletableFuture<ZLinkStreamEncodedPayload> pending,
+            BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply,
+            BiFunction<Throwable, BooleanSupplier, Boolean> onFailure) {
+        requests.put(
+                requestSeq,
+                new PendingRequest(
+                        (payload, failure) -> {
+                            if (failure != null)
+                                return onFailure.apply(
+                                        failure, () -> pending.completeExceptionally(failure));
+                            var reply =
+                                    new ZLinkStreamEncodedPayload(
+                                            packetName,
+                                            payload.payload(),
+                                            payload.metadata(),
+                                            payload.codec());
+                            return onReply.apply(reply, () -> pending.complete(reply));
+                        },
+                        pending));
         pending.whenComplete(
                 (reply, ex) -> {
                     if (pending.isCancelled()) {
                         requests.remove(requestSeq);
                     }
                 });
-        return pending;
     }
 
     void startTimeout(long requestSeq, Duration timeout, ScheduledExecutorService scheduler) {
@@ -34,12 +54,15 @@ final class ZLinkStreamPendingRequests {
                 scheduler.schedule(
                         () -> {
                             if (requests.remove(requestSeq, request)) {
-                                pending.completeExceptionally(
-                                        ZLinkStreamException.of(
-                                                ZLinkStreamErrorCode.REQUEST_TIMEOUT,
-                                                "request timed out after " + timeout,
-                                                new TimeoutException(
-                                                        "request timed out after " + timeout)));
+                                request.complete()
+                                        .apply(
+                                                null,
+                                                ZLinkStreamException.of(
+                                                        ZLinkStreamErrorCode.REQUEST_TIMEOUT,
+                                                        "request timed out after " + timeout,
+                                                        new TimeoutException(
+                                                                "request timed out after "
+                                                                        + timeout)));
                             }
                         },
                         timeout.toMillis(),
@@ -60,16 +83,14 @@ final class ZLinkStreamPendingRequests {
             payload.payload().close();
             return;
         }
-        CompletableFuture<ZLinkStreamEncodedPayload> pending = request.future();
-        ZLinkStreamEncodedPayload reply =
-                new ZLinkStreamEncodedPayload(
-                        request.packetName(),
-                        payload.payload(),
-                        payload.metadata(),
-                        payload.codec());
-        if (!pending.complete(reply)) {
-            reply.payload().close();
+        boolean completed;
+        try {
+            completed = request.complete().apply(payload, null);
+        } catch (RuntimeException failure) {
+            request.complete().apply(null, failure);
+            completed = false;
         }
+        if (!completed) payload.payload().close();
     }
 
     boolean fail(long requestSeq, Throwable ex) {
@@ -77,7 +98,7 @@ final class ZLinkStreamPendingRequests {
         CompletableFuture<ZLinkStreamEncodedPayload> pending =
                 request == null ? null : request.future();
         if (pending != null) {
-            pending.completeExceptionally(ex);
+            request.complete().apply(null, ex);
             return true;
         }
         return false;
@@ -99,7 +120,7 @@ final class ZLinkStreamPendingRequests {
                                 ex);
         for (Map.Entry<Long, PendingRequest> entry : requests.entrySet()) {
             if (requests.remove(entry.getKey()) != null) {
-                entry.getValue().future().completeExceptionally(failure);
+                entry.getValue().complete().apply(null, failure);
             }
         }
     }
@@ -116,5 +137,6 @@ final class ZLinkStreamPendingRequests {
     }
 
     private record PendingRequest(
-            String packetName, CompletableFuture<ZLinkStreamEncodedPayload> future) {}
+            BiFunction<ZLinkStreamEncodedPayload, Throwable, Boolean> complete,
+            CompletableFuture<ZLinkStreamEncodedPayload> future) {}
 }

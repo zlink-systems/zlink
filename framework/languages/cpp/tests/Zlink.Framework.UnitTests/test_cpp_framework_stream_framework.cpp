@@ -1029,14 +1029,14 @@ int main ()
 
     zlink::framework::detail::stream_header_t reserved (
       stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none, std::nullopt,
-      "__zlink.internal");
+      "$zlink.internal");
     if (runtime.validate_header (reserved)) {
         return 5;
     }
 
     zlink::framework::detail::stream_header_t valid_control (
       stream_message_kind_t::control, stream_codec_t::raw, stream_header_flags_t::none,
-      std::nullopt, "__zlink.ping");
+      std::nullopt, "$zlink.ping");
     if (!runtime.validate_header (valid_control)) {
         return 6;
     }

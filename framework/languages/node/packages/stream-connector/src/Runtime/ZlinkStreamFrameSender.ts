@@ -38,7 +38,7 @@ class ZlinkStreamConnectionWriteQueue {
   }
 
   cancel(operation: QueuedWrite, error: unknown): void {
-    if (this.queue.has(operation) || this.active === operation) operation.fail(error);
+    if (this.queue.delete(operation) || this.active === operation) operation.fail(error);
   }
 
   /**

@@ -29,6 +29,21 @@ namespace
 namespace beast = boost::beast;
 namespace http = beast::http;
 using body_provider_t = std::function<std::optional<std::string> ()>;
+constexpr std::size_t download_chunk_size = 16384;
+
+template <typename TCallback, typename... TArgs>
+decltype (auto) invoke_application_callback (const TCallback &callback, TArgs &&...args)
+{
+    try {
+        return std::invoke (callback, std::forward<TArgs> (args)...);
+    }
+    catch (const zlink::framework::framework_exception_t &) {
+        throw;
+    }
+    catch (const std::exception &error) {
+        throw request_internal_failure_error (error.what ());
+    }
+}
 
 struct exchange_outcome_t
 {
@@ -248,7 +263,7 @@ class request_performer_t
                 }
                 return std::move (outcome.response);
             }
-            catch (...) {
+            catch (const boost::system::system_error &) {
                 if (!reused || !can_retry_reused_connection (method)) {
                     throw;
                 }
@@ -321,7 +336,7 @@ class request_performer_t
         }
 
         while (!serializer.is_done ()) {
-            auto chunk = provider ();
+            auto chunk = invoke_application_callback (provider);
             if (chunk && chunk->empty ()) {
                 continue;
             }
@@ -367,7 +382,7 @@ class request_performer_t
                               && is_redirect_status (static_cast<int> (parser.get ().result_int ()))
                               && parser.get ().count (http::field::location) > 0;
 
-        char chunk[16384];
+        char chunk[download_chunk_size];
         while (!parser.is_done ()) {
             parser.get ().body ().data = chunk;
             parser.get ().body ().size = sizeof chunk;
@@ -378,7 +393,7 @@ class request_performer_t
             }
             const auto produced = sizeof chunk - parser.get ().body ().size;
             if (!draining && produced > 0) {
-                _request.sink (std::string_view (chunk, produced));
+                invoke_application_callback (_request.sink, std::string_view (chunk, produced));
             }
         }
 

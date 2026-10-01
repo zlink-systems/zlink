@@ -16,7 +16,6 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <typeindex>
 #include <typeinfo>
 #include <utility>
 #include <vector>
@@ -206,9 +205,6 @@ class connector_t
     /// Starts a send call and transfers the packet into the call object.
     send_call_t send (packet_t packet)
     {
-        if (packet.name.empty ()) {
-            packet.name = "packet";
-        }
         return send_call_t (_state, result_t<packet_t>::success (std::move (packet)));
     }
 
@@ -224,9 +220,6 @@ class connector_t
     /// Starts a request call and transfers the packet into the call object.
     request_call_t request (packet_t packet)
     {
-        if (packet.name.empty ()) {
-            packet.name = "packet";
-        }
         return request_call_t (_state, result_t<packet_t>::success (std::move (packet)),
                                options ().request_timeout);
     }
@@ -282,10 +275,10 @@ class connector_t
 
     template <typename TMessage> packet_t make_packet () const
     {
-        return make_packet (std::type_index (typeid (TMessage)), resolve_packet_name<TMessage> ());
+        return make_packet (resolve_packet_name<TMessage> ());
     }
 
-    packet_t make_packet (std::type_index type, std::string packet_name) const;
+    packet_t make_packet (std::string packet_name) const;
     subscription_t on_packet_erased (std::string packet_name,
                                      std::function<void (const packet_t &)> handler);
     subscription_t on_actor_packet_erased (std::string packet_name,
