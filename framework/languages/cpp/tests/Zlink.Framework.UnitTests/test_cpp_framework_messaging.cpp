@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -84,6 +85,8 @@ struct envelope_payload_t
 
 int main ()
 {
+    // This test drives runtime parts without a host.
+    zlink::framework::runtime::install_host_context_hooks ();
     {
         namespace msg = zlink::framework::runtime::messaging;
         const auto timeout = std::chrono::hours (27);

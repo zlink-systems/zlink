@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include "runtime_context_hooks_environment.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <future>

@@ -816,6 +816,8 @@ bool verify_delivery_defects (const char *executable)
 
 int main (int argc, char **argv)
 {
+    // This test drives runtime parts without a host.
+    zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 3 && std::string (argv[1]) == "--delivery-defect") {
         run_delivery_defect (static_cast<delivery_defect_t> (std::atoi (argv[2])));
         return 1;

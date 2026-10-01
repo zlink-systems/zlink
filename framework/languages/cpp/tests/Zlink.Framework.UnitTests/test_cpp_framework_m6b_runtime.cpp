@@ -3,6 +3,7 @@
 #include "metric_test_reader.hpp"
 #include "test_completion_poller_driver.hpp"
 
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/actors/actor_client.hpp"
@@ -6683,6 +6684,8 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main (int argc, char **argv)
 {
+    // This test drives runtime parts without a host.
+    zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
         verify_queued_owner_accepts_request_without_blocking_other_owner ();
         return 0;

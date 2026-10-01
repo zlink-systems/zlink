@@ -2823,6 +2823,7 @@ try {
     }
     std::vector<hosted_service_t *> started;
     try {
+        runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
         _state->start_hosted_services (provider, started);

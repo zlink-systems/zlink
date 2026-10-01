@@ -70,19 +70,14 @@ std::shared_ptr<void> enter_ambient_flow (const std::shared_ptr<void> &snapshot)
     return std::make_shared<ambient_context_scope_t> (*value);
 }
 
-constexpr framework::detail::ambient_context_hooks_t ambient_flow_hooks{&capture_ambient_flow,
-                                                                        &enter_ambient_flow};
-
-const bool ambient_flow_hooks_installed = [] {
-    framework::detail::set_ambient_context_hooks (&ambient_flow_hooks);
-    return true;
-}();
+constexpr framework::detail::ambient_context_hooks_t ambient_flow_hook_table{&capture_ambient_flow,
+                                                                             &enter_ambient_flow};
 
 } // namespace
 
-// The static runtime target retains this TU's ambient hook registration.
-extern "C" void zlink_framework_ambient_context_link_anchor ()
+const framework::detail::ambient_context_hooks_t &ambient_flow_hooks () noexcept
 {
+    return ambient_flow_hook_table;
 }
 
 std::string flow_id_t::create ()

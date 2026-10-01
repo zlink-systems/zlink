@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -192,15 +193,17 @@ namespace
 {
 constexpr runtime_execution_hooks_t host_execution_hooks{&capture_host_continuation_scheduler,
                                                          &check_blocking_submit_context};
-const bool host_execution_hooks_installed = [] {
-    set_runtime_execution_hooks (&host_execution_hooks);
-    return true;
-}();
 } // namespace
 
-// The static runtime target retains this TU's execution hook registration.
-extern "C" void zlink_framework_execution_context_link_anchor ()
+} // namespace zlink::framework::detail
+
+namespace zlink::framework::runtime
 {
+
+void install_host_context_hooks () noexcept
+{
+    detail::set_runtime_execution_hooks (&detail::host_execution_hooks);
+    detail::set_ambient_context_hooks (&ambient_flow_hooks ());
 }
 
-} // namespace zlink::framework::detail
+} // namespace zlink::framework::runtime
