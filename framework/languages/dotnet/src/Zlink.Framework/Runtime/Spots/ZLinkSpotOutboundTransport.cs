@@ -179,11 +179,7 @@ internal sealed class ZLinkSpotOutboundTransport(
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"spot_authority_observe target_node={targetNodeRid} "
-                + $"spot={targetSpotId} object_gen={targetSpotGeneration} "
-                + $"node_gen={targetNodeGeneration} "
-                + $"authority_gen={authorityOwnerGeneration} "
-                + $"lease_gen={ownerLeaseGeneration}"
+            $"spot_authority_observe target_node={targetNodeRid} spot={targetSpotId} object_gen={targetSpotGeneration} node_gen={targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
         );
         if (
             targetNodeRid == default

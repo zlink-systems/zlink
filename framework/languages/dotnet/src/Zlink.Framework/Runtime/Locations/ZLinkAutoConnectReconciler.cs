@@ -442,12 +442,9 @@ internal sealed class ZLinkAutoConnectReconciler
                     }
                 )
                 .ToArray();
-            if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_snapshot local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                        + $"mesh={_local.MeshName} rows={rows.Count} "
-                        + $"rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
-                );
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"autoconnect_snapshot local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} mesh={_local.MeshName} rows={rows.Count} rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
+            );
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return;
             if (!_runtime.GetHealthSnapshot().Healthy)
@@ -473,12 +470,9 @@ internal sealed class ZLinkAutoConnectReconciler
             // keep already-ready connections alive. While the store is
             // unreachable the loop cannot accept expanded desired sets, so
             // no new outbound connects are started after the failure.
-            if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_tick_failed local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                        + $"mesh={_local.MeshName} exception={exception.GetType().Name} "
-                        + $"message={exception.Message}"
-                );
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"autoconnect_tick_failed local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} mesh={_local.MeshName} exception={exception.GetType().Name} message={exception.Message}"
+            );
             await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
             return;
         }
@@ -496,13 +490,10 @@ internal sealed class ZLinkAutoConnectReconciler
                 }
 
                 var desired = ZLinkAutoConnectPlanner.ComputeDesired(_local, rows);
-                if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_desired local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"mesh={_local.MeshName} count={desired.Count} "
-                            + $"targets={string.Join(',', desired.Values.Select(static target =>
-                    $"{target.NodeRid}:{(target.InitiatesConnection ? "dial" : "await")}"))}"
-                    );
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_desired local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} mesh={_local.MeshName} count={desired.Count} targets={string.Join(',', desired.Values.Select(static target =>
+                $"{target.NodeRid}:{(target.InitiatesConnection ? "dial" : "await")}"))}"
+                );
                 Volatile.Write(
                     ref _discoveredPeerCount,
                     ZLinkAutoConnectPlanner.CountDiscoveredPeers(_local, rows)
@@ -585,11 +576,9 @@ internal sealed class ZLinkAutoConnectReconciler
                 )
                     continue;
                 var accepted = _executor.Connect(target);
-                if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_add local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
-                    );
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_add local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
+                );
                 if (accepted)
                     await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
                 continue;
@@ -600,12 +589,9 @@ internal sealed class ZLinkAutoConnectReconciler
                 if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                     return;
                 var disconnected = _executor.Disconnect(current);
-                if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
-                            + $"disconnect={disconnected}"
-                    );
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_handover local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} disconnect={disconnected}"
+                );
                 if (!disconnected)
                     continue;
                 await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
@@ -618,12 +604,9 @@ internal sealed class ZLinkAutoConnectReconciler
             else if (OwnerChanged(current, target) || current.Draining != target.Draining)
             {
                 await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
-                if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_refresh local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} "
-                            + $"draining={target.Draining}"
-                    );
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_refresh local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} draining={target.Draining}"
+                );
             }
         }
 
@@ -637,11 +620,9 @@ internal sealed class ZLinkAutoConnectReconciler
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return;
             var disconnected = _executor.Disconnect(target);
-            if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_remove local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                        + $"target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
-                );
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"autoconnect_remove local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
+            );
             if (disconnected)
                 await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
         }
@@ -677,12 +658,9 @@ internal sealed class ZLinkAutoConnectReconciler
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return false;
             var disconnected = _executor.Disconnect(current);
-            if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_endpoint_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                        + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
-                        + $"disconnect={disconnected}"
-                );
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"autoconnect_endpoint_handover local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} disconnect={disconnected}"
+            );
             if (!disconnected)
                 return false;
             await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);

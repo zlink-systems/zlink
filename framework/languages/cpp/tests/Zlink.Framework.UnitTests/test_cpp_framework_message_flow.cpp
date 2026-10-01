@@ -229,22 +229,36 @@ int main ()
     // they use the admitted phase shared by normal message-flow events.
     {
         zlink::framework::detail::actor_gateway_runtime_t gateway;
+        int detail_builds = 0;
+        const auto build_result = [&] {
+            ++detail_builds;
+            return std::string ("pending");
+        };
+
+        gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::off));
+        const auto off = capture_logs ([&] {
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
+        });
+        if (!off.empty () || detail_builds != 0)
+            return 44;
+
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::normal));
         const auto normal = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
-                                                    nullptr);
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
         });
-        if (!normal.empty ())
+        if (!normal.empty () || detail_builds != 0)
             return 33;
 
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::detailed));
         const auto detailed = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
-                                                    nullptr);
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
         });
         if (!contains (detailed, "phase=admitted") || !contains (detailed, "actor=player-1")
             || !contains (detailed, "stage=router_admission_wait")
-            || !contains (detailed, "result=pending")) {
+            || !contains (detailed, "result=pending") || detail_builds != 1) {
             return 34;
         }
     }
@@ -637,6 +651,10 @@ int main ()
             || enum_name (message_flow_reason_t::activation_rejected) != "activation_rejected"
             || enum_name (message_flow_reason_t::activation_timeout) != "activation_timeout") {
             return 38;
+        }
+        if (zlink::framework::detail::diagnostic_absent_value != "<none>"
+            || zlink::framework::detail::diagnostic_decoded_value != "<decoded>") {
+            return 39;
         }
     }
 

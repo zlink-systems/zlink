@@ -13,6 +13,9 @@
 namespace zlink::framework::detail
 {
 
+inline constexpr std::string_view diagnostic_absent_value = "<none>";
+inline constexpr std::string_view diagnostic_decoded_value = "<decoded>";
+
 inline std::string_view enum_name (flow_origin_t value) noexcept
 {
     switch (value) {
