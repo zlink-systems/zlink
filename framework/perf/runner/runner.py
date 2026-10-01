@@ -288,6 +288,10 @@ def get_json(url: str, timeout: float) -> dict:
         return json.load(response)
 
 
+class AdminConflict(RuntimeError):
+    """HTTP 409 from a role admin endpoint."""
+
+
 def post_json(url: str, body: dict, timeout: float) -> dict:
     request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
@@ -296,7 +300,19 @@ def post_json(url: str, body: dict, timeout: float) -> dict:
             return json.load(response)
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Admin HTTP {error.code}: {body}") from error
+        raise (AdminConflict if error.code == 409 else RuntimeError)(f"Admin HTTP {error.code}: {body}") from error
+
+
+def post_until_accepted(url: str, body: dict, workload: dict, deadline: float) -> dict:
+    """POST a phase trigger or reset until the role accepts it. Only the role can tell whether its previous work has
+    drained (§4.1); until the deadline a 409 means not yet."""
+    while True:
+        try:
+            return post_json(url, body, workload["adminTimeoutMs"] / 1000)
+        except AdminConflict:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
 
 
 def reset_ack_matches(acknowledgement: object, request: dict) -> bool:
@@ -362,8 +378,7 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
 
 
 def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
-    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline. After warmup a role must
-    also have no application handler running: the reset follows only a drained warmup (§4.1)."""
+    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline."""
     pending = list(roles)
     admin_timeout = workload["adminTimeoutMs"] / 1000
     observed = {}
@@ -376,8 +391,7 @@ def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict
                 break
             snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats", min(admin_timeout, remaining))
             observed[name] = snapshot
-            if snapshot.get("phase") == "complete" and (
-                    stage != "warmup" or snapshot["runtimeMetrics"]["activeHandlers"]["value"] == "0"):
+            if snapshot.get("phase") == "complete":
                 pending.remove(role)
         if pending and time.monotonic() >= deadline:
             write_json(owned.cell / "tmp" / (stage + "-completion-failed.json"), observed)
@@ -482,9 +496,10 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             if phase == "measured":
                 request = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq}
                 role_acks = []
+                reset_deadline = time.monotonic() + config["workload"]["setupTimeoutMs"] / 1000
                 for role in roles:
-                    ack = post_json(role["metrics"]["baseUrl"] + "/perf/reset", request,
-                                    config["workload"]["adminTimeoutMs"] / 1000)
+                    ack = post_until_accepted(role["metrics"]["baseUrl"] + "/perf/reset", request, config["workload"],
+                                              reset_deadline)
                     role_acks.append({"role": role["role"], "roleInstance": role["roleInstance"], "acknowledgement": ack})
                 client_acks = [client.call("reset", request, config["workload"]["adminTimeoutMs"] / 1000)
                                for client in clients]
@@ -497,10 +512,10 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             trigger = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq, "phase": phase}
             barrier = []
             role_acks = []
+            trigger_deadline = time.monotonic() + config["workload"]["setupTimeoutMs"] / 1000
             for role in roles:
                 sent = time.monotonic_ns()
-                ack = post_json(role["applicationTriggerUrl"], trigger,
-                                config["workload"]["adminTimeoutMs"] / 1000)
+                ack = post_until_accepted(role["applicationTriggerUrl"], trigger, config["workload"], trigger_deadline)
                 entry = {"participant": f"role {role['role']}-{role['roleInstance']}", "sentTicks": str(sent),
                          "ackTicks": str(time.monotonic_ns()), "acknowledgement": ack}
                 barrier.append(entry)

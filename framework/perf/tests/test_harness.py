@@ -495,21 +495,19 @@ class ClientControlTests(unittest.TestCase):
             control.log.close()
 
 
-class RoleDrainTests(unittest.TestCase):
-    def test_warmup_waits_until_no_application_handler_is_running(self):
-        from types import SimpleNamespace
-        from runner import wait_roles_complete
+class RoleResetTests(unittest.TestCase):
+    def test_trigger_or_reset_repeats_while_the_role_reports_undrained_work(self):
+        from runner import AdminConflict, post_until_accepted
 
-        def snapshot(active):
-            return {"phase": "complete", "runtimeMetrics": {"activeHandlers": {"value": active}}}
-
-        role = {"role": "session", "roleInstance": 0, "metrics": {"baseUrl": "http://127.0.0.1:1"}}
-        workload = {"adminTimeoutMs": 1000, "setupTimeoutMs": 1000}
-        owned = SimpleNamespace(check=lambda: None, cell=Path("/nonexistent"))
-        for stage, expected_reads in (("warmup", 2), ("measured", 1)):
-            with self.subTest(stage=stage), patch("runner.get_json", side_effect=[snapshot("1"), snapshot("0")]) as read:
-                wait_roles_complete(owned, [role], workload, time.monotonic() + 5, stage)
-                self.assertEqual(read.call_count, expected_reads)
+        url = "http://127.0.0.1:1/perf/reset"
+        workload = {"adminTimeoutMs": 1000}
+        ack = {"ok": True, "runId": "run", "cellId": "cell", "resetSeq": "1"}
+        with patch("runner.post_json", side_effect=[AdminConflict("Admin HTTP 409: not drained"), ack]) as post:
+            self.assertEqual(post_until_accepted(url, {}, workload, time.monotonic() + 5), ack)
+        self.assertEqual(post.call_count, 2)
+        with patch("runner.post_json", side_effect=AdminConflict("Admin HTTP 409: not drained")), \
+                self.assertRaises(AdminConflict):
+            post_until_accepted(url, {}, workload, time.monotonic() - 1)
 
 
 class RunExitCodeTests(unittest.TestCase):
