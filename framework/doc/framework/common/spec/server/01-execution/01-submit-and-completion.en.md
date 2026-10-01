@@ -70,8 +70,8 @@ The layer returning the completion representation owns its isolation. [Cancellat
 
 **Asynchronous results completed by the application, and bounded observation.** The application can create an asynchronous result that an external event completes, and can observe that result for a bounded time on an application thread.
 
-- A completion source settles only the first completion, and later completion attempts don't change the result. The result is a success value or a typed Framework error. Every result handle obtained from the same completion source observes the same original result. Destroying the completion source or a result handle neither completes nor cancels the original result.
-- Bounded observation follows the same context rule as a synchronous blocking terminator — in a runtime execution context it is `InvalidOperation`. When the time passes it only reports "not completed"; it neither completes nor cancels the original result, and a late completion stays on the original result. An observation timeout isn't an operation terminal.
+- A completion source settles only the first completion, and later completion attempts don't change the result. The result is a success value or a failure, and each language's error contract defines how a failure is represented (typed Framework error, cancellation, or the original exception). Every result handle obtained from the same completion source observes the same original result. Destroying the completion source or a result handle neither completes nor cancels the original result.
+- Bounded observation that the Framework provides follows the same context rule as a synchronous blocking terminator — in a runtime execution context it is `InvalidOperation`. When the time passes it only reports "not completed"; it neither completes nor cancels the original result, and a late completion stays on the original result. An observation timeout isn't an operation terminal.
 - .NET, Java, and Node.js provide this capability through their standard types (`TaskCompletionSource`, `CompletableFuture`, `Promise`), so the Framework adds no separate API there. C++ puts a completion source and bounded observation on the Framework task type. A continuation awaiting this completion source's result resumes in the execution context that registered the await, not on the completing thread, and an await inside a handler keeps that handler turn like a general asynchronous terminal. [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.en.md) fixes the names and shapes, and [Cancellation and shutdown §5.1](03-cancellation-and-shutdown.en.md#51-ending-waits-on-an-application-completion-source) owns the boundary with host shutdown.
 
 [Handler turn and execution gate §16](02-handler-turn-and-execution-gate.en.md#yield-call-eligibility)
@@ -204,6 +204,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 | Admission deadline expired | `DeadlineExceeded` |
 | Runtime not accepting new admission | `ShuttingDown` |
 | Same call's terminal invoked twice | `InvalidOperation` |
+| The binding doesn't admit a one-way send (`NOT_ADMITTED`) | `Rejected` |
 
 Pending admission keeps the caller-specified Node RID, global Spot/Actor ID, and session
 binding token. A select-one Channel in a

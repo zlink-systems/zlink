@@ -38,9 +38,12 @@
 | 역호출이 관리 코드에 닿나 | 핸들러 실행 횟수 | 핸들러가 몇 번 돌았나 — 등록 전이면 당연히 0이다 | #402 |
 | 이 최적화 수준에서 동작하나 | 링크 성공 | 링크되나 — JSDCE가 지운 선언은 **실행 중에** 터진다 | #398 |
 | 이 검사가 나쁜 입력을 잡나 | 좋은 입력에서 통과 | 좋은 입력을 통과시키나 — 아무것도 안 잡는 검사도 통과시킨다 | #397 |
+| C++ 회귀 assertion이 결함을 잡나 | 기존 Release library에 연결한 test 실행 성공 | `NDEBUG`가 assertion을 제거했으면 검사 자체가 실행되지 않는다. Compile 명령의 `-UNDEBUG`와 수정 전 실패를 확인한다 | #1207 |
 | 심볼 지역화가 먹혔나 | 내 머신에서 통과 | **내 binutils에서** 먹히나 — 2.42는 되고 릴리스를 만드는 2.38은 안 됐다 | #418 |
 | ld64가 이 심볼을 강등하나 | 컴파일 시점 hidden visibility | 그 TU의 보통 심볼을 숨기나 — 템플릿·인라인 static은 vague linkage라 안 닿는다 | #418 |
 | 지정한 수신 계약 두 class가 모두 실행됐나 | Gradle `--tests` 두 개와 `BUILD SUCCESSFUL` | 존재하는 filter 한 개의 test만 실행돼도 성공한다. XML의 class별 실행 수까지 확인한다 | #1270 |
+| .NET source 전체의 format이 맞나 | `format.sh --check dotnet`의 종료 코드 0 | 존재하는 source root에서 찾은 파일만 맞는다. WSL 사본에 `engines/Server`가 없어도 `find` 오류 뒤에 통과했다. 검사 root의 존재와 파일 수를 함께 확인한다 | #1082 |
+| Reject reason 오해석을 회귀 test가 잡나 | Server role fixture에서 not-required peer 수 0 | Role policy가 not-required 표시를 거부했는지만 확인한다. 결함 분기가 실제로 표시할 수 있는 Client role fixture에서 수정 전 실패를 확보한다 | #1082 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

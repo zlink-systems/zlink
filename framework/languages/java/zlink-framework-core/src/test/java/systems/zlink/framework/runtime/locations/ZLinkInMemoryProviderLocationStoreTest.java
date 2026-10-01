@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.locations;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -17,6 +18,47 @@ import java.util.List;
 
 final class ZLinkInMemoryProviderLocationStoreTest {
     private static final ZLinkStoreCancellation ACTIVE = () -> false;
+
+    @Test
+    void putAndReadKeepIndependentByteSnapshots() throws Exception {
+        var store =
+                new ZLinkInMemoryProviderLocationStore(
+                        Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC));
+        var key = new ZLinkStoreKey("snapshot");
+        byte[] input = {1, 2};
+        var put = new ZLinkStorePut(key, input, null);
+        input[0] = 9;
+        byte[] putSnapshot = put.bytes();
+        putSnapshot[1] = 9;
+        store.write(new ZLinkStoreWriteRequest(List.of(), List.of(put)), ACTIVE)
+                .toCompletableFuture()
+                .get();
+
+        var first =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        store.read(key, ACTIVE).toCompletableFuture().get());
+        byte[] readSnapshot = first.value().bytes();
+        assertArrayEquals(new byte[] {1, 2}, readSnapshot);
+        readSnapshot[0] = 9;
+        assertArrayEquals(new byte[] {1, 2}, first.value().bytes());
+        var second =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        store.read(key, ACTIVE).toCompletableFuture().get());
+        assertArrayEquals(new byte[] {1, 2}, second.value().bytes());
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        store.write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(),
+                                        List.of(
+                                                new ZLinkStorePut(
+                                                        key, new byte[1024 * 1024 + 1], null))),
+                                ACTIVE));
+    }
 
     @Test
     void valueConditionUsesCurrentBytesAndExpiryWithoutMutatingOnConflict() throws Exception {

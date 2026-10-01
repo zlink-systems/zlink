@@ -2192,3 +2192,41 @@ function receivedControl(frame) {
     close() { message.close(); }
   };
 }
+
+test('ClientServer admission and disconnect publish after their facts change', async () => {
+  const registration = internal.createFrameworkRegistration({ channels: { orders: { client: { manualConnections: [] } } }, locations: { useInMemoryStores: true } });
+  const dealer = fakeDealer('status-source');
+  let emit;
+  const sockets = new ZLinkChannelSocketRegistry(registration, {
+    createDealerSocket() { return dealer; }, createReadablePoller() { return readyPoller(); }
+  }, {}, { openSocketMonitor() { return { nativeInstance: {}, onEvent(callback) { emit = callback; }, drain() { return 0; }, async dispose() {} }; } });
+  sockets.openClientServerConnection('orders', 'source-connection', 'tcp://10.0.0.1:9401', { onTransportReady() {}, onTerminated() {} });
+  const projection = new internal.ZLinkClientServerRuntimeProjection(() => ({
+    clientServerTopology: name => ({ localRole: 'client', descriptors: sockets.clientServerActiveTargets(name) }),
+    observeClientServerTopology(name, callback) { const monitor = sockets.clientServerMonitoringSource(name); monitor.onChange(callback); return () => { void monitor.dispose(); }; }
+  }));
+  const first = projection.snapshot('orders');
+  assert.equal(first.sequence, 1n);
+  const events = projection.observe('orders')[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.sequence, 1n);
+  let rawReady;
+  const raw = sockets.clientServerMonitoringSource('orders');
+  raw.onEvent(() => { rawReady = sockets.clientServerActiveTargets('orders')[0].state; });
+  sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'source-connection');
+  const admitted = (await events.next()).value.status;
+  assert.equal(admitted.sequence, 2n);
+  assert.equal(admitted.targets[0].state, framework.ZLinkPeerState.Ready);
+  emit({ nativeEvent: internal.ZLinkSocketNativeEventType.Disconnected, routingId: 'server-a', localAddr: '', remoteAddr: 'tcp://10.0.0.1:9401', value: 0n });
+  assert.equal(rawReady, 'serving');
+  const disconnected = (await events.next()).value.status;
+  assert.equal(disconnected.sequence, 3n);
+  assert.equal(disconnected.targets[0].state, framework.ZLinkPeerState.NotConnected);
+  assert.equal(disconnected.targets[0].unavailableReason, framework.ZLinkTopologyReason.NoReadyTarget);
+  sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'source-connection');
+  assert.equal((await events.next()).value.status.sequence, 4n);
+  assert.equal(projection.snapshot('orders').sequence, 4n);
+  await events.return();
+  projection.stopObservers();
+  await raw.dispose();
+  await sockets.dispose();
+});

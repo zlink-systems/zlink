@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -36,11 +39,22 @@
 
 namespace zlink::framework::runtime
 {
+namespace aggregate_status
+{
+inline constexpr char pending[] = "pending";
+inline constexpr char preparing[] = "preparing";
+inline constexpr char prepared[] = "prepared";
+inline constexpr char committing[] = "committing";
+inline constexpr char committed[] = "committed";
+inline constexpr char aborted[] = "aborted";
+}
+
 
 /*
  * Framework-owned domain repository over the public opaque Store SPI.
  * Providers never receive descriptor, lease, authority or placement DTOs.
  */
+
 class provider_location_repository_t final : public location_repository_t
 {
   public:
@@ -136,7 +150,8 @@ class provider_location_repository_t final : public location_repository_t
         auto current = read (key);
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             const auto stored = decode_mesh_descriptor (
-              parse_canonical_record (found->value.bytes, "MeshNode descriptor").at ("descriptor"));
+              parse_canonical_record (found->value.bytes, "MeshNode descriptor")
+                .at (location_record_fields::descriptor));
             descriptor.capacity.actors.active = stored.capacity.actors.active;
             descriptor.capacity.actors.reserved = stored.capacity.actors.reserved;
             descriptor.capacity.spots.active = stored.capacity.spots.active;
@@ -158,8 +173,9 @@ class provider_location_repository_t final : public location_repository_t
           key, descriptor.owner_id, descriptor.lease_generation, descriptor.lifecycle_generation,
           descriptor.descriptor_revision, encode_mesh_record (1, descriptor), intent,
           [descriptor] (const nlohmann::json &record) {
-              return same_mesh_immutable (decode_mesh_descriptor (record.at ("descriptor")),
-                                          descriptor);
+              return same_mesh_immutable (
+                decode_mesh_descriptor (record.at (location_record_fields::descriptor)),
+                descriptor);
           });
     }
 
@@ -174,7 +190,7 @@ class provider_location_repository_t final : public location_repository_t
     {
         return list_descriptors<mesh_node_descriptor_t> (
           prefix_mesh (mesh_name), std::move (page), [] (const nlohmann::json &record) {
-              return decode_mesh_descriptor (record.at ("descriptor"));
+              return decode_mesh_descriptor (record.at (location_record_fields::descriptor));
           });
     }
 
@@ -190,7 +206,8 @@ class provider_location_repository_t final : public location_repository_t
                                     descriptor.lifecycle_generation, descriptor.descriptor_revision,
                                     encode (descriptor)),
           intent, [descriptor] (const nlohmann::json &record) {
-              const auto current = decode_client_server (record.at ("descriptor"));
+              const auto current =
+                decode_client_server (record.at (location_record_fields::descriptor));
               return current.endpoint == descriptor.endpoint
                      && current.security_identity == descriptor.security_identity;
           });
@@ -208,7 +225,7 @@ class provider_location_repository_t final : public location_repository_t
     {
         return list_descriptors<client_server_server_descriptor_t> (
           prefix_client_server (channel_name), std::move (page), [] (const nlohmann::json &record) {
-              return decode_client_server (record.at ("descriptor"));
+              return decode_client_server (record.at (location_record_fields::descriptor));
           });
     }
 
@@ -224,7 +241,7 @@ class provider_location_repository_t final : public location_repository_t
                                     descriptor.lifecycle_generation, descriptor.descriptor_revision,
                                     encode (descriptor)),
           intent, [descriptor] (const nlohmann::json &record) {
-              const auto current = decode_fanout (record.at ("descriptor"));
+              const auto current = decode_fanout (record.at (location_record_fields::descriptor));
               return current.endpoint == descriptor.endpoint
                      && current.security_identity == descriptor.security_identity;
           });
@@ -241,8 +258,9 @@ class provider_location_repository_t final : public location_repository_t
     list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) override
     {
         return list_descriptors<fanout_publisher_descriptor_t> (
-          prefix_fanout (channel_name), std::move (page),
-          [] (const nlohmann::json &record) { return decode_fanout (record.at ("descriptor")); });
+          prefix_fanout (channel_name), std::move (page), [] (const nlohmann::json &record) {
+              return decode_fanout (record.at (location_record_fields::descriptor));
+          });
     }
 
     task_t<authority_read_result_t> read_authority (authority_key_t key,
@@ -420,7 +438,7 @@ class provider_location_repository_t final : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_scan_result_t> ();
-        if (limit == 0 || limit > 1000)
+        if (limit == 0 || limit > location_page_item_limit)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         auto result = _store
                         ->scan ({prefix_authority (),
@@ -611,13 +629,13 @@ class provider_location_repository_t final : public location_repository_t
         // reservation identity while the row remains reserved.
         object_reservation_fence_t fence{"reservation-" + std::to_string (object_generation) + "-"
                                            + std::to_string (owner_generation_value),
-                                         "pending",
+                                         aggregate_status::pending,
                                          object_generation,
                                          owner_generation_value,
                                          request.target,
                                          request.capacity_bundle};
         authority_snapshot_t creating{
-          "pending",
+          aggregate_status::pending,
           request.creating_payload,
           object_generation,
           owner_generation_value,
@@ -723,7 +741,7 @@ class provider_location_repository_t final : public location_repository_t
           std::visit ([] (const auto &value) { return value.terminal; }, request.completion);
         if (publication.terminal_envelope.size () > 1024u * 1024u)
             throw std::invalid_argument ("creation terminal envelope is too large");
-        const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
+        const auto expires_at = publication.operation_deadline + creation_terminal_retention;
         const auto terminal_key = key_creation_terminal (publication.operation);
         auto existing = co_await _store->read (terminal_key);
         if (const auto *found = std::get_if<store_found_t> (&existing)) {
@@ -967,19 +985,21 @@ class provider_location_repository_t final : public location_repository_t
         auto current = read (row_key);
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             auto stored = parse_json (found->value.bytes);
-            const auto status = stored.value ("status", "");
+            const auto status = stored.value (location_record_fields::status, "");
             if (!aggregate_record_matches_request (stored, request, *inventory_tree))
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
-            if (status == "prepared" || status == "committing" || status == "committed")
+            if (status == aggregate_status::prepared || status == aggregate_status::committing
+                || status == aggregate_status::committed)
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
                   {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
-            if (status != "preparing")
+            if (status != aggregate_status::preparing)
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         } else {
             // Claim the aggregate before writing any inventory or lock child.
             // A restart can now find a partial prepare and abort those children
             // without guessing whether the claim reached the provider.
-            const auto preparing = encode_aggregate (request, "preparing", *inventory_tree);
+            const auto preparing =
+              encode_aggregate (request, aggregate_status::preparing, *inventory_tree);
             const auto claimed =
               write ({{missing_condition (row_key)},
                       {store_put_t{row_key, to_bytes (preparing.dump ()), std::nullopt}}});
@@ -987,7 +1007,8 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         }
 
-        const auto encoded = encode_aggregate (request, "prepared", *inventory_tree);
+        const auto encoded =
+          encode_aggregate (request, aggregate_status::prepared, *inventory_tree);
         std::size_t participant_offset = 0;
         std::size_t page_index = 0;
         for (const auto &page : inventory_tree->pages) {
@@ -1037,8 +1058,9 @@ class provider_location_repository_t final : public location_repository_t
                     auto old_aggregate = read (key_aggregate (lock->aggregate_id));
                     const auto *old_aggregate_found = std::get_if<store_found_t> (&old_aggregate);
                     if (!old_aggregate_found
-                        || parse_json (old_aggregate_found->value.bytes).value ("status", "")
-                             != "committed")
+                        || parse_json (old_aggregate_found->value.bytes)
+                               .value (location_record_fields::status, "")
+                             != aggregate_status::committed)
                         return completed (
                           aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
                     lock_request.conditions.push_back (
@@ -1055,7 +1077,7 @@ class provider_location_repository_t final : public location_repository_t
                               request.aggregate_id, request.aggregate_generation,
                               request.participants[participant_index].key.value,
                               request.participants[participant_index].expected_store_version,
-                              "prepared", page_index - 1, index)
+                              aggregate_status::prepared, page_index - 1, index)
                               .dump ()),
                   std::nullopt});
             }
@@ -1083,9 +1105,10 @@ class provider_location_repository_t final : public location_repository_t
                     const auto *raced_found = std::get_if<store_found_t> (&raced_aggregate);
                     if (raced_found) {
                         const auto raced = parse_json (raced_found->value.bytes);
-                        const auto status = raced.value ("status", "");
+                        const auto status = raced.value (location_record_fields::status, "");
                         if (aggregate_record_matches_request (raced, request, *inventory_tree)
-                            && (status == "preparing" || status == "prepared"))
+                            && (status == aggregate_status::preparing
+                                || status == aggregate_status::prepared))
                             return prepare_aggregate (std::move (request), cancellation);
                     }
                     return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
@@ -1129,10 +1152,14 @@ class provider_location_repository_t final : public location_repository_t
         if (!preparing_found)
             return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         const auto preparing_record = parse_json (preparing_found->value.bytes);
-        if (preparing_record.value ("status", "") != "preparing") {
-            if (preparing_record.value ("status", "") == "prepared"
-                || preparing_record.value ("status", "") == "committing"
-                || preparing_record.value ("status", "") == "committed")
+        if (preparing_record.value (location_record_fields::status, "")
+            != aggregate_status::preparing) {
+            if (preparing_record.value (location_record_fields::status, "")
+                  == aggregate_status::prepared
+                || preparing_record.value (location_record_fields::status, "")
+                     == aggregate_status::committing
+                || preparing_record.value (location_record_fields::status, "")
+                     == aggregate_status::committed)
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
                   {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
             return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
@@ -1166,19 +1193,22 @@ class provider_location_repository_t final : public location_repository_t
         if (!stored)
             return completed (aggregate_commit_result_t::stale);
         auto record = parse_json (stored->value.bytes);
-        if (record.at ("aggregateGeneration").get<std::uint64_t> () != fence.aggregate_generation)
+        if (record.at (location_record_fields::aggregateGeneration).get<std::uint64_t> ()
+            != fence.aggregate_generation)
             return completed (aggregate_commit_result_t::stale);
-        const auto status = record.value ("status", "");
-        if (status == "committed")
+        const auto status = record.value (location_record_fields::status, "");
+        if (status == aggregate_status::committed)
             return completed (aggregate_commit_result_t::already_committed);
-        if (status != "prepared" && status != "committing")
+        if (status != aggregate_status::prepared && status != aggregate_status::committing)
             return completed (aggregate_commit_result_t::stale);
-        const auto target_owner = decode_owner (record.at ("targetOwner"));
-        const bool resuming_commit = status == "committing";
+        const auto target_owner = decode_owner (record.at (location_record_fields::targetOwner));
+        const bool resuming_commit = status == aggregate_status::committing;
         const object_creation_target_t target{
-          record.at ("targetMeshName").get<std::string> (),
-          node_rid_t::from_string (record.at ("targetNodeRid").get<std::string> ()),
-          record.at ("targetLifecycleGeneration").get<std::uint64_t> (), target_owner};
+          record.at (location_record_fields::targetMeshName).get<std::string> (),
+          node_rid_t::from_string (
+            record.at (location_record_fields::targetNodeRid).get<std::string> ()),
+          record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
+          target_owner};
         // Before the aggregate enters committing, the target lease is part of
         // the admission fence. Once committing is durable, the authority rows
         // are still hidden by their locks, so the same target descriptor can
@@ -1189,8 +1219,10 @@ class provider_location_repository_t final : public location_repository_t
         if (!resuming_commit && !owner_is_live (target_owner))
             return completed (aggregate_commit_result_t::stale);
 
-        const auto inventory_count = record.value ("inventoryCount", std::size_t{0});
-        const auto inventory_page_count = record.value ("inventoryPageCount", std::size_t{0});
+        const auto inventory_count =
+          record.value (location_record_fields::inventoryCount, std::size_t{0});
+        const auto inventory_page_count =
+          record.value (location_record_fields::inventoryPageCount, std::size_t{0});
         const auto expected_inventory_page_count =
           inventory_count / aggregate_inventory::page_item_limit
           + (inventory_count % aggregate_inventory::page_item_limit != 0 ? 1 : 0);
@@ -1214,7 +1246,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto inventory_tree = aggregate_inventory::build_tree (participants);
         if (!inventory_tree || inventory_tree->participant_count != inventory_count
             || inventory_tree->pages.size () != inventory_page_count
-            || hex (inventory_tree->root) != record.at ("inventoryRoot").get<std::string> ())
+            || hex (inventory_tree->root)
+                 != record.at (location_record_fields::inventoryRoot).get<std::string> ())
             return completed (aggregate_commit_result_t::stale);
         for (std::size_t page_index = 0; page_index < inventory_page_count; ++page_index) {
             const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
@@ -1224,9 +1257,9 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::stale);
         }
         const auto inventory_index_page_count =
-          record.value ("inventoryIndexPageCount", std::size_t{0});
+          record.value (location_record_fields::inventoryIndexPageCount, std::size_t{0});
         const auto inventory_index_level_count =
-          record.value ("inventoryIndexLevelCount", std::size_t{0});
+          record.value (location_record_fields::inventoryIndexLevelCount, std::size_t{0});
         if (inventory_index_page_count != inventory_tree->index_pages.size ()
             || inventory_index_level_count != inventory_tree->index_level_count)
             return completed (aggregate_commit_result_t::stale);
@@ -1243,8 +1276,8 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::stale);
         }
         if (fence.inventory_digest) {
-            const auto stored_digest =
-              unhex_array<32> (record.at ("inventoryDigest").get<std::string> ());
+            const auto stored_digest = unhex_array<32> (
+              record.at (location_record_fields::inventoryDigest).get<std::string> ());
             if (stored_digest != fence.inventory_digest->value)
                 return completed (aggregate_commit_result_t::stale);
         }
@@ -1253,16 +1286,17 @@ class provider_location_repository_t final : public location_repository_t
         if (participant_count > max_generation)
             return completed (aggregate_commit_result_t::generation_exhausted);
         std::uint64_t owner_generation_start = 0;
-        if (status == "prepared") {
+        if (status == aggregate_status::prepared) {
             auto owner_generations = read (authority_owner_counter_key);
             const auto next_owner_generation = counter_next_value (owner_generations);
             if (next_owner_generation > max_generation - participant_count)
                 return completed (aggregate_commit_result_t::generation_exhausted);
             owner_generation_start = next_owner_generation;
         } else {
-            owner_generation_start = record.value ("ownerGenerationStart", std::uint64_t{0});
+            owner_generation_start =
+              record.value (location_record_fields::ownerGenerationStart, std::uint64_t{0});
             if (owner_generation_start == 0
-                || record.value ("ownerGenerationEnd", std::uint64_t{0})
+                || record.value (location_record_fields::ownerGenerationEnd, std::uint64_t{0})
                      != owner_generation_start + participant_count - 1)
                 return completed (aggregate_commit_result_t::stale);
         }
@@ -1293,11 +1327,12 @@ class provider_location_repository_t final : public location_repository_t
                 || lock->aggregate_generation != fence.aggregate_generation
                 || lock->authority_key != participant.key.value
                 || lock->expected_store_version != participant.expected_store_version
-                || (lock->status != "prepared" && lock->status != "committing"))
+                || (lock->status != aggregate_status::prepared
+                    && lock->status != aggregate_status::committing))
                 return completed (aggregate_commit_result_t::stale);
 
             aggregate_commit_entry_t entry;
-            if (lock->status == "committing") {
+            if (lock->status == aggregate_status::committing) {
                 if (!lock->page_index || !lock->entry_index)
                     return completed (aggregate_commit_result_t::stale);
                 auto page =
@@ -1360,15 +1395,16 @@ class provider_location_repository_t final : public location_repository_t
         const auto commit_pages = split_aggregate_commit_entries (entries);
         if (!commit_pages)
             return completed (aggregate_commit_result_t::stale);
-        if (status == "prepared") {
+        if (status == aggregate_status::prepared) {
             auto owner_generations = read (authority_owner_counter_key);
             const auto current_owner_generation = counter_next_value (owner_generations);
             if (current_owner_generation != owner_generation_start)
                 return completed (aggregate_commit_result_t::stale);
-            record["status"] = "committing";
-            record["ownerGenerationStart"] = owner_generation_start;
-            record["ownerGenerationEnd"] = owner_generation_start + participant_count - 1;
-            record["commitPageCount"] = commit_pages->size ();
+            record[location_record_fields::status] = aggregate_status::committing;
+            record[location_record_fields::ownerGenerationStart] = owner_generation_start;
+            record[location_record_fields::ownerGenerationEnd] =
+              owner_generation_start + participant_count - 1;
+            record[location_record_fields::commitPageCount] = commit_pages->size ();
             auto transition =
               write ({{version_condition (row_key, stored->value.version),
                        condition_for (authority_owner_counter_key, owner_generations)},
@@ -1413,7 +1449,7 @@ class provider_location_repository_t final : public location_repository_t
                 if (!found_authority || !found_lock)
                     return completed (aggregate_commit_result_t::stale);
                 const auto lock = decode_aggregate_lock (found_lock->value.bytes);
-                if (!lock || lock->status != "prepared")
+                if (!lock || lock->status != aggregate_status::prepared)
                     return completed (aggregate_commit_result_t::stale);
                 page_request.conditions.push_back (version_condition (
                   key_authority (participant.key.value), found_authority->value.version));
@@ -1421,14 +1457,14 @@ class provider_location_repository_t final : public location_repository_t
                   key_aggregate_lock (participant.key.value), found_lock->value.version));
                 page_request.mutations.push_back (
                   store_put_t{key_authority (participant.key.value), entry.after, std::nullopt});
-                page_request.mutations.push_back (store_put_t{
-                  key_aggregate_lock (participant.key.value),
-                  to_bytes (encode_aggregate_lock (fence.aggregate_id, fence.aggregate_generation,
-                                                   participant.key.value,
-                                                   participant.expected_store_version, "committing",
-                                                   page_index, entry_index)
-                              .dump ()),
-                  std::nullopt});
+                page_request.mutations.push_back (
+                  store_put_t{key_aggregate_lock (participant.key.value),
+                              to_bytes (encode_aggregate_lock (
+                                          fence.aggregate_id, fence.aggregate_generation,
+                                          participant.key.value, participant.expected_store_version,
+                                          aggregate_status::committing, page_index, entry_index)
+                                          .dump ()),
+                              std::nullopt});
             }
             page_request.mutations.push_back (store_put_t{page_key, encoded_page, std::nullopt});
             if (!std::holds_alternative<store_write_applied_t> (write (std::move (page_request))))
@@ -1444,13 +1480,14 @@ class provider_location_repository_t final : public location_repository_t
             return completed (aggregate_commit_result_t::stale);
         record = parse_json (current_found->value.bytes);
         stored = current_found;
-        if (record.value ("status", "") != "committing")
+        if (record.value (location_record_fields::status, "") != aggregate_status::committing)
             return completed (aggregate_commit_result_t::stale);
 
         auto target_capacity_state = capacities.find (target_capacity_key);
         if (target_capacity_state == capacities.end ()
             || !adjust_capacity (target_capacity_state->second.record,
-                                 decode_bundle (record.at ("capacityBundle")), -1, 1))
+                                 decode_bundle (record.at (location_record_fields::capacityBundle)),
+                                 -1, 1))
             return completed (aggregate_commit_result_t::stale);
         store_write_request_t final_request;
         final_request.conditions.push_back (version_condition (row_key, stored->value.version));
@@ -1467,7 +1504,7 @@ class provider_location_repository_t final : public location_repository_t
             final_request.mutations.push_back (
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         }
-        record["status"] = "committed";
+        record[location_record_fields::status] = aggregate_status::committed;
         final_request.mutations.push_back (
           store_put_t{row_key, to_bytes (record.dump ()), std::nullopt});
         auto written = write (std::move (final_request));
@@ -1487,20 +1524,24 @@ class provider_location_repository_t final : public location_repository_t
         if (!found)
             return completed (aggregate_abort_result_t::stale);
         auto record = parse_json (found->value.bytes);
-        if (record.at ("aggregateGeneration").get<std::uint64_t> () != fence.aggregate_generation)
+        if (record.at (location_record_fields::aggregateGeneration).get<std::uint64_t> ()
+            != fence.aggregate_generation)
             return completed (aggregate_abort_result_t::stale);
-        const auto status = record.value ("status", "");
-        if (status == "aborted")
+        const auto status = record.value (location_record_fields::status, "");
+        if (status == aggregate_status::aborted)
             return completed (aggregate_abort_result_t::already_aborted);
-        if (status != "preparing" && status != "prepared" && status != "committing")
+        if (status != aggregate_status::preparing && status != aggregate_status::prepared
+            && status != aggregate_status::committing)
             return completed (aggregate_abort_result_t::stale);
         const object_creation_target_t target{
-          record.at ("targetMeshName").get<std::string> (),
-          node_rid_t::from_string (record.at ("targetNodeRid").get<std::string> ()),
-          record.at ("targetLifecycleGeneration").get<std::uint64_t> (),
-          decode_owner (record.at ("targetOwner"))};
-        if (status == "committing") {
-            const auto commit_page_count = record.value ("commitPageCount", std::size_t{0});
+          record.at (location_record_fields::targetMeshName).get<std::string> (),
+          node_rid_t::from_string (
+            record.at (location_record_fields::targetNodeRid).get<std::string> ()),
+          record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
+          decode_owner (record.at (location_record_fields::targetOwner))};
+        if (status == aggregate_status::committing) {
+            const auto commit_page_count =
+              record.value (location_record_fields::commitPageCount, std::size_t{0});
             if (commit_page_count == 0)
                 return completed (aggregate_abort_result_t::stale);
             for (std::size_t page_index = 0; page_index < commit_page_count; ++page_index) {
@@ -1530,7 +1571,7 @@ class provider_location_repository_t final : public location_repository_t
                             || decoded_lock->aggregate_id.value != fence.aggregate_id.value
                             || decoded_lock->aggregate_generation != fence.aggregate_generation
                             || decoded_lock->authority_key != entry.authority_key
-                            || decoded_lock->status != "committing"
+                            || decoded_lock->status != aggregate_status::committing
                             || decoded_lock->page_index != page_index
                             || decoded_lock->entry_index != entry_index)
                             return completed (aggregate_abort_result_t::stale);
@@ -1555,7 +1596,7 @@ class provider_location_repository_t final : public location_repository_t
             }
         }
 
-        const bool target_capacity_reserved = status != "preparing";
+        const bool target_capacity_reserved = status != aggregate_status::preparing;
         std::optional<stored_target_t> target_descriptor;
         std::optional<stored_capacity_t> target_capacity;
         if (target_capacity_reserved) {
@@ -1563,12 +1604,14 @@ class provider_location_repository_t final : public location_repository_t
             if (!target_descriptor)
                 return completed (aggregate_abort_result_t::stale);
             target_capacity = read_capacity (target, *target_descriptor);
-            if (!adjust_capacity (target_capacity->record,
-                                  decode_bundle (record.at ("capacityBundle")), -1, 0))
+            if (!adjust_capacity (
+                  target_capacity->record,
+                  decode_bundle (record.at (location_record_fields::capacityBundle)), -1, 0))
                 return completed (aggregate_abort_result_t::stale);
         }
 
-        const auto inventory_page_count = record.value ("inventoryPageCount", std::size_t{0});
+        const auto inventory_page_count =
+          record.value (location_record_fields::inventoryPageCount, std::size_t{0});
         for (std::size_t page_index = 0; page_index < inventory_page_count; ++page_index) {
             auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
             const auto *stored_page = std::get_if<store_found_t> (&page);
@@ -1577,7 +1620,7 @@ class provider_location_repository_t final : public location_repository_t
                 // child page. Missing pages after that point cannot own a
                 // lock, so the durable claim can still be marked aborted
                 // without inventing participant keys.
-                if (status == "preparing")
+                if (status == aggregate_status::preparing)
                     break;
                 return completed (aggregate_abort_result_t::stale);
             }
@@ -1605,7 +1648,7 @@ class provider_location_repository_t final : public location_repository_t
                 && !std::holds_alternative<store_write_applied_t> (write (std::move (cleanup))))
                 return completed (aggregate_abort_result_t::stale);
         }
-        record["status"] = "aborted";
+        record[location_record_fields::status] = aggregate_status::aborted;
         store_write_request_t final_request;
         final_request.conditions.push_back (version_condition (key, found->value.version));
         final_request.mutations.push_back (
@@ -1638,11 +1681,13 @@ class provider_location_repository_t final : public location_repository_t
             if (!found)
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
             const auto record = parse_json (found->value.bytes);
-            if (record.at ("aggregateGeneration").get<std::uint64_t> ()
+            if (record.at (location_record_fields::aggregateGeneration).get<std::uint64_t> ()
                 != fence.aggregate_generation)
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
-            const auto count = record.at ("inventoryCount").get<std::size_t> ();
-            const auto page_count = record.at ("inventoryPageCount").get<std::size_t> ();
+            const auto count =
+              record.at (location_record_fields::inventoryCount).get<std::size_t> ();
+            const auto page_count =
+              record.at (location_record_fields::inventoryPageCount).get<std::size_t> ();
             const auto expected_page_count =
               count / aggregate_inventory::page_item_limit
               + (count % aggregate_inventory::page_item_limit != 0 ? 1 : 0);
@@ -1665,7 +1710,8 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
             const auto tree = aggregate_inventory::build_tree (participants);
             if (!tree || tree->participant_count != count || tree->pages.size () != page_count
-                || hex (tree->root) != record.at ("inventoryRoot").get<std::string> ())
+                || hex (tree->root)
+                     != record.at (location_record_fields::inventoryRoot).get<std::string> ())
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
             for (std::size_t page_index = 0; page_index < page_count; ++page_index) {
                 const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
@@ -1674,9 +1720,10 @@ class provider_location_repository_t final : public location_repository_t
                     || sha256 (stored_page->value.bytes) != tree->pages[page_index].digest)
                     return completed (std::optional<std::vector<aggregate_participant_t>>{});
             }
-            const auto index_page_count = record.value ("inventoryIndexPageCount", std::size_t{0});
+            const auto index_page_count =
+              record.value (location_record_fields::inventoryIndexPageCount, std::size_t{0});
             const auto index_level_count =
-              record.value ("inventoryIndexLevelCount", std::size_t{0});
+              record.value (location_record_fields::inventoryIndexLevelCount, std::size_t{0});
             if (index_page_count != tree->index_pages.size ()
                 || index_level_count != tree->index_level_count)
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
@@ -1694,7 +1741,8 @@ class provider_location_repository_t final : public location_repository_t
                     return completed (std::optional<std::vector<aggregate_participant_t>>{});
             }
             if (fence.inventory_digest
-                && unhex_array<32> (record.at ("inventoryDigest").get<std::string> ())
+                && unhex_array<32> (
+                     record.at (location_record_fields::inventoryDigest).get<std::string> ())
                      != fence.inventory_digest->value)
                 return completed (std::optional<std::vector<aggregate_participant_t>>{});
             return completed (
@@ -1781,7 +1829,8 @@ class provider_location_repository_t final : public location_repository_t
     };
 
     static constexpr std::size_t aggregate_commit_page_item_limit = 512;
-    static constexpr std::size_t aggregate_commit_page_byte_limit = 1024u * 1024u;
+    static constexpr std::size_t aggregate_commit_page_byte_limit =
+      aggregate_inventory::page_byte_limit;
     static constexpr std::size_t aggregate_commit_final_key_limit = 2048;
 
     static json_t
@@ -1790,11 +1839,12 @@ class provider_location_repository_t final : public location_repository_t
     {
         json_t encoded_entries = json_t::array ();
         for (const auto &entry : entries)
-            encoded_entries.push_back ({{"authorityKey", entry.authority_key},
-                                        {"before", hex (entry.before)},
-                                        {"after", hex (entry.after)}});
-        return {
-          {"version", 1}, {"pageIndex", page_index}, {"entries", std::move (encoded_entries)}};
+            encoded_entries.push_back ({{location_record_fields::authorityKey, entry.authority_key},
+                                        {location_record_fields::before, hex (entry.before)},
+                                        {location_record_fields::after, hex (entry.after)}});
+        return {{location_record_fields::version, 1},
+                {location_record_fields::pageIndex, page_index},
+                {location_record_fields::entries, std::move (encoded_entries)}};
     }
 
     static std::optional<std::vector<aggregate_commit_entry_t>>
@@ -1805,18 +1855,23 @@ class provider_location_repository_t final : public location_repository_t
             return std::nullopt;
         try {
             const auto record = parse_json (bytes);
-            if (record.value ("version", 0) != 1 || !record.at ("pageIndex").is_number_unsigned ()
+            if (record.value (location_record_fields::version, 0) != 1
+                || !record.at (location_record_fields::pageIndex).is_number_unsigned ()
                 || (expected_page_index
-                    && record.at ("pageIndex").get<std::size_t> () != *expected_page_index)
-                || !record.at ("entries").is_array () || record.at ("entries").empty ()
-                || record.at ("entries").size () > aggregate_commit_page_item_limit)
+                    && record.at (location_record_fields::pageIndex).get<std::size_t> ()
+                         != *expected_page_index)
+                || !record.at (location_record_fields::entries).is_array ()
+                || record.at (location_record_fields::entries).empty ()
+                || record.at (location_record_fields::entries).size ()
+                     > aggregate_commit_page_item_limit)
                 return std::nullopt;
             std::vector<aggregate_commit_entry_t> result;
-            result.reserve (record.at ("entries").size ());
-            for (const auto &entry : record.at ("entries"))
-                result.push_back ({entry.at ("authorityKey").get<std::string> (),
-                                   unhex (entry.at ("before").get<std::string> ()),
-                                   unhex (entry.at ("after").get<std::string> ())});
+            result.reserve (record.at (location_record_fields::entries).size ());
+            for (const auto &entry : record.at (location_record_fields::entries))
+                result.push_back (
+                  {entry.at (location_record_fields::authorityKey).get<std::string> (),
+                   unhex (entry.at (location_record_fields::before).get<std::string> ()),
+                   unhex (entry.at (location_record_fields::after).get<std::string> ())});
             return result;
         }
         catch (...) {
@@ -1871,13 +1926,15 @@ class provider_location_repository_t final : public location_repository_t
                                          std::optional<std::size_t> page_index = std::nullopt,
                                          std::optional<std::size_t> entry_index = std::nullopt)
     {
-        return {{"aggregateId", hex (aggregate_id.value)},
-                {"aggregateGeneration", aggregate_generation},
-                {"authorityKey", authority_key},
-                {"expectedStoreVersion", expected_store_version},
-                {"status", status},
-                {"pageIndex", page_index ? json_t (*page_index) : json_t (nullptr)},
-                {"entryIndex", entry_index ? json_t (*entry_index) : json_t (nullptr)}};
+        return {
+          {location_record_fields::aggregateId, hex (aggregate_id.value)},
+          {location_record_fields::aggregateGeneration, aggregate_generation},
+          {location_record_fields::authorityKey, authority_key},
+          {location_record_fields::expectedStoreVersion, expected_store_version},
+          {location_record_fields::status, status},
+          {location_record_fields::pageIndex, page_index ? json_t (*page_index) : json_t (nullptr)},
+          {location_record_fields::entryIndex,
+           entry_index ? json_t (*entry_index) : json_t (nullptr)}};
     }
 
     static std::optional<aggregate_lock_t>
@@ -1887,18 +1944,24 @@ class provider_location_repository_t final : public location_repository_t
             const auto record = parse_json (bytes);
             aggregate_lock_t result;
             result.aggregate_id.value =
-              unhex_array<16> (record.at ("aggregateId").get<std::string> ());
-            result.aggregate_generation = record.at ("aggregateGeneration").get<std::uint64_t> ();
-            result.authority_key = record.at ("authorityKey").get<std::string> ();
-            result.expected_store_version = record.at ("expectedStoreVersion").get<std::string> ();
-            result.status = record.at ("status").get<std::string> ();
-            if (!record.at ("pageIndex").is_null ())
-                result.page_index = record.at ("pageIndex").get<std::size_t> ();
-            if (!record.at ("entryIndex").is_null ())
-                result.entry_index = record.at ("entryIndex").get<std::size_t> ();
+              unhex_array<16> (record.at (location_record_fields::aggregateId).get<std::string> ());
+            result.aggregate_generation =
+              record.at (location_record_fields::aggregateGeneration).get<std::uint64_t> ();
+            result.authority_key =
+              record.at (location_record_fields::authorityKey).get<std::string> ();
+            result.expected_store_version =
+              record.at (location_record_fields::expectedStoreVersion).get<std::string> ();
+            result.status = record.at (location_record_fields::status).get<std::string> ();
+            if (!record.at (location_record_fields::pageIndex).is_null ())
+                result.page_index =
+                  record.at (location_record_fields::pageIndex).get<std::size_t> ();
+            if (!record.at (location_record_fields::entryIndex).is_null ())
+                result.entry_index =
+                  record.at (location_record_fields::entryIndex).get<std::size_t> ();
             if (result.aggregate_generation == 0 || result.authority_key.empty ()
-                || (result.status != "prepared" && result.status != "committing"
-                    && result.status != "committed"))
+                || (result.status != aggregate_status::prepared
+                    && result.status != aggregate_status::committing
+                    && result.status != aggregate_status::committed))
                 return std::nullopt;
             return result;
         }
@@ -1949,12 +2012,13 @@ class provider_location_repository_t final : public location_repository_t
     {
         auto raw = decode_authority (raw_bytes, raw_version, store_now);
         const auto lock = co_await read_aggregate_lock_async (authority_key);
-        if (!lock || lock->status != "committing")
+        if (!lock || lock->status != aggregate_status::committing)
             co_return raw;
         auto aggregate = co_await _store->read (key_aggregate (lock->aggregate_id));
         if (const auto *aggregate_found = std::get_if<store_found_t> (&aggregate)) {
             const auto aggregate_record = parse_json (aggregate_found->value.bytes);
-            if (aggregate_record.value ("status", "") == "committed")
+            if (aggregate_record.value (location_record_fields::status, "")
+                == aggregate_status::committed)
                 co_return raw;
         }
         if (!lock->page_index || !lock->entry_index)
@@ -1981,14 +2045,17 @@ class provider_location_repository_t final : public location_repository_t
     task_t<bool> authority_mutation_locked_async (std::string authority_key)
     {
         const auto lock = co_await read_aggregate_lock_async (authority_key);
-        if (!lock || (lock->status != "prepared" && lock->status != "committing"))
+        if (!lock
+            || (lock->status != aggregate_status::prepared
+                && lock->status != aggregate_status::committing))
             co_return false;
-        if (lock->status == "committing") {
+        if (lock->status == aggregate_status::committing) {
             auto aggregate = co_await _store->read (key_aggregate (lock->aggregate_id));
             if (const auto *found = std::get_if<store_found_t> (&aggregate)) {
                 const auto record = parse_json (found->value.bytes);
-                if (record.value ("status", "") == "committed"
-                    || record.value ("status", "") == "aborted")
+                if (record.value (location_record_fields::status, "") == aggregate_status::committed
+                    || record.value (location_record_fields::status, "")
+                         == aggregate_status::aborted)
                     co_return false;
             }
         }
@@ -2082,10 +2149,11 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::vector<std::byte> owner_lease_bytes (const location_owner_token_t &owner)
     {
-        return to_bytes (json_t{{"recordVersion", 1},
-                                {"ownerId", owner.owner_id},
-                                {"leaseGeneration", std::to_string (owner.lease_generation)}}
-                           .dump ());
+        return to_bytes (
+          json_t{{location_record_fields::recordVersion, 1},
+                 {location_record_fields::ownerId, owner.owner_id},
+                 {location_record_fields::leaseGeneration, std::to_string (owner.lease_generation)}}
+            .dump ());
     }
 
     static store_condition_t owner_condition (const location_owner_token_t &owner)
@@ -2129,8 +2197,9 @@ class provider_location_repository_t final : public location_repository_t
     // canonical contract and are not funneled through here.
     static void require_record_version (const json_t &record, const char *record_name)
     {
-        if (!record.contains ("recordVersion") || !record.at ("recordVersion").is_number_integer ()
-            || record.at ("recordVersion").get<std::int64_t> () != 1) {
+        if (!record.contains (location_record_fields::recordVersion)
+            || !record.at (location_record_fields::recordVersion).is_number_integer ()
+            || record.at (location_record_fields::recordVersion).get<std::int64_t> () != 1) {
             throw std::invalid_argument (std::string ("unrecognized ") + record_name
                                          + " recordVersion");
         }
@@ -2169,8 +2238,8 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::int64_t owner_generation (const std::vector<std::byte> &value)
     {
-        return parse_i64_field (
-          parse_canonical_record (value, "owner lease").at ("leaseGeneration"));
+        return parse_i64_field (parse_canonical_record (value, "owner lease")
+                                  .at (location_record_fields::leaseGeneration));
     }
 
     static owner_lease_found_t decode_owner_lease (const store_found_t &found)
@@ -2178,8 +2247,8 @@ class provider_location_repository_t final : public location_repository_t
         if (!found.value.expires_at)
             throw std::invalid_argument ("Location Store owner lease record is invalid");
         const auto record = parse_canonical_record (found.value.bytes, "owner lease");
-        return {{record.at ("ownerId").get<std::string> (),
-                 parse_i64_field (record.at ("leaseGeneration"))},
+        return {{record.at (location_record_fields::ownerId).get<std::string> (),
+                 parse_i64_field (record.at (location_record_fields::leaseGeneration))},
                 *found.value.expires_at,
                 found.value.store_now};
     }
@@ -2234,12 +2303,12 @@ class provider_location_repository_t final : public location_repository_t
 
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation)
     {
-        static constexpr char digits[] = "0123456789abcdef";
         const auto fixed_hex = [] (std::uint64_t value) {
             std::string result;
             result.reserve (16);
             for (int shift = 60; shift >= 0; shift -= 4)
-                result.push_back (digits[(value >> shift) & 0x0f]);
+                result.push_back (
+                  zlink::framework::detail::lowercase_hex_digits[(value >> shift) & 0x0f]);
             return result;
         };
         const auto source_rid = hex (to_bytes (operation.source_node_rid.value ()));
@@ -2293,28 +2362,12 @@ class provider_location_repository_t final : public location_repository_t
 
     template <std::size_t N> static std::string hex (const std::array<std::byte, N> &value)
     {
-        static constexpr char digits[] = "0123456789abcdef";
-        std::string result;
-        result.reserve (N * 2);
-        for (const auto item : value) {
-            const auto byte = std::to_integer<unsigned char> (item);
-            result.push_back (digits[byte >> 4]);
-            result.push_back (digits[byte & 0x0f]);
-        }
-        return result;
+        return zlink::framework::detail::encode_hex (std::span<const std::byte> (value));
     }
 
     static std::string hex (const std::vector<std::byte> &value)
     {
-        static constexpr char digits[] = "0123456789abcdef";
-        std::string result;
-        result.reserve (value.size () * 2);
-        for (const auto item : value) {
-            const auto byte = std::to_integer<unsigned char> (item);
-            result.push_back (digits[byte >> 4]);
-            result.push_back (digits[byte & 0x0f]);
-        }
-        return result;
+        return zlink::framework::detail::encode_hex (std::span<const std::byte> (value));
     }
 
     static std::vector<std::byte> unhex (std::string_view value)
@@ -2446,7 +2499,8 @@ class provider_location_repository_t final : public location_repository_t
         std::uint64_t generation = 1;
         store_condition_t row_condition;
         if (const auto *found = std::get_if<store_found_t> (&current)) {
-            auto stored = parse_canonical_record (found->value.bytes, "descriptor");
+            auto stored =
+              parse_canonical_record (found->value.bytes, location_record_fields::descriptor);
             std::uint64_t provider_generation = 0;
             bool provider_generation_known = false;
             try {
@@ -2501,7 +2555,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&current);
         if (!found)
             return completed (location_write_status_t::ignored_stale);
-        const auto record = parse_canonical_record (found->value.bytes, "descriptor");
+        const auto record =
+          parse_canonical_record (found->value.bytes, location_record_fields::descriptor);
         if (record_owner_id (record) != owner.owner_id
             || record_lease_generation (record) != owner.lease_generation)
             return completed (location_write_status_t::ignored_stale);
@@ -2530,8 +2585,8 @@ class provider_location_repository_t final : public location_repository_t
         location_page_t<T> output;
         output.items.reserve (found->items.size ());
         for (const auto &item : found->items)
-            output.items.push_back (
-              decode (parse_canonical_record (item.value.bytes, "descriptor")));
+            output.items.push_back (decode (
+              parse_canonical_record (item.value.bytes, location_record_fields::descriptor)));
         if (found->next_cursor)
             output.continuation_token = found->next_cursor->value;
         co_return std::move (output);
@@ -2542,13 +2597,15 @@ class provider_location_repository_t final : public location_repository_t
         std::int64_t removed = 0;
         std::optional<store_scan_cursor_t> cursor;
         do {
-            auto result = _store->scan ({row_prefix, cursor, 1000}).result ().value ();
+            auto result =
+              _store->scan ({row_prefix, cursor, location_page_item_limit}).result ().value ();
             const auto *page = std::get_if<store_scan_page_t> (&result);
             if (!page)
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "Location Store scan cursor expired");
             for (const auto &item : page->items) {
-                const auto record = parse_canonical_record (item.value.bytes, "descriptor");
+                const auto record =
+                  parse_canonical_record (item.value.bytes, location_record_fields::descriptor);
                 if (record_owner_id (record) != owner.owner_id
                     || record_lease_generation (record) != owner.lease_generation)
                     continue;
@@ -2579,30 +2636,35 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string record_owner_id (const json_t &record)
     {
-        if (record.contains ("ownerId"))
-            return record.at ("ownerId").get<std::string> ();
-        return record.at ("descriptor").at ("ownerId").get<std::string> ();
+        if (record.contains (location_record_fields::ownerId))
+            return record.at (location_record_fields::ownerId).get<std::string> ();
+        return record.at (location_record_fields::descriptor)
+          .at (location_record_fields::ownerId)
+          .get<std::string> ();
     }
 
     static std::int64_t record_lease_generation (const json_t &record)
     {
-        if (record.contains ("leaseGeneration"))
-            return parse_i64_field (record.at ("leaseGeneration"));
-        return parse_i64_field (record.at ("descriptor").at ("leaseGeneration"));
+        if (record.contains (location_record_fields::leaseGeneration))
+            return parse_i64_field (record.at (location_record_fields::leaseGeneration));
+        return parse_i64_field (record.at (location_record_fields::descriptor)
+                                  .at (location_record_fields::leaseGeneration));
     }
 
     static std::uint64_t record_lifecycle_generation (const json_t &record)
     {
-        if (record.contains ("lifecycleGeneration"))
-            return parse_u64_field (record.at ("lifecycleGeneration"));
-        return parse_u64_field (record.at ("descriptor").at ("lifecycleGeneration"));
+        if (record.contains (location_record_fields::lifecycleGeneration))
+            return parse_u64_field (record.at (location_record_fields::lifecycleGeneration));
+        return parse_u64_field (record.at (location_record_fields::descriptor)
+                                  .at (location_record_fields::lifecycleGeneration));
     }
 
     static std::uint64_t record_descriptor_revision (const json_t &record)
     {
-        if (record.contains ("descriptorRevision"))
-            return parse_u64_field (record.at ("descriptorRevision"));
-        return parse_u64_field (record.at ("descriptor").at ("descriptorRevision"));
+        if (record.contains (location_record_fields::descriptorRevision))
+            return parse_u64_field (record.at (location_record_fields::descriptorRevision));
+        return parse_u64_field (record.at (location_record_fields::descriptor)
+                                  .at (location_record_fields::descriptorRevision));
     }
 
     static std::int64_t unix_ms (std::chrono::system_clock::time_point value)
@@ -2618,13 +2680,14 @@ class provider_location_repository_t final : public location_repository_t
 
     static json_t encode_owner (const location_owner_token_t &value)
     {
-        return {{"ownerId", value.owner_id}, {"leaseGeneration", value.lease_generation}};
+        return {{location_record_fields::ownerId, value.owner_id},
+                {location_record_fields::leaseGeneration, value.lease_generation}};
     }
 
     static location_owner_token_t decode_owner (const json_t &value)
     {
-        return {value.at ("ownerId").get<std::string> (),
-                parse_i64_field (value.at ("leaseGeneration"))};
+        return {value.at (location_record_fields::ownerId).get<std::string> (),
+                parse_i64_field (value.at (location_record_fields::leaseGeneration))};
     }
 
     static bool same_owner (const location_owner_token_t &left, const location_owner_token_t &right)
@@ -2675,88 +2738,116 @@ class provider_location_repository_t final : public location_repository_t
     {
         // nodeGeneration is the 21-location-runtime.md#2.4 canonical alias
         // for nodeLifecycleGeneration (kept for decode_target/same_target).
-        return {{"meshName", value.mesh_name},
-                {"nodeRid", value.node_rid.value ()},
-                {"nodeLifecycleGeneration", value.node_lifecycle_generation},
-                {"nodeGeneration", generation_string (value.node_lifecycle_generation)},
-                {"owner", encode_owner (value.owner)}};
+        return {{location_record_fields::meshName, value.mesh_name},
+                {location_record_fields::nodeRid, value.node_rid.value ()},
+                {location_record_fields::nodeLifecycleGeneration, value.node_lifecycle_generation},
+                {location_record_fields::nodeGeneration,
+                 generation_string (value.node_lifecycle_generation)},
+                {location_record_fields::owner, encode_owner (value.owner)}};
     }
 
     static object_creation_target_t decode_target (const json_t &value)
     {
-        return {value.at ("meshName").get<std::string> (),
-                node_rid_t::from_string (value.at ("nodeRid").get<std::string> ()),
-                value.contains ("nodeLifecycleGeneration")
-                  ? value.at ("nodeLifecycleGeneration").get<std::uint64_t> ()
-                  : parse_u64_field (value.at ("nodeGeneration")),
-                decode_owner (value.at ("owner"))};
+        return {
+          value.at (location_record_fields::meshName).get<std::string> (),
+          node_rid_t::from_string (value.at (location_record_fields::nodeRid).get<std::string> ()),
+          value.contains (location_record_fields::nodeLifecycleGeneration)
+            ? value.at (location_record_fields::nodeLifecycleGeneration).get<std::uint64_t> ()
+            : parse_u64_field (value.at (location_record_fields::nodeGeneration)),
+          decode_owner (value.at (location_record_fields::owner))};
     }
 
     // 21-location-runtime.md#2.4's canonical objectKind spelling for the
     // three-way placement kind (actor|userSpot|instanceSpot), shared by
     // encode_bundle's spotType and encode_allocation below.
+    template <typename T, std::size_t N>
+    static const char *
+    store_enum_name (T value, const std::array<std::pair<T, const char *>, N> &names, T fallback)
+    {
+        for (const auto &[kind, name] : names)
+            if (kind == value)
+                return name;
+        return std::find_if (names.begin (), names.end (),
+                             [fallback] (const auto &entry) { return entry.first == fallback; })
+          ->second;
+    }
+
+    template <typename T, std::size_t N>
+    static T parse_store_enum (std::string_view value,
+                               const std::array<std::pair<T, const char *>, N> &names,
+                               T fallback)
+    {
+        for (const auto &[kind, name] : names)
+            if (value == name)
+                return kind;
+        return fallback;
+    }
+
+    static inline constexpr std::array<std::pair<placement_object_kind_t, const char *>, 3>
+      object_kind_names{{
+        {placement_object_kind_t::actor, "actor"},
+        {placement_object_kind_t::instance_spot, "instanceSpot"},
+        {placement_object_kind_t::user_spot, "userSpot"},
+      }};
+
     static const char *object_kind3_name (placement_object_kind_t value)
     {
-        switch (value) {
-            case placement_object_kind_t::actor:
-                return "actor";
-            case placement_object_kind_t::instance_spot:
-                return "instanceSpot";
-            case placement_object_kind_t::user_spot:
-            default:
-                return "userSpot";
-        }
+        return store_enum_name (value, object_kind_names, placement_object_kind_t::user_spot);
     }
 
     static placement_object_kind_t parse_object_kind3 (const std::string &value)
     {
-        if (value == "actor")
-            return placement_object_kind_t::actor;
-        if (value == "instanceSpot")
-            return placement_object_kind_t::instance_spot;
-        return placement_object_kind_t::user_spot;
+        return parse_store_enum (value, object_kind_names, placement_object_kind_t::user_spot);
     }
 
-    // §2.4's canonical capacity shape: `actors`/`spots` counts plus an
-    // optional `spotType{objectKind,stableType,count}` (was
     // `actorSlots`/`spotSlots`/`spotType{objectKind:int,...,slots}`).
     static json_t encode_bundle (const placement_capacity_bundle_t &value)
     {
         json_t spot_type = nullptr;
         if (value.spot_type)
-            spot_type = {{"objectKind", object_kind3_name (value.spot_type->object_kind)},
-                         {"stableType", value.spot_type->stable_type},
-                         {"count", value.spot_type->slots}};
-        return {{"actors", value.actor_slots},
-                {"spots", value.spot_slots},
-                {"spotType", std::move (spot_type)}};
+            spot_type = {{location_record_fields::objectKind,
+                          object_kind3_name (value.spot_type->object_kind)},
+                         {location_record_fields::stableType, value.spot_type->stable_type},
+                         {location_record_fields::count, value.spot_type->slots}};
+        return {{location_record_fields::actors, value.actor_slots},
+                {location_record_fields::spots, value.spot_slots},
+                {location_record_fields::spotType, std::move (spot_type)}};
     }
 
     static placement_capacity_bundle_t decode_bundle (const json_t &value)
     {
         placement_capacity_bundle_t result;
-        result.actor_slots = value.at ("actors").get<std::uint32_t> ();
-        result.spot_slots = value.at ("spots").get<std::uint32_t> ();
-        if (value.contains ("spotType") && !value.at ("spotType").is_null ()) {
-            const auto &spot = value.at ("spotType");
+        result.actor_slots = value.at (location_record_fields::actors).get<std::uint32_t> ();
+        result.spot_slots = value.at (location_record_fields::spots).get<std::uint32_t> ();
+        if (value.contains (location_record_fields::spotType)
+            && !value.at (location_record_fields::spotType).is_null ()) {
+            const auto &spot = value.at (location_record_fields::spotType);
             result.spot_type = spot_type_capacity_delta_t{
-              parse_object_kind3 (spot.at ("objectKind").get<std::string> ()),
-              spot.at ("stableType").get<std::string> (),
-              static_cast<std::uint32_t> (spot.at ("count").get<std::uint64_t> ())};
+              parse_object_kind3 (spot.at (location_record_fields::objectKind).get<std::string> ()),
+              spot.at (location_record_fields::stableType).get<std::string> (),
+              static_cast<std::uint32_t> (
+                spot.at (location_record_fields::count).get<std::uint64_t> ())};
         }
         return result;
     }
 
+    static inline constexpr std::array<std::pair<placement_allocation_state_t, const char *>, 2>
+      allocation_state_names{{
+        {placement_allocation_state_t::active, "active"},
+        {placement_allocation_state_t::reserved, "reserved"},
+      }};
+
     static const char *allocation_state_name (placement_allocation_state_t value)
     {
-        return value == placement_allocation_state_t::active ? "active" : "reserved";
+        return store_enum_name (value, allocation_state_names,
+                                placement_allocation_state_t::reserved);
     }
 
     static placement_allocation_state_t parse_allocation_state (const json_t &value)
     {
         if (value.is_string ())
-            return value.get<std::string> () == "active" ? placement_allocation_state_t::active
-                                                         : placement_allocation_state_t::reserved;
+            return parse_store_enum (value.get<std::string> (), allocation_state_names,
+                                     placement_allocation_state_t::reserved);
         return static_cast<placement_allocation_state_t> (value.get<int> ());
     }
 
@@ -2781,17 +2872,17 @@ class provider_location_repository_t final : public location_repository_t
     // node_rid_t that no longer resolves to the same mesh row.
     static json_t encode_target_descriptor (const object_creation_target_t &value)
     {
-        return {{"meshName", value.mesh_name},
-                {"routingIdHex",
+        return {{location_record_fields::meshName, value.mesh_name},
+                {location_record_fields::routingIdHex,
                  zlink::routing_id_t::from (std::string (value.node_rid.value ())).to_hex ()}};
     }
 
     static object_creation_target_t decode_target_descriptor (
       const json_t &value, location_owner_token_t owner, std::uint64_t node_lifecycle_generation)
     {
-        const auto rid =
-          zlink::routing_id_t::from_hex (value.at ("routingIdHex").get<std::string> ());
-        return {value.at ("meshName").get<std::string> (),
+        const auto rid = zlink::routing_id_t::from_hex (
+          value.at (location_record_fields::routingIdHex).get<std::string> ());
+        return {value.at (location_record_fields::meshName).get<std::string> (),
                 node_rid_t::from_string (
                   std::string (reinterpret_cast<const char *> (rid.data ()), rid.size ())),
                 node_lifecycle_generation, std::move (owner)};
@@ -2802,35 +2893,37 @@ class provider_location_repository_t final : public location_repository_t
     // shared with encode_bundle's spotType -- no separate spotKind field).
     static json_t encode_allocation (const placement_allocation_t &value)
     {
-        return {{"state", allocation_state_name (value.state)},
-                {"objectKind", object_kind3_name (value.object_kind)},
-                {"stableType", value.stable_type},
-                {"descriptor", encode_target_descriptor (value.target)},
-                {"descriptorLifecycleGeneration",
+        return {{location_record_fields::state, allocation_state_name (value.state)},
+                {location_record_fields::objectKind, object_kind3_name (value.object_kind)},
+                {location_record_fields::stableType, value.stable_type},
+                {location_record_fields::descriptor, encode_target_descriptor (value.target)},
+                {location_record_fields::descriptorLifecycleGeneration,
                  generation_string (value.target.node_lifecycle_generation)},
-                {"capacity", encode_bundle (value.capacity_bundle)}};
+                {location_record_fields::capacity, encode_bundle (value.capacity_bundle)}};
     }
 
     static placement_allocation_t decode_allocation (const json_t &value,
                                                      const location_owner_token_t &owner)
     {
         return {
-          parse_allocation_state (value.at ("state")),
-          parse_object_kind3 (value.at ("objectKind").get<std::string> ()),
-          value.at ("stableType").get<std::string> (),
-          decode_target_descriptor (value.at ("descriptor"), owner,
-                                    parse_u64_field (value.at ("descriptorLifecycleGeneration"))),
-          decode_bundle (value.at ("capacity"))};
+          parse_allocation_state (value.at (location_record_fields::state)),
+          parse_object_kind3 (value.at (location_record_fields::objectKind).get<std::string> ()),
+          value.at (location_record_fields::stableType).get<std::string> (),
+          decode_target_descriptor (
+            value.at (location_record_fields::descriptor), owner,
+            parse_u64_field (value.at (location_record_fields::descriptorLifecycleGeneration))),
+          decode_bundle (value.at (location_record_fields::capacity))};
     }
 
     static json_t encode_pending (const std::optional<pending_object_creation_t> &value)
     {
         if (!value)
             return nullptr;
-        return {{"reservationId", value->reservation_id},
-                {"requestContentReference", value->request_content_reference},
-                {"requestSha256", hex (value->request_sha256)},
-                {"requestEncodedSize", static_cast<std::uint64_t> (value->request_encoded_size)}};
+        return {{location_record_fields::reservationId, value->reservation_id},
+                {location_record_fields::requestContentReference, value->request_content_reference},
+                {location_record_fields::requestSha256, hex (value->request_sha256)},
+                {location_record_fields::requestEncodedSize,
+                 static_cast<std::uint64_t> (value->request_encoded_size)}};
     }
 
     static std::optional<pending_object_creation_t> decode_pending (const json_t &value)
@@ -2838,10 +2931,11 @@ class provider_location_repository_t final : public location_repository_t
         if (value.is_null ())
             return std::nullopt;
         return pending_object_creation_t{
-          value.at ("reservationId").get<std::string> (),
-          value.at ("requestContentReference").get<std::string> (),
-          unhex_array<32> (value.at ("requestSha256").get<std::string> ()),
-          static_cast<std::uint32_t> (parse_u64_field (value.at ("requestEncodedSize")))};
+          value.at (location_record_fields::reservationId).get<std::string> (),
+          value.at (location_record_fields::requestContentReference).get<std::string> (),
+          unhex_array<32> (value.at (location_record_fields::requestSha256).get<std::string> ()),
+          static_cast<std::uint32_t> (
+            parse_u64_field (value.at (location_record_fields::requestEncodedSize)))};
     }
 
     // 21-location-runtime.md#2.4's canonical authority envelope. `payload`
@@ -2857,16 +2951,18 @@ class provider_location_repository_t final : public location_repository_t
     // the record body.
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
-        return to_bytes (
-          json_t{{"recordVersion", 1},
-                 {"payload", base64_encode (value.payload)},
-                 {"objectGeneration", generation_string (value.object_generation)},
-                 {"authorityOwnerGeneration", generation_string (value.authority_owner_generation)},
-                 {"ownerId", value.owner.owner_id},
-                 {"ownerLeaseGeneration", generation_string (value.owner.lease_generation)},
-                 {"allocation", encode_allocation (value.allocation)},
-                 {"pendingCreation", encode_pending (value.pending_creation)}}
-            .dump ());
+        return to_bytes (json_t{
+          {location_record_fields::recordVersion, 1},
+          {location_record_fields::payload, base64_encode (value.payload)},
+          {location_record_fields::objectGeneration, generation_string (value.object_generation)},
+          {location_record_fields::authorityOwnerGeneration,
+           generation_string (value.authority_owner_generation)},
+          {location_record_fields::ownerId, value.owner.owner_id},
+          {location_record_fields::ownerLeaseGeneration,
+           generation_string (value.owner.lease_generation)},
+          {location_record_fields::allocation, encode_allocation (value.allocation)},
+          {location_record_fields::pendingCreation, encode_pending (value.pending_creation)}}
+                           .dump ());
     }
 
     static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,
@@ -2875,24 +2971,25 @@ class provider_location_repository_t final : public location_repository_t
     {
         // Fail-closed on absent AND present-unknown recordVersion (spec 21
         // §2.4); tolerating absence would guess at the record layout.
-        const auto value = parse_canonical_record (bytes, "authority");
+        const auto value = parse_canonical_record (bytes, location_record_fields::authority);
         const auto owner =
-          value.contains ("owner")
-            ? decode_owner (value.at ("owner"))
-            : location_owner_token_t{value.at ("ownerId").get<std::string> (),
-                                     parse_i64_field (value.at ("ownerLeaseGeneration"))};
+          value.contains (location_record_fields::owner)
+            ? decode_owner (value.at (location_record_fields::owner))
+            : location_owner_token_t{
+                value.at (location_record_fields::ownerId).get<std::string> (),
+                parse_i64_field (value.at (location_record_fields::ownerLeaseGeneration))};
         // Clean break (checklist C-4): payload was hex, now base64. There is
         // no dual-read fallback -- the whole opaque-record key/value scheme
         // changed in the same conversion, so no pre-conversion record can be
         // found under these keys to begin with.
         return {std::move (provider_version),
-                base64_decode (value.at ("payload").get<std::string> ()),
-                parse_u64_field (value.at ("objectGeneration")),
-                parse_u64_field (value.at ("authorityOwnerGeneration")),
+                base64_decode (value.at (location_record_fields::payload).get<std::string> ()),
+                parse_u64_field (value.at (location_record_fields::objectGeneration)),
+                parse_u64_field (value.at (location_record_fields::authorityOwnerGeneration)),
                 owner,
                 store_now,
-                decode_allocation (value.at ("allocation"), owner),
-                decode_pending (value.at ("pendingCreation"))};
+                decode_allocation (value.at (location_record_fields::allocation), owner),
+                decode_pending (value.at (location_record_fields::pendingCreation))};
     }
 
     static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,
@@ -2958,86 +3055,72 @@ class provider_location_repository_t final : public location_repository_t
 
     static json_t encode (const capacity_usage_t &value)
     {
-        return {{"active", value.active}, {"reserved", value.reserved}, {"limit", value.limit}};
+        return {{location_record_fields::active, value.active},
+                {location_record_fields::reserved, value.reserved},
+                {location_record_fields::limit, value.limit}};
     }
 
     static capacity_usage_t decode_capacity_usage (const json_t &value)
     {
-        return {value.at ("active").get<std::uint64_t> (),
-                value.at ("reserved").get<std::uint64_t> (),
-                value.at ("limit").get<std::int32_t> ()};
+        return {value.at (location_record_fields::active).get<std::uint64_t> (),
+                value.at (location_record_fields::reserved).get<std::uint64_t> (),
+                value.at (location_record_fields::limit).get<std::int32_t> ()};
     }
+
+    static inline constexpr std::array<std::pair<framework_runtime_state_t, const char *>, 7>
+      runtime_state_names{{
+        {framework_runtime_state_t::preparing, "preparing"},
+        {framework_runtime_state_t::serving, "serving"},
+        {framework_runtime_state_t::relocating, "relocating"},
+        {framework_runtime_state_t::relocated, "relocated"},
+        {framework_runtime_state_t::draining, "draining"},
+        {framework_runtime_state_t::stopped, "stopped"},
+        {framework_runtime_state_t::error, "error"},
+      }};
 
     static const char *runtime_state_name (framework_runtime_state_t value)
     {
-        switch (value) {
-            case framework_runtime_state_t::preparing:
-                return "preparing";
-            case framework_runtime_state_t::serving:
-                return "serving";
-            case framework_runtime_state_t::relocating:
-                return "relocating";
-            case framework_runtime_state_t::relocated:
-                return "relocated";
-            case framework_runtime_state_t::draining:
-                return "draining";
-            case framework_runtime_state_t::stopped:
-                return "stopped";
-            case framework_runtime_state_t::error:
-                return "error";
-        }
-        return "preparing";
+        return store_enum_name (value, runtime_state_names, framework_runtime_state_t::preparing);
     }
 
     static framework_runtime_state_t parse_runtime_state (const std::string &value)
     {
-        static const std::map<std::string, framework_runtime_state_t> names{
-          {"preparing", framework_runtime_state_t::preparing},
-          {"serving", framework_runtime_state_t::serving},
-          {"relocating", framework_runtime_state_t::relocating},
-          {"relocated", framework_runtime_state_t::relocated},
-          {"draining", framework_runtime_state_t::draining},
-          {"stopped", framework_runtime_state_t::stopped},
-          {"error", framework_runtime_state_t::error}};
-        const auto found = names.find (value);
-        return found == names.end () ? framework_runtime_state_t::preparing : found->second;
+        return parse_store_enum (value, runtime_state_names, framework_runtime_state_t::preparing);
     }
+
+    static inline constexpr std::array<std::pair<maintenance_policy_kind_t, const char *>, 3>
+      maintenance_policy_names{{
+        {maintenance_policy_kind_t::disabled, "disabled"},
+        {maintenance_policy_kind_t::recreate, "recreate"},
+        {maintenance_policy_kind_t::snapshot, "snapshot"},
+      }};
 
     static const char *maintenance_policy_name (maintenance_policy_kind_t value)
     {
-        switch (value) {
-            case maintenance_policy_kind_t::disabled:
-                return "disabled";
-            case maintenance_policy_kind_t::recreate:
-                return "recreate";
-            case maintenance_policy_kind_t::snapshot:
-                return "snapshot";
-        }
-        return "disabled";
+        return store_enum_name (value, maintenance_policy_names,
+                                maintenance_policy_kind_t::disabled);
     }
 
     static maintenance_policy_kind_t parse_maintenance_policy (const std::string &value)
     {
-        if (value == "recreate")
-            return maintenance_policy_kind_t::recreate;
-        if (value == "snapshot")
-            return maintenance_policy_kind_t::snapshot;
-        return maintenance_policy_kind_t::disabled;
+        return parse_store_enum (value, maintenance_policy_names,
+                                 maintenance_policy_kind_t::disabled);
     }
+
+    static inline constexpr std::array<const char *, 3> object_role_names{"none", "client",
+                                                                          "server"};
 
     static const char *object_role_name (object_role_t value)
     {
-        static constexpr std::array<const char *, 3> names{"none", "client", "server"};
-        return names.at (static_cast<std::size_t> (value));
+        return object_role_names.at (static_cast<std::size_t> (value));
     }
 
     static object_role_t parse_object_role (const std::string &value)
     {
-        if (value == "client")
-            return object_role_t::client;
-        if (value == "server")
-            return object_role_t::server;
-        return object_role_t::none;
+        const auto found = std::find (object_role_names.begin (), object_role_names.end (), value);
+        return found == object_role_names.end ()
+                 ? object_role_t::none
+                 : static_cast<object_role_t> (std::distance (object_role_names.begin (), found));
     }
 
     // 21-location-runtime.md#2.4's canonical mesh node descriptor shape:
@@ -3049,44 +3132,51 @@ class provider_location_repository_t final : public location_repository_t
     {
         json_t capabilities = json_t::array ();
         for (const auto &item : value.object_capabilities)
-            capabilities.push_back ({{"objectKind", object_kind3_name (item.object_kind)},
-                                     {"stableType", item.stable_type},
-                                     {"policy", maintenance_policy_name (item.policy)},
-                                     {"hasSnapshotAdapter", item.has_snapshot_adapter},
-                                     {"limit", item.spot_limit}});
+            capabilities.push_back (
+              {{location_record_fields::objectKind, object_kind3_name (item.object_kind)},
+               {location_record_fields::stableType, item.stable_type},
+               {location_record_fields::policy, maintenance_policy_name (item.policy)},
+               {location_record_fields::hasSnapshotAdapter, item.has_snapshot_adapter},
+               {location_record_fields::limit, item.spot_limit}});
         json_t spot_types = json_t::array ();
         for (const auto &item : value.capacity.spot_types)
-            spot_types.push_back ({{"objectKind", object_kind3_name (item.object_kind)},
-                                   {"stableType", item.stable_type},
-                                   {"active", item.usage.active},
-                                   {"reserved", item.usage.reserved},
-                                   {"limit", item.usage.limit}});
+            spot_types.push_back (
+              {{location_record_fields::objectKind, object_kind3_name (item.object_kind)},
+               {location_record_fields::stableType, item.stable_type},
+               {location_record_fields::active, item.usage.active},
+               {location_record_fields::reserved, item.usage.reserved},
+               {location_record_fields::limit, item.usage.limit}});
         return {
-          {"meshName", value.mesh_name},
-          {"routingIdHex", value.rid.to_hex ()},
-          {"lifecycleGeneration", generation_string (value.lifecycle_generation)},
-          {"descriptorRevision", generation_string (value.descriptor_revision)},
-          {"endpoint", value.endpoint},
-          {"entrySpotId", value.entry_spot_id ? json_t (*value.entry_spot_id) : json_t (nullptr)},
-          {"channelWeights", value.channel_weights},
-          {"applicationVersion", generation_string (value.application_version)},
-          {"objectCapabilities", std::move (capabilities)},
-          {"objectRole", object_role_name (value.object_role)},
-          {"placementWeight", value.placement_weight},
-          {"capacity",
-           {{"actors", encode (value.capacity.actors)},
-            {"spots", encode (value.capacity.spots)},
-            {"spotTypes", std::move (spot_types)}}},
-          {"activationConcurrency",
-           {{"active", value.activation_concurrency.active},
-            {"limit", value.activation_concurrency.limit}}},
-          {"maintenanceWave",
+          {location_record_fields::meshName, value.mesh_name},
+          {location_record_fields::routingIdHex, value.rid.to_hex ()},
+          {location_record_fields::lifecycleGeneration,
+           generation_string (value.lifecycle_generation)},
+          {location_record_fields::descriptorRevision,
+           generation_string (value.descriptor_revision)},
+          {location_record_fields::endpoint, value.endpoint},
+          {location_record_fields::entrySpotId,
+           value.entry_spot_id ? json_t (*value.entry_spot_id) : json_t (nullptr)},
+          {location_record_fields::channelWeights, value.channel_weights},
+          {location_record_fields::applicationVersion,
+           generation_string (value.application_version)},
+          {location_record_fields::objectCapabilities, std::move (capabilities)},
+          {location_record_fields::objectRole, object_role_name (value.object_role)},
+          {location_record_fields::placementWeight, value.placement_weight},
+          {location_record_fields::capacity,
+           {{location_record_fields::actors, encode (value.capacity.actors)},
+            {location_record_fields::spots, encode (value.capacity.spots)},
+            {location_record_fields::spotTypes, std::move (spot_types)}}},
+          {location_record_fields::activationConcurrency,
+           {{location_record_fields::active, value.activation_concurrency.active},
+            {location_record_fields::limit, value.activation_concurrency.limit}}},
+          {location_record_fields::maintenanceWave,
            value.maintenance_wave ? json_t (*value.maintenance_wave) : json_t (nullptr)},
-          {"state", runtime_state_name (value.state)},
-          {"securityIdentity", value.security_identity},
-          {"ownerId", value.owner_id},
-          {"leaseGeneration", generation_string (value.lease_generation)},
-          {"updatedAtEpochMs", generation_string (unix_ms (value.updated_at))}};
+          {location_record_fields::state, runtime_state_name (value.state)},
+          {location_record_fields::securityIdentity, value.security_identity},
+          {location_record_fields::ownerId, value.owner_id},
+          {location_record_fields::leaseGeneration, generation_string (value.lease_generation)},
+          {location_record_fields::updatedAtEpochMs,
+           generation_string (unix_ms (value.updated_at))}};
     }
 
     static bool same_mesh_immutable (const mesh_node_descriptor_t &left,
@@ -3141,7 +3231,7 @@ class provider_location_repository_t final : public location_repository_t
         if (!found)
             co_return std::nullopt;
         const auto record = parse_canonical_record (found->value.bytes, "MeshNode descriptor");
-        auto descriptor = decode_mesh_descriptor (record.at ("descriptor"));
+        auto descriptor = decode_mesh_descriptor (record.at (location_record_fields::descriptor));
         if ((require_identity
              && (descriptor.lifecycle_generation != target.node_lifecycle_generation
                  || descriptor.owner_id != target.owner.owner_id
@@ -3200,29 +3290,36 @@ class provider_location_repository_t final : public location_repository_t
     {
         const auto value = parse_json (bytes);
         capacity_record_t result;
-        if (value.contains ("active") && value.contains ("pending")) {
+        if (value.contains (location_record_fields::active)
+            && value.contains (location_record_fields::pending)) {
             result.format = capacity_record_format_t::node_compatible;
             const auto decode_usage = [&] (const json_t &usage, bool active) {
                 auto &actors = active ? result.actors.active : result.actors.pending;
                 auto &spots = active ? result.spots.active : result.spots.pending;
-                actors = usage.at ("actors").get<std::int64_t> ();
-                spots = usage.at ("spots").get<std::int64_t> ();
-                for (const auto &[key, count] : usage.at ("spotTypes").items ()) {
+                actors = usage.at (location_record_fields::actors).get<std::int64_t> ();
+                spots = usage.at (location_record_fields::spots).get<std::int64_t> ();
+                for (const auto &[key, count] :
+                     usage.at (location_record_fields::spotTypes).items ()) {
                     auto &typed = result.spot_types[key];
                     (active ? typed.active : typed.pending) = count.get<std::int64_t> ();
                 }
             };
-            decode_usage (value.at ("active"), true);
-            decode_usage (value.at ("pending"), false);
+            decode_usage (value.at (location_record_fields::active), true);
+            decode_usage (value.at (location_record_fields::pending), false);
         } else {
-            result.actors.active = value.at ("actorsActive").get<std::int64_t> ();
-            result.actors.pending = value.at ("actorsPending").get<std::int64_t> ();
-            result.spots.active = value.at ("spotsActive").get<std::int64_t> ();
-            result.spots.pending = value.at ("spotsPending").get<std::int64_t> ();
-            for (const auto &[key, count] : value.at ("spotTypes").items ())
+            result.actors.active =
+              value.at (location_record_fields::actorsActive).get<std::int64_t> ();
+            result.actors.pending =
+              value.at (location_record_fields::actorsPending).get<std::int64_t> ();
+            result.spots.active =
+              value.at (location_record_fields::spotsActive).get<std::int64_t> ();
+            result.spots.pending =
+              value.at (location_record_fields::spotsPending).get<std::int64_t> ();
+            for (const auto &[key, count] : value.at (location_record_fields::spotTypes).items ())
                 result.spot_types.emplace (
-                  key, capacity_count_t{count.at ("active").get<std::int64_t> (),
-                                        count.at ("pending").get<std::int64_t> ()});
+                  key, capacity_count_t{
+                         count.at (location_record_fields::active).get<std::int64_t> (),
+                         count.at (location_record_fields::pending).get<std::int64_t> ()});
         }
         const auto non_negative = [] (const capacity_count_t &count) {
             return count.active >= 0 && count.pending >= 0;
@@ -3246,23 +3343,24 @@ class provider_location_repository_t final : public location_repository_t
                 if (count.pending != 0)
                     pending_types[key] = count.pending;
             }
-            value = {{"active",
-                      {{"actors", record.actors.active},
-                       {"spots", record.spots.active},
-                       {"spotTypes", std::move (active_types)}}},
-                     {"pending",
-                      {{"actors", record.actors.pending},
-                       {"spots", record.spots.pending},
-                       {"spotTypes", std::move (pending_types)}}}};
+            value = {{location_record_fields::active,
+                      {{location_record_fields::actors, record.actors.active},
+                       {location_record_fields::spots, record.spots.active},
+                       {location_record_fields::spotTypes, std::move (active_types)}}},
+                     {location_record_fields::pending,
+                      {{location_record_fields::actors, record.actors.pending},
+                       {location_record_fields::spots, record.spots.pending},
+                       {location_record_fields::spotTypes, std::move (pending_types)}}}};
         } else {
             json_t typed = json_t::object ();
             for (const auto &[key, count] : record.spot_types)
-                typed[key] = {{"active", count.active}, {"pending", count.pending}};
-            value = {{"actorsActive", record.actors.active},
-                     {"actorsPending", record.actors.pending},
-                     {"spotsActive", record.spots.active},
-                     {"spotsPending", record.spots.pending},
-                     {"spotTypes", std::move (typed)}};
+                typed[key] = {{location_record_fields::active, count.active},
+                              {location_record_fields::pending, count.pending}};
+            value = {{location_record_fields::actorsActive, record.actors.active},
+                     {location_record_fields::actorsPending, record.actors.pending},
+                     {location_record_fields::spotsActive, record.spots.active},
+                     {location_record_fields::spotsPending, record.spots.pending},
+                     {location_record_fields::spotTypes, std::move (typed)}};
         }
         return to_bytes (value.dump ());
     }
@@ -3383,7 +3481,7 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::vector<std::byte> encode_target_record (stored_target_t target)
     {
-        target.record["descriptor"] = encode (target.descriptor);
+        target.record[location_record_fields::descriptor] = encode (target.descriptor);
         return to_bytes (target.record.dump ());
     }
 
@@ -3410,20 +3508,21 @@ class provider_location_repository_t final : public location_repository_t
                                     std::string_view status,
                                     const aggregate_inventory::tree_t &inventory)
     {
-        return {{"status", status},
-                {"aggregateId", hex (request.aggregate_id.value)},
-                {"aggregateGeneration", request.aggregate_generation},
-                {"inventoryRoot", hex (inventory.root)},
-                {"inventoryCount", inventory.participant_count},
-                {"inventoryPageCount", inventory.pages.size ()},
-                {"inventoryIndexPageCount", inventory.index_pages.size ()},
-                {"inventoryIndexLevelCount", inventory.index_level_count},
-                {"inventoryDigest", hex (request.inventory_digest.value)},
-                {"targetMeshName", request.target_descriptor.mesh_name},
-                {"targetNodeRid", request.target_descriptor.rid.to_string ()},
-                {"targetLifecycleGeneration", request.target_descriptor_lifecycle_generation},
-                {"capacityBundle", encode_bundle (request.capacity_bundle)},
-                {"targetOwner", encode_owner (request.target_owner)}};
+        return {{location_record_fields::status, status},
+                {location_record_fields::aggregateId, hex (request.aggregate_id.value)},
+                {location_record_fields::aggregateGeneration, request.aggregate_generation},
+                {location_record_fields::inventoryRoot, hex (inventory.root)},
+                {location_record_fields::inventoryCount, inventory.participant_count},
+                {location_record_fields::inventoryPageCount, inventory.pages.size ()},
+                {location_record_fields::inventoryIndexPageCount, inventory.index_pages.size ()},
+                {location_record_fields::inventoryIndexLevelCount, inventory.index_level_count},
+                {location_record_fields::inventoryDigest, hex (request.inventory_digest.value)},
+                {location_record_fields::targetMeshName, request.target_descriptor.mesh_name},
+                {location_record_fields::targetNodeRid, request.target_descriptor.rid.to_string ()},
+                {location_record_fields::targetLifecycleGeneration,
+                 request.target_descriptor_lifecycle_generation},
+                {location_record_fields::capacityBundle, encode_bundle (request.capacity_bundle)},
+                {location_record_fields::targetOwner, encode_owner (request.target_owner)}};
     }
 
     static bool aggregate_record_matches_request (const json_t &record,
@@ -3431,13 +3530,18 @@ class provider_location_repository_t final : public location_repository_t
                                                   const aggregate_inventory::tree_t &inventory)
     {
         try {
-            const auto expected =
-              encode_aggregate (request, record.value ("status", ""), inventory);
+            const auto expected = encode_aggregate (
+              request, record.value (location_record_fields::status, ""), inventory);
             for (const auto *field :
-                 {"aggregateId", "aggregateGeneration", "inventoryRoot", "inventoryCount",
-                  "inventoryPageCount", "inventoryIndexPageCount", "inventoryIndexLevelCount",
-                  "inventoryDigest", "targetMeshName", "targetNodeRid", "targetLifecycleGeneration",
-                  "capacityBundle", "targetOwner"}) {
+                 {location_record_fields::aggregateId, location_record_fields::aggregateGeneration,
+                  location_record_fields::inventoryRoot, location_record_fields::inventoryCount,
+                  location_record_fields::inventoryPageCount,
+                  location_record_fields::inventoryIndexPageCount,
+                  location_record_fields::inventoryIndexLevelCount,
+                  location_record_fields::inventoryDigest, location_record_fields::targetMeshName,
+                  location_record_fields::targetNodeRid,
+                  location_record_fields::targetLifecycleGeneration,
+                  location_record_fields::capacityBundle, location_record_fields::targetOwner}) {
                 if (!record.contains (field) || record.at (field) != expected.at (field))
                     return false;
             }
@@ -3451,111 +3555,143 @@ class provider_location_repository_t final : public location_repository_t
     static mesh_node_descriptor_t decode_mesh_descriptor (const json_t &value)
     {
         mesh_node_descriptor_t result;
-        result.mesh_name = value.at ("meshName").get<std::string> ();
-        result.rid = zlink::routing_id_t::from_hex (value.at ("routingIdHex").get<std::string> ());
-        result.lifecycle_generation = parse_u64_field (value.at ("lifecycleGeneration"));
-        result.descriptor_revision = parse_u64_field (value.at ("descriptorRevision"));
-        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
-        if (value.contains ("entrySpotId") && !value.at ("entrySpotId").is_null ())
-            result.entry_spot_id = value.at ("entrySpotId").get<std::string> ();
-        result.channel_weights = value.at ("channelWeights").get<std::map<std::string, int>> ();
-        result.application_version =
-          static_cast<std::int64_t> (parse_u64_field (value.at ("applicationVersion")));
-        for (const auto &item : value.at ("objectCapabilities"))
+        result.mesh_name = value.at (location_record_fields::meshName).get<std::string> ();
+        result.rid = zlink::routing_id_t::from_hex (
+          value.at (location_record_fields::routingIdHex).get<std::string> ());
+        result.lifecycle_generation =
+          parse_u64_field (value.at (location_record_fields::lifecycleGeneration));
+        result.descriptor_revision =
+          parse_u64_field (value.at (location_record_fields::descriptorRevision));
+        result.endpoint = transport::normalize_endpoint (
+          value.at (location_record_fields::endpoint).get<std::string> ());
+        if (value.contains (location_record_fields::entrySpotId)
+            && !value.at (location_record_fields::entrySpotId).is_null ())
+            result.entry_spot_id =
+              value.at (location_record_fields::entrySpotId).get<std::string> ();
+        result.channel_weights =
+          value.at (location_record_fields::channelWeights).get<std::map<std::string, int>> ();
+        result.application_version = static_cast<std::int64_t> (
+          parse_u64_field (value.at (location_record_fields::applicationVersion)));
+        for (const auto &item : value.at (location_record_fields::objectCapabilities))
             result.object_capabilities.push_back (
-              {parse_object_kind3 (item.at ("objectKind").get<std::string> ()),
-               item.at ("stableType").get<std::string> (),
-               parse_maintenance_policy (item.at ("policy").get<std::string> ()),
-               item.at ("hasSnapshotAdapter").get<bool> (),
-               item.at ("limit").get<std::int32_t> ()});
-        result.object_role = parse_object_role (value.at ("objectRole").get<std::string> ());
-        result.placement_weight = value.at ("placementWeight").get<int> ();
-        const auto &capacity = value.at ("capacity");
-        result.capacity.actors = decode_capacity_usage (capacity.at ("actors"));
-        result.capacity.spots = decode_capacity_usage (capacity.at ("spots"));
-        for (const auto &item : capacity.at ("spotTypes"))
+              {parse_object_kind3 (
+                 item.at (location_record_fields::objectKind).get<std::string> ()),
+               item.at (location_record_fields::stableType).get<std::string> (),
+               parse_maintenance_policy (
+                 item.at (location_record_fields::policy).get<std::string> ()),
+               item.at (location_record_fields::hasSnapshotAdapter).get<bool> (),
+               item.at (location_record_fields::limit).get<std::int32_t> ()});
+        result.object_role =
+          parse_object_role (value.at (location_record_fields::objectRole).get<std::string> ());
+        result.placement_weight = value.at (location_record_fields::placementWeight).get<int> ();
+        const auto &capacity = value.at (location_record_fields::capacity);
+        result.capacity.actors =
+          decode_capacity_usage (capacity.at (location_record_fields::actors));
+        result.capacity.spots = decode_capacity_usage (capacity.at (location_record_fields::spots));
+        for (const auto &item : capacity.at (location_record_fields::spotTypes))
             result.capacity.spot_types.push_back (
-              {parse_object_kind3 (item.at ("objectKind").get<std::string> ()),
-               item.at ("stableType").get<std::string> (),
-               {item.at ("active").get<std::uint64_t> (),
-                item.at ("reserved").get<std::uint64_t> (),
-                item.at ("limit").get<std::int32_t> ()}});
-        const auto &activation = value.at ("activationConcurrency");
-        result.activation_concurrency.active = activation.at ("active").get<std::uint32_t> ();
-        result.activation_concurrency.limit = activation.at ("limit").get<std::int32_t> ();
-        if (value.contains ("maintenanceWave") && !value.at ("maintenanceWave").is_null ())
-            result.maintenance_wave = value.at ("maintenanceWave").get<std::string> ();
-        result.state = parse_runtime_state (value.at ("state").get<std::string> ());
-        result.security_identity = value.at ("securityIdentity").get<std::string> ();
-        result.owner_id = value.at ("ownerId").get<std::string> ();
-        result.lease_generation =
-          static_cast<std::int64_t> (parse_u64_field (value.at ("leaseGeneration")));
-        result.updated_at = from_unix_ms (
-          static_cast<std::int64_t> (parse_u64_field (value.at ("updatedAtEpochMs"))));
+              {parse_object_kind3 (
+                 item.at (location_record_fields::objectKind).get<std::string> ()),
+               item.at (location_record_fields::stableType).get<std::string> (),
+               {item.at (location_record_fields::active).get<std::uint64_t> (),
+                item.at (location_record_fields::reserved).get<std::uint64_t> (),
+                item.at (location_record_fields::limit).get<std::int32_t> ()}});
+        const auto &activation = value.at (location_record_fields::activationConcurrency);
+        result.activation_concurrency.active =
+          activation.at (location_record_fields::active).get<std::uint32_t> ();
+        result.activation_concurrency.limit =
+          activation.at (location_record_fields::limit).get<std::int32_t> ();
+        if (value.contains (location_record_fields::maintenanceWave)
+            && !value.at (location_record_fields::maintenanceWave).is_null ())
+            result.maintenance_wave =
+              value.at (location_record_fields::maintenanceWave).get<std::string> ();
+        result.state =
+          parse_runtime_state (value.at (location_record_fields::state).get<std::string> ());
+        result.security_identity =
+          value.at (location_record_fields::securityIdentity).get<std::string> ();
+        result.owner_id = value.at (location_record_fields::ownerId).get<std::string> ();
+        result.lease_generation = static_cast<std::int64_t> (
+          parse_u64_field (value.at (location_record_fields::leaseGeneration)));
+        result.updated_at = from_unix_ms (static_cast<std::int64_t> (
+          parse_u64_field (value.at (location_record_fields::updatedAtEpochMs))));
         return result;
     }
 
     static json_t encode (const client_server_server_descriptor_t &value)
     {
-        return {{"channelName", value.channel_name},
-                {"serverRid", value.server_rid.to_hex ()},
-                {"lifecycleGeneration", value.lifecycle_generation},
-                {"descriptorRevision", value.descriptor_revision},
-                {"endpoint", value.endpoint},
-                {"weight", value.weight},
-                {"state", static_cast<int> (value.state)},
-                {"securityIdentity", value.security_identity},
-                {"ownerId", value.owner_id},
-                {"leaseGeneration", value.lease_generation},
-                {"updatedAt", unix_ms (value.updated_at)}};
+        return {{location_record_fields::channelName, value.channel_name},
+                {location_record_fields::serverRid, value.server_rid.to_hex ()},
+                {location_record_fields::lifecycleGeneration, value.lifecycle_generation},
+                {location_record_fields::descriptorRevision, value.descriptor_revision},
+                {location_record_fields::endpoint, value.endpoint},
+                {location_record_fields::weight, value.weight},
+                {location_record_fields::state, static_cast<int> (value.state)},
+                {location_record_fields::securityIdentity, value.security_identity},
+                {location_record_fields::ownerId, value.owner_id},
+                {location_record_fields::leaseGeneration, value.lease_generation},
+                {location_record_fields::updatedAt, unix_ms (value.updated_at)}};
     }
 
     static client_server_server_descriptor_t decode_client_server (const json_t &value)
     {
         client_server_server_descriptor_t result;
-        result.channel_name = value.at ("channelName").get<std::string> ();
-        result.server_rid =
-          zlink::routing_id_t::from_hex (value.at ("serverRid").get<std::string> ());
-        result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
-        result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
-        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
-        result.weight = value.at ("weight").get<int> ();
-        result.state = static_cast<framework_runtime_state_t> (value.at ("state").get<int> ());
-        result.security_identity = value.at ("securityIdentity").get<std::string> ();
-        result.owner_id = value.at ("ownerId").get<std::string> ();
-        result.lease_generation = value.at ("leaseGeneration").get<std::int64_t> ();
-        result.updated_at = from_unix_ms (value.at ("updatedAt").get<std::int64_t> ());
+        result.channel_name = value.at (location_record_fields::channelName).get<std::string> ();
+        result.server_rid = zlink::routing_id_t::from_hex (
+          value.at (location_record_fields::serverRid).get<std::string> ());
+        result.lifecycle_generation =
+          value.at (location_record_fields::lifecycleGeneration).get<std::uint64_t> ();
+        result.descriptor_revision =
+          value.at (location_record_fields::descriptorRevision).get<std::uint64_t> ();
+        result.endpoint = transport::normalize_endpoint (
+          value.at (location_record_fields::endpoint).get<std::string> ());
+        result.weight = value.at (location_record_fields::weight).get<int> ();
+        result.state = static_cast<framework_runtime_state_t> (
+          value.at (location_record_fields::state).get<int> ());
+        result.security_identity =
+          value.at (location_record_fields::securityIdentity).get<std::string> ();
+        result.owner_id = value.at (location_record_fields::ownerId).get<std::string> ();
+        result.lease_generation =
+          value.at (location_record_fields::leaseGeneration).get<std::int64_t> ();
+        result.updated_at =
+          from_unix_ms (value.at (location_record_fields::updatedAt).get<std::int64_t> ());
         return result;
     }
 
     static json_t encode (const fanout_publisher_descriptor_t &value)
     {
-        return {{"channelName", value.channel_name},
-                {"publisherRid", value.publisher_rid.to_hex ()},
-                {"lifecycleGeneration", value.lifecycle_generation},
-                {"descriptorRevision", value.descriptor_revision},
-                {"endpoint", value.endpoint},
-                {"state", static_cast<int> (value.state)},
-                {"securityIdentity", value.security_identity},
-                {"ownerId", value.owner_id},
-                {"leaseGeneration", value.lease_generation},
-                {"updatedAt", unix_ms (value.updated_at)}};
+        return {{location_record_fields::channelName, value.channel_name},
+                {location_record_fields::publisherRid, value.publisher_rid.to_hex ()},
+                {location_record_fields::lifecycleGeneration, value.lifecycle_generation},
+                {location_record_fields::descriptorRevision, value.descriptor_revision},
+                {location_record_fields::endpoint, value.endpoint},
+                {location_record_fields::state, static_cast<int> (value.state)},
+                {location_record_fields::securityIdentity, value.security_identity},
+                {location_record_fields::ownerId, value.owner_id},
+                {location_record_fields::leaseGeneration, value.lease_generation},
+                {location_record_fields::updatedAt, unix_ms (value.updated_at)}};
     }
 
     static fanout_publisher_descriptor_t decode_fanout (const json_t &value)
     {
         fanout_publisher_descriptor_t result;
-        result.channel_name = value.at ("channelName").get<std::string> ();
-        result.publisher_rid =
-          zlink::routing_id_t::from_hex (value.at ("publisherRid").get<std::string> ());
-        result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
-        result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
-        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
-        result.state = static_cast<framework_runtime_state_t> (value.at ("state").get<int> ());
-        result.security_identity = value.at ("securityIdentity").get<std::string> ();
-        result.owner_id = value.at ("ownerId").get<std::string> ();
-        result.lease_generation = value.at ("leaseGeneration").get<std::int64_t> ();
-        result.updated_at = from_unix_ms (value.at ("updatedAt").get<std::int64_t> ());
+        result.channel_name = value.at (location_record_fields::channelName).get<std::string> ();
+        result.publisher_rid = zlink::routing_id_t::from_hex (
+          value.at (location_record_fields::publisherRid).get<std::string> ());
+        result.lifecycle_generation =
+          value.at (location_record_fields::lifecycleGeneration).get<std::uint64_t> ();
+        result.descriptor_revision =
+          value.at (location_record_fields::descriptorRevision).get<std::uint64_t> ();
+        result.endpoint = transport::normalize_endpoint (
+          value.at (location_record_fields::endpoint).get<std::string> ());
+        result.state = static_cast<framework_runtime_state_t> (
+          value.at (location_record_fields::state).get<int> ());
+        result.security_identity =
+          value.at (location_record_fields::securityIdentity).get<std::string> ();
+        result.owner_id = value.at (location_record_fields::ownerId).get<std::string> ();
+        result.lease_generation =
+          value.at (location_record_fields::leaseGeneration).get<std::int64_t> ();
+        result.updated_at =
+          from_unix_ms (value.at (location_record_fields::updatedAt).get<std::int64_t> ());
         return result;
     }
 
@@ -3576,11 +3712,13 @@ class provider_location_repository_t final : public location_repository_t
                                       const mesh_node_descriptor_t &descriptor)
     {
         (void) generation;
-        return {{"recordVersion", 1},
-                {"ownerId", descriptor.owner_id},
-                {"leaseGeneration", generation_string (descriptor.lease_generation)},
-                {"descriptorRevision", generation_string (descriptor.descriptor_revision)},
-                {"descriptor", encode (descriptor)}};
+        return {{location_record_fields::recordVersion, 1},
+                {location_record_fields::ownerId, descriptor.owner_id},
+                {location_record_fields::leaseGeneration,
+                 generation_string (descriptor.lease_generation)},
+                {location_record_fields::descriptorRevision,
+                 generation_string (descriptor.descriptor_revision)},
+                {location_record_fields::descriptor, encode (descriptor)}};
     }
 
     static json_t encode_descriptor_record (std::uint64_t generation,
@@ -3591,12 +3729,13 @@ class provider_location_repository_t final : public location_repository_t
                                             json_t descriptor)
     {
         (void) generation;
-        return {{"recordVersion", 1},
-                {"ownerId", std::move (owner_id)},
-                {"leaseGeneration", generation_string (lease_generation)},
-                {"lifecycleGeneration", lifecycle_generation},
-                {"descriptorRevision", generation_string (descriptor_revision)},
-                {"descriptor", std::move (descriptor)}};
+        return {
+          {location_record_fields::recordVersion, 1},
+          {location_record_fields::ownerId, std::move (owner_id)},
+          {location_record_fields::leaseGeneration, generation_string (lease_generation)},
+          {location_record_fields::lifecycleGeneration, lifecycle_generation},
+          {location_record_fields::descriptorRevision, generation_string (descriptor_revision)},
+          {location_record_fields::descriptor, std::move (descriptor)}};
     }
 
     template <typename T> static task_t<T> completed (T value)

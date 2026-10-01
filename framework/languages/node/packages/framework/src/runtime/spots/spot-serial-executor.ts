@@ -108,7 +108,7 @@ export class ZLinkSpotSerialExecutor {
    */
   close(): Promise<void> {
     const children = this.closeChildren();
-    return Promise.all([children, this.spotSerial.close()]).then(() => undefined);
+    return Promise.all([children, this.spotSerial.whenIdle()]).then(() => undefined);
   }
 
   /**
@@ -124,7 +124,7 @@ export class ZLinkSpotSerialExecutor {
     this.timerSerials.clear();
     this.actorExecutors.clear();
     this.closePromise = Promise.all([
-      ...childSerials.map((serial) => serial.close()),
+      ...childSerials.map((serial) => serial.whenIdle()),
       ...actorExecutors.map((executor) => executor.close())
     ]).then(() => undefined);
     return this.closePromise;

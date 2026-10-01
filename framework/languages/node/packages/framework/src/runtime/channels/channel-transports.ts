@@ -1,10 +1,14 @@
+import { ZLinkFrameworkException } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import { ZLinkSpotKind } from '../../contracts/Spots';
+import { throwIfAborted } from '../abort';
+import type { ZLinkBackendMeshNode, ZLinkBackendSpot } from '../backend/contracts';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind,
-  internalFrameworkErrorKindFromWireReply,
-  isCanonicalWireReplyTerminal
-} from '../framework-errors-internal';
+  closeMeshCompletion,
+  type ZLinkMeshCompletion,
+  type ZLinkMeshCompletionTable
+} from '../backend/mesh-completion-table';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
 import {
   RequestResult,
@@ -12,34 +16,32 @@ import {
   isZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
-import type { ZLinkBackendMeshNode, ZLinkBackendSpot } from '../backend/contracts';
-import type { ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType } from '../framework-errors-internal';
-import { ZLinkFrameworkException } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { ZLinkSpotKind } from '../../contracts/Spots';
-import { throwIfAborted } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
-import {
-  closeMeshCompletion,
-  type ZLinkMeshCompletion,
-  type ZLinkMeshCompletionTable
-} from '../backend/mesh-completion-table';
-import { routingIdsEqual, toBackendRoutingId as toBackendRoutingId } from '../routing-id';
-import {
-  decodeChannelReply,
-  encodeChannelEnvelopeParts,
-  type ZLinkChannelEnvelopeCodecRegistry,
-  ZLinkChannelMessageKind
-} from './channel-envelope';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
+import { ServiceStaleGenerationError } from '../foundation/service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceRouteFence
 } from '../foundation/service-stateful-wire-codec';
-import { ServiceStaleGenerationError } from '../foundation/service-stateful-registry';
-import { runWithOutboundFlow } from '../diagnostics/flow-context';
+import {
+  type ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType,
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  internalFrameworkErrorKindFromWireReply,
+  isCanonicalWireReplyTerminal
+} from '../framework-errors-internal';
+
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
+import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import {
+  ZLinkChannelMessageKind,
+  decodeChannelReply,
+  encodeChannelEnvelopeParts,
+  type ZLinkChannelEnvelopeCodecRegistry
+} from './channel-envelope';
 
 export interface ZLinkChannelClientTransport {
   send(
@@ -434,7 +436,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       meshName,
       packetName,
       request,
-      timeoutMs ?? 30_000,
+      timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       metadata
     );
     const completion = await this.submitRequestOperation(
@@ -534,7 +536,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       channelName,
       packetName,
       request,
-      timeoutMs ?? 30_000,
+      timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       metadata
     );
     const metric = this.metrics?.startRequest(meshName, 'channel');
@@ -568,7 +570,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       remainingTimeoutMs: number
     ) => ReturnType<Parameters<ZLinkMeshCompletionTable['submit']>[0]>
   ): Promise<ZLinkMeshCompletion> {
-    const effectiveTimeoutMs = Math.max(1, timeoutMs ?? 30_000);
+    const effectiveTimeoutMs = Math.max(1, timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     const deadlineMs = performance.now() + effectiveTimeoutMs;
     const remainingTimeoutMs = deadlineMs - performance.now();
     if (remainingTimeoutMs <= 0) {
@@ -1103,12 +1105,13 @@ function mapMeshSubmissionError(error: unknown, operation: string): Error {
     );
   }
   if (isZLinkBackendResultError(error)) {
-    const notFound = error.result === SubmitResult.NotFound || error.result === 102;
+    const notFound =
+      error.result === SubmitResult.NotFound || error.result === RequestResult.NotFound;
     const retriable =
       error.result === SubmitResult.Backpressured ||
       error.result === SubmitResult.NotConnected ||
-      error.result === 109 ||
-      error.result === 113;
+      error.result === RequestResult.NotConnected ||
+      error.result === RequestResult.Backpressured;
     return createInternalFrameworkException(
       notFound
         ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound

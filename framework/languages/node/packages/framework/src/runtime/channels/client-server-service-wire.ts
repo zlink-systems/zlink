@@ -1,16 +1,40 @@
-import type { ZLinkClientServerServerDescriptor } from '../../contracts/Locations';
-import { ZLinkFrameworkRuntimeState } from '../../contracts/Locations';
+import { UINT32_MAX } from '@zlink-systems/stream-wire';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
+import { isValidPublicWeight } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import {
+  type ZLinkClientServerServerDescriptor,
+  ZLinkFrameworkRuntimeState
+} from '../../contracts/Locations';
+
 import {
   decodeCanonicalServiceWireText,
   decodeServiceWireRoutingId,
   encodeCanonicalServiceWireText,
   encodeServiceWireRoutingId
 } from '../foundation/service-wire-binary-primitives';
-import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR
+} from '../foundation/service-wire-constants.generated';
+export const DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT = 0x7fff_ffff;
+export function normalizeClientServerMessageLimit(value: number): number {
+  return Number.isSafeInteger(value) && value > 0
+    ? Math.min(value, UINT32_MAX)
+    : DEFAULT_CLIENT_SERVER_MESSAGE_LIMIT;
+}
 
-const MAGIC_0 = 0x5a;
-const MAGIC_1 = 0x4d;
-const WIRE_MAJOR = 1;
+const CLIENT_SERVER_PREFIX_BYTES = 5;
+const CLIENT_SERVER_ROLE_BODY_MAX_BYTES = 0xffff;
+const CLIENT_SERVER_TEXT_MAX_BYTES = 4096;
+
+export enum ClientServerRejectReason {
+  ProtocolVersionUnsupported = 1,
+  AdmissionMismatch = 3
+}
+
+const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
+const MAGIC_1 = SERVICE_WIRE_MAGIC[1];
+const WIRE_MAJOR = SERVICE_WIRE_MAJOR;
 const TOPOLOGY_CLIENT_SERVER = 2;
 const ROLE_CLIENT = 1;
 const ROLE_SERVER = 2;
@@ -22,7 +46,7 @@ const COMMAND_UPDATE = 4;
 const COMMAND_LIVENESS_PROBE = 5;
 const COMMAND_LIVENESS_ACK = 6;
 const MAX_DESCRIPTOR_BYTES = 1024 * 1024;
-const MAX_U32 = 0xffff_ffff;
+const MAX_U32 = UINT32_MAX;
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 export interface ZLinkClientServerHello {
@@ -99,7 +123,10 @@ export function encodeClientServerLivenessAck(probeId: bigint): Buffer {
 
 export function isClientServerControlFrame(frame: Uint8Array): boolean {
   return (
-    frame.byteLength >= 5 && frame[0] === MAGIC_0 && frame[1] === MAGIC_1 && frame[2] === WIRE_MAJOR
+    frame.byteLength >= CLIENT_SERVER_PREFIX_BYTES &&
+    frame[0] === MAGIC_0 &&
+    frame[1] === MAGIC_1 &&
+    frame[2] === WIRE_MAJOR
   );
 }
 
@@ -177,7 +204,8 @@ function encodeServerAdmission(
 }
 
 function encodeAdmission(command: number, role: number, roleBody: Buffer): Buffer {
-  if (roleBody.byteLength > 0xffff) fail('ClientServer role body is oversized.');
+  if (roleBody.byteLength > CLIENT_SERVER_ROLE_BODY_MAX_BYTES)
+    fail('ClientServer role body is oversized.');
   const admission = concat(Buffer.of(role), encodeU16(roleBody.byteLength), roleBody);
   const result = concat(
     prefix(command),
@@ -210,7 +238,7 @@ function decodeServerAdmission(reader: Reader): ZLinkClientServerAdmission {
   const lifecycleGeneration = reader.nonZeroU64('lifecycleGeneration');
   const descriptorRevision = reader.nonZeroU64('descriptorRevision');
   const weight = reader.u32('weight');
-  if (weight > 10_000) fail('ClientServer weight is invalid.');
+  if (!isValidPublicWeight(weight)) fail('ClientServer weight is invalid.');
   return {
     channelName,
     serverRid,
@@ -261,7 +289,7 @@ function encodeText8(value: string, field: string): Buffer {
 }
 
 function encodeText16(value: string, field: string): Buffer {
-  const bytes = encodeCanonicalServiceWireText(value, field, 4096, fail);
+  const bytes = encodeCanonicalServiceWireText(value, field, CLIENT_SERVER_TEXT_MAX_BYTES, fail);
   return concat(encodeU16(bytes.byteLength), bytes);
 }
 
@@ -373,7 +401,7 @@ class Reader {
 
   text16(field: string): string {
     const length = this.u16(`${field}.length`);
-    if (length < 1 || length > 4096) fail(`${field} length is invalid.`);
+    if (length < 1 || length > CLIENT_SERVER_TEXT_MAX_BYTES) fail(`${field} length is invalid.`);
     return decodeText(this.bytes(length, field), field);
   }
 

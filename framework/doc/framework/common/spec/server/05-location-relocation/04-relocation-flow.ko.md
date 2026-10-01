@@ -571,11 +571,13 @@ Late cutover나 Session route update가 늦었다는 이유로 Message Follow �
 않는다. 반대로 Session route가 먼저 적용됐다는 이유로 이미 이전 주소로 전송된 server
 message를 즉시 폐기하지 않는다.
 
-Source는 Message Follow에 필요한 route를 제외한 source instance와 temporary state를 정리하고,
 Target commit이 확인된 경우 source는 Message Follow route 외의 source instance와
 temporary state를 정리하고 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 payload와
 record를 해제한다. Source `Preserve`가 이기면 보관 작업은 source queue로 돌아간다. Cleanup
-실패는 확인된 target owner를 되돌리는 조건이 아니다.
+실패는 확인된 target owner를 되돌리는 조건이 아니다. Source 정리는 한 번 실행한다. 한 단계가
+실패해도 나머지 단계를 계속하고 source instance를 registry에서 제거하며, 실패는 진단으로 한 번
+보고하고 정리를 다시 실행하지 않는다. 같은 object ID가 다시 이 node로 오면 새 application instance로
+복원한다. `ObjectGeneration`은 바꾸지 않는다.
 
 ## 11. 구현 결정 — 하지 않는 relocation 기법
 

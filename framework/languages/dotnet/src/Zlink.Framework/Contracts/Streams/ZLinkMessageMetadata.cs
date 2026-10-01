@@ -1,11 +1,19 @@
 namespace Zlink.Framework.Contracts.Streams;
 
-public sealed class ZLinkMessageMetadata(IReadOnlyDictionary<string, string> values)
+public sealed class ZLinkMessageMetadata
 {
     public static ZLinkMessageMetadata Empty { get; } =
         new(new Dictionary<string, string>(StringComparer.Ordinal));
 
-    public IReadOnlyDictionary<string, string> Values { get; } = values;
+    public ZLinkMessageMetadata(IReadOnlyDictionary<string, string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        Values = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+            new Dictionary<string, string>(values, StringComparer.Ordinal)
+        );
+    }
+
+    public IReadOnlyDictionary<string, string> Values { get; }
 
     public string? Find(string key)
     {

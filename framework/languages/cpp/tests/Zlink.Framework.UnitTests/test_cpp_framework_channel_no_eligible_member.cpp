@@ -204,13 +204,13 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicClientServerWeightZeroEndsUnava
     auto &runtime = provider.get_required<fw::client_server_runtime_t> ();
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     auto status = runtime.snapshot ("selection-client-zero");
-    while (status.servers.empty () && std::chrono::steady_clock::now () < deadline) {
+    while (status.targets.empty () && std::chrono::steady_clock::now () < deadline) {
         std::this_thread::yield ();
         status = runtime.snapshot ("selection-client-zero");
     }
-    ASSERT_FALSE (status.servers.empty ());
-    EXPECT_FALSE (status.servers.front ().ready);
-    ASSERT_EQ (0, status.servers.front ().weight);
+    ASSERT_FALSE (status.targets.empty ());
+    EXPECT_FALSE (status.is_ready);
+    ASSERT_EQ (0, status.targets.front ().weight);
     auto &channels = provider.get_required<fw::channel_client_t> ();
     const auto started = std::chrono::steady_clock::now ();
     const auto send =

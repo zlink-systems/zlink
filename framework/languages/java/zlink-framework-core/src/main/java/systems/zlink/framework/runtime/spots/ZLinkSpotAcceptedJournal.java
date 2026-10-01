@@ -7,12 +7,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -68,67 +62,6 @@ final class ZLinkSpotAcceptedJournal {
         } finally {
             parts.forEach(Message::close);
         }
-    }
-
-    private static void writeRoutingId(DataOutputStream output, Optional<RoutingId> value)
-            throws IOException {
-        output.writeBoolean(value.isPresent());
-        if (value.isPresent()) {
-            writeBytes(output, value.orElseThrow().toBytes());
-        }
-    }
-
-    private static Optional<RoutingId> readRoutingId(DataInputStream input) throws IOException {
-        return input.readBoolean()
-                ? Optional.of(RoutingId.from(readBytes(input)))
-                : Optional.empty();
-    }
-
-    private static void writeSpotId(DataOutputStream output, Optional<String> value)
-            throws IOException {
-        output.writeBoolean(value.isPresent());
-        if (value.isPresent()) {
-            writeBytes(output, value.orElseThrow().getBytes(StandardCharsets.UTF_8));
-        }
-    }
-
-    private static Optional<String> readSpotId(DataInputStream input) throws IOException {
-        if (!input.readBoolean()) {
-            return Optional.empty();
-        }
-        byte[] encoded = readBytes(input);
-        try {
-            String spotId =
-                    StandardCharsets.UTF_8
-                            .newDecoder()
-                            .onMalformedInput(CodingErrorAction.REPORT)
-                            .onUnmappableCharacter(CodingErrorAction.REPORT)
-                            .decode(ByteBuffer.wrap(encoded))
-                            .toString();
-            return Optional.of(
-                    systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator
-                            .requireValid(spotId));
-        } catch (CharacterCodingException error) {
-            throw new IllegalArgumentException(
-                    "accepted Spot journal contains invalid SpotId UTF-8", error);
-        }
-    }
-
-    private static void writeBytes(DataOutputStream output, byte[] value) throws IOException {
-        output.writeInt(value.length);
-        output.write(value);
-    }
-
-    private static byte[] readBytes(DataInputStream input) throws IOException {
-        int length = input.readInt();
-        if (length < 0 || length > 64 * 1024 * 1024) {
-            throw new IllegalArgumentException("invalid accepted Spot journal byte length");
-        }
-        byte[] value = input.readNBytes(length);
-        if (value.length != length) {
-            throw new IllegalArgumentException("truncated accepted Spot journal record");
-        }
-        return value;
     }
 
     record Record(

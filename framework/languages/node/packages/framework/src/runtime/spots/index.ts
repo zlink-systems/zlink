@@ -48,6 +48,7 @@ import {
   runWithFlow,
   type ZLinkRuntimeEventPublisher
 } from '../diagnostics';
+import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { SubmitResult } from '../backend/runtime-values';
 import {
@@ -2520,7 +2521,7 @@ export class DefaultZLinkSpotManager {
               if (failedHandoff !== undefined) {
                 throw new Error(
                   `Actor '${entryActor.context.actorId}' saved Entry handoff packet ` +
-                    `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+                    `${failedHandoff.index} failed: ${diagnosticTextOrAbsent(failedHandoff.error)}.`
                 );
               }
             } catch (error) {
@@ -2767,7 +2768,7 @@ export class DefaultZLinkSpotManager {
             if (failedHandoff !== undefined) {
               throw new Error(
                 `Actor '${actor.context.actorId}' saved handoff packet ` +
-                  `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+                  `${failedHandoff.index} failed: ${diagnosticTextOrAbsent(failedHandoff.error)}.`
               );
             }
             // Spec 15 §4.2 relocation temporary queue: arrivals parked at

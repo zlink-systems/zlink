@@ -17,53 +17,102 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private const string AdmissionTestServerHost = "127.0.0.2";
 
     [Fact]
-    public async Task GlobalClientServerMetadataFailureDisposesEachSendPartOnce()
+    public async Task ClientServerPublicSendAndRequestPreserveMetadataSnapshot()
     {
-        await using var client = CreateClient("tcp://127.0.0.1:0");
-        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        var parts = new SingleAccessMessageParts();
+        await using var server = CreateServer(0);
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var state = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await runtime.SendToChannelAsync(
-                    "work",
-                    parts,
-                    CancellationToken.None,
-                    new byte[] { 1 }
+            var route = client.GetRequiredService<IZLinkRouteClient>();
+            await route
+                .SendToChannel("work", new EchoSend("send"))
+                .Metadata("tenant-id", "tenant-42")
+                .Async();
+            var snapshot = await server
+                .GetRequiredService<EchoProbe>()
+                .MetadataReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("tenant-42", snapshot.Find("tenant-id"));
+            Assert.Null(await server.GetRequiredService<EchoProbe>().SendCorrelation.Task);
+            var activation = new MetadataTestSpotActivation(clientRuntime.Flow);
+            var spot = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, clientRuntime);
+            activation.OutboundEndpoint = spot;
+            var spotReply = await spot.RequestToChannel("work", new EchoRequest("spot"))
+                .Metadata("tenant-id", "tenant-42")
+                .Async<EchoReply>();
+            Assert.Equal("tenant-42:spot", spotReply.Value);
+            await spot.SendToChannel("work", new EchoSend("spot-send"))
+                .Metadata("tenant-id", "tenant-42")
+                .Async();
+            var reply = await route
+                .RequestToChannel("work", new EchoRequest("request"))
+                .Metadata("tenant-id", "tenant-42")
+                .Async<EchoReply>();
+            Assert.Equal("tenant-42:request", reply.Value);
+            var unannotated = await route
+                .RequestToChannel("work", new EchoRequest("request"))
+                .Async<EchoReply>();
+            Assert.Equal("request", unannotated.Value);
+            Assert.Equal("tenant-42", snapshot.Find("tenant-id"));
+            var probe = server.GetRequiredService<EchoProbe>();
+            var acceptedRequests = probe.Requests;
+            using var fixture = System.Text.Json.JsonDocument.Parse(
+                File.ReadAllText(
+                    Path.Combine(
+                        Zlink.Framework.Tests.Common.FrameworkTestEnvironment.GetRepoRoot(),
+                        "framework/runtime/protocol/fixtures/client-server-metadata.json"
+                    )
                 )
             );
-
-            parts.AssertDisposedOnce();
+            foreach (var scenario in fixture.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                if (scenario.GetProperty("valid").GetBoolean())
+                    continue;
+                var rawMetadata = scenario.TryGetProperty(
+                    "receivedEncoded",
+                    out var receivedMetadata
+                )
+                    ? receivedMetadata.GetString()
+                    : scenario.GetProperty("metadata").GetRawText();
+                var rawHeader =
+                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"work\",\"messageName\":\"EchoRequest\","
+                    + "\"contentType\":\"application/json\",\"correlationId\":\"invalid-metadata\",\"metadata\":"
+                    + rawMetadata
+                    + "}";
+                var invalidParts = ZLinkMessageParts.Create(
+                    Message.From(System.Text.Encoding.UTF8.GetBytes(rawHeader)),
+                    Message.From(System.Text.Encoding.UTF8.GetBytes("{\"value\":\"invalid\"}"))
+                );
+                var rejected = await clientRuntime
+                    .GetClientServerClientRuntime("work")
+                    .RequestAsync(invalidParts, TimeSpan.FromSeconds(2), CancellationToken.None);
+                try
+                {
+                    var errorHeader = ZLinkEnvelopeCodec.DecodeHeader(rejected);
+                    var error = Assert.IsType<ZLinkFrameworkException>(
+                        ZLinkEnvelopeErrorMapper.CreateException(errorHeader, "metadata rejected")
+                    );
+                    Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, error.Kind);
+                    Assert.False(errorHeader.Metadata?.ContainsKey("k") ?? false);
+                }
+                finally
+                {
+                    ZLinkMessageParts.DisposeAll(rejected);
+                }
+            }
+            Assert.Equal(acceptedRequests, probe.Requests);
         }
         finally
         {
-            parts.DisposeRemaining();
-        }
-    }
-
-    [Fact]
-    public async Task GlobalClientServerMetadataFailureDisposesEachRequestPartOnce()
-    {
-        await using var client = CreateClient("tcp://127.0.0.1:0");
-        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        var parts = new SingleAccessMessageParts();
-        try
-        {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await runtime.RequestToChannelAsync(
-                    "work",
-                    parts,
-                    TimeSpan.FromSeconds(1),
-                    CancellationToken.None,
-                    new byte[] { 1 }
-                )
-            );
-
-            parts.AssertDisposedOnce();
-        }
-        finally
-        {
-            parts.DisposeRemaining();
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -400,67 +449,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             await serverRuntime.StopAsync(CancellationToken.None);
             await clientRuntime.StopAsync(CancellationToken.None);
-        }
-    }
-
-    [Fact]
-    public async Task CurrentSpotClientServerMetadataFailureUsesGlobalSendOwnership()
-    {
-        await using var client = CreateClient("tcp://127.0.0.1:0");
-        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        await runtime.StartAsync(CancellationToken.None);
-        var activation = new MetadataFailureSpotActivation();
-        var endpoint = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, runtime);
-        activation.OutboundEndpoint = endpoint;
-        var parts = new SingleAccessMessageParts();
-        try
-        {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await endpoint.SendToChannelAsync(
-                    "work",
-                    parts,
-                    CancellationToken.None,
-                    new byte[] { 1 }
-                )
-            );
-
-            parts.AssertDisposedOnce();
-        }
-        finally
-        {
-            parts.DisposeRemaining();
-            await runtime.StopAsync(CancellationToken.None);
-        }
-    }
-
-    [Fact]
-    public async Task CurrentSpotClientServerMetadataFailureUsesGlobalRequestOwnership()
-    {
-        await using var client = CreateClient("tcp://127.0.0.1:0");
-        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        await runtime.StartAsync(CancellationToken.None);
-        var activation = new MetadataFailureSpotActivation();
-        var endpoint = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, runtime);
-        activation.OutboundEndpoint = endpoint;
-        var parts = new SingleAccessMessageParts();
-        try
-        {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await endpoint.RequestToChannelAsync(
-                    "work",
-                    parts,
-                    TimeSpan.FromSeconds(1),
-                    CancellationToken.None,
-                    new byte[] { 1 }
-                )
-            );
-
-            parts.AssertDisposedOnce();
-        }
-        finally
-        {
-            parts.DisposeRemaining();
-            await runtime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -945,6 +933,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var target = Assert.Single(status.Targets);
             Assert.Equal(weight, target.Weight);
             Assert.Equal(ZLinkPeerState.Ready, target.State);
+            Assert.Null(target.UnavailableReason);
         }
         finally
         {
@@ -1043,7 +1032,127 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 Assert.Single(secondEvents.Current.Status.Targets).State
             );
             Assert.False(events.Current.Status.IsReady);
+            Assert.Equal(
+                ZLinkTopologyReason.Draining,
+                Assert.Single(events.Current.Status.Targets).UnavailableReason
+            );
             Assert.False(monitoring.GetStatus("work").IsReady);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RetiringServerTargetProjectsDraining()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        provider
+            .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+            .TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            var started = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            await GetServerBundle(started, "work").ClientServerServer!.MarkRetiringAsync();
+            Assert.True(await WaitForTargetStateAsync(observer, ZLinkPeerState.Draining));
+            var target = Assert.Single(observer.Current.Status.Targets);
+            Assert.Equal(ZLinkTopologyReason.Draining, target.UnavailableReason);
+            var route = provider.GetRequiredService<IZLinkRouteClient>();
+            var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await route.SendToChannel("work", new EchoSend("retiring")).Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, sendError.Kind);
+            var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await route.RequestToChannel("work", new EchoRequest("retiring")).Async<EchoReply>()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, requestError.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ServerOnlyObserverPublishesLocalWeightChanges()
+    {
+        await using var provider = CreateServer(0);
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = provider
+                .GetRequiredService<IZLinkClientServerRuntime>()
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            var initial = observer.Current.Status;
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
+            Assert.True(await observer.MoveNextAsync());
+            var excluded = observer.Current.Status;
+            Assert.Equal(initial.Sequence + 1, excluded.Sequence);
+            Assert.Equal(0, Assert.Single(excluded.Targets).Weight);
+            Assert.Equal(0, excluded.ReadyTargetCount);
+            Assert.False(excluded.IsReady);
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight =
+                100;
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(excluded.Sequence + 1, observer.Current.Status.Sequence);
+            Assert.True(observer.Current.Status.IsReady);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ObserverStartsWithCurrentStatusAfterLocalWeightChanged()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        provider
+            .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+            .TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
+            var current = monitoring.GetStatus("work");
+            Assert.Equal(0, Assert.Single(current.Targets).Weight);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.True(observer.Current.Status.Sequence >= current.Sequence);
+            Assert.Equal(0, Assert.Single(observer.Current.Status.Targets).Weight);
+            Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
         }
         finally
         {
@@ -1107,15 +1216,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .Async<EchoReply>();
             Assert.Equal("local:ready", admitted.Value);
             provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await using var states = provider
-                .GetRequiredService<IZLinkClientServerRuntime>()
-                .ObserveAsync("work", timeout.Token)
-                .GetAsyncEnumerator();
-            while (await states.MoveNextAsync())
-                if (states.Current.Status.Targets.All(target => target.Weight == 0))
-                    break;
-            Assert.Single(states.Current.Status.Targets);
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work");
+            var target = Assert.Single(status.Targets);
+            Assert.Equal(0, target.Weight);
+            Assert.Equal(0, status.ReadyTargetCount);
             var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             {
@@ -1186,6 +1290,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             });
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
             Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromMilliseconds(500));
+            var zeroWeightTarget = Assert.Single(
+                provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work").Targets
+            );
+            Assert.Equal(ZLinkPeerState.Ready, zeroWeightTarget.State);
+            Assert.Null(zeroWeightTarget.UnavailableReason);
         }
         finally
         {
@@ -2697,6 +2806,175 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteTransportClose_PreservesTargetUntilReadmitted(bool automatic)
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        var serverRid = RoutingId.From("manual-server");
+        router.SetRoutingId(serverRid);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        var store = new ZLinkInMemoryProviderLocationStore();
+        if (automatic)
+        {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = Assert
+                .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                    await repository.ClaimOwnerLeaseAsync(
+                        "r4-clientserver-close",
+                        TimeSpan.FromMinutes(2)
+                    )
+                )
+                .Token;
+            var written = await repository.UpdateClientServerAsync(
+                new ZLinkClientServerServerDescriptor(
+                    "work",
+                    serverRid,
+                    1,
+                    1,
+                    endpoint,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    owner.OwnerId,
+                    owner.LeaseGeneration,
+                    default
+                ),
+                ZLinkLocationWriteIntent.NewClaim
+            );
+            Assert.Equal(ZLinkLocationWriteStatus.Stored, written.Status);
+        }
+        await using var client = automatic ? CreateAutomaticClient(store) : CreateClient(endpoint);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = client.GetRequiredService<IZLinkClientServerRuntime>();
+        var hosted = client
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            ReplyAdmission(router, hello, endpoint);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                !observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            var target = Assert.Single(observer.Current.Status.Targets);
+            router.Dispose();
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            var disconnected = Assert.Single(observer.Current.Status.Targets);
+            Assert.Equal(target.NodeRid, disconnected.NodeRid);
+            Assert.Equal(ZLinkPeerState.NotConnected, disconnected.State);
+            Assert.Equal(ZLinkTopologyReason.NoReadyTarget, disconnected.UnavailableReason);
+            Assert.Equal(0, observer.Current.Status.ReadyTargetCount);
+            Assert.Equal(disconnected, Assert.Single(monitoring.GetStatus("work").Targets));
+
+            using var replacement = CreateClientServerRouter(context);
+            replacement.SetRoutingId(serverRid);
+            replacement.Bind(endpoint);
+            using var secondHello = await PollReceivedAsync(
+                storage => TryReceive(replacement, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            ReplyAdmission(replacement, secondHello, endpoint);
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                !observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            Assert.Equal(target.NodeRid, Assert.Single(observer.Current.Status.Targets).NodeRid);
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                runtime.GetClientServerClientRuntime("work").AdmissionDiagnostics,
+                error
+            );
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task TopologyStatusQueriesPublishChangedStatusWithNextSequence()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            await provider
+                .GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("ready"))
+                .Async<EchoReply>();
+            var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+            var initial = monitoring.GetStatus("work");
+            Assert.Equal(1UL, initial.Sequence);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(initial, observer.Current.Status);
+            provider
+                .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+                .TransitionTo(ZLinkFrameworkRuntimeState.Relocating);
+            var current = monitoring.GetStatus("work");
+            Assert.Equal(ZLinkTopologyState.Stopping, current.State);
+            Assert.Equal(initial.Sequence + 1, current.Sequence);
+            Assert.Equal(current.Sequence, monitoring.GetStatus("work").Sequence);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(current, observer.Current.Status);
+            var lifecycle = provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Stopped);
+            var terminal = monitoring.GetStatus("work");
+            Assert.Equal(ZLinkTopologyState.Stopped, terminal.State);
+            Assert.Equal(current.Sequence + 1, terminal.Sequence);
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+            Assert.Equal(terminal, monitoring.GetStatus("work"));
+            await observer.DisposeAsync();
+            await hosted.StopAsync(CancellationToken.None);
+            Assert.Equal(terminal, monitoring.GetStatus("work"));
+            await using var lateObserver = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await lateObserver.MoveNextAsync());
+            Assert.Equal(terminal, lateObserver.Current.Status);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task RemoteDisconnect_ReadmitsTheExistingClientConnection()
     {
@@ -3149,7 +3427,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
-    private sealed class MetadataFailureSpotActivation : IZLinkCurrentSpotActivation
+    private sealed class MetadataTestSpotActivation(ZLinkMessageFlowTracer flow)
+        : IZLinkCurrentSpotActivation
     {
         public void EnsureOperationAllowed() { }
 
@@ -3163,7 +3442,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         public ZLinkCodecRegistryBuilder Codecs { get; } = new();
 
-        public ZLinkMessageFlowTracer Flow => null!;
+        public ZLinkMessageFlowTracer Flow => flow;
 
         public IZLinkRuntimeFailureReporter ErrorSink => null!;
 
@@ -3188,6 +3467,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
     private sealed class EchoProbe
     {
+        public int Requests;
+        public TaskCompletionSource<string?> SendCorrelation { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<ZLinkMessageMetadata> MetadataReceived { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<string> Received { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -3261,12 +3545,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("work", context.ChannelName);
+            Assert.Throws<NotSupportedException>(() =>
+                ((IDictionary<string, string>)context.Metadata.Values).Add("mutated", "value")
+            );
+            probe.MetadataReceived.TrySetResult(new ZLinkMessageMetadata(context.Metadata.Values));
+            probe.SendCorrelation.TrySetResult(context.CorrelationId);
             probe.Received.TrySetResult(message.Value);
             return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class EchoHandler(ServerIdentity identity)
+    private sealed class EchoHandler(ServerIdentity identity, EchoProbe probe)
         : IZLinkRequestHandler<EchoRequest, EchoReply>
     {
         public ValueTask<EchoReply> HandleAsync(
@@ -3276,12 +3565,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref probe.Requests);
             Assert.Equal("work", context.ChannelName);
             return ValueTask.FromResult(
                 new EchoReply(
-                    string.IsNullOrEmpty(identity.Name)
-                        ? request.Value
-                        : $"{identity.Name}:{request.Value}"
+                    context.Metadata.Find("tenant-id") is { } tenant ? $"{tenant}:{request.Value}"
+                    : string.IsNullOrEmpty(identity.Name) ? request.Value
+                    : $"{identity.Name}:{request.Value}"
                 )
             );
         }

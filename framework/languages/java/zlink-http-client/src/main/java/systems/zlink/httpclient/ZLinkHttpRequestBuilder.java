@@ -85,7 +85,8 @@ public final class ZLinkHttpRequestBuilder {
         } catch (Exception cause) {
             throw HttpClientErrors.protocol("HTTP request body could not be serialized", cause);
         }
-        headers.putIfAbsent("content-type", "application/json");
+        headers.putIfAbsent(
+                HttpClientText.Header.CONTENT_TYPE.wire(), HttpClientText.JSON_CONTENT_TYPE);
         return this;
     }
 
@@ -96,7 +97,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.body = content;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -110,7 +111,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.bodyProvider = provider;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -192,7 +193,7 @@ public final class ZLinkHttpRequestBuilder {
             CompletionStage<RawHttpResponse> operation, Class<T> type) {
         return operation.thenApply(
                 raw -> {
-                    if (raw.status() >= 400) {
+                    if (raw.status() >= java.net.HttpURLConnection.HTTP_BAD_REQUEST) {
                         throw HttpClientErrors.internalFailure(
                                 "HTTP request failed with status " + raw.status());
                     }

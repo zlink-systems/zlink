@@ -6,6 +6,8 @@ public enum ZLinkStreamCodec {
     MESSAGE_PACK(2),
     PROTOBUF(3);
 
+    private static final ZLinkStreamCodec[] VALUES = values();
+
     private final int value;
 
     ZLinkStreamCodec(int value) {
@@ -17,7 +19,7 @@ public enum ZLinkStreamCodec {
     }
 
     public static ZLinkStreamCodec fromValue(int value) {
-        for (ZLinkStreamCodec codec : values()) {
+        for (ZLinkStreamCodec codec : VALUES) {
             if (codec.value == value) {
                 return codec;
             }

@@ -43,7 +43,7 @@ run('lint', process.execPath, [
   'packages/*/src/**/*.ts',
   ...(includeSamples ? ['samples/**/*.ts'] : [])
 ]);
-for (const testFile of listTestFiles(path.join(nodeRoot, 'test'))) {
+for (const testFile of listTestFiles(nodeRoot)) {
   const relative = relativePath(nodeRoot, testFile);
   // Actual browser E2E belongs to `test:browser`, whose CI jobs install Chromium.
   if (relative.startsWith('test/browser/')) continue;
@@ -83,7 +83,9 @@ console.log(
   `-- runtime test integrity: announced=${expectedTestCount} completed=${completedTestCount}`
 );
 if (failedTestFiles.length > 0) {
-  console.error(`Framework runtime tests failed in ${failedTestFiles.length} file(s): ${failedTestFiles.join(', ')}`);
+  console.error(
+    `Framework runtime tests failed in ${failedTestFiles.length} file(s): ${failedTestFiles.join(', ')}`
+  );
   process.exit(1);
 }
 
@@ -175,7 +177,13 @@ function inspectTap(output) {
 
 function listTestFiles(root) {
   const files = [];
-  visit(root);
+  visit(path.join(root, 'test'));
+  const packagesRoot = path.join(root, 'packages');
+  for (const entry of fs.readdirSync(packagesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const testRoot = path.join(packagesRoot, entry.name, 'test');
+    if (fs.existsSync(testRoot)) visit(testRoot);
+  }
   return files.sort();
 
   function visit(current) {
@@ -183,7 +191,7 @@ function listTestFiles(root) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
         visit(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.test.js')) {
+      } else if (entry.isFile() && /\.test\.[cm]?js$/.test(entry.name)) {
         files.push(fullPath);
       }
     }

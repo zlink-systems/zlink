@@ -9,6 +9,48 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RouteMeshRuntimeServiceTests
 {
     [Fact]
+    public async Task UnchangedStatusQueriesAndSubscriptionsPreserveSequence()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        var initial = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        Assert.Equal(initial.Sequence, fixture.Runtime.GetStatus(RuntimeFixture.MeshName).Sequence);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = fixture
+            .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(initial.Sequence, observer.Current.Status.Sequence);
+
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocating);
+        Assert.True(await observer.MoveNextAsync());
+        var relocating = observer.Current.Status;
+        Assert.Equal(initial.Sequence + 1, relocating.Sequence);
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocated);
+        Assert.Equal(
+            relocating.Sequence,
+            fixture.Runtime.GetStatus(RuntimeFixture.MeshName).Sequence
+        );
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Serving);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(relocating.Sequence + 1, observer.Current.Status.Sequence);
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Stopped);
+        var terminal = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        Assert.Equal(ZLinkTopologyState.Stopped, terminal.State);
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Serving);
+        Assert.Equal(terminal, fixture.Runtime.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
+    public async Task FirstSourceStatusStartsAtSequenceOne()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        await using var monitoring = fixture.CreateMonitoring(new ControlledDescriptorQuery());
+        var first = monitoring.GetStatus(RuntimeFixture.MeshName);
+        Assert.Equal(1UL, first.Sequence);
+        Assert.Equal(first, monitoring.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
     public void Topology_Monitor_Does_Not_Queue_DataPlane_Traffic_Ahead_Of_Peer_Changes()
     {
         using var monitor = new RawMeshMonitor(ZLinkRouteMeshRuntimeService.TopologyMonitorEvents);
@@ -352,6 +394,85 @@ public sealed class RouteMeshRuntimeServiceTests
         );
     }
 
+    [Theory]
+    [InlineData(ZLinkFrameworkRuntimeState.Preparing, ZLinkTopologyReason.RuntimeNotReady)]
+    [InlineData(ZLinkFrameworkRuntimeState.Relocating, ZLinkTopologyReason.Draining)]
+    [InlineData(ZLinkFrameworkRuntimeState.Relocated, ZLinkTopologyReason.Draining)]
+    [InlineData(ZLinkFrameworkRuntimeState.Draining, ZLinkTopologyReason.Draining)]
+    public async Task PlacementReasonPrioritizesHostStateOverLocationFailure(
+        ZLinkFrameworkRuntimeState hostState,
+        ZLinkTopologyReason expectedReason
+    )
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        fixture.ReportLocationFailure();
+        fixture.SetHostState(hostState);
+
+        var status = fixture.Runtime.GetStatus(RuntimeFixture.MeshName);
+        Assert.False(status.Placement.IsAvailable);
+        Assert.Equal(expectedReason, status.Placement.UnavailableReason);
+    }
+
+    [Fact]
+    public async Task InitialDescriptorBatchPublishesOneCompleteStatus()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Client);
+        var query = new ControlledDescriptorQuery();
+        await using var monitoring = fixture.CreateMonitoring(query);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = monitoring
+            .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        await query.FirstQueryStarted.Task.WaitAsync(timeout.Token);
+
+        var descriptors = new[] { "remote-a", "remote-b", "remote-c" }
+            .Select(name => new ZLinkMeshNodeDescriptor(
+                RuntimeFixture.MeshName,
+                RoutingId.From(name),
+                1,
+                1,
+                $"inproc://{name}",
+                new Dictionary<string, int>(),
+                ZLinkTransportSecurityIdentity.Plaintext,
+                string.Empty,
+                0,
+                default
+            )
+            {
+                ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                State = ZLinkFrameworkRuntimeState.Serving,
+            })
+            .ToArray();
+        query.InitialPage.SetResult(
+            new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(descriptors, null)
+        );
+        await query.NextQueryStarted.Task.WaitAsync(timeout.Token);
+
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(descriptors.Length, observer.Current.Status.Peers.Count);
+        Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
+    }
+
+    [Fact]
+    public async Task EquivalentHostTransitionsDoNotPublishDuplicatePublicStatus()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = fixture
+            .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocating);
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Relocated);
+        fixture.SetHostState(ZLinkFrameworkRuntimeState.Serving);
+
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Equal(ZLinkTopologyState.Ready, observer.Current.Status.State);
+        Assert.Equal(new ZLinkObservationLoss(1, 0), observer.Current.Loss);
+    }
+
     [Fact]
     public async Task Stop_Preserves_Terminal_Status_Without_Waiting_For_Slow_Observer()
     {
@@ -638,6 +759,33 @@ public sealed class RouteMeshRuntimeServiceTests
     }
 
     [Fact]
+    public async Task ObserverStartsWithPlacementWeightChangedBeforeSubscription()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using (
+            var convergence = fixture
+                .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+                .GetAsyncEnumerator(timeout.Token)
+        )
+        {
+            Assert.True(await convergence.MoveNextAsync());
+            fixture.RuntimeOptions.Mesh(RuntimeFixture.MeshName).PlacementWeight = 0;
+            await MoveUntilAsync(convergence, status => !status.Status.Placement.IsAvailable);
+        }
+        await using var observer = fixture
+            .Runtime.ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await observer.MoveNextAsync());
+        Assert.False(observer.Current.Status.Placement.IsAvailable);
+        Assert.Equal(
+            ZLinkTopologyReason.CapacityExceeded,
+            observer.Current.Status.Placement.UnavailableReason
+        );
+        Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
+    }
+
+    [Fact]
     public async Task Placement_Weight_Change_And_Recovery_Wake_Status_Stream()
     {
         await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
@@ -741,6 +889,36 @@ public sealed class RouteMeshRuntimeServiceTests
         );
     }
 
+    private sealed class ControlledDescriptorQuery : IZLinkLocationDescriptorQuery
+    {
+        internal TaskCompletionSource FirstQueryStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource NextQueryStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<
+            ZLinkLocationPage<ZLinkMeshNodeDescriptor>
+        > InitialPage { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<
+            ZLinkLocationPage<ZLinkMeshNodeDescriptor>
+        > ListMeshNodeDescriptorsAsync(
+            string meshName,
+            ZLinkPageRequest page = default,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (FirstQueryStarted.TrySetResult())
+                return await InitialPage.Task.WaitAsync(cancellationToken);
+            NextQueryStarted.TrySetResult();
+            await new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            ).Task.WaitAsync(cancellationToken);
+            throw new InvalidOperationException(
+                "The descriptor query must be cancelled on shutdown."
+            );
+        }
+    }
+
     private sealed class RuntimeFixture : IAsyncDisposable
     {
         internal const string MeshName = "orders";
@@ -789,6 +967,16 @@ public sealed class RouteMeshRuntimeServiceTests
         internal RoutingId LocalNodeRid { get; }
 
         internal string ListenEndpoint { get; }
+
+        internal ZLinkRouteMeshRuntimeService CreateMonitoring(
+            IZLinkLocationDescriptorQuery query
+        ) =>
+            new(
+                _provider.GetRequiredService<ZLinkFrameworkRuntime>(),
+                _hostLifecycle,
+                _locationHealth,
+                query
+            );
 
         internal static async Task<RuntimeFixture> StartAsync(
             ZLinkMeshNodeObjectRole objectRole,

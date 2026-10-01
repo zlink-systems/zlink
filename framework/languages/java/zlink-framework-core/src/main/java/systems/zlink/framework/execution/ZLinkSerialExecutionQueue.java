@@ -458,7 +458,7 @@ public final class ZLinkSerialExecutionQueue {
             result = enqueueAccepted(null, 0, operation);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
-        return !result.result().toCompletableFuture().isCompletedExceptionally();
+        return true;
     }
 
     /**
@@ -477,7 +477,7 @@ public final class ZLinkSerialExecutionQueue {
             result = enqueueAccepted(null, payloadBytes, operation);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
-        return !result.result().toCompletableFuture().isCompletedExceptionally();
+        return true;
     }
 
     public boolean tryEnqueueRelocatable(byte[] record, Supplier<CompletionStage<Void>> operation) {
@@ -490,7 +490,7 @@ public final class ZLinkSerialExecutionQueue {
             result = enqueueAccepted(record.clone(), record.length, operation);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
-        return !result.result().toCompletableFuture().isCompletedExceptionally();
+        return true;
     }
 
     private EnqueueResult enqueueAccepted(

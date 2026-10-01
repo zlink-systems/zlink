@@ -19,7 +19,7 @@ struct workload_t
     std::optional<int> connections, logical_streams;
     int client_count = 1;
     std::optional<int> connect_concurrency;
-    int request_timeout_ms = 0, correlation_expiry_ms = 0, settle_timeout_ms = 0, setup_timeout_ms = 0,
+    int request_timeout_ms = 0, correlation_expiry_ms = 0, driver_timeout_ms = 0, setup_timeout_ms = 0,
         admin_timeout_ms = 0, socket_send_timeout_ms = 0;
 };
 inline void from_json (const json &in, workload_t &v)
@@ -34,7 +34,7 @@ inline void from_json (const json &in, workload_t &v)
     v.connect_concurrency = in.at ("connectConcurrency").get<std::optional<int>> ();
     v.request_timeout_ms = in.at ("requestTimeoutMs").get<int> ();
     v.correlation_expiry_ms = in.at ("correlationExpiryMs").get<int> ();
-    v.settle_timeout_ms = in.at ("settleTimeoutMs").get<int> ();
+    v.driver_timeout_ms = in.at ("driverTimeoutMs").get<int> ();
     v.setup_timeout_ms = in.at ("setupTimeoutMs").get<int> ();
     v.admin_timeout_ms = in.at ("adminTimeoutMs").get<int> ();
     v.socket_send_timeout_ms = in.at ("socketSendTimeoutMs").get<int> ();
@@ -59,8 +59,7 @@ inline void from_json (const json &in, store_config_t &v)
 struct worker_config_t
 {
     std::string algorithm;
-    int task_millis = 0, min_threads = 0, max_threads = 0, max_queue_length = 0, idle_timeout_ms = 0,
-        worker_timeout_ms = 0;
+    int task_millis = 0, min_threads = 0, max_threads = 0, idle_timeout_ms = 0, worker_timeout_ms = 0;
 };
 inline void from_json (const json &in, worker_config_t &v)
 {
@@ -68,7 +67,6 @@ inline void from_json (const json &in, worker_config_t &v)
     v.task_millis = in.at ("taskMillis").get<int> ();
     v.min_threads = in.at ("minThreads").get<int> ();
     v.max_threads = in.at ("maxThreads").get<int> ();
-    v.max_queue_length = in.at ("maxQueueLength").get<int> ();
     v.idle_timeout_ms = in.at ("idleTimeoutMs").get<int> ();
     v.worker_timeout_ms = in.at ("workerTimeoutMs").get<int> ();
 }
@@ -80,7 +78,7 @@ struct diagnostics_config_t
 
 struct role_config_t
 {
-    std::string run_id, cell_id, config_hash, role;
+    std::string run_id, cell_id, config_hash, language, role;
     int role_instance = 0;
     std::string scenario;
     std::optional<std::string> topology, channel_name, mesh_name;
@@ -111,6 +109,7 @@ inline void from_json (const json &in, role_config_t &v)
     v.run_id = in.at ("runId").get<std::string> ();
     v.cell_id = in.at ("cellId").get<std::string> ();
     v.config_hash = in.at ("configHash").get<std::string> ();
+    v.language = in.at ("language").get<std::string> ();
     v.role = in.at ("role").get<std::string> ();
     v.role_instance = in.at ("roleInstance").get<int> ();
     v.scenario = in.at ("scenario").get<std::string> ();
@@ -167,7 +166,7 @@ struct endpoint_role_t
 };
 struct endpoint_manifest_t
 {
-    std::string run_id, cell_id, config_hash;
+    std::string run_id, cell_id, config_hash, language;
     workload_t workload;
     std::vector<endpoint_role_t> roles;
     json provenance;
@@ -177,6 +176,7 @@ inline void from_json (const json &in, endpoint_manifest_t &v)
     v.run_id = in.at ("runId").get<std::string> ();
     v.cell_id = in.at ("cellId").get<std::string> ();
     v.config_hash = in.at ("configHash").get<std::string> ();
+    v.language = in.at ("language").get<std::string> ();
     v.workload = in.at ("workload").get<workload_t> ();
     v.provenance = in.at ("provenance");
     for (const auto &role : in.at ("roles"))

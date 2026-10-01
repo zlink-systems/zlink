@@ -9,6 +9,8 @@ const { runActorHandlerWithDeferredJoins } = require('../../packages/framework/d
 
 function fixture({ storeFailure = false, lifecycleFailure = false, entry = false, rejected = false, sameTarget = false, sourceLeave, admissionWaitForAbort = false } = {}) {
   const events = [];
+  let admissionEntered;
+  const admissionEntry = new Promise(resolve => { admissionEntered = resolve; });
   let joinSignal;
   const completions = [];
   const shutdown = new AbortController();
@@ -53,7 +55,8 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
     spot: {
       async onActorJoin() {
         events.push('admission');
-        if (admissionWaitForAbort) {
+        admissionEntered();
+        if (admissionWaitForAbort && !joinSignal.aborted) {
           await new Promise(resolve => joinSignal.addEventListener('abort', resolve, { once: true }));
         }
         return { accepted: !rejected };
@@ -86,7 +89,7 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
   };
   state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
   state.bindActor(actor, context);
-  return { state, events, completions, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
+  return { state, events, completions, admissionEntry, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
     try {
       await runActorHandlerWithDeferredJoins(() => {
         const call = entry ? context.joinEntrySpot() : context.joinSpot('room');
@@ -136,28 +139,37 @@ for (const entry of [false, true]) {
   });
 }
 
-test('same-node Join completion does not wait for one-way source leave', async () => {
-  let release;
-  const leave = new Promise(resolve => { release = resolve; });
-  const f = fixture({ sourceLeave: () => leave });
-  try {
+for (const entry of [false, true]) {
+  test(`same-node ${entry ? 'Entry' : 'User'} Join completion does not wait for one-way source leave`, async () => {
+    let release;
+    const leave = new Promise(resolve => { release = resolve; });
+    const f = fixture({ entry, sourceLeave: () => leave });
+    try {
+      await f.run();
+      assert.deepEqual(f.events, [...(entry ? [] : ['admission']), 'store', 'membership', 'joined', 'source-left', 'completion:accepted']);
+    } finally { release(); }
+  });
+
+  test(`same-node ${entry ? 'Entry' : 'User'} source leave failure is reported without changing Accepted completion`, async () => {
+    const f = fixture({ entry, sourceLeave: async () => { throw new Error('source leave failed'); } });
     await f.run();
-    assert.deepEqual(f.events, ['admission', 'store', 'membership', 'joined', 'source-left', 'completion:accepted']);
-  } finally { release(); }
-});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.completions[0].status, 'accepted');
+    assert.ok(f.events.includes('source-error:source leave failed'));
+    assert.equal(f.location().membershipEpoch, 2n);
+  });
+}
 
-test('same-node source leave failure is reported without changing Accepted completion', async () => {
-  const f = fixture({ sourceLeave: async () => { throw new Error('source leave failed'); } });
-  await f.run();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.completions[0].status, 'accepted');
-  assert.ok(f.events.includes('source-error:source leave failed'));
-  assert.equal(f.location().membershipEpoch, 2n);
-});
-
-test('same-node Join deadline expires during admission before Store commit', async () => {
+test('same-node Join deadline expires during admission before Store commit', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture({ admissionWaitForAbort: true });
-  await f.run(10);
+  const pending = f.run(10);
+  await f.admissionEntry;
+  now = 10;
+  t.mock.timers.tick(10);
+  await pending;
   assert.deepEqual(f.events, ['admission', 'completion:failed']);
   assert.equal(f.location().membershipEpoch, 1n);
 });

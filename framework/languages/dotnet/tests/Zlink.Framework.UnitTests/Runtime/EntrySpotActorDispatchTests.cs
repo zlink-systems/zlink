@@ -4078,8 +4078,9 @@ public sealed partial class EntrySpotActorDispatchTests
             relocationRepository,
             publishMode
         );
+        var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
-            new CapturingSpotNode(),
+            node,
             includeActorFactory: false,
             userSpotType: typeof(EmptyUserSpot),
             defaultRequestTimeout: TimeSpan.FromMilliseconds(250),
@@ -4125,8 +4126,27 @@ public sealed partial class EntrySpotActorDispatchTests
 
             Assert.False(result.Completed);
             Assert.Equal(expectedKnowledge, result.CommitKnowledge);
-            Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
-            Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.TerminalReason);
+            if (expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed)
+            {
+                Assert.True(
+                    result.SourceTerminalized
+                        || result.TerminalReason == ZLinkFrameworkRelocationReason.DeadlineExceeded
+                );
+                Assert.True(
+                    result.TerminalReason
+                        is ZLinkFrameworkRelocationReason.RelocationFailed
+                            or ZLinkFrameworkRelocationReason.DeadlineExceeded
+                );
+                Assert.Empty(runtime.GetSpotNodeRuntime("entry").Spots);
+            }
+            else
+            {
+                Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
+                Assert.Equal(
+                    ZLinkFrameworkRelocationReason.RelocationFailed,
+                    result.TerminalReason
+                );
+            }
             Assert.Equal(
                 expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed ? 1UL : 0UL,
                 result.CommittedUnitCount
@@ -4141,6 +4161,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 await runtime.ForceStopAsync(CancellationToken.None);
             else
                 await runtime.StopAsync(CancellationToken.None);
+            if (expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed)
+                Assert.Equal(1, Assert.Single(node.CreatedSpots).DisposeCount);
         }
     }
 
@@ -6416,39 +6438,131 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task Instance_Spot_Request_Refreshes_Stale_Route_Before_Retrying()
+    [Theory]
+    [InlineData(RequestResult.NotFound, false)]
+    [InlineData(RequestResult.NotConnected, false)]
+    [InlineData(RequestResult.Conflict, false)]
+    [InlineData(RequestResult.NotFound, true)]
+    [InlineData(RequestResult.NotConnected, true)]
+    [InlineData(RequestResult.Conflict, true)]
+    public async Task Spot_Request_Preserves_First_Stale_Terminal_Without_Resubmit(
+        RequestResult terminal,
+        bool instanceIntent
+    )
     {
         var node = new CapturingSpotNode
         {
             SpotRequestHandler = parts =>
-            {
-                var requestHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
-                return ZLinkEnvelopeCodec.EncodeParts(
-                    requestHeader with
+                ZLinkEnvelopeCodec.EncodeParts(
+                    ZLinkEnvelopeCodec.DecodeHeader(parts) with
                     {
                         Kind = ZLinkMessageKind.Response,
                         MessageName = string.Empty,
                     },
-                    new ProbeReply("reply"),
+                    new ProbeReply("unexpected resubmit"),
                     typeof(ProbeReply),
                     codecs: null
-                );
-            },
+                ),
         };
-        node.SpotRequestResults.Enqueue(RequestResult.NotConnected);
+        node.SpotRequestResults.Enqueue(terminal);
         node.SpotRequestResults.Enqueue(RequestResult.Ok);
         var (runtime, _) = await CreateStartedRuntimeAsync(node, includeInstanceSpotRoute: true);
         try
         {
-            var reply = await new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
-                runtime,
-                new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
-                new ProbeRouteMessage("request")
-            ).Async<ProbeReply>();
+            var call = instanceIntent
+                ? new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
+                    runtime,
+                    new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                    new ProbeRouteMessage("request")
+                )
+                : new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
+                    runtime,
+                    "spot-ready",
+                    new ProbeRouteMessage("request")
+                );
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                call.Async<ProbeReply>().AsTask()
+            );
 
-            Assert.Equal("reply", reply.Value);
-            Assert.Equal(2, node.SpotRequests.Count);
+            Assert.Equal(
+                (ZlinkRequestException.ErrorCode)(int)terminal,
+                Assert.IsType<ZlinkRequestException>(error.InnerException).Result
+            );
+            Assert.Single(node.SpotRequests);
+            Assert.Equal(RequestResult.Ok, Assert.Single(node.SpotRequestResults));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, true)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, true)]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, false)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, false)]
+    public async Task Spot_Request_Remote_Terminal_Invalidates_Once_Only_For_Framework_Origin(
+        ZLinkFrameworkErrorKind kind,
+        bool frameworkOrigin
+    )
+    {
+        var origin = frameworkOrigin ? ZLinkErrorOrigin.Framework : ZLinkErrorOrigin.Application;
+        var node = new CapturingSpotNode
+        {
+            SpotRequestHandler = parts =>
+                [
+                    ZLinkEnvelopeCodec.EncodeHeader(
+                        ZLinkChannelReplyWriter.CreateErrorHeader(
+                            "entry",
+                            ZLinkEnvelopeCodec.DecodeHeader(parts),
+                            new ZLinkFrameworkException(kind, "first remote terminal")
+                            {
+                                Origin = origin,
+                            }
+                        )
+                    ),
+                ],
+        };
+        var (runtime, _) = await CreateStartedRuntimeAsync(node, includeInstanceSpotRoute: true);
+        try
+        {
+            var resolved = Assert.IsType<ZLinkResolvedSpotHandle>(
+                await runtime.ResolveInstanceSpotHandleAsync(
+                    new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                    CancellationToken.None
+                )
+            );
+            var invalidations = 0;
+            var refreshes = 0;
+            var handle = new ZLinkResolvedSpotHandle(
+                resolved.Snapshot,
+                1,
+                _ =>
+                {
+                    refreshes++;
+                    return ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(
+                        null
+                    );
+                },
+                () => invalidations++
+            );
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(
+                    runtime,
+                    handle,
+                    new ProbeRouteMessage("request")
+                )
+                    .Async<ProbeReply>()
+                    .AsTask()
+            );
+
+            Assert.Equal(kind, error.Kind);
+            Assert.Equal(origin, error.Origin);
+            Assert.Equal("first remote terminal", error.Message);
+            Assert.Equal(frameworkOrigin ? 1 : 0, invalidations);
+            Assert.Equal(0, refreshes);
+            Assert.Single(node.SpotRequests);
         }
         finally
         {

@@ -14,6 +14,11 @@
 namespace zlink::stream_connector
 {
 
+namespace detail
+{
+inline constexpr std::size_t default_max_receive_payload_size = 64 * 1024;
+}
+
 struct heartbeat_options_t
 {
     /// Enables connector heartbeat control frames.
@@ -78,7 +83,7 @@ struct connector_options_t
     std::size_t max_send_payload_size = 64 * 1024;
 
     /// Maximum encoded payload bytes accepted from inbound stream frames.
-    std::size_t max_receive_payload_size = 64 * 1024;
+    std::size_t max_receive_payload_size = detail::default_max_receive_payload_size;
 
     /// Disables TLS server certificate validation when true.
     bool skip_server_certificate_validation = false;

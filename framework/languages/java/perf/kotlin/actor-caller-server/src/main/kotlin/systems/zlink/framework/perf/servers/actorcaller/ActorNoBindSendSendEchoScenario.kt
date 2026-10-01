@@ -91,7 +91,7 @@ class ActorNoBindSendSendEchoScenario(
         val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor sendToActor(...).await() -> return Channel handler",
             mapOf("probes" to sequences.length(), "streams" to sequences.length()))
         measurement.setupEvidence(listOf(typedProbe))
-        readiness.set(true, "", listOf(created, typedProbe))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
@@ -104,18 +104,27 @@ class ActorNoBindSendSendEchoScenario(
                                 .withReturnChannel(config.channelName())
                             val started = measurement.beginOperation("send")
                             if (started < 0) break
-                            val sent = request.withSentTicks(started)
-                            val entry = correlations.register(sent, started)
-                            try {
-                                actorClient.kotlin().sendToActor(config.actorIds()[stream], sent).await()
-                                metrics.record("sourceAdmissionMs", started, PerfClock.now())
-                                correlations.firstSendEnded(entry, null)
-                            } catch (error: Exception) {
-                                if (error is CancellationException) throw error
-                                correlations.firstSendEnded(entry, error)
+                            val entry = try {
+                                val sent = request.withSentTicks(started)
+                                correlations.register(sent, started)
+                            } catch (error: Throwable) {
+                                measurement.completeOperation(started, error)
+                                throw error
                             }
-                            val result = correlations.completeAsync(entry).await()
-                            measurement.completeOperation(started, result.error(), result.completedTicks())
+                            val fatal = try {
+                                actorClient.kotlin().sendToActor(config.actorIds()[stream], request.withSentTicks(started)).await()
+                                correlations.firstSendEnded(entry, null)
+                                metrics.record("sourceAdmissionMs", started, PerfClock.now())
+                                null
+                            } catch (error: Throwable) {
+                                correlations.firstSendEnded(entry, error)
+                                error.takeIf { it is CancellationException || it !is Exception }
+                            }
+                            val accounted = correlations.completeAsync(entry).thenAccept { result ->
+                                measurement.completeOperation(started, result.error(), result.completedTicks())
+                            }
+                            if (fatal != null) throw fatal
+                            accounted.await()
                         }
                     }
                 }

@@ -213,9 +213,12 @@ struct handler_key_t
 
 handler_key_t make_handler_key (std::string_view channel_name,
                                 std::string_view topic,
-                                std::string_view packet_name)
+                                std::string_view packet_name,
+                                handler_kind_t kind = handler_kind_t::send)
 {
-    return {std::string (channel_name), std::string (topic), std::string (packet_name)};
+    return {std::string (channel_name),
+            kind == handler_kind_t::event ? std::string{} : std::string (topic),
+            std::string (packet_name)};
 }
 
 const handler_entry_t *
@@ -230,6 +233,28 @@ find_by_channel_packet (const std::map<handler_key_t, handler_entry_t> &handlers
         }
     }
     return nullptr;
+}
+
+const handler_entry_t *find_handler_entry (const std::map<handler_key_t, handler_entry_t> &handlers,
+                                           std::string_view channel_name,
+                                           std::string_view topic,
+                                           std::string_view packet_name,
+                                           bool allow_packet_fallback)
+{
+    const auto found = handlers.find (make_handler_key (channel_name, topic, packet_name));
+    if (found != handlers.end ()) {
+        return &found->second;
+    }
+    if (!topic.empty ()) {
+        const auto event = handlers.find (
+          make_handler_key (channel_name, topic, packet_name, handler_kind_t::event));
+        if (event != handlers.end () && event->second.descriptor.kind == handler_kind_t::event) {
+            return &event->second;
+        }
+    }
+    return allow_packet_fallback && topic.empty ()
+             ? find_by_channel_packet (handlers, channel_name, packet_name)
+             : nullptr;
 }
 
 /// Fills the routing-derived fields the caller left open so every handler sees the same context
@@ -256,10 +281,16 @@ inbound_message_context_t resolve_inbound_context (const inbound_message_context
 class handler_registry_state_t
 {
   public:
+    std::stop_source wait_stop;
     std::map<handler_key_t, handler_entry_t> handlers;
     std::shared_ptr<const filter_list_t> filters = std::make_shared<const filter_list_t> ();
     handler_registry_t::failure_observer_t failure_observer;
 };
+
+void cancel_handler_waits (handler_registry_t &registry) noexcept
+{
+    registry._state->wait_stop.request_stop ();
+}
 
 void configure_handler_invocation_executor ()
 {
@@ -312,16 +343,16 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
                                           const message_context_t &context,
                                           terminal_invoker_t terminal) const
 {
-    const detail::ambient_context_scope_t invocation (nullptr, this);
+    const detail::ambient_context_scope_t invocation (nullptr, this,
+                                                      _state->wait_stop.get_token ());
     const auto filters = _state->filters;
     if (filters->empty ()) {
         try {
             return terminal ();
         }
         catch (...) {
-            task_t<zlink::message_t>::promise_type failure;
-            failure.unhandled_exception ();
-            return failure.get_return_object ();
+            return task_t<zlink::message_t> (
+              detail::current_exception_result<zlink::message_t> ("handler threw an exception"));
         }
     }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
@@ -340,12 +371,9 @@ const handler_descriptor_t *handler_registry_t::find (std::string_view channel_n
                                                       std::string_view topic,
                                                       std::string_view packet_name) const
 {
-    const auto found =
-      _state->handlers.find (detail::make_handler_key (channel_name, topic, packet_name));
-    if (found == _state->handlers.end ()) {
-        return nullptr;
-    }
-    return &found->second.descriptor;
+    const auto *entry =
+      detail::find_handler_entry (_state->handlers, channel_name, topic, packet_name, false);
+    return entry == nullptr ? nullptr : &entry->descriptor;
 }
 
 result_t<zlink::message_t>
@@ -368,14 +396,8 @@ handler_registry_t::invoke (std::string_view channel_name,
                             const zlink::message_t &message,
                             const detail::inbound_message_context_t &inbound) const
 {
-    const auto found =
-      _state->handlers.find (detail::make_handler_key (channel_name, topic, packet_name));
-    const detail::handler_entry_t *entry = nullptr;
-    if (found != _state->handlers.end ()) {
-        entry = &found->second;
-    } else if (topic.empty ()) {
-        entry = detail::find_by_channel_packet (_state->handlers, channel_name, packet_name);
-    }
+    const auto *entry =
+      detail::find_handler_entry (_state->handlers, channel_name, topic, packet_name, true);
     if (entry == nullptr) {
         return result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
                                                     "handler is not registered");
@@ -385,6 +407,8 @@ handler_registry_t::invoke (std::string_view channel_name,
                         owned_message = std::make_shared<zlink::message_t> (message),
                         owned_inbound = detail::resolve_inbound_context (
                           inbound, entry->descriptor, channel_name, packet_name)] () mutable {
+        const detail::ambient_context_scope_t owner_context (nullptr, this,
+                                                             _state->wait_stop.get_token ());
         result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler failed");
         try {
@@ -414,39 +438,27 @@ handler_registry_t::invoke (std::string_view channel_name,
         return result;
     };
 
-    detail::task_completion_source_t<zlink::message_t> completion;
-    auto task = completion.task ();
+    auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+    auto task = completion->task ();
     try {
         auto executor = handler_invocation_executor ();
         if (!executor) {
             return detail::boundary_failure<zlink::message_t> (
               detail::boundary_error_t::shutdown, "handler invocation executor is not running");
         }
-        executor->submit (
-          [completion = std::move (completion), invoke_body = std::move (invoke_body)] () mutable {
-              completion.complete (invoke_body ());
-          });
+        executor->submit ([completion, invoke_body = std::move (invoke_body)] () mutable {
+            completion->complete (invoke_body ());
+        });
     }
     catch (const std::exception &error) {
-        completion.complete (result_t<zlink::message_t>::failure (
+        completion->complete (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, error.what ()));
     }
     catch (...) {
-        completion.complete (result_t<zlink::message_t>::failure (
+        completion->complete (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler executor rejected invocation"));
     }
     return task.result ();
-}
-
-task_t<zlink::message_t>
-handler_registry_t::invoke_async (std::string_view channel_name,
-                                  std::string_view packet_name,
-                                  service_provider_t &services,
-                                  serializer_registry_t &serializers,
-                                  const zlink::message_t &message,
-                                  const detail::inbound_message_context_t &inbound) const
-{
-    return invoke_async (channel_name, "", packet_name, services, serializers, message, inbound);
 }
 
 task_t<zlink::message_t>
@@ -458,14 +470,8 @@ handler_registry_t::invoke_async (std::string_view channel_name,
                                   const zlink::message_t &message,
                                   const detail::inbound_message_context_t &inbound) const
 {
-    const auto found =
-      _state->handlers.find (detail::make_handler_key (channel_name, topic, packet_name));
-    const detail::handler_entry_t *entry = nullptr;
-    if (found != _state->handlers.end ()) {
-        entry = &found->second;
-    } else if (topic.empty ()) {
-        entry = detail::find_by_channel_packet (_state->handlers, channel_name, packet_name);
-    }
+    const auto *entry =
+      detail::find_handler_entry (_state->handlers, channel_name, topic, packet_name, true);
     if (entry == nullptr) {
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
           framework_error_kind_t::not_found, "handler is not registered"));
@@ -535,8 +541,8 @@ handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descri
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "duplicate handler registration");
     }
-    const auto key =
-      detail::make_handler_key (descriptor.channel_name, descriptor.topic, descriptor.packet_name);
+    const auto key = detail::make_handler_key (descriptor.channel_name, descriptor.topic,
+                                               descriptor.packet_name, descriptor.kind);
     const auto [_, inserted] = _state->handlers.emplace (
       key, detail::handler_entry_t{std::move (descriptor), std::move (invoker)});
     if (!inserted) {

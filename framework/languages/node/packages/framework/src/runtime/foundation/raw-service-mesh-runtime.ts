@@ -1,3 +1,9 @@
+import { constants as osConstants } from 'node:os';
+import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawHostPort,
@@ -5,23 +11,26 @@ import type {
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
 import { RequestResult, SubmitResult } from '../backend/runtime-values';
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from '../application-jobs/contracts';
-import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
+import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
 import { ServiceMailbox, type ServiceMailboxRecord } from './service-mailbox';
 import {
-  ServiceTopologyRegistry,
   sameServiceNodeDescriptor,
+  ServiceTopologyRegistry,
   validateDescriptor,
   type AdmittedServicePeer,
   type PeerAdmissionResult,
-  type ServicePeerAdmissionExpectation,
-  type ServiceNodeDescriptor
+  type ServiceNodeDescriptor,
+  type ServicePeerAdmissionExpectation
 } from './service-topology-registry';
+import { createServiceWireCodec } from './service-wire-codec';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  ServiceWireCommand,
+  ServiceWireFrameworkErrorCode
+} from './service-wire-constants.generated';
 import {
   decodeApplicationPayloadView,
   decodeChannelRequestHeader,
@@ -40,14 +49,11 @@ import {
   encodeReplyHeader,
   encodeRouteMeshAdmission,
   M6aServiceWireCommand,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
+  ServiceWireProtocolError,
+  type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-import { createServiceWireCodec } from './service-wire-codec';
-import {
-  ServiceWireCommand,
-  ServiceWireFrameworkErrorCode
-} from './service-wire-constants.generated';
+
+const nativeErrnoValues = osConstants.errno;
 
 export type RawServicePumpResult =
   'noData' | 'infrastructure' | 'application' | 'dropped' | 'protocolError';
@@ -118,11 +124,15 @@ export interface RawServiceMeshRuntimeOptions {
 
 // Framework error code 13 (RequestTargetNotFound) is encoded as 14 on a
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
-const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = 14;
+const RAW_MESH_RECEIVE_RECORD_BUDGET = 64;
+const RAW_MESH_RECEIVE_BYTE_BUDGET = 4 * 1024 * 1024;
+const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
+
+const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = ServiceWireFrameworkErrorCode.requestTargetNotFound;
 
 const livenessCodec = createServiceWireCodec({
-  magic: [0x5a, 0x4d],
-  major: 1,
+  magic: SERVICE_WIRE_MAGIC,
+  major: SERVICE_WIRE_MAJOR,
   commands: M6aServiceWireCommand
 });
 
@@ -613,7 +623,7 @@ export class RawServiceMeshRuntime {
     const observe: RawServicePumpObserver = (_source, byteCount) => {
       bytes += byteCount;
     };
-    while (receiveReady && messages < 64 && !this.closed) {
+    while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
       const result = await this.receiveOne(performance.now(), observe);
       if (result === 'noData') {
         receiveReady = false;
@@ -622,7 +632,11 @@ export class RawServiceMeshRuntime {
       messages += 1;
       // Core owns the per-peer fair-queue cursor. The Framework limit bounds
       // the entire round, so changing peers does not renew its byte/count budget.
-      if (bytes >= 4 * 1024 * 1024 || performance.now() - startedAtMs >= 2) break;
+      if (
+        bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
+        performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
+      )
+        break;
     }
     if (!this.closed) {
       await this.announceExpectedPeers();
@@ -758,7 +772,9 @@ export class RawServiceMeshRuntime {
           (expected.meshName !== descriptor.meshName ||
             expected.nodeRoutingId !== descriptor.nodeRoutingId)
         ) {
-          await this.send(received.sourceRid, [encodeReject(3)]);
+          await this.send(received.sourceRid, [
+            encodeReject(enumWireRejectReason('identityMismatch'))
+          ]);
           return 'infrastructure';
         }
         const result = this.admitPeer(
@@ -798,23 +814,7 @@ export class RawServiceMeshRuntime {
       }
       if (header.command === M6aServiceWireCommand.reject) {
         if (received.parts.length !== 1) return 'protocolError';
-        const reason = decodeReject(received.parts[0]!);
-        // Keep an already admitted peer: a reject of an earlier Hello on the
-        // same selected route does not end the admission that succeeded.
-        if (reason === 4 && this.topology.peer(received.sourceRid) === undefined) {
-          const expected = this.expectedPeers.get(received.sourceRid);
-          const local = this.topology.localDescriptor();
-          this.topology.markNotRequired({
-            ...local,
-            nodeRoutingId: received.sourceRid,
-            lifecycleGeneration: 1n,
-            descriptorRevision: 1n,
-            advertisedEndpoint: expected?.endpoint ?? local.advertisedEndpoint,
-            channels: [],
-            objectRole: 'client'
-          });
-          this.retireNotRequiredExpectedPeer(received.sourceRid);
-        }
+        decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
       const peer = this.topology.peer(received.sourceRid);
@@ -1300,7 +1300,7 @@ function isAlreadyDisconnectedError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('nativeErrno' in error)) {
     return false;
   }
-  return (error as { readonly nativeErrno?: unknown }).nativeErrno === 2;
+  return (error as { readonly nativeErrno?: unknown }).nativeErrno === nativeErrnoValues.ENOENT;
 }
 
 /**
@@ -1378,17 +1378,13 @@ function immutableDescriptorMismatch(
   return undefined;
 }
 
-function admissionReason(result: PeerAdmissionResult): number {
+function admissionReason(result: Exclude<PeerAdmissionResult, 'admitted' | 'notRequired'>): number {
   switch (result) {
     case 'meshMismatch':
-      return 2;
+      return enumWireRejectReason('topologyMismatch');
     case 'staleDescriptor':
-      return 7;
+      return enumWireRejectReason('descriptorRevisionStale');
     case 'invalidDescriptor':
-      return 11;
-    case 'notRequired':
-      return 4;
-    case 'admitted':
-      return 1;
+      return enumWireRejectReason('invalidDescriptor');
   }
 }

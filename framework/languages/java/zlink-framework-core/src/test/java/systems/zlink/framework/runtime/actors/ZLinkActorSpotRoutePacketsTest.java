@@ -2,12 +2,15 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
@@ -16,6 +19,58 @@ import java.util.Map;
 import java.util.Optional;
 
 final class ZLinkActorSpotRoutePacketsTest {
+    @Test
+    void entrySpotJoinMetadataRoundTrips() {
+        RoutingId node = RoutingId.from("node");
+        try (Message request =
+                        ZLinkActorEntrySpotRoutePackets.encodeJoinRequest(
+                                "actor", "ProbeActor", node, 9L);
+                Message reply =
+                        ZLinkActorEntrySpotRoutePackets.encodeJoinReply(
+                                "actor", "ProbeActor", node, 10L)) {
+            var decodedRequest = ZLinkActorEntrySpotRoutePackets.decodeJoinRequest(request);
+            var decodedReply = ZLinkActorEntrySpotRoutePackets.decodeJoinReply(reply);
+            assertEquals("actor", decodedRequest.actorId());
+            assertEquals("ProbeActor", decodedRequest.actorType());
+            assertEquals(node, decodedRequest.sourceNodeRid());
+            assertEquals(9L, decodedRequest.sourceGeneration());
+            assertEquals("actor", decodedReply.actorId());
+            assertEquals("ProbeActor", decodedReply.actorType());
+            assertEquals(node, decodedReply.targetNodeRid());
+            assertEquals(10L, decodedReply.actorGeneration());
+        }
+    }
+
+    @Test
+    void malformedJoinAndTransferMetadataReportProtocolError() {
+        try (Message malformed = Message.from("malformed metadata")) {
+            assertEquals(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () ->
+                                            ZLinkActorEntrySpotRoutePackets.decodeJoinRequest(
+                                                    malformed))
+                            .kind());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () ->
+                                            ZLinkActorEntrySpotRoutePackets.decodeJoinReply(
+                                                    malformed))
+                            .kind());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () ->
+                                            ZLinkActorSpotRoutePackets.decodeTransferRequest(
+                                                    malformed))
+                            .kind());
+        }
+    }
+
     @Test
     void actorPacketAllowsEmptyNativeSourceSessionRoutingId() {
         ZLinkBackendActorRef actor =

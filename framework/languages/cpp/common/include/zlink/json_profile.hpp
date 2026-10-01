@@ -19,6 +19,9 @@
 namespace zlink::detail::json_profile
 {
 
+inline constexpr char content_type[] = "application/json";
+inline constexpr char empty_object[] = "{}";
+
 inline bool has_finite_numbers (const nlohmann::json &value)
 {
     if (value.is_number_float () && !std::isfinite (value.get<double> ())) {

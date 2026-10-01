@@ -85,26 +85,67 @@ public sealed class MeshNodeShutdownSealTests
         {
             scheduler.Release();
         }
+        (
+            IMeshNodeMonitor Monitor,
+            RoutingId PeerRid,
+            MeshNodeStatus Status,
+            MeshNodePeer[] Peers
+        )[] observations = [];
         await WaitUntilAsync(() =>
-            left.Status().AdmittedPeerCount == 1 && right.Status().AdmittedPeerCount == 1
-        );
-        // Let the crossed Admit replies and two admission retry intervals pass.
-        await Task.Delay(TimeSpan.FromMilliseconds(1200));
-
-        foreach (
-            var (node, monitor, peerRid) in new[]
+        {
+            observations = new[]
             {
-                (left, leftMonitor, rightRid),
-                (right, rightMonitor, leftRid),
-            }
-        )
+                (
+                    Monitor: leftMonitor,
+                    PeerRid: rightRid,
+                    Status: left.Status(),
+                    Peers: left.Peers()
+                ),
+                (
+                    Monitor: rightMonitor,
+                    PeerRid: leftRid,
+                    Status: right.Status(),
+                    Peers: right.Peers()
+                ),
+            };
+            return observations.All(observation =>
+                observation.Status.State == MeshNodeState.Ready
+                && observation.Status.AdmittedPeerCount == 1
+                && observation.Peers.Length == 1
+                && observation.Peers[0].RoutingId == observation.PeerRid
+                && observation.Peers[0].State == MeshPeerState.Admitted
+            );
+        });
+        foreach (var (monitor, peerRid, nodeStatus, peers) in observations)
         {
             var status = monitor.Status();
-            Assert.Equal(1UL, status.PeerAdmitted);
+            var peerEvents = new List<MeshMonitorEvent>();
+            while (monitor.Recv(RecvFlags.DontWait) is { } meshEvent)
+            {
+                if (meshEvent.PeerRid == peerRid)
+                {
+                    peerEvents.Add(meshEvent);
+                }
+            }
+            var admissions = peerEvents
+                .Select((meshEvent, index) => (meshEvent, index))
+                .Where(item => item.meshEvent.Kind == MeshMonitorEventKind.PeerAdmitted)
+                .Select(item => item.index)
+                .ToArray();
+            Assert.NotEmpty(admissions);
+            for (var index = 1; index < admissions.Length; index++)
+            {
+                Assert.Contains(
+                    peerEvents
+                        .Skip(admissions[index - 1] + 1)
+                        .Take(admissions[index] - admissions[index - 1] - 1),
+                    meshEvent => meshEvent.Kind == MeshMonitorEventKind.PeerClosed
+                );
+            }
             Assert.Equal(0UL, status.ProtocolErrors);
-            Assert.Equal(MeshNodeState.Ready, node.Status().State);
-            Assert.Equal(1U, node.Status().AdmittedPeerCount);
-            var admitted = Assert.Single(node.Peers(), peer => peer.RoutingId == peerRid);
+            Assert.Equal(MeshNodeState.Ready, nodeStatus.State);
+            Assert.Equal(1U, nodeStatus.AdmittedPeerCount);
+            var admitted = Assert.Single(peers, peer => peer.RoutingId == peerRid);
             Assert.Equal(MeshPeerState.Admitted, admitted.State);
         }
     }

@@ -36,16 +36,16 @@ final class JsonSessionActorsRuntimeIntegrationTest {
                             .getOrCreateManagedActor(actorId, "player")
                             .toCompletableFuture()
                             .join();
-            ZLinkSessionActor bound =
+            var sessionActors =
                     runtime.sessionActors(
-                                    "local-json",
-                                    SessionActorsRuntimeIntegrationTest.connectedSession())
-                            .bind(actor)
-                            .toCompletableFuture()
-                            .join();
+                            "local-json", SessionActorsRuntimeIntegrationTest.connectedSession());
+            ZLinkSessionActor bound = sessionActors.bind(actor).toCompletableFuture().join();
 
             SessionActorsRuntimeIntegrationTest.relayWithHeader(
-                    bound, "JsonRelaySend", ZLinkMessage.of(new JsonRelaySend("json-hello")));
+                    sessionActors,
+                    bound,
+                    "JsonRelaySend",
+                    ZLinkMessage.of(new JsonRelaySend("json-hello")));
 
             assertEquals(
                     actorId + ":json-hello",

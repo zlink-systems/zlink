@@ -4,16 +4,16 @@ import { LATENCY_SUFFIXES } from './histogram';
 // The §14 keys every snapshot carries. A scenario fills the ones it measures; the rest stay null with a reason.
 export const MetricCatalog = {
   auxiliaryPrefixes: ['actor.sourceAdmission.latency', 'spot.remoteCallLatency', 'driver.latency', 'worker.callLatency',
-    'worker.submitToStart', 'worker.taskLatency', 'worker.resultToContinuation', 'fanout.deliveryLatency', 'fanout.settleDeliveryLatency'],
+    'worker.submitToStart', 'worker.taskLatency', 'worker.resultToContinuation', 'fanout.deliveryLatency'],
   auxiliaryHistograms: ['sourceAdmissionMs', 'driverLatencyMs', 'workerCallLatencyMs', 'workerSubmitToStartMs', 'workerTaskLatencyMs',
-    'workerResultToContinuationMs', 'fanoutDeliveryLatencyMs', 'fanoutSettleDeliveryLatencyMs'],
+    'workerResultToContinuationMs', 'fanoutDeliveryLatencyMs'],
   inapplicable: ['messages.admitted', 'messages.expired', 'messages.duplicateReply', 'messages.lateReply', 'messages.unknownCorrelation',
     'spot.applicationYieldCalls', 'spot.applicationHandlerEntries', 'driver.issued', 'driver.notStarted', 'driver.failed',
-    'messages.published', 'messages.publishedInWindow', 'messages.settlePublished', 'fanout.subscriberCount', 'fanout.uniqueDelivered',
-    'fanout.deliveredInWindow', 'fanout.settleDelivered', 'fanout.duplicateEvents', 'fanout.outOfCohortEvents', 'fanout.deliveryRatio',
+    'messages.publishedInWindow', 'fanout.subscriberCount',
+    'fanout.deliveredInWindow', 'fanout.duplicateEvents', 'fanout.outOfCohortEvents', 'fanout.deliveryRatio',
     'fanout.publishOpsPerSec', 'fanout.deliveryOpsPerSec', 'spot.mailboxDepth.max', 'spot.mailboxDepth.mean', 'spot.suspendedTurns',
     'spot.resumedTurns', 'spot.resumeLatency.p95Ms', 'spot.resumeLatency.p99Ms', 'worker.pool.queueDepth.max', 'worker.pool.queueDepth.mean'],
-  outcomes: ['sent', 'completed', 'settleCompleted', 'failed', 'timeout', 'cancelled', 'unresolved'] as const,
+  outcomes: ['sent', 'completed', 'failed', 'timeout', 'cancelled', 'inflightAtEnd'] as const,
 
   setNull(values: Record<string, unknown>, reasons: Record<string, NullReason>, container: string, key: string, code: string, reason: string): void {
     values[key] = null;

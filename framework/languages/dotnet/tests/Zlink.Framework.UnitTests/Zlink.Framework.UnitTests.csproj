@@ -11,7 +11,7 @@
         <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
-        <PackageReference Include="Zlink"/>
+        <PackageReference Include="Zlink" Condition="'$(ZLinkUseBindingsSource)' != 'true'"/>
         <PackageReference Include="coverlet.collector">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
@@ -69,6 +69,7 @@
         <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
         <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
         <Compile Include="Runtime/SameNodeActorJoinTests.cs"/>
+        <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>

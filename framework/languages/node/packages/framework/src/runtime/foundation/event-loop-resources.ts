@@ -1,3 +1,4 @@
+import { shouldCompactBackingArray } from '../admission';
 import { runZLinkExecutionArea } from '../execution';
 
 export interface CloseableResource {
@@ -23,7 +24,7 @@ export class EventLoopResourceStack {
   }
 }
 
-async function closeResources(resources: readonly CloseableResource[]): Promise<void> {
+export async function closeResources(resources: readonly CloseableResource[]): Promise<void> {
   const failures: unknown[] = [];
   for (const resource of resources) {
     try {
@@ -32,6 +33,10 @@ async function closeResources(resources: readonly CloseableResource[]): Promise<
       failures.push(error);
     }
   }
+  finishResourceCleanup(failures);
+}
+
+export function finishResourceCleanup(failures: readonly unknown[]): void {
   if (failures.length > 0) {
     throw new AggregateError(failures, 'Event-loop resource cleanup failed.');
   }
@@ -133,10 +138,7 @@ export class EventLoopWorkQueues {
     if (this.infrastructureCount === 0) {
       this.infrastructure.length = 0;
       this.infrastructureHead = 0;
-    } else if (
-      this.infrastructureHead >= 1024 &&
-      this.infrastructureHead * 2 >= this.infrastructure.length
-    ) {
+    } else if (shouldCompactBackingArray(this.infrastructureHead, this.infrastructure.length)) {
       this.infrastructure.splice(0, this.infrastructureHead);
       this.infrastructureHead = 0;
     }
@@ -146,10 +148,7 @@ export class EventLoopWorkQueues {
     if (this.applicationCount === 0) {
       this.application.length = 0;
       this.applicationHead = 0;
-    } else if (
-      this.applicationHead >= 1024 &&
-      this.applicationHead * 2 >= this.application.length
-    ) {
+    } else if (shouldCompactBackingArray(this.applicationHead, this.application.length)) {
       this.application.splice(0, this.applicationHead);
       this.applicationHead = 0;
     }

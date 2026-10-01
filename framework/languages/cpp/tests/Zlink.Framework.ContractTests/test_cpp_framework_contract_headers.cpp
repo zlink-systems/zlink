@@ -337,6 +337,27 @@ static_assert (std::is_abstract_v<zlink::framework::route_mesh_runtime_t>);
 static_assert (std::is_abstract_v<zlink::framework::mesh_runtime_observation_t>);
 static_assert (std::is_abstract_v<zlink::framework::framework_runtime_t>);
 static_assert (std::is_abstract_v<zlink::framework::fanout_runtime_t>);
+static_assert (
+  std::is_same_v<decltype (zlink::framework::client_server_channel_snapshot_t{}.targets),
+                 std::vector<zlink::framework::client_server_target_snapshot_t>>);
+static_assert (
+  std::is_same_v<decltype (zlink::framework::client_server_channel_snapshot_t{}.ready_target_count),
+                 std::uint32_t>);
+static_assert (std::is_same_v<decltype (zlink::framework::client_server_target_snapshot_t::state),
+                              zlink::framework::peer_state_t>);
+static_assert (std::is_same_v<decltype (zlink::framework::fanout_channel_snapshot_t{}.publishers),
+                              std::vector<zlink::framework::mesh_peer_snapshot_t>>);
+static_assert (
+  std::is_same_v<decltype (zlink::framework::fanout_channel_snapshot_t{}.ready_publisher_count),
+                 std::uint32_t>);
+static_assert (
+  std::is_same_v<decltype (&zlink::framework::client_server_runtime_t::observe),
+                 std::unique_ptr<zlink::framework::mesh_runtime_observation_t> (
+                   zlink::framework::client_server_runtime_t::*) (
+                   std::string,
+                   std::size_t,
+                   std::function<void (const zlink::framework::observed_status_t<
+                                       zlink::framework::client_server_channel_snapshot_t> &)>)>);
 static_assert (std::is_abstract_v<zlink::framework::fanout_runtime_observation_t>);
 static_assert (std::is_abstract_v<zlink::framework::route_mesh_runtime_options_t>);
 static_assert (std::is_abstract_v<zlink::framework::mesh_channel_runtime_options_t>);
@@ -357,6 +378,9 @@ static_assert (
   std::is_same_v<
     decltype (std::declval<const zlink::framework::mesh_channel_runtime_options_t &> ().weight ()),
     int>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::mesh_node_snapshot_t> ().state),
+                 zlink::framework::topology_state_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::mesh_peer_snapshot_t> ().node_rid),
                  zlink::routing_id_t>);
@@ -402,7 +426,7 @@ static_assert (
       std::declval<std::string> (),
       std::declval<std::size_t> (),
       std::declval<std::function<void (const zlink::framework::observed_status_t<
-                                       zlink::framework::fanout_runtime_event_t> &)>> ())),
+                                       zlink::framework::fanout_channel_snapshot_t> &)>> ())),
     std::unique_ptr<zlink::framework::fanout_runtime_observation_t>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::app_t &> ().relocate (
                                 std::declval<zlink::framework::relocation_options_t> (),
@@ -1736,7 +1760,7 @@ int main ()
       "sample", "context-topic", &named_handler_t::handle_context);
     handlers.on_send<named_handler_t, named_request_t> ("sample", "send-topic",
                                                         &named_handler_t::send_context);
-    handlers.on_event<named_handler_t, named_request_t> ("sample", "publish-topic",
+    handlers.on_event<named_handler_t, named_request_t> ("sample",
                                                          &named_handler_t::publish_context);
     const auto *descriptor = handlers.find ("sample", "topic", named_request_t::packet_name);
     if (descriptor == nullptr || descriptor->packet_name != named_request_t::packet_name) {

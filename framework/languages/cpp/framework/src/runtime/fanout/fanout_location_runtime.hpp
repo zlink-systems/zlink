@@ -58,10 +58,10 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     std::unique_ptr<fanout_runtime_observation_t> observe (
       std::string channel_name,
       std::size_t capacity,
-      std::function<void (const observed_status_t<fanout_runtime_event_t> &)> observer) override;
+      std::function<void (const observed_status_t<fanout_channel_snapshot_t> &)> observer) override;
 
     using observer_t =
-      zlink::framework::observation_detail::runtime_observer_state_t<fanout_runtime_event_t>;
+      zlink::framework::observation_detail::runtime_observer_state_t<fanout_channel_snapshot_t>;
 
   private:
     struct publisher_entry_t;
@@ -75,6 +75,9 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     void reconcile_subscribers ();
     void reconcile_subscriber (subscriber_entry_t &subscriber);
     void publish_snapshot_changes ();
+    fanout_channel_snapshot_t
+    publish_snapshot_locked (fanout_channel_snapshot_t current,
+                             const std::shared_ptr<observer_t> &initial_observer = {}) const;
     fanout_channel_snapshot_t build_snapshot_locked (const std::string &channel_name) const;
     bool is_observable_channel (std::string_view channel_name) const noexcept;
     static bool snapshot_equivalent (const fanout_channel_snapshot_t &left,
@@ -110,9 +113,9 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     std::mutex _descriptor_publish_mutex;
     std::map<std::string, std::unique_ptr<publisher_entry_t>> _publishers;
     std::map<std::string, std::unique_ptr<subscriber_entry_t>> _subscribers;
-    std::map<std::string, std::uint64_t> _snapshot_sequences;
-    std::map<std::string, fanout_channel_snapshot_t> _last_snapshots;
-    std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;
+    mutable std::map<std::string, std::uint64_t> _snapshot_sequences;
+    mutable std::map<std::string, fanout_channel_snapshot_t> _last_snapshots;
+    mutable std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;
     std::size_t _subscriber_pump_cursor = 0;
     std::atomic_bool _stop{false};
     std::thread _thread;

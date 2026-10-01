@@ -1063,7 +1063,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || Volatile.Read(ref stage.AuthorityPublished) != 0
         )
             return;
-        ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=spot");
+        ZLinkFrameworkDebugLog.SpotDiscovery($"cutover_timeout object=spot");
         ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
             prepare.Object.Kind == 3 ? "instance_spot" : "user_spot"
         );
@@ -1195,7 +1195,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             when (exception.Kind == ZLinkFrameworkErrorKind.NotFound)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "late_cutover object=spot reason=no_prepared_target"
+                $"late_cutover object=spot reason=no_prepared_target"
             );
             return;
         }
@@ -1207,7 +1207,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             if (Volatile.Read(ref stage.AuthorityPublished) != 0)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    "late_cutover object=spot reason=already_committed"
+                    $"late_cutover object=spot reason=already_committed"
                 );
                 return;
             }

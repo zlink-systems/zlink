@@ -1505,7 +1505,7 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
             auto serialized = encode_payload (*state->serializers);
             co_await (*client_server) (packet_name, std::move (serialized.content_type),
                                        detail::encoded_payload_to_raw (serialized.payload),
-                                       std::chrono::milliseconds::zero ());
+                                       std::chrono::milliseconds::zero (), metadata);
             detail::message_flow_tracer_t (state->runtime->dispatch)
               .trace (message_flow_outcome_t::sent, [&] {
                   return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
@@ -1928,7 +1928,8 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
               });
             co_return co_await (*client_server) (
               packet_name, std::move (serialized.content_type),
-              detail::encoded_payload_to_raw (serialized.payload), effective_timeout);
+              detail::encoded_payload_to_raw (serialized.payload), effective_timeout,
+              std::move (metadata));
         }
         catch (const framework_exception_t &error) {
             co_return detail::result_access_t::failure<zlink::message_t> (error);

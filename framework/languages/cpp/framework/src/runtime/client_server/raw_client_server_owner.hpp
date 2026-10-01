@@ -25,6 +25,11 @@
 #include <string>
 #include <vector>
 
+namespace zlink::framework::runtime::messaging
+{
+struct envelope_header_t;
+}
+
 namespace zlink
 {
 class context_t;
@@ -95,7 +100,9 @@ class raw_client_server_server_t
     next_liveness_activity_task () const;
     bool reply (const mesh::service_mailbox_record_t &request,
                 const protocol::application_payload_t &payload);
-    bool reply (const mesh::service_mailbox_record_t &request, const framework_exception_t &error);
+    bool reply (const mesh::service_mailbox_record_t &request,
+                const framework_exception_t &error,
+                const std::optional<messaging::envelope_header_t> *decoded_context = nullptr);
 
   private:
     task_t<client_server_pump_result_t> enqueue_application_record (
@@ -158,6 +165,7 @@ class raw_client_server_client_t
     {
         bool ready;
         std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
+        bool connecting = false;
     };
     task_t<pump_status_t> pump_status_task () const;
     task_t<std::size_t>
@@ -167,9 +175,12 @@ class raw_client_server_client_t
     task_t<std::size_t> last_pump_bytes_task () const;
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
-    task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload);
+    task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload,
+                                         std::map<std::string, std::string> metadata = {});
     task_t<client_server_request_completion_t>
-    request (const protocol::application_payload_t &payload, std::chrono::milliseconds timeout);
+    request (const protocol::application_payload_t &payload,
+             std::chrono::milliseconds timeout,
+             std::map<std::string, std::string> metadata = {});
     std::size_t pending_request_count () const noexcept;
 
   private:

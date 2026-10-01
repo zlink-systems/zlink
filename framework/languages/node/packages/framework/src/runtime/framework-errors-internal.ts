@@ -5,6 +5,7 @@ import {
 import { RequestResult } from './backend/runtime-values';
 import { ServiceWireProtocolError } from './foundation/service-wire-m6a-codec';
 import {
+  ServiceWireBoundaryTerminalResults,
   ServiceWireExactTerminalByFailureCode,
   ServiceWireFrameworkErrorCode
 } from './foundation/service-wire-constants.generated';
@@ -104,6 +105,8 @@ const INTERNAL_TO_PUBLIC: Readonly<
   [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ZLinkFrameworkErrorKind.Unavailable
 });
 
+const ROUTE_NOT_CONNECTED_INTERNAL_CODE = ServiceWireFrameworkErrorCode.routeNotConnected - 1;
+
 export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   Record<ZLinkFrameworkInternalErrorKind, number>
 > = Object.freeze({
@@ -119,7 +122,8 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   [ZLinkFrameworkInternalErrorKind.RouteHandlerNotFound]: 9,
   [ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound]: 10,
   [ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed]: 11,
-  [ZLinkFrameworkInternalErrorKind.RouteNotConnected]: 12,
+  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ROUTE_NOT_CONNECTED_INTERNAL_CODE,
+  [ZLinkFrameworkInternalErrorKind.RouteNotConnected]: ROUTE_NOT_CONNECTED_INTERNAL_CODE,
   [ZLinkFrameworkInternalErrorKind.RequestTargetNotFound]: 13,
   [ZLinkFrameworkInternalErrorKind.RequestRejected]: 14,
   [ZLinkFrameworkInternalErrorKind.RequestProtocolError]: 15,
@@ -147,8 +151,7 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   [ZLinkFrameworkInternalErrorKind.RelocationDisabled]: 37,
   [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]: 38,
   [ZLinkFrameworkInternalErrorKind.RelocationFailed]: 39,
-  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40,
-  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: 41
+  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40
 });
 
 const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> =
@@ -158,15 +161,16 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
     ),
     //  Spec 32-framework-error-model:99-103 — a workerQueueFull(18) received in a
     //  remote reply is the target's queue state and maps to Unavailable.
-    [18, ZLinkFrameworkInternalErrorKind.RouteNotConnected]
+    [
+      ServiceWireFrameworkErrorCode.workerQueueFull,
+      ZLinkFrameworkInternalErrorKind.RouteNotConnected
+    ]
   ]);
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
-  ...[1, 6, 8, 9, 10, 11, 14].map((code) => [code, 102] as const),
-  ...[2, 5, 13, 17, 19, 20, 35, 42].map((code) => [code, 105] as const),
-  ...[3, 4, 7, 21, 33, 34].map((code) => [code, 107] as const),
-  ...[12, 16].map((code) => [code, 104] as const),
-  ...[15, 18, 22].map((code) => [code, 106] as const)
+  ...Object.entries(ServiceWireExactTerminalByFailureCode).map(
+    ([code, terminal]) => [Number(code), terminal] as const
+  )
 ]);
 
 const INTERNAL_KIND = new WeakMap<ZLinkFrameworkException, ZLinkFrameworkInternalErrorKind>();
@@ -295,7 +299,10 @@ export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
 } {
   const kind = INTERNAL_KIND.get(error);
   if (kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
-    return { terminalResult: 101, failureCode: 0 };
+    return {
+      terminalResult: RequestResult.TimedOut,
+      failureCode: ServiceWireFrameworkErrorCode.none
+    };
   }
   if (kind === undefined) {
     const failureCode =
@@ -309,7 +316,9 @@ export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
               ? ServiceWireFrameworkErrorCode.actorRouteNotFound
               : error.kind === ZLinkFrameworkErrorKind.Rejected
                 ? ServiceWireFrameworkErrorCode.requestRejected
-                : ServiceWireFrameworkErrorCode.requestFailed;
+                : error.kind === ZLinkFrameworkErrorKind.Unavailable
+                  ? ServiceWireFrameworkErrorCode.routeNotConnected
+                  : ServiceWireFrameworkErrorCode.requestFailed;
     return {
       terminalResult: ServiceWireExactTerminalByFailureCode[failureCode],
       failureCode
@@ -318,7 +327,10 @@ export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
   const failureCode = ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind] + 1;
   const terminalResult = WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode);
   return terminalResult === undefined
-    ? { terminalResult: 105, failureCode: 17 }
+    ? {
+        terminalResult: RequestResult.InternalError,
+        failureCode: ServiceWireFrameworkErrorCode.requestFailed
+      }
     : { terminalResult, failureCode };
 }
 
@@ -337,7 +349,10 @@ export function internalFrameworkErrorKindFromWireReply(
   // ServiceStaleGenerationError is emitted as NotFound with the historical
   // stale-route code, while the same internal code is also used by Conflict
   // replies from the actor route protocol.
-  if (terminalResult === 102 && failureCode === 21) {
+  if (
+    terminalResult === RequestResult.NotFound &&
+    failureCode === ServiceWireFrameworkErrorCode.actorLocationStale
+  ) {
     return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
   }
   const kind = internalFrameworkErrorKindFromWireFailureCode(failureCode);
@@ -346,11 +361,12 @@ export function internalFrameworkErrorKindFromWireReply(
   return expectedTerminalResult === terminalResult ? kind : undefined;
 }
 
-const BOUNDARY_WIRE_TERMINAL_RESULTS = new Set([101, 103, 108, 109, 110, 111, 112, 113]);
+const BOUNDARY_WIRE_TERMINAL_RESULTS = new Set<number>(ServiceWireBoundaryTerminalResults);
 
 /** Checks the terminal and failure-code pair before a transport maps it. */
 export function isCanonicalWireReplyTerminal(terminalResult: number, failureCode: number): boolean {
-  if (terminalResult === 0) return failureCode === 0;
+  if (terminalResult === RequestResult.Ok)
+    return failureCode === ServiceWireFrameworkErrorCode.none;
   if (BOUNDARY_WIRE_TERMINAL_RESULTS.has(terminalResult)) return failureCode === 0;
   return internalFrameworkErrorKindFromWireReply(terminalResult, failureCode) !== undefined;
 }

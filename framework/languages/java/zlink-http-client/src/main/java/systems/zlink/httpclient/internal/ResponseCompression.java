@@ -21,7 +21,41 @@ import java.util.zip.InflaterInputStream;
  */
 public final class ResponseCompression {
 
+    enum Encoding {
+        GZIP("gzip"),
+        DEFLATE("deflate");
+
+        private final String wire;
+
+        Encoding(String wire) {
+            this.wire = wire;
+        }
+
+        static Encoding decode(String wire) {
+            if (GZIP.wire.equalsIgnoreCase(wire)) {
+                return GZIP;
+            }
+            if (DEFLATE.wire.equalsIgnoreCase(wire)) {
+                return DEFLATE;
+            }
+            return null;
+        }
+    }
+
+    static final String ACCEPT_ENCODING = Encoding.GZIP.wire + ", " + Encoding.DEFLATE.wire;
+    private static final int ZLIB_HEADER_BYTES = 2;
+    private static final int COMPRESSION_METHOD_MASK = 0x0f;
+    private static final int DEFLATE_METHOD = 8;
+    private static final int ZLIB_HEADER_CHECK_DIVISOR = 31;
+
     private ResponseCompression() {}
+
+    static byte[] decompress(Encoding encoding, byte[] input, long maxBytes) {
+        return switch (encoding) {
+            case GZIP -> gunzip(input, maxBytes);
+            case DEFLATE -> inflateDeflate(input, maxBytes);
+        };
+    }
 
     public static byte[] gunzip(byte[] input, long maxBytes) {
         try {
@@ -34,9 +68,11 @@ public final class ResponseCompression {
     public static byte[] inflateDeflate(byte[] input, long maxBytes) {
         // Detect a zlib-wrapped stream (method deflate, header a multiple of 31) vs raw deflate.
         boolean zlibWrapped =
-                input.length >= 2
-                        && (input[0] & 0x0f) == 8
-                        && (((input[0] & 0xff) << 8 | (input[1] & 0xff)) % 31) == 0;
+                input.length >= ZLIB_HEADER_BYTES
+                        && (input[0] & COMPRESSION_METHOD_MASK) == DEFLATE_METHOD
+                        && (((input[0] & 0xff) << Byte.SIZE | (input[1] & 0xff))
+                                        % ZLIB_HEADER_CHECK_DIVISOR)
+                                == 0;
         try {
             InflaterInputStream stream =
                     zlibWrapped

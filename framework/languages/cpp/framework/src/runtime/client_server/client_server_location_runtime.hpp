@@ -64,12 +64,12 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<mesh_runtime_observation_t>
     observe (std::string channel_name,
              std::size_t capacity,
-             std::function<void (const observed_status_t<client_server_runtime_event_t> &)>
+             std::function<void (const observed_status_t<client_server_channel_snapshot_t> &)>
                observer) override;
     bool is_ready (std::string channel_name) const override;
 
-    using observer_t =
-      zlink::framework::observation_detail::runtime_observer_state_t<client_server_runtime_event_t>;
+    using observer_t = zlink::framework::observation_detail::runtime_observer_state_t<
+      client_server_channel_snapshot_t>;
 
   private:
     struct server_entry_t;
@@ -93,6 +93,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<void> pump ();
     task_t<worker_lane_snapshot_t> refresh_client_pump_snapshot ();
     task_t<void> publish_snapshot_changes ();
+    client_server_channel_snapshot_t
+    publish_snapshot_locked (client_server_channel_snapshot_t current,
+                             const std::shared_ptr<observer_t> &initial_observer = {}) const;
     task_t<void> dispatch_server (std::shared_ptr<raw_client_server_server_t> owner);
     void stop_servers () noexcept;
     void stop_clients () noexcept;
@@ -100,12 +103,14 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<void> send (const std::string &channel_name,
                        std::string packet_name,
                        std::string content_type,
-                       zlink::message_t message);
+                       zlink::message_t message,
+                       std::map<std::string, std::string> metadata);
     task_t<zlink::message_t> request (const std::string &channel_name,
                                       std::string packet_name,
                                       std::string content_type,
                                       zlink::message_t message,
-                                      std::chrono::milliseconds timeout);
+                                      std::chrono::milliseconds timeout,
+                                      std::map<std::string, std::string> metadata);
     task_t<std::shared_ptr<raw_client_server_client_t>> select_ready (std::string channel_name);
     result_t<client_channel_t *> select_channel_locked (const std::string &channel_name);
     result_t<std::shared_ptr<raw_client_server_client_t>>
@@ -149,9 +154,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<std::string, std::unique_ptr<server_entry_t>> _servers;
     std::map<std::string, std::unique_ptr<client_channel_t>> _clients;
-    std::map<std::string, std::uint64_t> _snapshot_sequences;
-    std::map<std::string, client_server_channel_snapshot_t> _last_snapshots;
-    std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;
+    mutable std::map<std::string, std::uint64_t> _snapshot_sequences;
+    mutable std::map<std::string, client_server_channel_snapshot_t> _last_snapshots;
+    mutable std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;
     std::size_t _server_pump_cursor = 0;
     std::size_t _client_pump_cursor = 0;
     std::vector<server_entry_t *> _server_pump_snapshot;

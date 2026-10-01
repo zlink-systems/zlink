@@ -23,6 +23,10 @@ import java.io.IOException;
  * apart.
  */
 final class ZLinkOwnerLeaseRecordCodec {
+    private static final int RECORD_VERSION = 1;
+    private static final String FIELD_RECORD_VERSION = "recordVersion";
+    private static final String FIELD_OWNER_ID = "ownerId";
+    private static final String FIELD_LEASE_GENERATION = "leaseGeneration";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private ZLinkOwnerLeaseRecordCodec() {}
@@ -33,9 +37,9 @@ final class ZLinkOwnerLeaseRecordCodec {
 
     static byte[] encode(String ownerId, long leaseGeneration) {
         ObjectNode root = JSON.createObjectNode();
-        root.put("recordVersion", 1);
-        root.put("ownerId", ownerId);
-        root.put("leaseGeneration", Long.toUnsignedString(leaseGeneration));
+        root.put(FIELD_RECORD_VERSION, RECORD_VERSION);
+        root.put(FIELD_OWNER_ID, ownerId);
+        root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(leaseGeneration));
         try {
             return JSON.writeValueAsBytes(root);
         } catch (JsonProcessingException error) {
@@ -50,21 +54,22 @@ final class ZLinkOwnerLeaseRecordCodec {
     static Record decode(byte[] bytes) {
         try {
             JsonNode root = JSON.readTree(bytes);
-            if (root.path("recordVersion").asInt(-1) != 1) {
+            if (root.path(FIELD_RECORD_VERSION).asInt(-1) != RECORD_VERSION) {
                 throw new IllegalStateException(
                         "Location Store owner lease record has an" + " unrecognized recordVersion");
             }
-            if (!root.hasNonNull("ownerId")) {
+            if (!root.hasNonNull(FIELD_OWNER_ID)) {
                 throw new IllegalStateException(
                         "Location Store owner lease record is missing" + " ownerId");
             }
             // Full-range unsigned parse: peers may issue 64-bit generation
             // values with bit 63 set, which Long.parseLong rejects.
-            long leaseGeneration = Long.parseUnsignedLong(root.path("leaseGeneration").asText());
+            long leaseGeneration =
+                    Long.parseUnsignedLong(root.path(FIELD_LEASE_GENERATION).asText());
             if (leaseGeneration == 0) {
                 throw new IllegalStateException("Location Store owner lease generation is invalid");
             }
-            return new Record(root.path("ownerId").asText(), leaseGeneration);
+            return new Record(root.path(FIELD_OWNER_ID).asText(), leaseGeneration);
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException(
                     "Location Store owner lease record is invalid", failure);

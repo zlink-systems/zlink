@@ -2,7 +2,10 @@
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
+#include <zlink/framework/contracts/placement.hpp>
+
 #include <algorithm>
+#include <service_wire_constants.hpp>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -13,16 +16,18 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-constexpr std::size_t max_creation_request_bytes = 1024u * 1024u;
+constexpr std::uint64_t stable_hash_offset_basis = 1469598103934665603ull;
+constexpr std::uint64_t stable_hash_prime = 1099511628211ull;
+
 constexpr std::size_t max_restored_timers = 4096;
 constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 
 std::uint64_t stable_hash (const std::string &value)
 {
-    std::uint64_t hash = 1469598103934665603ull;
+    std::uint64_t hash = stable_hash_offset_basis;
     for (const auto byte : value) {
         hash ^= static_cast<unsigned char> (byte);
-        hash *= 1099511628211ull;
+        hash *= stable_hash_prime;
     }
     return hash;
 }
@@ -119,7 +124,7 @@ create_result_t stateful_object_runtime_t::begin_create (const create_request_t 
     return _lane
       .run ([&, this] () -> create_result_t {
           if (!valid_text (request.key) || !valid_text (request.stable_type)
-              || request.creation_request.size () > max_creation_request_bytes) {
+              || request.creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
           if (_maintenance_inventory_active) {
@@ -201,7 +206,7 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
               || !valid_text (reserved.key) || !valid_text (stable_type)
               || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
               || !valid_text (reserved.mesh_name) || !valid_text (reserved.node_id)
-              || creation_request.size () > max_creation_request_bytes) {
+              || creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
           if (_maintenance_inventory_active) {
@@ -2241,7 +2246,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
 
 bool stateful_object_runtime_t::valid_text (const std::string &value)
 {
-    return !value.empty () && value.size () <= 255;
+    return !value.empty () && value.size () <= zlink::framework::detail::identifier_max_bytes;
 }
 
 bool stateful_object_runtime_t::same_exact_ref (const object_ref_t &left, const object_ref_t &right)

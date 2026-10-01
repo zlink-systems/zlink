@@ -1,43 +1,57 @@
-import { ZLinkListenerRecords } from '../foundation/listener-records';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkRuntimeState,
   type RoutingId,
   type ZLinkClientServerServerDescriptor,
   type ZLinkFanoutPublisherDescriptor
 } from '../../contracts';
-import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
-import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import type { Message } from '../../contracts/Common/Message';
 import {
-  buildAdvertisedEndpoint,
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration
-} from '../configuration';
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
+import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
+import { createAbortError, throwIfAborted } from '../abort';
 import type {
   ZLinkBackendContext,
   ZLinkBackendDealerSocket,
   ZLinkBackendPublisherSocket,
-  ZLinkBackendRouterSocket,
   ZLinkBackendReadablePoller,
+  ZLinkBackendRouterSocket,
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent,
   ZLinkBackendSubscriberSocket,
   ZLinkChannelBackendAdapter,
   ZLinkMonitoringBackendAdapter
 } from '../backend/contracts';
-import { createAbortError, throwIfAborted } from '../abort';
-import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
-import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { Message } from '../../contracts/Common/Message';
-import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import {
+  buildAdvertisedEndpoint,
+  ZLinkConfigurationException,
+  type ZLinkFrameworkRegistration
+} from '../configuration';
+import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
+import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import {
+  DEFAULT_SERVICE_PEER_TIMEOUT_MS,
+  DEFAULT_SERVICE_PROBE_INTERVAL_MS
+} from '../foundation/service-liveness-registry';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import type { ApplicationJobQueue } from '../host/application-job-queue';
+import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
+import {
+  ClientServerRejectReason,
   decodeClientServerControl,
   encodeClientServerAdmit,
   encodeClientServerHello,
@@ -46,6 +60,7 @@ import {
   encodeClientServerReject,
   encodeClientServerUpdate,
   isClientServerControlFrame,
+  normalizeClientServerMessageLimit,
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
 import {
@@ -53,13 +68,12 @@ import {
   FANOUT_LIVENESS_TOPIC,
   inspectFanoutInbound
 } from './fanout-service-wire';
-import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
-import type { ApplicationJobQueue } from '../host/application-job-queue';
-import { isBackendRequestTimeoutError } from '../backend/runtime-values';
+import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
 
 const MAX_LIFECYCLE_GENERATION = 0x7fff_ffff_ffff_ffffn;
-const CLIENT_SERVER_PROBE_INTERVAL_MS = 5_000;
-const CLIENT_SERVER_PEER_DEADLINE_MS = 15_000;
+const CLIENT_SERVER_PROBE_INTERVAL_MS = DEFAULT_SERVICE_PROBE_INTERVAL_MS;
+const CLIENT_SERVER_PEER_DEADLINE_MS = DEFAULT_SERVICE_PEER_TIMEOUT_MS;
+const CLIENT_SERVER_LIVENESS_TICK_MS = 100;
 const DEFAULT_SEND_TIMEOUT_MS = 1_000;
 
 export interface ZLinkClientServerServerSocketIdentity {
@@ -160,7 +174,7 @@ export class ZLinkChannelSocketRegistry {
   private nextClientServerProbeId = 1n;
   private readonly clientServerMonitorHandlers = new Map<
     string,
-    Set<(event: ZLinkBackendSocketMonitorEvent) => void>
+    Set<(event?: ZLinkBackendSocketMonitorEvent) => void>
   >();
   private readonly fanoutMonitorHandlers = new Map<
     string,
@@ -294,7 +308,7 @@ export class ZLinkChannelSocketRegistry {
     };
     this.clientServerIdentities.set(channelName, identity);
     router.setRoutingId(identity.serverRid);
-    const publicWeight = channel.server.weight ?? 100;
+    const publicWeight = channel.server.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
     this.clientServerPublicWeights.set(channelName, publicWeight);
     router.peerWeight = rawAvailabilityWeight(publicWeight);
     applySocketConfig(router, channel.server);
@@ -365,7 +379,7 @@ export class ZLinkChannelSocketRegistry {
 
   clientServerServerWeight(channelName: string): number {
     this.channelRouter(channelName);
-    return this.clientServerPublicWeights.get(channelName) ?? 100;
+    return this.clientServerPublicWeights.get(channelName) ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
   }
 
   setClientServerServerWeight(channelName: string, weight: number): void {
@@ -517,6 +531,7 @@ export class ZLinkChannelSocketRegistry {
         });
       }
     }
+    this.notifyClientServerTopology(current.channelName);
     if (current.aliases.size > 0) return;
     await this.disposeClientServerPhysical(connectionId, current);
   }
@@ -555,6 +570,7 @@ export class ZLinkChannelSocketRegistry {
         connection.readyConnectionId
       );
       if (admitted) connection.admittedDescriptor = descriptor;
+      this.notifyClientServerTopology(descriptor.channelName);
       return admitted;
     }
     const duplicateId = [...this.clientServerReadyIdentities].find(
@@ -592,6 +608,7 @@ export class ZLinkChannelSocketRegistry {
       connection.readyConnectionId = connectionId;
       connection.admittedDescriptor = descriptor;
     }
+    this.notifyClientServerTopology(descriptor.channelName);
     return admitted;
   }
 
@@ -615,6 +632,7 @@ export class ZLinkChannelSocketRegistry {
         connection.outstandingProbeId = undefined;
       }
     }
+    this.notifyClientServerTopology(channelName);
     return removed;
   }
 
@@ -734,26 +752,41 @@ export class ZLinkChannelSocketRegistry {
     }
   }
 
-  clientServerMonitoringSource(channelName: string): ZLinkBackendSocketMonitor {
-    if (this.registration.channels.get(channelName)?.client === undefined) {
-      throw new ZLinkConfigurationException(`Channel client '${channelName}' is not registered.`);
+  clientServerMonitoringSource(channelName: string): ZLinkBackendSocketMonitor & {
+    onChange(handler: () => void): void;
+  } {
+    const channel = this.registration.channels.get(channelName);
+    if (channel?.client === undefined && channel?.server === undefined) {
+      throw new ZLinkConfigurationException(
+        `ClientServer channel '${channelName}' is not registered.`
+      );
     }
     let disposed = false;
-    let handler: ((event: ZLinkBackendSocketMonitorEvent) => void) | undefined;
+    let handler: ((event?: ZLinkBackendSocketMonitorEvent) => void) | undefined;
+    const register = (next: (event?: ZLinkBackendSocketMonitorEvent) => void): void => {
+      if (disposed) return;
+      if (handler !== undefined) {
+        this.clientServerMonitorHandlers.get(channelName)?.delete(handler);
+      }
+      handler = next;
+      let handlers = this.clientServerMonitorHandlers.get(channelName);
+      if (handlers === undefined) {
+        handlers = new Set();
+        this.clientServerMonitorHandlers.set(channelName, handlers);
+      }
+      handlers.add(next);
+    };
     return {
       nativeInstance: {},
       onEvent: (next) => {
-        if (disposed) return;
-        if (handler !== undefined) {
-          this.clientServerMonitorHandlers.get(channelName)?.delete(handler);
-        }
-        handler = next;
-        let handlers = this.clientServerMonitorHandlers.get(channelName);
-        if (handlers === undefined) {
-          handlers = new Set();
-          this.clientServerMonitorHandlers.set(channelName, handlers);
-        }
-        handlers.add(next);
+        register((event) => {
+          if (event !== undefined) next(event);
+        });
+      },
+      onChange: (next) => {
+        register((event) => {
+          if (event === undefined) next();
+        });
       },
       drain: () => 0,
       dispose: async () => {
@@ -840,6 +873,11 @@ export class ZLinkChannelSocketRegistry {
       this.clientServerServerDescriptors.set(channelName, descriptor);
       this.pushClientServerDescriptorUpdate(channelName, descriptor);
     }
+    this.notifyClientServerTopology(channelName);
+  }
+
+  private notifyClientServerTopology(channelName: string): void {
+    for (const handler of this.clientServerMonitorHandlers.get(channelName) ?? []) handler();
   }
 
   tryHandleClientServerControl(
@@ -887,7 +925,7 @@ export class ZLinkChannelSocketRegistry {
         received.parts.length !== 1 ||
         received.replyToken === null
       ) {
-        reply = encodeClientServerReject(1);
+        reply = encodeClientServerReject(ClientServerRejectReason.ProtocolVersionUnsupported);
       } else {
         const descriptor = this.clientServerServerDescriptors.get(channelName);
         if (
@@ -895,10 +933,10 @@ export class ZLinkChannelSocketRegistry {
           record.hello.channelName !== channelName ||
           record.hello.securityIdentity !== descriptor.securityIdentity
         ) {
-          reply = encodeClientServerReject(3);
+          reply = encodeClientServerReject(ClientServerRejectReason.AdmissionMismatch);
         } else {
           const normalizedEffectiveMaxMessageBytes = Math.min(
-            normalizedMessageLimit(router.maxMessageSize),
+            normalizeClientServerMessageLimit(router.maxMessageSize),
             record.hello.normalizedEffectiveMaxMessageBytes
           );
           reply = encodeClientServerAdmit(descriptor, normalizedEffectiveMaxMessageBytes);
@@ -1174,7 +1212,7 @@ export class ZLinkChannelSocketRegistry {
     };
   }
 
-  private notifyFanoutTopology(channelName: string): void {
+  notifyFanoutTopology(channelName: string): void {
     for (const handler of this.fanoutTopologyHandlers.get(channelName) ?? []) {
       try {
         handler();
@@ -1435,7 +1473,10 @@ export class ZLinkChannelSocketRegistry {
 
   private ensureClientServerLivenessTimer(): void {
     if (this.clientServerLivenessTimer !== undefined) return;
-    this.clientServerLivenessTimer = setInterval(() => this.tickClientServerLiveness(), 100);
+    this.clientServerLivenessTimer = setInterval(
+      () => this.tickClientServerLiveness(),
+      CLIENT_SERVER_LIVENESS_TICK_MS
+    );
     this.clientServerLivenessTimer.unref();
   }
 
@@ -1461,6 +1502,7 @@ export class ZLinkChannelSocketRegistry {
       connection.nextProbeAt = undefined;
       connection.outstandingProbeId = undefined;
     }
+    this.notifyClientServerTopology(identity.channelName);
   }
 
   private requestClientServerLiveness(
@@ -1608,7 +1650,7 @@ export class ZLinkChannelSocketRegistry {
 
   private allocateClientServerProbeId(): bigint {
     const result = this.nextClientServerProbeId;
-    this.nextClientServerProbeId = result === 0xffff_ffff_ffff_ffffn ? 1n : result + 1n;
+    this.nextClientServerProbeId = result === UINT64_MAX ? 1n : result + 1n;
     return result;
   }
 
@@ -1674,7 +1716,7 @@ export class ZLinkChannelSocketRegistry {
     router.setRoutingId(
       routeChannel.routingId ?? `${routeChannel.routingIdPrefix ?? routerChannelId}-${randomUUID()}`
     );
-    const publicWeight = routeChannel.weight ?? 100;
+    const publicWeight = routeChannel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
     this.routeMeshPublicWeights.set(routerChannelId, publicWeight);
     router.peerWeight = rawAvailabilityWeight(publicWeight);
     applySocketConfig(router, routeChannel);
@@ -1698,7 +1740,7 @@ export class ZLinkChannelSocketRegistry {
 
   routeMeshWeight(routerChannelId: string): number {
     this.routeRouter(routerChannelId);
-    return this.routeMeshPublicWeights.get(routerChannelId) ?? 100;
+    return this.routeMeshPublicWeights.get(routerChannelId) ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
   }
 
   setRouteMeshWeight(routerChannelId: string, weight: number): void {
@@ -1793,7 +1835,7 @@ async function requestClientServerAdmission(
     encodeClientServerHello({
       channelName,
       securityIdentity,
-      normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
+      normalizedEffectiveMaxMessageBytes: normalizeClientServerMessageLimit(dealer.maxMessageSize)
     })
   );
   try {
@@ -1871,9 +1913,9 @@ function setFanoutSubscriptions(
 
 function deriveRoutingId(baseRoutingId: string, suffix: string): string {
   const derived = `${baseRoutingId}\0${suffix}`;
-  if (Buffer.byteLength(derived, 'utf8') > 255) {
+  if (Buffer.byteLength(derived, 'utf8') > ZLINK_MAX_ROUTING_ID_BYTES) {
     throw new ZLinkConfigurationException(
-      `Derived routing id with suffix '${suffix}' exceeds the 255 byte limit.`
+      `Derived routing id with suffix '${suffix}' exceeds the ${ZLINK_MAX_ROUTING_ID_BYTES} byte limit.`
     );
   }
   return derived;
@@ -1908,13 +1950,11 @@ function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undef
   return result;
 }
 
-function normalizedMessageLimit(value: number): number {
-  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 0xffff_ffff) : 0x7fff_ffff;
-}
-
 function requirePublicWeight(weight: number): void {
-  if (!Number.isInteger(weight) || weight < 0 || weight > 10_000) {
-    throw new ZLinkConfigurationException('Weight must be an integer in 0..10000.');
+  if (!isValidPublicWeight(weight)) {
+    throw new ZLinkConfigurationException(
+      `Weight must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
 }
 

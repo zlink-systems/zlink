@@ -27,41 +27,73 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, AutoCloseable {
+    private static final int MAXIMUM_REFERENCE_BYTES = 4096;
     private static final int MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
+
+    private enum ScriptToken {
+        ALREADY("already"),
+        COLLISION("collision"),
+        STORED("stored"),
+        MISSING("missing"),
+        FOUND("found"),
+        RENEWED("renewed");
+
+        private static final java.util.Map<String, ScriptToken> BY_WIRE =
+                java.util.Arrays.stream(values())
+                        .collect(
+                                java.util.stream.Collectors.toUnmodifiableMap(
+                                        token -> token.wire, token -> token));
+        private final String wire;
+
+        ScriptToken(String wire) {
+            this.wire = wire;
+        }
+
+        static ScriptToken decode(Object value) {
+            return BY_WIRE.get(string(value));
+        }
+    }
+
     private static final String PUT =
-            """
+            ZLinkRedisLocationConnection.script(
+                    """
             if redis.replicate_commands then redis.replicate_commands() end
             local time = redis.call('TIME')
             local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
             local current = redis.call('GET', KEYS[1])
             if current == ARGV[1] then
                 local ttl = redis.call('PTTL', KEYS[1])
-                return {'already', nowMs, ttl}
+                return {'${ALREADY}', nowMs, ttl}
             elseif current then
-                return {'collision', nowMs}
+                return {'${COLLISION}', nowMs}
             end
             redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
-            return {'stored', nowMs, tonumber(ARGV[2])}
-            """;
+            return {'${STORED}', nowMs, tonumber(ARGV[2])}
+            """,
+                    ScriptToken.BY_WIRE);
     private static final String READ =
-            """
+            ZLinkRedisLocationConnection.script(
+                    """
             local time = redis.call('TIME')
             local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
             local value = redis.call('GET', KEYS[1])
-            if not value then return {'missing', nowMs} end
-            return {'found', nowMs, redis.call('PTTL', KEYS[1]), value}
-            """;
+            if not value then return {'${MISSING}', nowMs} end
+            return {'${FOUND}', nowMs, redis.call('PTTL', KEYS[1]), value}
+            """,
+                    ScriptToken.BY_WIRE);
     private static final String RENEW =
-            """
+            ZLinkRedisLocationConnection.script(
+                    """
             if redis.replicate_commands then redis.replicate_commands() end
             local time = redis.call('TIME')
             local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
             if redis.call('EXISTS', KEYS[1]) == 0 then
-                return {'missing', nowMs}
+                return {'${MISSING}', nowMs}
             end
             redis.call('PEXPIRE', KEYS[1], ARGV[1])
-            return {'renewed', nowMs}
-            """;
+            return {'${RENEWED}', nowMs}
+            """,
+                    ScriptToken.BY_WIRE);
 
     private final ZLinkRedisLocationConnection<byte[]> connection;
     private final String keyPrefix;
@@ -97,13 +129,13 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
                                         bytes(Long.toString(retentionMs))))
                 .thenApply(
                         raw -> {
-                            String status = string(raw.getFirst());
+                            ScriptToken status = ScriptToken.decode(raw.getFirst());
                             Instant storeNow = Instant.ofEpochMilli(number(raw.get(1)));
-                            if ("collision".equals(status)) {
+                            if (status == ScriptToken.COLLISION) {
                                 return new ZLinkBlobConflict(storeNow);
                             }
                             Instant expiresAt = storeNow.plusMillis(number(raw.get(2)));
-                            return "already".equals(status)
+                            return status == ScriptToken.ALREADY
                                     ? new ZLinkBlobAlreadyStored(expiresAt, storeNow)
                                     : new ZLinkBlobStored(expiresAt, storeNow);
                         });
@@ -127,7 +159,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
                 .thenApply(
                         raw -> {
                             Instant now = Instant.ofEpochMilli(number(raw.get(1)));
-                            if ("missing".equals(string(raw.getFirst()))) {
+                            if (ScriptToken.decode(raw.getFirst()) == ScriptToken.MISSING) {
                                 return new ZLinkBlobMissing(now);
                             }
                             return new ZLinkBlobFound(
@@ -155,7 +187,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
                 .thenApply(
                         raw -> {
                             Instant storeNow = Instant.ofEpochMilli(number(raw.get(1)));
-                            return "missing".equals(string(raw.getFirst()))
+                            return ScriptToken.decode(raw.getFirst()) == ScriptToken.MISSING
                                     ? new ZLinkBlobRenewMissing(storeNow)
                                     : new ZLinkBlobRenewed(
                                             storeNow.plusMillis(retentionMs), storeNow);
@@ -198,7 +230,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
                 Objects.requireNonNull(
                         Objects.requireNonNull(reference, "reference").value(), "reference.value");
         int bytes = value.getBytes(StandardCharsets.UTF_8).length;
-        if (bytes < 1 || bytes > 4096 || value.indexOf('\0') >= 0) {
+        if (bytes < 1 || bytes > MAXIMUM_REFERENCE_BYTES || value.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("invalid relocation reference");
         }
         return value;

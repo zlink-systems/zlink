@@ -1,4 +1,12 @@
-import { ZLinkFrameworkRuntimeState } from '../../contracts';
+import { ZLinkFrameworkRuntimeState, ZLinkTopologyState } from '../../contracts';
+
+export function runtimeObservationIsTerminal(state: ZLinkFrameworkRuntimeState): boolean {
+  return state === ZLinkFrameworkRuntimeState.Stopped;
+}
+
+export function topologyObservationIsTerminal(state: ZLinkTopologyState): boolean {
+  return state === ZLinkTopologyState.Stopped || state === ZLinkTopologyState.Failed;
+}
 
 export type MaintenanceAdmissionState =
   'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';

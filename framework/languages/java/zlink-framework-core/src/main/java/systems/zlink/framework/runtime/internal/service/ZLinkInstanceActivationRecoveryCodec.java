@@ -46,7 +46,8 @@ public final class ZLinkInstanceActivationRecoveryCodec {
         long sourceNodeGeneration = body.nonzeroU64();
         Optional<String> sourceSpotId = body.optionalText8();
         int operationKind = body.u8();
-        if (operationKind != 1 && operationKind != 2) {
+        if (operationKind != ServiceWireCodec.InstanceOperationKind.SEND.wire
+                && operationKind != ServiceWireCodec.InstanceOperationKind.REQUEST.wire) {
             throw invalid();
         }
         long operationHigh = body.u64();
@@ -54,7 +55,10 @@ public final class ZLinkInstanceActivationRecoveryCodec {
         if (operationHigh == 0 && operationLow == 0) {
             throw invalid();
         }
-        Long replyRouteId = operationKind == 2 ? body.nonzeroU64() : null;
+        Long replyRouteId =
+                operationKind == ServiceWireCodec.InstanceOperationKind.REQUEST.wire
+                        ? body.nonzeroU64()
+                        : null;
         long deadlineUnixMs = body.nonzeroU64();
         int hasMetadata = body.u8();
         byte[] metadata =
@@ -78,7 +82,7 @@ public final class ZLinkInstanceActivationRecoveryCodec {
                 sourceNodeRid,
                 sourceNodeGeneration,
                 sourceSpotId,
-                operationKind == 2,
+                operationKind == ServiceWireCodec.InstanceOperationKind.REQUEST.wire,
                 operationHigh,
                 operationLow,
                 replyRouteId,

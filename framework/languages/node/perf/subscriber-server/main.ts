@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_FANOUT_RUNTIME } from '@zlink-systems/nestjs';
 import type { ZLinkFanoutHandler, ZLinkFanoutRuntime, ZLinkPublishMessageContext } from '@zlink-systems/framework';
+import { PerfClock } from '../shared/clock';
 import { PerfPublishEvent } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
 import { ObjectsReadiness, readConfig, runRole } from '../server-support/server-application';
@@ -17,9 +18,10 @@ class PerfFanoutHandler implements ZLinkFanoutHandler<PerfPublishEvent> {
   constructor(@Inject(Measurement) private readonly measurement: Measurement, @Inject(FanoutReceipts) private readonly receipts: FanoutReceipts) {}
 
   async handle(message: PerfPublishEvent, _context: ZLinkPublishMessageContext): Promise<void> {
+    const receivedTicks = PerfClock.now();
     this.measurement.handlerEnter();
     try {
-      this.receipts.record(message);
+      this.receipts.record(message, receivedTicks);
     } catch (error) {
       this.measurement.recordDiagnostic(error);
       throw error;

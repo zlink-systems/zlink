@@ -14,9 +14,13 @@ import java.util.Map;
 /** Fluent builder for {@link ZLinkHttpClient}. Mirrors the C++ {@code client_builder_t}. */
 public final class ZLinkHttpClientBuilder {
 
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(3000);
+    private static final long DEFAULT_MAX_RESPONSE_BODY_SIZE = 16L * 1024 * 1024;
+    private static final int DEFAULT_MAX_REDIRECTS = 5;
+
     private String baseUrl = "";
-    private Duration timeout = Duration.ofMillis(3000);
-    private long maxResponseBodySize = 16L * 1024 * 1024;
+    private Duration timeout = DEFAULT_TIMEOUT;
+    private long maxResponseBodySize = DEFAULT_MAX_RESPONSE_BODY_SIZE;
     private final Map<String, String> headers = new LinkedHashMap<>();
     private String trustCertificateFile;
     private HttpClientOptions.ClientCertificate clientCertificate;
@@ -46,13 +50,15 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder basicAuth(String user, String password) {
         HttpClientText.requireNonBlank(user, "HTTP client basic auth user is required");
-        this.headers.put("authorization", HttpClientText.basicAuthorization(user, password));
+        this.headers.put(
+                HttpClientText.Header.AUTHORIZATION.wire(),
+                HttpClientText.basicAuthorization(user, password));
         return this;
     }
 
     public ZLinkHttpClientBuilder bearerToken(String token) {
         HttpClientText.requireNonBlank(token, "HTTP client bearer token is required");
-        this.headers.put("authorization", "Bearer " + token);
+        this.headers.put(HttpClientText.Header.AUTHORIZATION.wire(), "Bearer " + token);
         return this;
     }
 
@@ -79,7 +85,7 @@ public final class ZLinkHttpClientBuilder {
     }
 
     public ZLinkHttpClientBuilder followRedirects() {
-        return followRedirects(5);
+        return followRedirects(DEFAULT_MAX_REDIRECTS);
     }
 
     public ZLinkHttpClientBuilder followRedirects(int maxRedirects) {
@@ -106,7 +112,7 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder proxy(String url) {
         HttpClientText.requireNonBlank(url, "HTTP client proxy url is required");
-        if (!url.startsWith("http://")) {
+        if (!HttpClientText.hasHttpPrefix(url)) {
             throw HttpClientErrors.protocol("HTTP client proxy url must start with http://");
         }
         this.proxy = url;
@@ -129,7 +135,7 @@ public final class ZLinkHttpClientBuilder {
         HttpClientText.requireNonBlank(baseUrl, "HTTP client base_url is required");
         HttpClientText.requirePositiveTimeout(timeout);
         String lower = baseUrl.toLowerCase(Locale.ROOT);
-        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+        if (!HttpClientText.hasSupportedSchemePrefix(lower)) {
             throw HttpClientErrors.protocol(
                     "HTTP client base_url must start with http:// or https://");
         }

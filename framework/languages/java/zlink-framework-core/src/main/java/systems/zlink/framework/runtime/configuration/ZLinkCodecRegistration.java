@@ -20,7 +20,8 @@ import java.util.function.Predicate;
 
 public final class ZLinkCodecRegistration
         implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
-    private static final String DEFAULT_JSON_CONTENT_TYPE = "application/json";
+    private static final String DEFAULT_JSON_CONTENT_TYPE =
+            systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile.CONTENT_TYPE;
     private static final String LEGACY_JSON_CONTENT_TYPE = "application/zlink-framework-json-v1";
     private static final int MAX_TYPE_CACHE_ENTRIES = 1024;
     private volatile Map<String, RegisteredSerializer> serializers = new LinkedHashMap<>();

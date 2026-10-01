@@ -301,9 +301,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     continue;
                 }
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"relocation_preflight_blocker mode={mode} "
-                        + $"target_version={targetApplicationVersion} "
-                        + $"reason={targetBlocker}"
+                    $"relocation_preflight_blocker mode={mode} target_version={targetApplicationVersion} reason={targetBlocker}"
                 );
                 if (targetBlocker != ZLinkFrameworkRelocationReason.TargetUnavailable)
                     return targetBlocker;
@@ -336,9 +334,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_preflight_cancelled mode={mode} "
-                    + $"target_version={targetApplicationVersion} "
-                    + $"stage={preflightStage}"
+                $"relocation_preflight_cancelled mode={mode} target_version={targetApplicationVersion} stage={preflightStage}"
             );
             throw;
         }
@@ -584,10 +580,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         )
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"handoff_root_mismatch actor={request.ActorId} handoff={request.HandoffId} "
-                    + $"request_ref={request.RelocationReference} request_crc={request.RelocationChecksumCrc32c} "
-                    + $"current_ref={currentPublication.Reference} current_crc={currentPublication.ChecksumCrc32c} "
-                    + $"current_owner={current.Snapshot.OwnerId} current_store={current.Snapshot.StoreVersion}"
+                $"handoff_root_mismatch actor={request.ActorId} handoff={request.HandoffId} request_ref={request.RelocationReference} request_crc={request.RelocationChecksumCrc32c} current_ref={currentPublication.Reference} current_crc={currentPublication.ChecksumCrc32c} current_owner={current.Snapshot.OwnerId} current_store={current.Snapshot.StoreVersion}"
             );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DataLost,
@@ -806,7 +799,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             //  The reply carries only "rejected", so without this the commit
             //  failure that caused it never reaches any log.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"handoff_commit_failed actor={request.ActorId} spot={spotId} " + $"{commitFailure}"
+                $"handoff_commit_failed actor={request.ActorId} spot={spotId} {commitFailure}"
             );
             var rejected = CreateRejectedHandoffReply(request.ActorId);
             await _actorHandoffAdmissions
@@ -991,15 +984,13 @@ internal sealed partial class ZLinkFrameworkRuntime
             var submit = GetMeshNodeRuntime(meshName)
                 .Node.SendToNode(RoutingId.From(request.SourceNodeRid), parts, SendFlags.DontWait);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"source_leave_submit actor={request.ActorId} "
-                    + $"handoff={request.HandoffId} submit={submit}"
+                $"source_leave_submit actor={request.ActorId} handoff={request.HandoffId} submit={submit}"
             );
         }
         catch (Exception error)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"source_leave_submit_failed actor={request.ActorId} "
-                    + $"handoff={request.HandoffId} error={error.GetType().Name}"
+                $"source_leave_submit_failed actor={request.ActorId} handoff={request.HandoffId} error={error.GetType().Name}"
             );
         }
         finally
@@ -1497,9 +1488,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 request.HandoffId
             );
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"handoff_recovery_replay_path actor={request.ActorId} "
-                    + $"handoff={request.HandoffId} canonical={canonicalMaintenance} "
-                    + $"frames={request.Frames.Count}"
+                $"handoff_recovery_replay_path actor={request.ActorId} handoff={request.HandoffId} canonical={canonicalMaintenance} frames={request.Frames.Count}"
             );
             if (!canonicalMaintenance)
                 actorState.Handoff.PrepareImportedReplay(request.Frames);
@@ -1673,8 +1662,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         var commit = await CommitSessionRouteAsync(actorState, handoffId, cancellationToken)
             .ConfigureAwait(false);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"relocation_session_route commit={(commit ? "present" : "none")} "
-                + $"actor={actorState.ActorId} handoff={handoffId}"
+            $"relocation_session_route commit={(commit ? "present" : "none")} actor={actorState.ActorId} handoff={handoffId}"
         );
     }
 
@@ -1771,8 +1759,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  target even when the source dies. Both the duplicate-watch skip and
         //  a detached task that never runs look identical from outside.
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_scheduled aggregate={envelope.AggregateId} "
-                + $"already_watched={_publishedActorRecoveryWatches.ContainsKey(envelope.AggregateId)}"
+            $"recovery_scheduled aggregate={envelope.AggregateId} already_watched={_publishedActorRecoveryWatches.ContainsKey(envelope.AggregateId)}"
         );
         if (!_publishedActorRecoveryWatches.TryAdd(envelope.AggregateId, 0))
             return;
@@ -1832,9 +1819,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 },
                                 exception =>
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        "published Actor relocation recovery "
-                                            + $"id={envelope.AggregateId:N}: "
-                                            + exception.Message
+                                        $"published Actor relocation recovery id={envelope.AggregateId:N}: {exception.Message}"
                                     ),
                                 token,
                                 static exception =>
@@ -2365,10 +2350,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         else
                             result = ZLinkSpotActorJoinResult.Reject();
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"admission_decision actor={request.ActorId} spot={spotId} "
-                                + $"accepted={result.Accepted} "
-                                + $"user_spot={target.UserSpot is not null} "
-                                + $"entry_spot={target.EntrySpot is not null}"
+                            $"admission_decision actor={request.ActorId} spot={spotId} accepted={result.Accepted} user_spot={target.UserSpot is not null} entry_spot={target.EntrySpot is not null}"
                         );
                         if (!result.Accepted)
                             return ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
@@ -3136,8 +3118,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         }
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bound_session_replaced_candidate actor={request.ActorId} "
-                + $"current={(priorBindingForNotification is null ? "none" : priorBindingForNotification.Value.SessionRid.ToHex())}"
+            $"bound_session_replaced_candidate actor={request.ActorId} current={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(priorBindingForNotification?.SessionRid.ToHex())}"
         );
         var replacement = _actorBoundSessionCoordinator.BeginActorSessionReplacement(
             request.ActorId,
@@ -3224,9 +3205,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         )
                     );
                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"bound_session_replaced_schedule actor={request.ActorId} "
-                            + $"source={targetNodeRid} target={previousSessionNodeRid} "
-                            + $"session={previous.SessionRid} binding={previous.BindingGeneration}"
+                        $"bound_session_replaced_schedule actor={request.ActorId} source={targetNodeRid} target={previousSessionNodeRid} session={previous.SessionRid} binding={previous.BindingGeneration}"
                     );
                     ScheduleBoundSessionReplacedNotification(
                         node,
@@ -3730,14 +3709,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         var state = GetOrCreateActorState(actorId);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_commit_check actor={actorId} "
-                + $"committed_generation={committedActor.ObjectGeneration} "
-                + $"committed_node={committedActor.NodeRid} "
-                + $"actor_present={state.Actor is not null} "
-                + $"native_generation={state.NativeActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"native_node={state.NativeActorRef?.NodeRid.ToString() ?? "<none>"} "
-                + $"retired_generation={state.RetiredLocalActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"blocked={state.IsDispatchBlocked}"
+            $"actor_state_commit_check actor={actorId} committed_generation={committedActor.ObjectGeneration} committed_node={committedActor.NodeRid} actor_present={state.Actor is not null} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.NativeActorRef?.Generation)} native_node={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.NativeActorRef?.NodeRid)} retired_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.RetiredLocalActorRef?.Generation)} blocked={state.IsDispatchBlocked}"
         );
         if (
             state.Actor is null
@@ -4160,9 +4132,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  exception never reaches the original requester: the frame just
         //  disappears and the caller waits out its deadline.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_frame_dispatch actor={actorId} "
-                + $"node_gen={targetNode.MeshStatus().LifecycleGeneration}/{targetNodeGeneration} "
-                + $"authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
+            $"remote_frame_dispatch actor={actorId} node_gen={targetNode.MeshStatus().LifecycleGeneration}/{targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
         );
         var hasBoundSessionFence = ZLinkActorBoundSessionHandoffMetadata.TryDecode(
             applicationMetadata,
@@ -4331,9 +4301,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 boundSessionFence.SessionSequence
             );
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"session_route_watermark actor={actorId} "
-                    + $"session={sourceSessionRid} "
-                    + $"accepted={boundSessionFence.SessionSequence}"
+                $"session_route_watermark actor={actorId} session={sourceSessionRid} accepted={boundSessionFence.SessionSequence}"
             );
         }
         var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(this, parts);
@@ -4676,8 +4644,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
         TraceRejectedSessionPush(identity, delivery);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"session_push_delivery_result actor={identity.ActorId} "
-                + $"result={delivery} source_node={sourceNodeRid}"
+            $"session_push_delivery_result actor={identity.ActorId} result={delivery} source_node={sourceNodeRid}"
         );
     }
 
@@ -4692,8 +4659,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
         TraceRejectedSessionPush(identity, delivery);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"session_push_one_way_admission actor={identity.ActorId} "
-                + $"result={delivery} source_node={sourceNodeRid}"
+            $"session_push_one_way_admission actor={identity.ActorId} result={delivery} source_node={sourceNodeRid}"
         );
     }
 
@@ -4746,8 +4712,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 SendFlags.DontWait
             );
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"session_push_relay_submit actor={actorId} source_node={relay.ActorNodeRid} "
-                    + $"target_node={relay.SessionNodeRid} submit={submit} bytes={frame.Length}"
+                $"session_push_relay_submit actor={actorId} source_node={relay.ActorNodeRid} target_node={relay.SessionNodeRid} submit={submit} bytes={frame.Length}"
             );
             return submit == SubmitResult.Ok;
         }
@@ -4771,8 +4736,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .NodeRuntime.SendToNodeAsync(relay.SessionNodeRid, relay.Parts, cancellationToken)
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"session_push_relay_async actor={actorId} source_node={relay.ActorNodeRid} "
-                    + $"target_node={relay.SessionNodeRid} submit={submit.Status} bytes={frame.Length}"
+                $"session_push_relay_async actor={actorId} source_node={relay.ActorNodeRid} target_node={relay.SessionNodeRid} submit={submit.Status} bytes={frame.Length}"
             );
             return submit;
         }
@@ -5098,9 +5062,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         var replyNodeRid = capabilityResolved ? preservedReplyNodeRid : sourceNodeRid;
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_reply_route actor={actor.ActorId} request_id={requestId} "
-                + $"actor_node={nodeRuntime.Node.RoutingId} reply_node={replyNodeRid} "
-                + $"source_node={sourceNodeRid} capability_resolved={capabilityResolved}"
+            $"actor_reply_route actor={actor.ActorId} request_id={requestId} actor_node={nodeRuntime.Node.RoutingId} reply_node={replyNodeRid} source_node={sourceNodeRid} capability_resolved={capabilityResolved}"
         );
 
         if (!replyNodeRid.IsEmpty && !replyNodeRid.Equals(nodeRuntime.Node.RoutingId))
@@ -5194,8 +5156,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     );
                 }
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_reply_relay_submitted actor={actor.ActorId} request_id={requestId} "
-                        + $"target_node={replyNodeRid} attempts=1"
+                    $"actor_reply_relay_submitted actor={actor.ActorId} request_id={requestId} target_node={replyNodeRid} attempts=1"
                 );
             }
             finally
@@ -5272,9 +5233,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_actor_reply_received actor={actorId} request_id={requestId} "
-                + $"source_node={sourceNodeRid} responder_node={responderNodeRid} "
-                + $"flags={flags} capability={(!string.IsNullOrWhiteSpace(replyCapability))}"
+            $"remote_actor_reply_received actor={actorId} request_id={requestId} source_node={sourceNodeRid} responder_node={responderNodeRid} flags={flags} capability={!string.IsNullOrWhiteSpace(replyCapability)}"
         );
         if (
             await _actorMessageFollower

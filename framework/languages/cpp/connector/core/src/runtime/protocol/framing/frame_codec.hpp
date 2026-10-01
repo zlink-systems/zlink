@@ -13,6 +13,8 @@ namespace zlink::stream_connector::detail
 class frame_codec_t
 {
   public:
+    static constexpr std::size_t prefix_size = sizeof (std::uint16_t) + sizeof (std::uint32_t);
+
     static bool validate_receive_frame_size (std::size_t header_size,
                                              std::size_t payload_size,
                                              const connector_options_t &options);

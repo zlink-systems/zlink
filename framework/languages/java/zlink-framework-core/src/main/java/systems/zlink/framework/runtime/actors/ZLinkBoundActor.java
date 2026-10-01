@@ -44,6 +44,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 final class ZLinkBoundActor implements ZLinkSessionActor {
+    static final int MAX_ACTOR_SLOT = 0xffff;
     private final ZLinkBackendStreamSocket stream;
     private final RoutingId sessionRid;
     private volatile ZLinkBackendActorRef ref;
@@ -99,8 +100,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             throw new IllegalArgumentException("bound Session binding generation must be positive");
         }
         this.bindingGeneration = bindingGeneration;
-        if (actorSlot <= 0 || actorSlot > 0xffff) {
-            throw new IllegalArgumentException("bound Session Actor slot must be in 1..65535");
+        if (actorSlot <= 0 || actorSlot > MAX_ACTOR_SLOT) {
+            throw new IllegalArgumentException(
+                    "bound Session Actor slot must be in 1.." + MAX_ACTOR_SLOT);
         }
         this.actorSlot = actorSlot;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;

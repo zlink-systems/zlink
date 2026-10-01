@@ -325,8 +325,8 @@ class FZLinkStreamConnectorRuntime
                       TFunction<void (const FZLinkStreamRequestResult &)> Callback)
     {
         auto request = Connector.request (MakePacket (PacketName, JsonPayload, Options));
-        request.timeout (
-          std::chrono::milliseconds (std::max (1, static_cast<int> (TimeoutSeconds * 1000.0f))));
+        request.timeout (std::chrono::milliseconds (
+          std::max (1, static_cast<int> (TimeoutSeconds * static_cast<float> (std::milli::den)))));
         if (Options.bCompress) {
             request.compress ();
         }
