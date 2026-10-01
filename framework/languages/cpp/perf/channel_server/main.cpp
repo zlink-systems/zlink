@@ -75,8 +75,10 @@ int main (int argc, char **argv)
         throw std::invalid_argument ("ChannelServer runs the channel role.");
     const auto scenario = config.scenario;
     const bool source = config.source;
-    // Only a source Object Client reports objectsReady (the Spots it found); every other role has no objects of its own.
-    auto role = std::make_unique<perf::role_t> (std::move (config), source && scenario != "channel-echo-only");
+    // Sources report objectsReady after preparation; targets have no applicable objects readiness.
+    auto role = std::make_unique<perf::role_t> (std::move (config), source);
+    if (source && scenario == "channel-echo-only")
+        role->objects->set (false, "The Channel target probe has not completed.", nlohmann::json::array ());
 
     if (scenario == "channel-echo-only")
         return source ? run_source<channel_echo_only_scenario_t> (std::move (role), configure_channel_echo_only)

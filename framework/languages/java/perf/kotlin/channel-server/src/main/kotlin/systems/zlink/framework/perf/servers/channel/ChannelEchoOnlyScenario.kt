@@ -16,6 +16,7 @@ import systems.zlink.framework.monitoring.ZLinkClientServerRuntime
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.perf.Evidence
 import systems.zlink.framework.perf.Measurement
+import systems.zlink.framework.perf.ObjectsReadiness
 import systems.zlink.framework.perf.PayloadPattern
 import systems.zlink.framework.perf.PerfEchoReply
 import systems.zlink.framework.perf.RoleConfig
@@ -29,6 +30,7 @@ internal class KotlinChannelEchoOnlyScenario(
     private val client: ZLinkRouteClient,
     private val meshRuntime: ZLinkRouteMeshRuntime,
     private val channelRuntime: ZLinkClientServerRuntime,
+    private val readiness: ObjectsReadiness,
 ) {
     private lateinit var sequences: AtomicLongArray
 
@@ -52,6 +54,9 @@ internal class KotlinChannelEchoOnlyScenario(
                 }
             }.bean(KotlinChannelEchoHandler::class.java)
             if (config.source()) {
+                app.bean(ObjectsReadiness::class.java) {
+                    ObjectsReadiness(false, "The Channel target probe has not completed.")
+                }
                 app.bean(KotlinChannelEchoOnlyScenario::class.java)
                     .workload(KotlinChannelEchoOnlyScenario::class.java, KotlinChannelEchoOnlyScenario::run)
             }
@@ -61,18 +66,24 @@ internal class KotlinChannelEchoOnlyScenario(
         }
     }
 
-    private fun ready(): Boolean = if (config.topology() == "routemesh") {
-        val status = meshRuntime.snapshot(config.meshName())
-        status.isReady() && status.channels().any { channel ->
-            channel.channelName() == config.channelName() && channel.isReady() && channel.readyTargetCount() > 0
-        }
-    } else {
-        val status = channelRuntime.snapshot(config.channelName())
-        status.isReady() && status.readyTargetCount() > 0
-    }
-
     fun prepare(): CompletionStage<Void> = completionStage {
-        Polling.until({ ready() }, 5, config.workload().setupTimeoutMs().toLong()).await()
+        var channelTargetStatus: Any? = null
+        Polling.until({
+            if (config.topology() == "routemesh") {
+                val status = meshRuntime.snapshot(config.meshName())
+                val channel = status.channels().firstOrNull { it.channelName() == config.channelName() }
+                if (status.isReady() && channel != null && channel.isReady() && channel.readyTargetCount() > 0) {
+                    channelTargetStatus = channel
+                    true
+                } else false
+            } else {
+                val status = channelRuntime.snapshot(config.channelName())
+                if (status.isReady() && status.readyTargetCount() > 0) {
+                    channelTargetStatus = status
+                    true
+                } else false
+            }
+        }, 5, config.workload().setupTimeoutMs().toLong()).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
         val request = measurement.request(0, sequences.incrementAndGet(0), true)
         val reply = client.kotlin().requestToChannel<PerfEchoReply>(config.channelName(), request)
@@ -81,6 +92,9 @@ internal class KotlinChannelEchoOnlyScenario(
         measurement.pattern().validate(reply.payload())
         measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin route requestToChannel<PerfEchoReply>().await",
             mapOf("correlationId" to request.correlationId(), "receivedTicks" to reply.receivedTicks(), "clockDomainId" to reply.clockDomainId()))))
+        readiness.set(true, "", listOf(Evidence.of("channelTarget",
+            if (config.topology() == "routemesh") "ZLinkRouteMeshRuntime.snapshot" else "ZLinkClientServerRuntime.snapshot",
+            checkNotNull(channelTargetStatus))))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
