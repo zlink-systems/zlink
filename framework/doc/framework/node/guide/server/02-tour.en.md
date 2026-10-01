@@ -35,7 +35,9 @@ timings and numbers are for demonstration only.
 | --- | --- | --- |
 | ClientServer | The API server calls feature servers by channel name and splits the load by weight | [Channel Messaging](20-channel-messaging.en.md) |
 | Fanout | One publish from the ops tool reaches only the servers subscribed to that topic | [Channel Messaging](20-channel-messaging.en.md) |
+| RouteMesh channel | A dungeon server calls the API servers by channel name over the mesh, split by weight. Adding a channel adds no connection | [Channel Messaging](20-channel-messaging.en.md#3-routemesh) · [How Channels Work](30-channel-patterns.en.md#42-distribution-among-candidates) |
 | Lobby and dungeon · RouteMesh | From connecting to the town, entering a dungeon, the boss fight, reconnecting, and returning | [Spot](21-spot.en.md) · [Actor](22-actor.en.md) · [Session and Actor](24-actor-session.en.md) |
+| RouteMesh pub/sub | Player positions near a border reach the neighboring zone Spots through a topic, and leaving the border is sent the same way (Logical Multicast) | [How Channels Work](30-channel-patterns.en.md#5-the-forms-of-pubsub) · [Reading Along: ZoneWorld](56-zoneworld.en.md) |
 | Instance Spot | Several servers contribute to the same guild at once, and the guild processes them one at a time | [Spot](21-spot.en.md) · [Execution Model](32-execution-model.en.md) |
 | Host Relocation | A server is taken down for maintenance mid-fight, and the room moves to another server and keeps running | [Relocation](37-relocation.en.md) |
 | Backpressure | The same burst against a server that queues without limit and a ZLink server | [Backpressure](33-backpressure.en.md) |
