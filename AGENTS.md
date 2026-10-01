@@ -222,10 +222,13 @@ effort는 토큰 단가를 바꾸지 않고 추론 토큰(출력 단가)만 늘�
     필요해 보이면 멈추고 보고한다([5.1](#51-스펙-개정-절차)).
   - **Execution gate를 우회하는 동기화를 남기지 않는다.**
     [`02-handler-turn-and-execution-gate.ko.md`](./framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)가
-    기준이다. 다음 세 가지를 찾아, gate 하나가 결정하도록 고친다.
+    기준이다. Framework 내부 구현(runtime·dispatch·connector)에서 다음 세 가지를 찾아, gate 하나가 결정하도록 고친다.
     - gate가 이미 직렬화하는 상태를 lock·별도 queue·대기로 다시 보호하는 코드
     - 같은 실행 권한을 플래그·상태·generation 같은 두 번째 수단으로 판정하는 코드
     - handler turn 안에서 infrastructure 진행을 기다리는 코드
+
+    sample·perf 같은 애플리케이션 코드가 handler 안에서 public 비동기 API(request, Actor 생성·bind 등)를
+    기다리는 것은 public 계약이 허용한 사용이며 이 항목의 대상이 아니다.
   - 완료 보고에 점검 결과(발견 수, 고친 항목, 넘긴 항목)를 한 줄로 적는다.
 
 ## 4. 검증과 완료 보고
