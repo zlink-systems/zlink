@@ -362,7 +362,8 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
 
 
 def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
-    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline."""
+    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline. After warmup a role must
+    also have no application handler running: the reset follows only a drained warmup (§4.1)."""
     pending = list(roles)
     admin_timeout = workload["adminTimeoutMs"] / 1000
     observed = {}
@@ -375,7 +376,8 @@ def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict
                 break
             snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats", min(admin_timeout, remaining))
             observed[name] = snapshot
-            if snapshot.get("phase") == "complete":
+            if snapshot.get("phase") == "complete" and (
+                    stage != "warmup" or snapshot["runtimeMetrics"]["activeHandlers"]["value"] == "0"):
                 pending.remove(role)
         if pending and time.monotonic() >= deadline:
             write_json(owned.cell / "tmp" / (stage + "-completion-failed.json"), observed)
@@ -435,6 +437,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
     server_files = []
     roles = []
     issues = []
+    interrupted = False
     try:
         common = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "language": args.language,
                   "workload": config["workload"],
@@ -547,6 +550,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
         write_json(cell / "loaded-artifacts.json", loaded)
         env["coreVersion"] = agreed_core_version(role_versions, env["coreVersion"])
     except (Exception, KeyboardInterrupt) as error:
+        interrupted = isinstance(error, KeyboardInterrupt)
         issues.append({"code": "PublicContractMismatch" if isinstance(error, UnsupportedCellError) else "InvalidSetup" if isinstance(error, InvalidSetupError) else "CollectionFailure",
                        "message": type(error).__name__ + ": " + str(error),
                        "sourceFile": error.source_file if isinstance(error, UnsupportedCellError) else "logs/"})
@@ -575,6 +579,8 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
         owned.cleanup()
     result = aggregate(cell, config, client_files, server_files, issues, owners, scenario.aggregation)
     print(f"cell={cell_id} status={result['status']} result={cell / 'result.json'}", flush=True)
+    if interrupted:
+        raise KeyboardInterrupt("run interrupted after the cell result was written")
     return result
 
 

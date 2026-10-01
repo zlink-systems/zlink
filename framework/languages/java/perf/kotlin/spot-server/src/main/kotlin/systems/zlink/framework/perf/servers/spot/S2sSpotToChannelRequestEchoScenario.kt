@@ -72,7 +72,8 @@ class S2sSpotToChannelRequestEchoScenario(
             check(driven.started()) { "Setup probe was not started." }
             probes.add(mapOf("correlationId" to request.correlationId(), "receivedTicks" to reply.receivedTicks(), "clockDomainId" to reply.clockDomainId()))
         }
-        readiness.set(true, "", listOf(created, Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot -> Spot requestToChannel", probes)))
+        measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot -> Spot requestToChannel", probes)))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {

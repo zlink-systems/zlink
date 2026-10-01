@@ -65,7 +65,7 @@ class ActorNoBindRequestEchoScenario(
         val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor wrapper requestToActor<PerfEchoReply>().await()",
             mapOf("probes" to sequences.length(), "streams" to sequences.length()))
         measurement.setupEvidence(listOf(typedProbe))
-        readiness.set(true, "", listOf(created, typedProbe))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {

@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import sys
 import unittest
 from unittest.mock import patch
@@ -492,6 +493,23 @@ class ClientControlTests(unittest.TestCase):
             control = ClientControl(SimpleNamespace(stdout=stdout, stdin=io.BytesIO()), Path(directory) / "control.log")
             self.assertEqual(control.call("stats", None, 1), {"phase": "complete"})
             control.log.close()
+
+
+class RoleDrainTests(unittest.TestCase):
+    def test_warmup_waits_until_no_application_handler_is_running(self):
+        from types import SimpleNamespace
+        from runner import wait_roles_complete
+
+        def snapshot(active):
+            return {"phase": "complete", "runtimeMetrics": {"activeHandlers": {"value": active}}}
+
+        role = {"role": "session", "roleInstance": 0, "metrics": {"baseUrl": "http://127.0.0.1:1"}}
+        workload = {"adminTimeoutMs": 1000, "setupTimeoutMs": 1000}
+        owned = SimpleNamespace(check=lambda: None, cell=Path("/nonexistent"))
+        for stage, expected_reads in (("warmup", 2), ("measured", 1)):
+            with self.subTest(stage=stage), patch("runner.get_json", side_effect=[snapshot("1"), snapshot("0")]) as read:
+                wait_roles_complete(owned, [role], workload, time.monotonic() + 5, stage)
+                self.assertEqual(read.call_count, expected_reads)
 
 
 class RunExitCodeTests(unittest.TestCase):

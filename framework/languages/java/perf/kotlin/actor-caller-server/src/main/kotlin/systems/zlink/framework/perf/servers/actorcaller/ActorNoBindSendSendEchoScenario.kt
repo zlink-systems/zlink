@@ -91,7 +91,7 @@ class ActorNoBindSendSendEchoScenario(
         val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor sendToActor(...).await() -> return Channel handler",
             mapOf("probes" to sequences.length(), "streams" to sequences.length()))
         measurement.setupEvidence(listOf(typedProbe))
-        readiness.set(true, "", listOf(created, typedProbe))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {

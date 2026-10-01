@@ -77,7 +77,8 @@ class S2sSpotToChannelSendSendEchoScenario(
             check(result.error() == null) { "Send/send setup probe failed: ${result.error()?.message}" }
             probes.add(mapOf("correlationId" to request.correlationId()))
         }
-        readiness.set(true, "", listOf(created, Evidence.of("typedProbeEcho", "Kotlin Spot sendToChannel -> Channel sendToSpot -> Spot return handler", probes)))
+        measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin Spot sendToChannel -> Channel sendToSpot -> Spot return handler", probes)))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {

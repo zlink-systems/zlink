@@ -96,12 +96,14 @@ def _node_output(perf_dir: Path, role: str) -> Path:
 
 
 def _node_build(perf_dir: Path, role: str) -> list[str]:
-    # Each role build reuses node_modules only when its lock hash matches. npm ci must leave the lock unchanged.
+    # Each role build reuses node_modules only when its lock hash and package source match. npm ci must leave the lock
+    # unchanged; a local build relinks workspace packages, so a published build after it installs again.
     script = r'''set -euo pipefail
 cd "$1"
 lock_hash=$(sha256sum package-lock.json | cut -d ' ' -f 1)
 marker="node_modules/.zlink-perf-package-lock.sha256"
-if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$lock_hash" ]; then
+install_key="$lock_hash $ZLINK_PERF_PACKAGE_SOURCE"
+if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$install_key" ]; then
   set +e
   npm ci --no-audit --no-fund --loglevel=error
   npm_status=$?
@@ -114,7 +116,7 @@ if [ ! -f "$marker" ] || [ "$(cat "$marker")" != "$lock_hash" ]; then
   if [ "$npm_status" -ne 0 ]; then
     exit "$npm_status"
   fi
-  printf '%s\n' "$installed_lock_hash" > "$marker.tmp"
+  printf '%s\n' "$install_key" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
 fi
 npm run build'''

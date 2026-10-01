@@ -81,7 +81,7 @@ class SpotWorkerOffloadEchoScenario(
         }
         val typedProbe = Evidence.of("typedProbeEcho", "Kotlin requestToSpot -> runCpuWorker Kotlin await/yield", probes)
         measurement.setupEvidence(listOf(typedProbe))
-        readiness.set(true, "", listOf(created, typedProbe))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {

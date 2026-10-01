@@ -59,7 +59,8 @@ class SpotNoAwaitEchoScenario(
             measurement.pattern().validate(reply.payload())
             probes.add(mapOf("correlationId" to request.correlationId(), "receivedTicks" to reply.receivedTicks(), "clockDomainId" to reply.clockDomainId()))
         }
-        readiness.set(true, "", listOf(created, Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot<PerfEchoReply>().await()", probes)))
+        measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot<PerfEchoReply>().await()", probes)))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
