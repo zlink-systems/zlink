@@ -321,6 +321,15 @@ carrying only some fields.** A general-purpose event DTO combining
 nullable fields isn't provided. If an observer notices a `Sequence` gap, it
 re-queries the current status to restore every field.
 
+**An observation delivers the current status at the moment the
+subscription is registered as its first item.** A change made before the
+subscription is already reflected in the first item, so an observer does
+not need to query the current status separately before observing. The
+first item is also subject to coalescing in
+[§7](#7-when-the-observer-is-slow--source-coalescing-and-the-lost-update-count),
+so if a change happens before the first item is consumed, the first item
+can be a newer status.
+
 ## 7. When the Observer Is Slow — Source, Coalescing, and the Lost-Update Count
 
 ### 7.1 Definition of a Source
