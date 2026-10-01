@@ -563,6 +563,43 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
   );
 });
 
+test('runtime host publishes only the resolved authority route for User membership', () => {
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: { useInMemoryStores: true },
+      routeChannels: ['bingo.room.route']
+    })
+  });
+  const state = {
+    spotId: 'bingo-room-1',
+    spotGeneration: 7n,
+    nativeActorRef: { nodeRid: 'play-node-1', actorId: 'player-2', generation: 1n }
+  };
+  runtime.setActorManager({ getState() { return state; } });
+
+  assert.equal(
+    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    undefined
+  );
+  const readyRoute = {
+    routerChannelId: 'bingo.room.route',
+    targetNodeRid: 'play-node-1',
+    spotId: state.spotId,
+    spotKind: framework.ZLinkSpotKind.User,
+    targetSpotGeneration: 7n,
+    targetNodeGeneration: 11n,
+    authorityOwnerGeneration: 13n,
+    targetOwnerId: 'play-owner',
+    ownerLeaseGeneration: 17n,
+    authorityStoreVersion: 'room-ready'
+  };
+  state.remoteActorPacketTarget = readyRoute;
+  assert.strictEqual(
+    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    readyRoute
+  );
+});
+
 test('runtime host legacy remote actor join admits the actor', async () => {
   const actor = { actorId: 'player-1' };
   const runtime = new framework.ZLinkFrameworkRuntimeHost({
