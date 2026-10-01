@@ -1051,7 +1051,7 @@ The Framework can briefly cache a `Ready` location. The cache stores ID,
 generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't exceed the
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
-expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
+expiry, or on receiving a reply the owner rejected because of the Close seal. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
