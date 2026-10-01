@@ -35,6 +35,7 @@ class actor_access_t
 };
 
 class shared_runtime_t;
+bool stream_trace_enabled ();
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
 
 struct pending_write_t

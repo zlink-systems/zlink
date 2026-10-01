@@ -36,6 +36,8 @@ namespace detail
 {
 namespace
 {
+
+constexpr std::chrono::milliseconds actor_lookup_retry_interval{50};
 inline thread_local std::optional<bool> current_actor_request_release_turn;
 
 class actor_request_turn_intent_scope_t
@@ -598,7 +600,8 @@ class actor_client_impl_t final : public actor_client_t
                 co_return detail::propagate_failure<message_t> (actor, "actor route was not found");
             }
             policy = stale_policy_t::location_stale;
-            if (std::chrono::steady_clock::now () + std::chrono::milliseconds (50) >= deadline) {
+            if (std::chrono::steady_clock::now () + detail::actor_lookup_retry_interval
+                >= deadline) {
                 co_return on_deadline ();
             }
             // A stale-move retry only needs to wait out the admission
@@ -606,7 +609,7 @@ class actor_client_impl_t final : public actor_client_t
             // thread it runs on, so a serial lane or worker stays free for
             // other work in the meantime (session-actor-dispatch.en.md
             // 187,193).
-            co_await detail::delay (std::chrono::milliseconds (50));
+            co_await detail::delay (detail::actor_lookup_retry_interval);
         }
     }
 

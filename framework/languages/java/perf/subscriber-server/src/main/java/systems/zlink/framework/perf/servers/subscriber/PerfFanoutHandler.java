@@ -3,6 +3,7 @@ package systems.zlink.framework.perf.servers.subscriber;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.perf.Measurement;
+import systems.zlink.framework.perf.PerfClock;
 import systems.zlink.framework.perf.PerfPublishEvent;
 
 import java.util.concurrent.CompletableFuture;
@@ -20,9 +21,10 @@ public final class PerfFanoutHandler implements ZLinkFanoutHandler<PerfPublishEv
 
     @Override
     public CompletionStage<Void> handle(PerfPublishEvent message, ZLinkPublishMessageContext context) {
+        long handlerEntryTicks = PerfClock.now();
         measurement.handlerEnter();
         try {
-            receipts.record(message);
+            receipts.record(message, handlerEntryTicks);
         } catch (RuntimeException error) {
             measurement.recordDiagnostic(error);
             throw error;

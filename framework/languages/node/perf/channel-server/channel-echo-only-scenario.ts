@@ -4,6 +4,7 @@ import { PerfClock } from '../shared/clock';
 import { DecimalText, PerfEchoReply, PerfEchoRequest, RoleConfig } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
+import { ObjectsReadiness } from '../server-support/server-application';
 import { runLoops, until } from '../server-support/wait';
 
 // §11.2: two Channel processes, manual RouteMesh or ClientServer, no Store/objects.
@@ -14,21 +15,32 @@ export class ChannelEchoOnlyScenario {
 
   constructor(
     private readonly client: ZLinkRouteClient, private readonly measurement: Measurement, private readonly config: RoleConfig,
-    private readonly meshRuntime: ZLinkRouteMeshRuntime, private readonly channelRuntime: ZLinkClientServerRuntime
+    private readonly meshRuntime: ZLinkRouteMeshRuntime, private readonly channelRuntime: ZLinkClientServerRuntime,
+    private readonly readiness: ObjectsReadiness
   ) {}
 
   async prepare(): Promise<void> {
     const { config, measurement } = this;
     const timeoutMs = config.workload.setupTimeoutMs;
     try {
+      let channelTargetStatus: unknown;
       // observe() is a change stream, not an initial snapshot (monitoring §6): query public status until setup evidence is ready.
       await until(() => {
         if (config.topology === 'routemesh') {
           const status = this.meshRuntime.snapshot(config.meshName!);
-          return status.isReady && status.channels.some((channel) => channel.channelName === config.channelName && channel.isReady && channel.readyTargetCount > 0);
+          const channel = status.channels.find((item) => item.channelName === config.channelName);
+          if (status.isReady && channel?.isReady && channel.readyTargetCount > 0) {
+            channelTargetStatus = channel;
+            return true;
+          }
+          return false;
         }
         const status = this.channelRuntime.snapshot(config.channelName!);
-        return status.isReady && status.readyTargetCount > 0;
+        if (status.isReady && status.readyTargetCount > 0) {
+          channelTargetStatus = status;
+          return true;
+        }
+        return false;
       }, timeoutMs, 'the Channel target to be ready');
       this.sequences = new Array<number>(config.workload.logicalStreams as number).fill(0);
       const request = measurement.request(0, ++this.sequences[0], true);
@@ -38,6 +50,9 @@ export class ChannelEchoOnlyScenario {
       measurement.pattern.validate(reply.payload);
       measurement.setupEvidence = [{ kind: 'typedProbeEcho', source: 'ZLinkRouteClient.requestToChannel.submit<PerfEchoReply>',
         observedValue: { correlationId: request.correlationId, receivedTicks: reply.receivedTicks, clockDomainId: reply.clockDomainId } }];
+      this.readiness.set(true, '', [{ kind: 'channelTarget',
+        source: config.topology === 'routemesh' ? 'ZLinkRouteMeshRuntime.snapshot' : 'ZLinkClientServerRuntime.snapshot',
+        observedValue: channelTargetStatus }]);
     } catch (error) {
       measurement.recordDiagnostic(error);
     }

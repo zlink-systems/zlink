@@ -370,7 +370,7 @@ class close_fault_store_t final : public zf::location_store_t
     void release_held_commit (bool conflict)
     {
         std::optional<zf::store_write_request_t> request;
-        std::optional<zf::detail::task_completion_source_t<zf::store_write_result_t>> completion;
+        std::optional<zf::task_completion_source_t<zf::store_write_result_t>> completion;
         {
             std::lock_guard lock (_held_mutex);
             request = std::move (_held_request);
@@ -404,7 +404,7 @@ class close_fault_store_t final : public zf::location_store_t
                 watched_delete = watched_delete || is_watched (erase->key);
         }
         if (watched_put && hold_closing_commit_once.exchange (false)) {
-            zf::detail::task_completion_source_t<zf::store_write_result_t> completion;
+            zf::task_completion_source_t<zf::store_write_result_t> completion;
             auto held = completion.task ();
             {
                 std::lock_guard lock (_held_mutex);
@@ -447,7 +447,7 @@ class close_fault_store_t final : public zf::location_store_t
     std::shared_ptr<zf::runtime::in_memory_location_store_t> _inner;
     std::mutex _held_mutex;
     std::optional<zf::store_write_request_t> _held_request;
-    std::optional<zf::detail::task_completion_source_t<zf::store_write_result_t>> _held_completion;
+    std::optional<zf::task_completion_source_t<zf::store_write_result_t>> _held_completion;
 };
 
 // ---------------------------------------------------------------------------

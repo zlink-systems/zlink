@@ -5,6 +5,8 @@
 #include "runtime/runtime_errors.hpp"
 #include "runtime/text.hpp"
 
+#include <boost/beast/http/status.hpp>
+
 #include <stdexcept>
 
 namespace zlink::http_client::detail
@@ -14,14 +16,14 @@ namespace http = boost::beast::http;
 
 parsed_url_t parse_base_url (const std::string &url)
 {
-    std::string scheme;
+    http_scheme_t scheme;
     std::string rest;
-    if (starts_with (url, "http://")) {
-        scheme = "http";
-        rest = url.substr (7);
-    } else if (starts_with (url, "https://")) {
-        scheme = "https";
-        rest = url.substr (8);
+    if (starts_with (url, http_url_prefix.data ())) {
+        scheme = http_scheme_t::plain;
+        rest = url.substr (http_url_prefix.size ());
+    } else if (starts_with (url, https_url_prefix.data ())) {
+        scheme = http_scheme_t::secure;
+        rest = url.substr (https_url_prefix.size ());
     } else {
         throw std::invalid_argument ("HTTP client base_url must start with http:// or https://");
     }
@@ -34,7 +36,7 @@ parsed_url_t parse_base_url (const std::string &url)
     }
 
     std::string host;
-    std::string port = scheme == "https" ? "443" : "80";
+    std::string port = scheme == http_scheme_t::secure ? https_default_port : http_default_port;
     if (authority.front () == '[') {
         const auto close = authority.find (']');
         if (close == std::string::npos) {
@@ -61,7 +63,7 @@ parsed_url_t parse_base_url (const std::string &url)
         throw std::invalid_argument ("HTTP client base_url requires host and port");
     }
 
-    return {.scheme = std::move (scheme),
+    return {.scheme = scheme,
             .host = std::move (host),
             .port = std::move (port),
             .target_prefix = std::move (target_prefix)};
@@ -104,18 +106,22 @@ http::verb to_beast_method (http_method_t method)
 
 bool is_redirect_status (int status)
 {
-    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    const auto value = static_cast<http::status> (status);
+    return value == http::status::moved_permanently || value == http::status::found
+           || value == http::status::see_other || value == http::status::temporary_redirect
+           || value == http::status::permanent_redirect;
 }
 
 bool same_origin (const hop_target_t &left, const hop_target_t &right)
 {
-    return iequals (left.scheme, right.scheme) && iequals (left.host, right.host)
+    return left.scheme == right.scheme && iequals (left.host, right.host)
            && left.port == right.port;
 }
 
 hop_target_t resolve_location (const hop_target_t &current, const std::string &location)
 {
-    if (starts_with (location, "http://") || starts_with (location, "https://")) {
+    if (starts_with (location, http_url_prefix.data ())
+        || starts_with (location, https_url_prefix.data ())) {
         const auto url = parse_base_url (location);
         return {.scheme = url.scheme,
                 .host = url.host,

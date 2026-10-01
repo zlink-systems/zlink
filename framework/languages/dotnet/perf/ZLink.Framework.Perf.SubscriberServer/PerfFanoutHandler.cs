@@ -8,10 +8,14 @@ public sealed class PerfFanoutHandler(Measurement measurement, FanoutReceipts re
 {
     public ValueTask HandleAsync(PerfPublishEvent message, ZLinkPublishMessageContext context, CancellationToken cancellationToken)
     {
+        var receivedTicks = PerfClock.Now;
         measurement.HandlerEnter();
-        try { receipts.Record(message); }
+        try
+        {
+            receipts.Record(message, receivedTicks);
+            return ValueTask.CompletedTask;
+        }
         catch (Exception error) { measurement.RecordDiagnostic(error); throw; }
         finally { measurement.HandlerExit(); }
-        return ValueTask.CompletedTask;
     }
 }

@@ -28,7 +28,8 @@ void open_proxy_tunnel (const http_client_options_t &options,
                         const hop_target_t &hop)
 {
     const auto authority = hop.host + ":" + hop.port;
-    http::request<http::empty_body> connect_request{http::verb::connect, authority, 11};
+    http::request<http::empty_body> connect_request{http::verb::connect, authority,
+                                                    http_11_version};
     connect_request.set (http::field::host, authority);
     if (options.proxy_authorization) {
         connect_request.set (http::field::proxy_authorization, *options.proxy_authorization);
@@ -64,7 +65,7 @@ std::unique_ptr<pooled_connection_t> open_connection (const http_client_options_
     }
     const auto endpoints = resolver.resolve (connect_host, connect_port);
 
-    if (hop.scheme == "http") {
+    if (hop.scheme == http_scheme_t::plain) {
         connection->plain.emplace (connection->io);
         connection->plain->expires_after (timeout);
         connection->plain->connect (endpoints);

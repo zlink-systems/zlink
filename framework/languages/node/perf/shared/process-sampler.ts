@@ -55,8 +55,9 @@ export class ProcessSampler {
       metrics[key] = null;
       reasons[`/metrics/${key}`] = nullReason('RUNTIME_METRIC_UNSUPPORTED', 'Node.js exposes no cumulative allocation counter or GC generation counts.');
     }
-    runtime.rssSampling = { name: 'process.memoryUsage().rss', unit: 'ns', type: 'sampling',
+    runtime.rssSamplingInterval = { name: 'process.memoryUsage() RSS sample interval', unit: 'ns', type: 'sampling',
       value: { requestedIntervalNs: '100000000', actualIntervalsNs: this.intervals.map(String), startedTicks: this.started.toString(), endedTicks: this.lastSample.toString() } };
+    runtime.rssMaxBytes = { name: 'process.memoryUsage().rss maximum', unit: 'bytes', type: 'number', value: this.rssMax };
     runtime.cpuObservationSeconds = { name: 'process.cpuUsage() observation span', unit: 's', type: 'number', value: seconds };
     runtime.heapUsedMb = { name: 'process.memoryUsage().heapUsed maximum of the RSS samples', unit: 'MiB', type: 'number', value: this.heapUsedMax / 1048576 };
     runtime.eventLoopDelay = { name: 'perf_hooks.monitorEventLoopDelay (10 ms resolution)', unit: 'ms', type: 'summary', value: this.delaySummary ?? null };

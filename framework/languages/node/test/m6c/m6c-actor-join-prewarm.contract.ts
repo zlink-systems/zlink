@@ -68,7 +68,7 @@ test('canonical Join public error kinds retain their exact wire terminals', () =
     [ZLinkFrameworkErrorKind.ProtocolError, 104, 16],
     [ZLinkFrameworkErrorKind.InvalidOperation, 107, 21],
     [ZLinkFrameworkErrorKind.NotFound, 102, 1],
-    [ZLinkFrameworkErrorKind.Unavailable, 105, 17],
+    [ZLinkFrameworkErrorKind.Unavailable, 105, ServiceWireFrameworkErrorCode.routeNotConnected],
     [ZLinkFrameworkErrorKind.Rejected, 106, 15]
   ] as const;
   for (const [kind, terminalResult, failureCode] of cases) {
@@ -76,6 +76,12 @@ test('canonical Join public error kinds retain their exact wire terminals', () =
       internalFrameworkWireReply(new ZLinkFrameworkException(kind, 'Join failed.')),
       { terminalResult, failureCode }
     );
+    if (kind === ZLinkFrameworkErrorKind.Unavailable) {
+      assert.equal(
+        wireReplyFailureException(terminalResult, failureCode, 'Join failed.').kind,
+        kind
+      );
+    }
   }
 });
 

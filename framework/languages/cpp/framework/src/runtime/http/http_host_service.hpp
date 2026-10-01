@@ -29,6 +29,10 @@ class http_host_service_t final : public hosted_service_t, public hosted_service
     void request_stop () noexcept override;
     void stop () noexcept override;
     int shutdown_stop_priority () const noexcept override { return 100; }
+    void seal_application_dispatch () noexcept override;
+    bool wait_for_accepted_callbacks_until (
+      std::chrono::steady_clock::time_point deadline) noexcept override;
+    void cancel_execution_waits () noexcept override;
 
   private:
     class listener_t;

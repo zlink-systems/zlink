@@ -37,13 +37,8 @@ public sealed class PayloadPattern(int size)
     }
     public void Validate(string payload)
     {
-        Span<byte> bytes = stackalloc byte[size];
-        if (!Convert.TryFromBase64String(payload, bytes, out var length) || length != size ||
-            !string.Equals(payload, Base64, StringComparison.Ordinal))
+        if (!string.Equals(payload, Base64, StringComparison.Ordinal))
             throw new PerfValidationException("PayloadMismatch", "Payload is not the canonical Base64 pattern.");
-        for (var i = 0; i < length; i++)
-            if (bytes[i] != (byte)((31 * i + 17 * (i / 251) + 29) % 256))
-                throw new PerfValidationException("PayloadMismatch", "Logical byte pattern differs.");
     }
     public static void ValidateIdentity(PerfEchoRequest request, PerfEchoReply reply)
     {

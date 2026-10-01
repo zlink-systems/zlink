@@ -372,7 +372,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 ),
                 ZLinkFrameworkErrorKind.Unavailable => (
                     RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
                 ),
                 ZLinkFrameworkErrorKind.Rejected => (
                     RequestResult.Rejected,

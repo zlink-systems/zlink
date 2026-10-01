@@ -5,6 +5,8 @@
 // URL-safe alphabet. Used by the store record layer (21-location-runtime.md
 // #2.4) to encode the authority record's opaque `payload` field.
 
+#include <zlink/framework/detail/base64.hpp>
+
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -14,29 +16,11 @@
 namespace zlink::framework::runtime
 {
 
-inline std::string base64_encode (const std::vector<std::byte> &bytes)
-{
-    static constexpr char alphabet[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string encoded;
-    encoded.reserve (((bytes.size () + 2) / 3) * 4);
-    for (std::size_t offset = 0; offset < bytes.size (); offset += 3) {
-        const auto remaining = bytes.size () - offset;
-        const auto first = std::to_integer<unsigned> (bytes[offset]);
-        const auto second = remaining > 1 ? std::to_integer<unsigned> (bytes[offset + 1]) : 0u;
-        const auto third = remaining > 2 ? std::to_integer<unsigned> (bytes[offset + 2]) : 0u;
-        encoded.push_back (alphabet[first >> 2]);
-        encoded.push_back (alphabet[((first & 0x03u) << 4) | (second >> 4)]);
-        encoded.push_back (remaining > 1 ? alphabet[((second & 0x0fu) << 2) | (third >> 6)] : '=');
-        encoded.push_back (remaining > 2 ? alphabet[third & 0x3fu] : '=');
-    }
-    return encoded;
-}
+using zlink::framework::detail::base64_encode;
 
 inline std::vector<std::byte> base64_decode (std::string_view encoded)
 {
-    static constexpr std::string_view alphabet =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    constexpr auto alphabet = zlink::framework::detail::base64_alphabet;
     if (encoded.size () % 4 != 0)
         throw std::invalid_argument ("base64 payload has an invalid length");
     const auto symbol = [&] (char character) -> unsigned {

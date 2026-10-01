@@ -3,4 +3,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../ZLink.Framework.Perf.Shared/ZLink.Framework.Perf.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ZLink.Framework.Perf.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>
