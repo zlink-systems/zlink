@@ -459,7 +459,7 @@ handler_registry_t::invoke_async (std::string_view channel_name,
                                   const detail::inbound_message_context_t &inbound) const
 {
     const auto found =
-      _state->handlers.find (detail::make_handler_key (channel_name, topic, packet_name));
+      _state->handlers.find (detail::make_handler_key (channel_name, "", packet_name));
     const detail::handler_entry_t *entry = nullptr;
     if (found != _state->handlers.end ()) {
         entry = &found->second;

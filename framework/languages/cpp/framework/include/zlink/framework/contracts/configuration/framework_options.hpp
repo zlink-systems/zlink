@@ -384,8 +384,7 @@ class handler_options_builder_t
     template <typename THandler> void add_publish_to_group (std::string group_name)
     {
         using event_type = typename THandler::event_type;
-        auto topic_name = detail::handler_topic_name<THandler, event_type> ();
-        _state->add_handler_packet (group_name, detail::handler_group_kind_t::publish, topic_name,
+        _state->add_handler_packet (group_name, detail::handler_group_kind_t::publish, "",
                                     detail::message_name<event_type> ());
 
         detail::injected_handler_registrar_t<THandler>::add (*_services);
@@ -393,9 +392,9 @@ class handler_options_builder_t
         auto *handlers = _handlers;
         add_serializers<event_type> ();
         _state->add_installer (std::move (group_name), detail::handler_group_kind_t::publish,
-                               [handlers, topic_name] (const std::string &channel_name) {
+                               [handlers] (const std::string &channel_name) {
                                    handlers->on_event<THandler, event_type> (
-                                     channel_name, topic_name, &THandler::handle,
+                                     channel_name, "", &THandler::handle,
                                      {.execution = handler_execution_t::offload});
                                });
     }
