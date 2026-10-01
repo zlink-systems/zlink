@@ -21,8 +21,8 @@ namespace zlink::http_client::detail
 struct http_client_options_t
 {
     std::string base_url;
-    std::chrono::milliseconds timeout{3000};
-    std::uint64_t max_response_body_size = 16 * 1024 * 1024;
+    std::chrono::milliseconds timeout{default_timeout};
+    std::uint64_t max_response_body_size = default_max_response_body_size;
     std::map<std::string, std::string> headers;
     std::optional<std::string> trust_certificate_file;
     std::optional<std::pair<std::string, std::string>> client_certificate;

@@ -10,6 +10,8 @@ namespace zlink::http_client::detail
 namespace
 {
 namespace asio = boost::asio;
+constexpr std::size_t execute_worker_count = 4;
+constexpr std::size_t resume_worker_count = 1;
 
 class default_coroutine_scheduler_t final
     : public zlink::http_client::coroutine_execute_scheduler_t,
@@ -20,7 +22,10 @@ class default_coroutine_scheduler_t final
     //  framework I/O thread convention) instead of a single shared thread that serialized
     //  every request. Resume runs on its own thread so a continuation that blocks on
     //  another HTTP task cannot occupy the only worker and deadlock against execute.
-    default_coroutine_scheduler_t () : _execute_pool (4), _resume_pool (1) {}
+    default_coroutine_scheduler_t () :
+        _execute_pool (execute_worker_count), _resume_pool (resume_worker_count)
+    {
+    }
 
     void execute (std::function<void ()> work) override
     {

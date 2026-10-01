@@ -235,6 +235,13 @@ Startup에 등록한 type별 capacity reservation, Spot 초기화가 끝나기 �
 새 작업 차단 조건에 해당하지 않을 때만 `true`다.** Activation concurrency의 현재 값과 limit은
 public status에 별도 field로 노출하지 않는다.
 
+`IsAvailable`이 `false`이면 placement의 unavailable reason은 다음 순서에서 처음 해당하는 값 하나다.
+
+1. Host가 `relocating`·`relocated`·`draining`이면 `draining`
+2. Host가 그 밖의 이유로 `serving`이 아니면 `runtime_not_ready`
+3. Location runtime §5의 새 작업 차단 조건에 해당하면 `location_unavailable`
+4. 그 밖(Object Server가 아님, placement weight `0`, capacity 또는 activation concurrency 소진)은 `capacity_exceeded`
+
 새 target 선택 비율에 사용하는 [weight](../00-foundation/02-glossary.ko.md#weight)는 signed integer
 `0..10000`이다. 값이 `0`이면 새 placement 대상으로 선택하지 않는다.
 
@@ -247,6 +254,15 @@ public status에 별도 field로 노출하지 않는다.
 [liveness beacon](../00-foundation/02-glossary.ko.md#liveness와-liveness-beacon) 수신으로 ready가 시작되고
 disconnect나 15초 무수신으로 끝난다는 판정은 그 문서의 규칙이다. 연결 계획이나 `connect` 수락만으로
 ready가 되지 않는다.
+
+ClientServer target과 automatic fanout publisher의 peer state와 unavailable reason은 다음 순서에서 처음 해당하는
+규칙 하나로 정한다. Target의 host가 `relocating`·`relocated`·`draining`을 알렸으면 state와 reason은 `draining`이다.
+그 밖에 target이 ready이면 state는 `ready`이고 reason은 없다. Ready 판정은 ClientServer는
+[transport liveness §3](../02-channel-transport/05-transport-liveness.ko.md#3-routemesh와-clientserver), fanout publisher는 위 문단이 정한 소유자를 따른다.
+연결을 시작했거나 다시 연결하는 중이면, 또는 연결은 되었지만 ready 판정이 아직 시작되지 않았으면 state는
+`connecting`이다. 그 밖은 `not_connected`다. `draining`이 아닌 미준비 target의 reason은 ClientServer target이면
+`no_ready_target`, fanout publisher면 `no_ready_peer`다. ClientServer target의 weight는 별도 field로 제공하며 peer
+state와 unavailable reason을 바꾸지 않는다.
 
 ## 6. 상태 변화를 관찰한다 — Sequence와 완전한 status
 

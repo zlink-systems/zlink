@@ -42,6 +42,7 @@
 | 심볼 지역화가 먹혔나 | 내 머신에서 통과 | **내 binutils에서** 먹히나 — 2.42는 되고 릴리스를 만드는 2.38은 안 됐다 | #418 |
 | ld64가 이 심볼을 강등하나 | 컴파일 시점 hidden visibility | 그 TU의 보통 심볼을 숨기나 — 템플릿·인라인 static은 vague linkage라 안 닿는다 | #418 |
 | .NET source 전체의 format이 맞나 | `format.sh --check dotnet`의 종료 코드 0 | 존재하는 source root에서 찾은 파일만 맞는다. WSL 사본에 `engines/Server`가 없어도 `find` 오류 뒤에 통과했다. 검사 root의 존재와 파일 수를 함께 확인한다 | #1082 |
+| Reject reason 오해석을 회귀 test가 잡나 | Server role fixture에서 not-required peer 수 0 | Role policy가 not-required 표시를 거부했는지만 확인한다. 결함 분기가 실제로 표시할 수 있는 Client role fixture에서 수정 전 실패를 확보한다 | #1082 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

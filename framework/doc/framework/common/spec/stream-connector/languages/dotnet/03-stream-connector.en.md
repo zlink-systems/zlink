@@ -507,7 +507,7 @@ positive.
 | `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | Uses the [packet name](../../../server/00-foundation/02-glossary.en.md#packet-name) attribute as the default identity. |
 | `StreamConnectorTests.DisconnectEventCarriesTheFrozenCloseReasonContract` | Fixes the disconnect event's closed close reason. |
 | `StreamConnectorTests.SessionClosingPublishesServerDrainReasonAfterDisconnectedState` | Converts a session-closing frame to the `ServerDrain` reason. |
-| `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | Repeated close and dispose observe the same failure. |
+| `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | A transport close failure is delivered once as a `Disconnected` error event, and repeated close and dispose don't fail. |
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | The one-way terminal waits asynchronously up to bounded queue acceptance and completes with no result value. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | Preserves the wire send order of an earlier-accepted one-way send and a later request. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | Once a frame write starts, caller cancellation doesn't create a partial frame. |

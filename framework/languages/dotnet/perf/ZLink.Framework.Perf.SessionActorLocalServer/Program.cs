@@ -9,7 +9,7 @@ var builder = ServerApplication.Builder(config, options =>
     options.AddRouteMesh(config.meshName!).Listen(config.transportEndpoints["mesh"]).Objects().Server().AddPerfActors();
     options.AddStreamNode("perf-session").Bind(config.transportEndpoints["stream"]).EnableActorDispatch().AddSession<PerfActorRelaySession>();
 });
-builder.Services.AddSingleton(new ObjectsReadiness(false, "No Actor is bound to a session yet."));
+builder.Services.AddSingleton(new ObjectsReadiness(true, ""));
 builder.Services.AddSingleton<SessionActorSetup>();
 var app = builder.Build();
 ServerApplication.Map(app);

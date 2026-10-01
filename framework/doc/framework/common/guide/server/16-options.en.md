@@ -179,9 +179,9 @@ limit belongs to the STREAM node and the ClientServer listener
 | `RelocationNodeInFlightPayloadBudget` | The same limit across the whole node | `0` — not applied |
 | `RelocationCutoverWaitTimeout` | How long the cutover is awaited | 1 second |
 
-**The lease values move together.** `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout` must be
+**The lease values move together.** `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout` must be
 smaller than `OwnerLeaseTtl - OwnerLeaseFencingMargin`. The defaults satisfy this at 8 seconds
-against 10 seconds, so ownership survives one failed renewal. `RouteCacheMaxAge` must be at
+against 10 seconds. `RouteCacheMaxAge` must be at
 least five seconds shorter than `MessageFollowDuration`, and `0` for either turns off the route
 cache and message forwarding respectively. Placement and transfer behavior are covered by
 [Location](25-location.en.md) and [Relocation](37-relocation.en.md).
@@ -273,7 +273,7 @@ the one intended.
   address and the advertised address separately.
 - **Memory keeps growing after a value was set to `0`** — `0` on a byte limit is unlimited. Leave
   the value unset to let the Core compute it.
-- **Ownership keeps being lost** — the renewal interval plus the renewal timeout is larger than
+- **Ownership keeps being lost** — the larger of the renewal interval and the renewal timeout, plus the renewal timeout, is larger than
   the lifetime minus the margin.
 - **The connection drops on a large message from a client** — the STREAM size limit is 64 KiB.
   Raise it on a node that receives large payloads.

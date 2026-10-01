@@ -3,6 +3,8 @@
 #include <zlink/framework/contracts/configuration/transport.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include "runtime/transport/endpoint_notation.hpp"
+
 #include <utility>
 
 namespace zlink::framework
@@ -21,22 +23,10 @@ transport_endpoint_t transport_endpoint_t::parse (std::string uri)
                                      "endpoint URI has no scheme");
     }
 
-    const auto scheme = uri.substr (0, scheme_end);
-    if (scheme == "tcp") {
-        return {transport_scheme_t::tcp, std::move (uri)};
-    }
-    if (scheme == "ipc") {
-        return {transport_scheme_t::ipc, std::move (uri)};
-    }
-    if (scheme == "tls") {
-        return {transport_scheme_t::tls, std::move (uri)};
-    }
-    if (scheme == "ws") {
-        return {transport_scheme_t::websocket, std::move (uri)};
-    }
-    if (scheme == "wss") {
-        return {transport_scheme_t::websocket_tls, std::move (uri)};
-    }
+    const auto scheme =
+      runtime::transport::parse_transport_scheme (std::string_view (uri).substr (0, scheme_end));
+    if (scheme)
+        return {*scheme, std::move (uri)};
 
     throw framework_exception_t (framework_error_kind_t::protocol_error,
                                  "unsupported endpoint URI scheme");

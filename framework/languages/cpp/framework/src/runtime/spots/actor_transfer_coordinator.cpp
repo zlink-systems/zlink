@@ -278,14 +278,13 @@ actor_transfer_coordinator_t::try_append_backlog_unlocked (const std::string &ac
     const auto backlog_size =
       backlog_found == _backlogs.end () ? std::size_t{0} : backlog_found->second.size ();
     if (packet.is_request) {
-        const auto request_id = packet.metadata.find ("__zlink.actorRequestId");
+        const auto request_id = packet.metadata.find (actor_request_id_key);
         if (request_id != packet.metadata.end () && !request_id->second.empty ()
             && backlog_found != _backlogs.end ()) {
             const auto duplicate =
               std::find_if (backlog_found->second.begin (), backlog_found->second.end (),
                             [&request_id] (const handoff_packet_t &queued) {
-                                const auto queued_id =
-                                  queued.metadata.find ("__zlink.actorRequestId");
+                                const auto queued_id = queued.metadata.find (actor_request_id_key);
                                 return queued.is_request && queued_id != queued.metadata.end ()
                                        && queued_id->second == request_id->second;
                             });
@@ -317,7 +316,7 @@ bool actor_transfer_coordinator_t::stage_commit_backlog (const std::string &tran
             [] (const handoff_packet_t &packet) -> std::optional<std::string_view> {
               if (!packet.is_request)
                   return std::nullopt;
-              const auto found = packet.metadata.find ("__zlink.actorRequestId");
+              const auto found = packet.metadata.find (actor_request_id_key);
               if (found == packet.metadata.end () || found->second.empty ())
                   return std::nullopt;
               return found->second;

@@ -244,7 +244,7 @@ internal sealed class ZLinkSpotRetireScheduler(
         bool instanceSpot,
         ZLinkRelocationTargetSelection selection,
         DateTimeOffset deadline,
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask> completeSource,
+        Func<ZLinkSpotActivation, ValueTask> detachSource,
         CancellationToken cancellationToken
     )
     {
@@ -267,7 +267,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     instanceSpot,
                     selection,
                     deadline,
-                    completeSource,
+                    detachSource,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -301,12 +301,12 @@ internal sealed class ZLinkSpotRetireScheduler(
         bool instanceSpot,
         ZLinkRelocationTargetSelection selection,
         DateTimeOffset deadline,
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask> completeSource,
+        Func<ZLinkSpotActivation, ValueTask> detachSource,
         CancellationToken cancellationToken
     )
     {
         ArgumentNullException.ThrowIfNull(activation);
-        ArgumentNullException.ThrowIfNull(completeSource);
+        ArgumentNullException.ThrowIfNull(detachSource);
         cancellationToken.ThrowIfCancellationRequested();
         using var cleanupDeadline = CreateDeadlineTokenSource(deadline);
 
@@ -853,98 +853,137 @@ internal sealed class ZLinkSpotRetireScheduler(
             // source interruption at the same boundary before cutover.
             interruption.Complete();
             committed = true;
-            if (perActorShell)
-                await activation
-                    .PublishPerActorShellRelocationPlanAsync(
-                        new ZLinkPerActorShellRelocationPlan(
-                            reservation.TargetDescriptor.Rid,
-                            reservation.TargetDescriptorLifecycleGeneration,
-                            reservation.TargetOwner,
-                            targetAuthorityOwnerGeneration,
-                            deadline
-                        ),
-                        completionToken
-                    )
-                    .ConfigureAwait(false);
-            if (!messageFollowStarted)
-            {
-                var spotParticipant = committedPublication.Envelope.Participants.Single(
-                    static participant =>
-                        participant.ObjectKind
-                            is ZLinkPlacementObjectKind.UserSpot
-                                or ZLinkPlacementObjectKind.InstanceSpot
-                );
-                activation.BeginMessageFollow(
-                    reservation.TargetDescriptor.Rid,
-                    reservation.TargetDescriptorLifecycleGeneration,
-                    spotParticipant.AuthorityOwnerGeneration,
-                    targetAuthorityOwnerGeneration,
-                    reservation.TargetOwner
-                );
-                await StartActorMessageFollowAsync(committedPublication, completionToken)
-                    .ConfigureAwait(false);
-                messageFollowStarted = true;
-            }
-            if (!sourceCommitted)
-            {
-                if (
-                    !activation.CommitRelocation(
-                        seal,
-                        out var releasedHeld,
-                        preserveActorExecution: perActorShell
-                    ) || !SameAcceptedWork(heldAtCutoff, releasedHeld)
-                )
-                    throw new ZLinkRelocationDataLostException(
-                        $"SPOT '{activation.SpotId}' accepted ingress changed after its durable root was prepared."
-                    );
-                committedHeld = releasedHeld;
-                sourceCommitted = true;
-            }
-            if (!committedHeldValidated)
-            {
-                ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
-                    committedHeld
-                        .Select(static record => new ZLinkSpotRetireHeldRecord(
-                            record.AcceptedSequence,
-                            record.Payload.ToArray()
-                        ))
-                        .ToArray()
-                );
-                committedHeldValidated = true;
-            }
-            if (!targetCompletionDelivered)
-            {
-                if (
-                    activeActorMessageFollowBacklog.Count != 0
-                    && (
-                        await Task.WhenAll(activeActorMessageFollowBacklog).ConfigureAwait(false)
-                    ).Any(static delivered => !delivered)
-                )
-                    throw new ZLinkRelocationDataLostException(
-                        $"SPOT '{activation.SpotId}' could not deliver every pre-cutover Actor Message Follow frame."
-                    );
-                await target
-                    .RelayCommittedAsync(
-                        activeReservation,
-                        committedPublication,
-                        committedHeld,
-                        completionToken
-                    )
-                    .ConfigureAwait(false);
-                targetCompletionDelivered = true;
-            }
             if (!sourceCompleted)
             {
+                var failures = new ZLinkFailureCollector();
+                await failures
+                    .CaptureAsync(async () =>
+                    {
+                        var cutoverFailures = new ZLinkFailureCollector();
+                        await cutoverFailures
+                            .CaptureAsync(async () =>
+                            {
+                                if (perActorShell)
+                                    await activation
+                                        .PublishPerActorShellRelocationPlanAsync(
+                                            new ZLinkPerActorShellRelocationPlan(
+                                                reservation.TargetDescriptor.Rid,
+                                                reservation.TargetDescriptorLifecycleGeneration,
+                                                reservation.TargetOwner,
+                                                targetAuthorityOwnerGeneration,
+                                                deadline
+                                            ),
+                                            CancellationToken.None
+                                        )
+                                        .ConfigureAwait(false);
+                                if (!messageFollowStarted)
+                                {
+                                    var spotParticipant =
+                                        committedPublication.Envelope.Participants.Single(
+                                            static participant =>
+                                                participant.ObjectKind
+                                                    is ZLinkPlacementObjectKind.UserSpot
+                                                        or ZLinkPlacementObjectKind.InstanceSpot
+                                        );
+                                    activation.BeginMessageFollow(
+                                        reservation.TargetDescriptor.Rid,
+                                        reservation.TargetDescriptorLifecycleGeneration,
+                                        spotParticipant.AuthorityOwnerGeneration,
+                                        targetAuthorityOwnerGeneration,
+                                        reservation.TargetOwner
+                                    );
+                                    await StartActorMessageFollowAsync(
+                                            committedPublication,
+                                            completionToken
+                                        )
+                                        .ConfigureAwait(false);
+                                    messageFollowStarted = true;
+                                }
+                            })
+                            .ConfigureAwait(false);
+                        await cutoverFailures
+                            .CaptureAsync(() => detachSource(activation))
+                            .ConfigureAwait(false);
+                        cutoverFailures.Capture(() =>
+                        {
+                            if (!sourceCommitted)
+                            {
+                                if (
+                                    !activation.CommitRelocation(
+                                        seal,
+                                        out var releasedHeld,
+                                        preserveActorExecution: perActorShell
+                                    ) || !SameAcceptedWork(heldAtCutoff, releasedHeld)
+                                )
+                                    throw new ZLinkRelocationDataLostException(
+                                        $"SPOT '{activation.SpotId}' accepted ingress changed after its durable root was prepared."
+                                    );
+                                committedHeld = releasedHeld;
+                                sourceCommitted = true;
+                            }
+                            if (!committedHeldValidated)
+                            {
+                                ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
+                                    committedHeld
+                                        .Select(static record => new ZLinkSpotRetireHeldRecord(
+                                            record.AcceptedSequence,
+                                            record.Payload.ToArray()
+                                        ))
+                                        .ToArray()
+                                );
+                                committedHeldValidated = true;
+                            }
+                        });
+                        cutoverFailures.ThrowIfAny();
+                        if (!targetCompletionDelivered)
+                        {
+                            if (
+                                activeActorMessageFollowBacklog.Count != 0
+                                && (
+                                    await Task.WhenAll(activeActorMessageFollowBacklog)
+                                        .ConfigureAwait(false)
+                                ).Any(static delivered => !delivered)
+                            )
+                                throw new ZLinkRelocationDataLostException(
+                                    $"SPOT '{activation.SpotId}' could not deliver every pre-cutover Actor Message Follow frame."
+                                );
+                            await target
+                                .RelayCommittedAsync(
+                                    activeReservation,
+                                    committedPublication,
+                                    committedHeld,
+                                    completionToken
+                                )
+                                .ConfigureAwait(false);
+                            targetCompletionDelivered = true;
+                        }
+                    })
+                    .ConfigureAwait(false);
                 if (!perActorShell)
-                    await activation
-                        .InvokeRelocationClosingAfterCommitAsync(deadline)
+                    await failures
+                        .CaptureAsync(() =>
+                            activation.InvokeRelocationClosingAfterCommitAsync(deadline)
+                        )
                         .ConfigureAwait(false);
                 foreach (var capture in activeActorCaptures.Values)
-                    await runtime
-                        .FinalizeMigratedActorSourceAsync(capture.State, capture.SourceActor)
+                    await failures
+                        .CaptureAsync(() =>
+                            runtime.FinalizeMigratedActorSourceAsync(
+                                capture.State,
+                                capture.SourceActor
+                            )
+                        )
                         .ConfigureAwait(false);
-                await completeSource(activation, completionToken).ConfigureAwait(false);
-                sourceCompleted = true;
+                await failures
+                    .CaptureAsync(async () =>
+                    {
+                        await ZLinkSpotNodeCatalog
+                            .ScheduleRelocatedSourceCleanupAsync(runtime, activation)
+                            .ConfigureAwait(false);
+                        sourceCompleted = true;
+                    })
+                    .ConfigureAwait(false);
+                failures.ThrowIfAny();
             }
         }
 

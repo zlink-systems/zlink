@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/detail/utf8.hpp>
+
 #include <runtime/locations/location_repository.hpp>
 
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
+
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -13,6 +18,15 @@ namespace zlink::framework::runtime
 
 namespace authority_key_codec_detail
 {
+
+inline constexpr std::string_view prefix = "zla1:";
+inline constexpr std::size_t identity_byte_limit = protocol::shortTextBytes;
+inline constexpr std::size_t percent_encoded_byte_width = 3;
+inline constexpr std::size_t identity_length_digits =
+  std::numeric_limits<unsigned char>::digits10 + 1;
+inline constexpr std::size_t encoded_key_byte_limit =
+  prefix.size () + 2 + identity_length_digits + 1
+  + identity_byte_limit * percent_encoded_byte_width;
 
 struct decoded_authority_key_t
 {
@@ -27,50 +41,11 @@ inline bool is_unreserved (unsigned char byte) noexcept
            || byte == '~';
 }
 
-inline bool valid_identity_utf8 (std::string_view value) noexcept
-{
-    for (std::size_t index = 0; index < value.size ();) {
-        const auto first = static_cast<unsigned char> (value[index]);
-        std::size_t continuation = 0;
-        std::uint32_t codepoint = 0;
-        if (first <= 0x7f) {
-            if (first == 0)
-                return false;
-            ++index;
-            continue;
-        }
-        if ((first & 0xe0u) == 0xc0u) {
-            continuation = 1;
-            codepoint = first & 0x1fu;
-        } else if ((first & 0xf0u) == 0xe0u) {
-            continuation = 2;
-            codepoint = first & 0x0fu;
-        } else if ((first & 0xf8u) == 0xf0u) {
-            continuation = 3;
-            codepoint = first & 0x07u;
-        } else {
-            return false;
-        }
-        if (value.size () - index - 1 < continuation)
-            return false;
-        for (std::size_t part = 0; part < continuation; ++part) {
-            const auto next = static_cast<unsigned char> (value[index + part + 1]);
-            if ((next & 0xc0u) != 0x80u)
-                return false;
-            codepoint = (codepoint << 6u) | (next & 0x3fu);
-        }
-        if ((continuation == 1 && codepoint < 0x80) || (continuation == 2 && codepoint < 0x800)
-            || (continuation == 3 && codepoint < 0x10000) || codepoint > 0x10ffff
-            || (codepoint >= 0xd800 && codepoint <= 0xdfff))
-            return false;
-        index += continuation + 1;
-    }
-    return true;
-}
 
 inline authority_key_t encode_authority_key (char kind, std::string_view object_id)
 {
-    if (object_id.empty () || object_id.size () > 255 || !valid_identity_utf8 (object_id)) {
+    if (object_id.empty () || object_id.size () > identity_byte_limit
+        || !zlink::framework::detail::is_valid_non_nul_utf8 (object_id)) {
         throw std::invalid_argument (
           "authority identity must contain 1..255 valid UTF-8 bytes without NUL");
     }
@@ -87,14 +62,14 @@ inline authority_key_t encode_authority_key (char kind, std::string_view object_
             encoded.push_back (hex[byte & 0x0f]);
         }
     }
-    return authority_key_t{"zla1:" + std::string (1, kind) + ":"
+    return authority_key_t{std::string (prefix) + std::string (1, kind) + ":"
                            + std::to_string (object_id.size ()) + ":" + encoded};
 }
 
 inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_view value)
 {
-    constexpr std::string_view prefix = "zla1:";
-    if (!value.starts_with (prefix) || value.size () < prefix.size () + 4 || value.size () > 776)
+    if (!value.starts_with (prefix) || value.size () < prefix.size () + 4
+        || value.size () > encoded_key_byte_limit)
         return std::nullopt;
     const auto kind = value[prefix.size ()];
     if ((kind != 'a' && kind != 's') || value[prefix.size () + 1] != ':')
@@ -109,11 +84,11 @@ inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_
     for (const auto digit : length) {
         if (digit < '0' || digit > '9')
             return std::nullopt;
-        if (expected_size > (255 - static_cast<std::size_t> (digit - '0')) / 10)
+        if (expected_size > (identity_byte_limit - static_cast<std::size_t> (digit - '0')) / 10)
             return std::nullopt;
         expected_size = expected_size * 10 + static_cast<std::size_t> (digit - '0');
     }
-    if (expected_size == 0 || expected_size > 255)
+    if (expected_size == 0 || expected_size > identity_byte_limit)
         return std::nullopt;
     const auto hex = [] (char digit) -> int {
         if (digit >= '0' && digit <= '9')
@@ -144,7 +119,8 @@ inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_
         decoded.push_back (static_cast<char> (byte));
         index += 2;
     }
-    if (decoded.size () != expected_size || !valid_identity_utf8 (decoded))
+    if (decoded.size () != expected_size
+        || !zlink::framework::detail::is_valid_non_nul_utf8 (decoded))
         return std::nullopt;
     return decoded_authority_key_t{kind, std::move (decoded)};
 }

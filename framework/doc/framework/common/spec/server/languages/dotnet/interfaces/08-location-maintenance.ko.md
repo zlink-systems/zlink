@@ -53,7 +53,7 @@ startup을 실패한다.
 Lease와 polling option은 0보다 커야 한다. 모든 Location host는 다음 관계를 만족해야 한다.
 
 ```text
-OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout
+max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout
  < OwnerLeaseTtl - OwnerLeaseFencingMargin
 ```
 

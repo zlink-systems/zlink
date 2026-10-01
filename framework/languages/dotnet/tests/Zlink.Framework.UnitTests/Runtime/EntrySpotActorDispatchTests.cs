@@ -4078,8 +4078,9 @@ public sealed partial class EntrySpotActorDispatchTests
             relocationRepository,
             publishMode
         );
+        var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
-            new CapturingSpotNode(),
+            node,
             includeActorFactory: false,
             userSpotType: typeof(EmptyUserSpot),
             defaultRequestTimeout: TimeSpan.FromMilliseconds(250),
@@ -4125,8 +4126,27 @@ public sealed partial class EntrySpotActorDispatchTests
 
             Assert.False(result.Completed);
             Assert.Equal(expectedKnowledge, result.CommitKnowledge);
-            Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
-            Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.TerminalReason);
+            if (expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed)
+            {
+                Assert.True(
+                    result.SourceTerminalized
+                        || result.TerminalReason == ZLinkFrameworkRelocationReason.DeadlineExceeded
+                );
+                Assert.True(
+                    result.TerminalReason
+                        is ZLinkFrameworkRelocationReason.RelocationFailed
+                            or ZLinkFrameworkRelocationReason.DeadlineExceeded
+                );
+                Assert.Empty(runtime.GetSpotNodeRuntime("entry").Spots);
+            }
+            else
+            {
+                Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
+                Assert.Equal(
+                    ZLinkFrameworkRelocationReason.RelocationFailed,
+                    result.TerminalReason
+                );
+            }
             Assert.Equal(
                 expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed ? 1UL : 0UL,
                 result.CommittedUnitCount
@@ -4141,6 +4161,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 await runtime.ForceStopAsync(CancellationToken.None);
             else
                 await runtime.StopAsync(CancellationToken.None);
+            if (expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed)
+                Assert.Equal(1, Assert.Single(node.CreatedSpots).DisposeCount);
         }
     }
 

@@ -31,12 +31,16 @@ public static class ChannelEchoOnlyHost
             }
             else throw new ArgumentException("Unsupported channel topology.");
         });
-        builder.Services.AddSingleton<ChannelEchoOnlyScenario>();
+        if (config.source)
+        {
+            builder.Services.AddSingleton(new ObjectsReadiness(false, "The Channel target probe has not completed."));
+            builder.Services.AddSingleton<ChannelEchoOnlyScenario>();
+        }
         var app = builder.Build();
-        var scenario = app.Services.GetRequiredService<ChannelEchoOnlyScenario>();
-        ServerApplication.Map(app, config.source ? scenario.RunAsync : null);
+        var scenario = config.source ? app.Services.GetRequiredService<ChannelEchoOnlyScenario>() : null;
+        ServerApplication.Map(app, scenario is null ? null : scenario.RunAsync);
         await app.StartAsync();
-        if (config.source) await scenario.PrepareAsync(app.Lifetime.ApplicationStopping);
+        if (scenario is not null) await scenario.PrepareAsync(app.Lifetime.ApplicationStopping);
         await app.WaitForShutdownAsync();
     }
 }

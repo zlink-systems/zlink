@@ -3,6 +3,19 @@ const { test } = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
 
+test('Unavailable errors round-trip through the generated wire schema', () => {
+  const { isValidServiceWireTerminalFailure } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+  for (const error of [
+    framework.createInternalFrameworkException(framework.ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable, 'owner unavailable'),
+    new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.Unavailable, 'join unavailable')
+  ]) {
+    const reply = framework.internalFrameworkWireReply(error);
+    assert.equal(isValidServiceWireTerminalFailure(reply.terminalResult, reply.failureCode), true);
+    assert.equal(framework.wireReplyFailureException(reply.terminalResult, reply.failureCode, error.message).kind, error.kind);
+  }
+  assert.equal(framework.isCanonicalWireReplyTerminal(105, 42), false);
+});
+
 test('every internal Framework error produces a canonical stateful wire reply', () => {
   for (const kind of Object.values(framework.ZLinkFrameworkInternalErrorKind)) {
     const error = framework.createInternalFrameworkException(kind, `injected ${kind}`);

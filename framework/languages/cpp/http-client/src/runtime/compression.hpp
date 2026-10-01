@@ -11,6 +11,11 @@
 namespace zlink::http_client::detail
 {
 
+inline constexpr char content_encoding_header_name[] = "content-encoding";
+inline constexpr char content_length_header_name[] = "content-length";
+inline constexpr char gzip_content_encoding[] = "gzip";
+inline constexpr char deflate_content_encoding[] = "deflate";
+
 std::optional<std::string> find_header (const std::map<std::string, std::string> &headers,
                                         std::string_view name);
 void erase_header (std::map<std::string, std::string> &headers, std::string_view name);

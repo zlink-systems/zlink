@@ -69,7 +69,7 @@ public sealed record PerfReady(string runId, string cellId, string role, int rol
 public sealed record NullReason(string code, string reason, string owner = "perf/README.ko.md",
     double? lowerBoundMs = null);
 public sealed record Window(string? startedAtUnixMs, string? endedAtUnixMs, string? startTicks,
-    string? endTicks, double? measuredSeconds, double? settleSeconds);
+    string? endTicks, double? measuredSeconds);
 public sealed record ClockMetadata(string source, string nativeFrequencyHz, string ticksUnit,
     string clockDomainId, string scope, string? alignmentMethod, string? maxErrorNs,
     string? validFromTicks, string? validThroughTicks, string[] evidence);
@@ -84,13 +84,13 @@ public sealed record PerfMetricsSnapshot(int schemaVersion, string runId, string
 
 public sealed record Workload(int payloadSize, double durationSeconds, double warmupSeconds,
     int inflight, int? connections, int? logicalStreams, int clientCount, int? connectConcurrency,
-    int requestTimeoutMs, int correlationExpiryMs, int settleTimeoutMs, int setupTimeoutMs,
+    int requestTimeoutMs, int correlationExpiryMs, int driverTimeoutMs, int setupTimeoutMs,
     int adminTimeoutMs, int socketSendTimeoutMs);
 // Perf spec §20: the run-owned Redis and this cell's namespace; null when the scenario needs no Store.
 public sealed record StoreConfig(string provider, string endpoint, string containerId, string image, string imageDigest,
     string @namespace);
 // Perf spec §5.2: the public worker options and the CPU task every callback runs (§10.8).
-public sealed record WorkerConfig(string algorithm, int taskMillis, int minThreads, int maxThreads, int maxQueueLength,
+public sealed record WorkerConfig(string algorithm, int taskMillis, int minThreads, int maxThreads,
     int idleTimeoutMs, int workerTimeoutMs);
 public sealed record RoleConfig(string runId, string cellId, string configHash, string role,
     int roleInstance, string scenario, string? topology, string? channelName, string? meshName,
@@ -98,7 +98,7 @@ public sealed record RoleConfig(string runId, string cellId, string configHash, 
     bool source, string objectRole, StoreConfig? store, string[] spotIds, string[] actorIds,
     string executionMode, Workload workload, Dictionary<string, object?> provenance, DiagnosticsConfig? diagnostics = null,
     string mode = "request", string terminal = "ordinary", int? spotCount = null, int? subscriberCount = null,
-    WorkerConfig? worker = null, bool awaitRemoteTargets = true)
+    WorkerConfig? worker = null, bool awaitRemoteTargets = true, string language = "dotnet")
 {
     // The role's first listener; roles with several transports read transportEndpoints by key.
     [JsonIgnore] public string? listenerEndpoint => transportEndpoints.Values.FirstOrDefault();
@@ -108,7 +108,7 @@ public sealed record EndpointRole(string role, int roleInstance, string configFi
     string? streamEndpoint, string applicationTriggerUrl, MetricsEndpoint metrics,
     Dictionary<string, string> transportEndpoints, string[] spotIds, string[] actorIds);
 public sealed record MetricsEndpoint(string transport, string baseUrl);
-public sealed record EndpointManifest(string runId, string cellId, string configHash,
+public sealed record EndpointManifest(string runId, string cellId, string configHash, string language,
     Workload workload, EndpointRole[] roles, Dictionary<string, object?> provenance);
 
 public static class PerfJson

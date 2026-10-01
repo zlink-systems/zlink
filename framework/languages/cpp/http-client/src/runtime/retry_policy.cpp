@@ -25,8 +25,11 @@ std::chrono::milliseconds retry_policy_t::delay (int attempt)
 {
     //  Exponential backoff with full jitter: base 50ms, doubling per attempt, capped at 1s.
     //  Fixed delays synchronize retries from many clients against an ailing server.
-    const int shift = attempt < 5 ? attempt : 5;
-    const long ceiling_ms = std::min<long> (1000, 50L << shift);
+    constexpr int maximum_shift = 5;
+    constexpr long maximum_delay_ms = 1000;
+    constexpr long base_delay_ms = 50;
+    const int shift = attempt < maximum_shift ? attempt : maximum_shift;
+    const long ceiling_ms = std::min<long> (maximum_delay_ms, base_delay_ms << shift);
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<long> jitter (0, ceiling_ms);
     return std::chrono::milliseconds (jitter (rng));

@@ -11,6 +11,7 @@
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
+#include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/framework/contracts/configuration/module.hpp>
 
@@ -41,7 +42,9 @@ namespace location_auto_connect_detail
  * cross-language Store -> expected-peer projection. */
 inline std::string to_service_wire_admission_identity (std::string_view descriptor_identity)
 {
-    return descriptor_identity == "plaintext" ? "default" : std::string (descriptor_identity);
+    return descriptor_identity == transport::plaintext_security_identity
+             ? transport::default_security_identity
+             : std::string (descriptor_identity);
 }
 
 } // namespace location_auto_connect_detail

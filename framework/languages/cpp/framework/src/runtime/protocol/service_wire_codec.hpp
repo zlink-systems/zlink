@@ -23,6 +23,8 @@
 namespace zlink::framework::runtime::protocol
 {
 
+inline constexpr char message_follow_hop_count_metadata_key[] = "__zlink.messageFollowHopCount";
+
 class service_wire_error_t : public std::runtime_error
 {
   public:

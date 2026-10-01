@@ -179,66 +179,64 @@ class dispatch_error_reporter_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event_id", "zlink.dispatch_error");
-            add ("outcome", "failed");
-            add ("surface", std::string (enum_name (event.surface)));
-            add ("kind", std::string (enum_name (event.message_kind)));
-            add ("reason", std::string (enum_name (event.reason)));
-            add ("action", std::string (enum_name (event.action)));
+            add (dispatch_event_field::event_id, "zlink.dispatch_error");
+            add (dispatch_event_field::outcome, "failed");
+            add (dispatch_event_field::surface, std::string (enum_name (event.surface)));
+            add (dispatch_event_field::kind, std::string (enum_name (event.message_kind)));
+            add (dispatch_event_field::reason, std::string (enum_name (event.reason)));
+            add (dispatch_event_field::action, std::string (enum_name (event.action)));
             if (event.packet_name) {
-                add ("packet", *event.packet_name);
+                add (dispatch_event_field::packet, *event.packet_name);
             }
             if (event.channel_name) {
-                add ("channel", *event.channel_name);
+                add (dispatch_event_field::channel, *event.channel_name);
             }
             if (event.channel_route_kind) {
-                add ("channel_route", *event.channel_route_kind);
-            } else if (event.surface == dispatch_error_surface_t::route_mesh_channel) {
-                add ("channel_route", "route_mesh");
-            } else if (event.surface == dispatch_error_surface_t::channel) {
-                add ("channel_route", "client_server");
+                add (dispatch_event_field::channel_route, *event.channel_route_kind);
+            } else if (const auto route_name = default_channel_route_name (event.surface)) {
+                add (dispatch_event_field::channel_route, std::string (*route_name));
             }
             if (event.mesh_name) {
-                add ("mesh", *event.mesh_name);
+                add (dispatch_event_field::mesh, *event.mesh_name);
             }
             if (event.topic) {
-                add ("topic", *event.topic);
+                add (dispatch_event_field::topic, *event.topic);
             }
             if (event.correlation_id) {
-                add ("corr", *event.correlation_id);
+                add (dispatch_event_field::corr, *event.correlation_id);
             }
             if (event.flow_id) {
-                add ("flow", *event.flow_id);
+                add (dispatch_event_field::flow, *event.flow_id);
             }
             if (event.flow_origin) {
-                add ("origin", std::string (enum_name (*event.flow_origin)));
+                add (dispatch_event_field::origin, std::string (enum_name (*event.flow_origin)));
             }
             if (event.source_rid) {
-                add ("source_rid", *event.source_rid);
+                add (dispatch_event_field::source_rid, *event.source_rid);
             }
             if (event.target_rid) {
-                add ("target_rid", *event.target_rid);
+                add (dispatch_event_field::target_rid, *event.target_rid);
             }
             if (event.server_rid) {
-                add ("server_rid", *event.server_rid);
+                add (dispatch_event_field::server_rid, *event.server_rid);
             }
             if (event.spot_id) {
-                add ("spot", *event.spot_id);
+                add (dispatch_event_field::spot, *event.spot_id);
             }
             if (event.actor_id) {
-                add ("actor", *event.actor_id);
+                add (dispatch_event_field::actor, *event.actor_id);
             }
             if (event.instance_spot_type) {
-                add ("instance_type", *event.instance_spot_type);
+                add (dispatch_event_field::instance_type, *event.instance_spot_type);
             }
             if (event.activation_state) {
-                add ("activation_state", *event.activation_state);
+                add (dispatch_event_field::activation_state, *event.activation_state);
             }
             if (event.error_type) {
-                add ("error_type", *event.error_type);
+                add (dispatch_event_field::error_type, *event.error_type);
             }
             if (event.error_message) {
-                add ("error_message", *event.error_message);
+                add (dispatch_event_field::error_message, *event.error_message);
             }
             // Structured fields through the configured framework logger.
             diagnostic_event_sink_t::log_if_configured (

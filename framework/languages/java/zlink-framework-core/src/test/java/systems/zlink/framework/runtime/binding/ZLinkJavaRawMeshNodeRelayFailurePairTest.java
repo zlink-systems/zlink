@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +10,8 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 /**
  * Pins the relocation-forward relay failure classification (spec 32-framework-error-model:83-92 +
@@ -15,6 +19,20 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
  * unchanged, and every synthesized pair is schema-valid.
  */
 final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
+    @Test
+    void unavailableActorJoinPreservesPublicErrorKind() {
+        int[] pair =
+                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE, "unavailable"));
+        assertArrayEquals(
+                new int[] {105, (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED},
+                pair);
+        assertTrue(ServiceWireConstants.validTerminalFailure(pair[0], pair[1]));
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(pair[1]));
+    }
 
     @Test
     void relayedReplyTerminalPairIsPreservedUnchanged() {

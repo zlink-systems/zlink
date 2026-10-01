@@ -117,7 +117,7 @@ STREAM frame의 앞쪽 2바이트는 `header_size`다.
 
 - **header의 첫 바이트는 `format_marker = 0xF2`다.** 값이 다르면 decode error다.
 - `kind`·`codec`은 문자열이 아니라 **1바이트 enum**으로 인코딩한다.
-- packet name은 `u8 name_len + UTF-8 bytes`이며 **최대 255바이트**다. **`Response`와 `Error`는
+- packet name은 `u8 name_len + UTF-8 bytes`이며 **최대 255바이트**다. `Send`·`Request`와 push의 packet name은 비어 있거나 공백 문자(Unicode `White_Space` 속성의 문자)만으로 이루어질 수 없으며, 이름을 받는 모든 표면이 이런 이름을 거부한다. **`Response`와 `Error`는
   [packet name](../server/00-foundation/02-glossary.ko.md#packet-name)을 담지 않는다** — `name_len = 0`으로 인코딩한다. 응답은 handler를 고르지 않고
   상관관계는 `request_seq`가 이미 정하므로 이 필드가 쓰이지 않는다
   ([03 message model](../server/00-foundation/05-message-model.ko.md)의 "reply 상관관계").
@@ -317,6 +317,7 @@ response에만** 들어간다.
   ([Session Actor Dispatch §3](../server/04-session/02-session-actor-binding.ko.md#5-bind와-relay)).
 - **request timeout·close·disconnect가 발생하면 pending request는 실패로 완료하고 map에서
   제거한다.** 재연결 후 자동 재전송하지 않는다(§6).
+- Request가 timeout이나 호출자 취소로 끝난 경우, 아직 쓰기를 시작하지 않은 그 request의 frame은 보내지 않는다.
 - Request timeout은 operation 수락 때 시작해 queue 대기, frame write와 reply 대기를 모두 포함한다.
 
 ### 5.3 error payload
@@ -671,6 +672,8 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
+종료 처리 중 transport close가 실패하면 연결은 닫힌 것으로 확정하고, 종료를 시작한 원인의 종료 사유와 자동 reconnect 정책을 유지하며, close 실패는 `Disconnected` 오류 event로 전달한다. 정리를 마친 명시적 close 호출의 결과는 close 실패 때문에 실패가 되지 않는다.
+
 ### 9.1 닫힌 오류 코드 집합
 
 위 표의 **13개가 전부다.** 구현이 코드를 더하거나 빼지 않는다. 언어별 문서는 이름의 표기만
@@ -702,7 +705,7 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 같은 타입은 코드를 담는 자리가 없어, 호출자가 `ValidationFailed`인지 `ConfigurationError`인지
 판정하지 못한다. 예외로 전달하는 언어는 **코드를 담는 전용 예외 타입**을 둔다.
 
-이 요구는 옵션 검증 실패와 관찰 표면의 위반(§10.1)에도 똑같이 적용된다.
+이 요구는 옵션 검증 실패와 관찰 표면의 위반(§10.1)에도 똑같이 적용된다. 테스트 assertion helper도 이 코드만 읽는다. 예외 타입이나 메시지로 코드를 추정하지 않으며, 코드를 담지 않은 실패는 그대로 전달한다.
 
 ## 10. 수신 메시지 큐
 

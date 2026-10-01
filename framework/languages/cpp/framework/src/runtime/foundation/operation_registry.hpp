@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/foundation/operation_terminal.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <chrono>
@@ -18,17 +19,6 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
-enum class operation_terminal_t
-{
-    completed,
-    timed_out,
-    cancelled,
-    transport_failed,
-    protocol_error,
-    shutdown,
-    route_unavailable
-};
-
 class operation_completion_dispatcher_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;

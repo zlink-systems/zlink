@@ -65,7 +65,7 @@ class ActorNoBindRequestEchoScenario(
         val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor wrapper requestToActor<PerfEchoReply>().await()",
             mapOf("probes" to sequences.length(), "streams" to sequences.length()))
         measurement.setupEvidence(listOf(typedProbe))
-        readiness.set(true, "", listOf(created, typedProbe))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
@@ -77,16 +77,17 @@ class ActorNoBindRequestEchoScenario(
                             val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation()
                             if (started < 0) break
-                            val sent = request.withSentTicks(started)
                             try {
-                                val reply = actorClient.kotlin().requestToActor<PerfEchoReply>(config.actorIds()[stream], sent)
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                PayloadPattern.validateIdentity(sent, reply)
-                                measurement.pattern().validate(reply.payload())
+
+                                    val sent = request.withSentTicks(started)
+                                    val reply = actorClient.kotlin().requestToActor<PerfEchoReply>(config.actorIds()[stream], sent)
+                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
+                                    PayloadPattern.validateIdentity(sent, reply)
+                                    measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
-                                if (error is CancellationException) throw error
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException) throw error
                             }
                         }
                     }

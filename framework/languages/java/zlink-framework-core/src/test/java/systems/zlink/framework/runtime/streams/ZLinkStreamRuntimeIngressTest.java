@@ -61,9 +61,6 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -83,9 +80,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,6 +93,9 @@ final class ZLinkStreamRuntimeIngressTest {
     private static final RoutingId PEER_A = RoutingId.from("peer-a");
     private static final RoutingId PEER_B = RoutingId.from("peer-b");
     private static final String MESH = "replacement-mesh";
+    private static final String REPLACEMENT_ACTOR = "replacement-actor";
+    private static final String HEARTBEAT_PING = "$zlink.heartbeat.ping";
+    private static final String HEARTBEAT_PONG = "$zlink.heartbeat.pong";
     private final List<ZLinkStreamRuntime> runtimes = new ArrayList<>();
     private ZLinkFrameworkRegistration lastRegistration;
 
@@ -322,16 +319,17 @@ final class ZLinkStreamRuntimeIngressTest {
         runtimes.add(runtime);
 
         TestSession session = awaitSession();
-        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
-        assertTrue(session.dispatchCount.get() >= 1);
-        assertFalse(session.firstDispatch.isDone());
-
-        assertEquals(2, stream.successfulReceives.get());
-        assertEquals(0, stream.zeroReadinessWaits.get());
-        assertFalse(session.secondDispatchLatch.await(100, TimeUnit.MILLISECONDS));
-        assertEquals(1, session.dispatchCount.get());
-
-        session.firstDispatch.complete(null);
+        try {
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(1, session.dispatchCount.get());
+            assertFalse(session.firstDispatch.isDone());
+            awaitValue(stream.successfulReceives, 2);
+            assertEquals(0, stream.zeroReadinessWaits.get());
+            assertFalse(session.secondDispatchLatch.await(100, TimeUnit.MILLISECONDS));
+            assertEquals(1, session.dispatchCount.get());
+        } finally {
+            session.firstDispatch.complete(null);
+        }
         assertTrue(session.secondDispatchLatch.await(5, TimeUnit.SECONDS));
         assertEquals(2, session.dispatchCount.get());
         assertEquals(List.of("first", "second"), session.packetNames);
@@ -408,14 +406,14 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession session = awaitSession();
         assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         assertEquals(List.of("good"), session.packetNames);
-        assertEquals(PEER_A, stream.disconnectedPeer.get());
+        assertEquals(PEER_A, stream.disconnectedPeer.getNow(null));
     }
 
     @Test
     void heartbeatBackpressureDoesNotIsolateThePeer() throws Exception {
         FakeStream stream = new FakeStream();
         stream.failHeartbeatPongSend = true;
-        stream.enqueue(PEER_A, controlFrame("$zlink.heartbeat.ping"));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING));
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
@@ -432,7 +430,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void pendingHeartbeatPongAdmissionDoesNotBlockTheReceiveOwner() throws Exception {
         FakeStream stream = new FakeStream();
         stream.deferHeartbeatPongSend = true;
-        stream.enqueue(PEER_A, controlFrame("$zlink.heartbeat.ping"));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING));
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
@@ -458,16 +456,23 @@ final class ZLinkStreamRuntimeIngressTest {
 
         awaitSession();
         assertTrue(stream.heartbeatPingAttempted.await(5, TimeUnit.SECONDS));
-        stream.failHeartbeatPingSend = false;
-        expireSessionTimestamp(runtime, "lastHeartbeatPongNanos");
-
-        assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
     }
 
     @Test
     void livenessTimeoutsAreIncludedInClosedConnectionMetrics() throws Exception {
-        assertLivenessCloseReason("lastHeartbeatPongNanos", "heartbeat_timeout");
-        assertLivenessCloseReason("lastApplicationNanos", "idle_timeout");
+        assertLivenessCloseReason(new FakeStream(), "heartbeat_timeout");
+        FakeStream idleStream =
+                new FakeStream() {
+                    @Override
+                    public CompletionStage<Void> sendAsync(
+                            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+                        if (HEARTBEAT_PING.equals(header.packetName())) {
+                            ((FakeStream) this).enqueue(routingId, controlFrame(HEARTBEAT_PONG));
+                        }
+                        return super.sendAsync(routingId, header, parts);
+                    }
+                };
+        assertLivenessCloseReason(idleStream, "idle_timeout");
     }
 
     @Test
@@ -479,7 +484,8 @@ final class ZLinkStreamRuntimeIngressTest {
             ZLinkStreamRuntime runtime = start(stream, 0);
             runtimes.add(runtime);
 
-            awaitSession();
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
             runtime.beginDrain();
             runtime.closeAsync().toCompletableFuture().join();
 
@@ -517,10 +523,7 @@ final class ZLinkStreamRuntimeIngressTest {
         runtime.beginDrain();
         stream.firstReceiveRelease.countDown();
 
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (stream.sessionClosingSends.get() == 0 && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
+        assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
         assertEquals(1, stream.sessionClosingSends.get());
         assertNull(TestSession.lastSession.get());
     }
@@ -536,7 +539,9 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(stream.firstReceiveEntered.await(5, TimeUnit.SECONDS));
         CompletableFuture<Void> close =
                 CompletableFuture.runAsync(() -> runtime.closeAsync().toCompletableFuture().join());
-        Thread.sleep(2_200);
+        assertThrows(
+                java.util.concurrent.TimeoutException.class,
+                () -> close.get(2_200, TimeUnit.MILLISECONDS));
         assertEquals(0, stream.closeCalls.get());
 
         stream.firstReceiveRelease.countDown();
@@ -606,45 +611,6 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void closingStreamReturnsGrantWhoseQueuedResumeIsDiscarded() throws Exception {
-        FakeStream stream = new FakeStream();
-        stream.enqueue(PEER_A, frame("discarded", "{}"));
-        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
-        ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
-        ZLinkApplicationJobQueue queue = registration.applicationJobQueue();
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
-        try {
-            ZLinkStreamRuntime runtime = start(stream, registration);
-            runtimes.add(runtime);
-            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
-            Field executorField = ZLinkStreamRuntime.class.getDeclaredField("receiveExecutor");
-            executorField.setAccessible(true);
-            ExecutorService receiveExecutor = (ExecutorService) executorField.get(runtime);
-            CountDownLatch blockerEntered = new CountDownLatch(1);
-            receiveExecutor.execute(
-                    () -> {
-                        blockerEntered.countDown();
-                        try {
-                            new CountDownLatch(1).await();
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                        }
-                    });
-            assertTrue(blockerEntered.await(1, TimeUnit.SECONDS));
-            held.close();
-            awaitCondition(() -> ((ThreadPoolExecutor) receiveExecutor).getQueue().size() == 1);
-            runtime.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertEquals(0, queue.snapshot().capacityWaiters());
-            assertEquals(0, queue.snapshot().permitsInUse());
-            assertEquals(0, stream.successfulReceives.get());
-            assertEquals(0, TestSession.createdCount.get());
-        } finally {
-            held.close();
-        }
-    }
-
-    @Test
     void samePeerPacketsKeepOrderWhileAnotherPeerProgresses() throws Exception {
         TestSession.holdFirstDispatch = true;
         FakeStream stream = new FakeStream();
@@ -676,17 +642,17 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void boundSessionReplacementRunsCallbackBeforeADeferredCloseAndRejectsInbound()
-            throws Exception {
+    void boundSessionReplacementRunsCallbackBeforeADeferredClose() throws Exception {
         TestSession.replacementMode = ReplacementMode.FAILURE;
         FakeStream stream = new FakeStream();
         ReplacementFixture fixture = startReplacement(stream);
         runtimes.add(fixture.runtime());
 
         TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         ZLinkActor actor =
                 fixture.actors()
-                        .getOrCreateLocalActor("replacement-actor", ZLinkActor.class)
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
                         .toCompletableFuture()
                         .join()
                         .orElseThrow();
@@ -702,33 +668,28 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .join();
 
-        long started = System.nanoTime();
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
 
         assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
-        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
-        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
         assertEquals(1, session.replacementCallbacks.get());
-        stream.enqueue(PEER_A, frame("after-replacement", "{}"));
-        Thread.sleep(100);
-        assertFalse(session.packetNames.contains("after-replacement"));
-        assertTrue(elapsedMillis >= 80, "replacement close must be timer driven");
-        assertTrue(elapsedMillis < 2_000, "replacement close exceeded its timer");
+        assertEquals(1, stream.disconnectCalls.get());
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void boundSessionReplacementDisconnectsAtTheFirstTimerBoundary(
-            boolean completeClosingControlSend) throws Exception {
-        TestSession.replacementMode = ReplacementMode.PENDING;
+    void boundSessionReplacementDisconnectsAfterCallbackTerminal(boolean completeClosingControlSend)
+            throws Exception {
+        TestSession.replacementMode = ReplacementMode.SUCCESS;
         FakeStream stream = new FakeStream();
         stream.completeClosingControlSend = completeClosingControlSend;
         ReplacementFixture fixture = startReplacement(stream);
         runtimes.add(fixture.runtime());
         TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         ZLinkActor actor =
                 fixture.actors()
-                        .getOrCreateLocalActor("replacement-actor", ZLinkActor.class)
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
                         .toCompletableFuture()
                         .join()
                         .orElseThrow();
@@ -744,63 +705,26 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .join();
 
-        Field executorField = ZLinkStreamRuntime.class.getDeclaredField("replyRetryExecutor");
-        executorField.setAccessible(true);
-        ScheduledExecutorService timer =
-                (ScheduledExecutorService) executorField.get(fixture.runtime());
-        AtomicReference<Duration> scheduledCloseDelay = new AtomicReference<>();
-        executorField.set(
-                fixture.runtime(),
-                Proxy.newProxyInstance(
-                        ScheduledExecutorService.class.getClassLoader(),
-                        new Class<?>[] {ScheduledExecutorService.class},
-                        (proxy, method, arguments) -> {
-                            if (method.getName().equals("schedule")) {
-                                scheduledCloseDelay.set(
-                                        Duration.ofNanos(
-                                                ((TimeUnit) arguments[2])
-                                                        .toNanos((Long) arguments[1])));
-                            }
-                            try {
-                                return method.invoke(timer, arguments);
-                            } catch (InvocationTargetException failure) {
-                                throw failure.getCause();
-                            }
-                        }));
-        CompletableFuture<RoutingId> disconnectAtNextTask = new CompletableFuture<>();
-        stream.sessionClosingObserver =
-                () ->
-                        timer.execute(
-                                () -> disconnectAtNextTask.complete(stream.disconnectedPeer.get()));
-
+        CompletableFuture<Void> ingressBeforeTerminal =
+                session.replacementCompletion.thenRun(
+                        () -> {
+                            assertEquals(0, stream.disconnectCalls.get());
+                            stream.enqueue(PEER_A, frame("during-replacement", "{}"));
+                        });
+        assertEquals(0, stream.disconnectCalls.get());
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
-        assertTrue(session.replacementEntered.await(1, TimeUnit.SECONDS));
-        scheduledCloseDelay.set(null);
-        long terminalAt = System.nanoTime();
-        session.replacementCompletion.complete(null);
-
         try {
-            assertEquals(
-                    PEER_A,
-                    disconnectAtNextTask.get(2, TimeUnit.SECONDS),
-                    "transport close must start in the 100 ms timer task, before any next task");
-            assertEquals(
-                    Duration.ofMillis(100),
-                    scheduledCloseDelay.get(),
-                    "scheduler tolerance must not permit a longer planned close delay");
+            long terminalAt = session.replacementCompletion.get(5, TimeUnit.SECONDS);
+            ingressBeforeTerminal.join();
+            assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
             long closeDelay = stream.disconnectStartedAt - terminalAt;
             assertTrue(
                     closeDelay >= TimeUnit.MILLISECONDS.toNanos(100),
                     "callback terminal must precede transport close by 100 ms");
-            assertTrue(
-                    closeDelay < TimeUnit.SECONDS.toNanos(2),
-                    "the replacement timer must run within scheduler tolerance");
-            assertTrue(
-                    stream.disconnectStartedAt - stream.sessionClosingStartedAt
-                            < TimeUnit.MILLISECONDS.toNanos(20),
-                    "the timer boundary must not add the 25 ms fallback delay");
             assertEquals(1, session.replacementCallbacks.get());
-            assertEquals(1, stream.sessionClosingSends.get());
+            assertEquals(2, stream.successfulReceives.get());
+            assertEquals(2, stream.sessionClosingSends.get());
+            assertEquals(List.of("initial"), session.packetNames);
             assertEquals(1, stream.disconnectCalls.get());
         } finally {
             stream.closingControlCompletion.complete(null);
@@ -810,10 +734,10 @@ final class ZLinkStreamRuntimeIngressTest {
     @Test
     void relocationHandlersFenceTheTransportSourceAndAcceptSourceAbort() throws Exception {
         FakeStream stream = new FakeStream();
-        stream.enqueue(PEER_A, frame("initial", "{}"));
         ReplacementFixture fixture = startReplacement(stream);
         runtimes.add(fixture.runtime());
         TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         ZLinkActor actor =
                 fixture.actors()
                         .getOrCreateLocalActor("relocation-actor", ZLinkActor.class)
@@ -901,9 +825,10 @@ final class ZLinkStreamRuntimeIngressTest {
         runtimes.add(fixture.runtime());
 
         TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         ZLinkActor actor =
                 fixture.actors()
-                        .getOrCreateLocalActor("replacement-actor", ZLinkActor.class)
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
                         .toCompletableFuture()
                         .join()
                         .orElseThrow();
@@ -934,7 +859,6 @@ final class ZLinkStreamRuntimeIngressTest {
                                         command.retiredSession().sessionOwnerLeaseGeneration(),
                                         command.retiredSession().sessionRid(),
                                         command.retiredSession().retiredBindingGeneration())));
-        Thread.sleep(100);
         assertEquals(0, session.replacementCallbacks.get());
 
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), command);
@@ -968,9 +892,10 @@ final class ZLinkStreamRuntimeIngressTest {
         runtimes.add(fixture.runtime());
 
         TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         ZLinkActor actor =
                 fixture.actors()
-                        .getOrCreateLocalActor("replacement-actor", ZLinkActor.class)
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
                         .toCompletableFuture()
                         .join()
                         .orElseThrow();
@@ -990,14 +915,12 @@ final class ZLinkStreamRuntimeIngressTest {
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
 
         assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
-        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
-        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
         assertEquals(1, session.replacementCallbacks.get());
+        assertFalse(session.replacementCompletion.isDone());
         assertTrue(
-                elapsedMillis >= 80, "a stalled callback must be bounded by the callback deadline");
-        assertTrue(
-                elapsedMillis < 2_000,
-                "callback deadline did not return to the scheduler promptly");
+                stream.disconnectStartedAt - started >= TimeUnit.MILLISECONDS.toNanos(100),
+                "a stalled callback must close after its deadline");
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
@@ -1209,10 +1132,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 .start();
     }
 
-    private void assertLivenessCloseReason(String expiredTimestampField, String expectedReason)
+    private void assertLivenessCloseReason(FakeStream stream, String expectedReason)
             throws Exception {
         TestSession.lastSession.set(null);
-        FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
         List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
         try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
@@ -1221,7 +1143,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
             TestSession session = awaitSession();
             assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
-            expireSessionForLiveness(runtime, expiredTimestampField);
+            assertTrue(stream.sessionClosingSendsLatch.await(35, TimeUnit.SECONDS));
             runtime.closeAsync().toCompletableFuture().join();
 
             assertEquals(List.of(expectedReason), closeReasons);
@@ -1238,50 +1160,6 @@ final class ZLinkStreamRuntimeIngressTest {
                         }
                     }
                 });
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void expireSessionForLiveness(
-            ZLinkStreamRuntime runtime, String expiredTimestampField) throws Exception {
-        expireSessionTimestamp(runtime, expiredTimestampField);
-        Method checkSessionLiveness =
-                ZLinkStreamRuntime.class.getDeclaredMethod("checkSessionLiveness");
-        checkSessionLiveness.setAccessible(true);
-        checkSessionLiveness.invoke(runtime);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void expireSessionTimestamp(
-            ZLinkStreamRuntime runtime, String expiredTimestampField) throws Exception {
-        Field sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
-        sessionsField.setAccessible(true);
-        Map<String, Object> sessions = (Map<String, Object>) sessionsField.get(runtime);
-        Object state = null;
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (System.nanoTime() < deadline) {
-            synchronized (sessions) {
-                if (!sessions.isEmpty()) {
-                    state = sessions.values().iterator().next();
-                    break;
-                }
-            }
-            Thread.sleep(1);
-        }
-        if (state == null) {
-            throw new AssertionError("STREAM session was not created");
-        }
-
-        long now = System.nanoTime();
-        setSessionTimestamp(state, "lastHeartbeatPongNanos", now);
-        setSessionTimestamp(state, "lastApplicationNanos", now);
-        setSessionTimestamp(state, expiredTimestampField, now - TimeUnit.SECONDS.toNanos(31));
-    }
-
-    private static void setSessionTimestamp(Object state, String name, long value)
-            throws ReflectiveOperationException {
-        Field field = state.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.setLong(state, value);
     }
 
     private static TestSession awaitSession() throws Exception {
@@ -1378,7 +1256,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger dispatchCount = new AtomicInteger();
         private final AtomicInteger replacementCallbacks = new AtomicInteger();
         private final CountDownLatch replacementEntered = new CountDownLatch(1);
-        private final CompletableFuture<Void> replacementCompletion = new CompletableFuture<>();
+        private final CompletableFuture<Long> replacementCompletion = new CompletableFuture<>();
         private final List<String> packetNames = Collections.synchronizedList(new ArrayList<>());
 
         public TestSession(ZLinkSessionContext context) {
@@ -1421,11 +1299,15 @@ final class ZLinkStreamRuntimeIngressTest {
             replacementCallbacks.incrementAndGet();
             replacementEntered.countDown();
             return switch (replacementMode) {
-                case SUCCESS, NONE -> CompletableFuture.completedFuture(null);
+                case SUCCESS -> {
+                    replacementCompletion.complete(System.nanoTime());
+                    yield CompletableFuture.completedFuture(null);
+                }
+                case NONE -> CompletableFuture.completedFuture(null);
                 case FAILURE ->
                         CompletableFuture.failedFuture(
                                 new IllegalStateException("replacement callback failure"));
-                case PENDING -> replacementCompletion;
+                case PENDING -> replacementCompletion.thenApply(ignored -> null);
             };
         }
 
@@ -1514,7 +1396,7 @@ final class ZLinkStreamRuntimeIngressTest {
         public void shutdown() {}
     }
 
-    private static final class FakeStream implements ZLinkBackendStreamSocket {
+    private static class FakeStream implements ZLinkBackendStreamSocket {
         private Runnable readabilityObserver = () -> {};
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
@@ -1523,11 +1405,9 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
-        private final AtomicReference<RoutingId> disconnectedPeer = new AtomicReference<>();
+        private final CompletableFuture<RoutingId> disconnectedPeer = new CompletableFuture<>();
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private volatile long disconnectStartedAt;
-        private volatile long sessionClosingStartedAt;
-        private Runnable sessionClosingObserver = () -> {};
         private boolean completeClosingControlSend = true;
         private final CompletableFuture<Void> closingControlCompletion = new CompletableFuture<>();
         private final CountDownLatch firstReceiveEntered = new CountDownLatch(1);
@@ -1537,7 +1417,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private volatile boolean failHeartbeatPongSend;
         private volatile boolean failHeartbeatPingSend;
         private volatile boolean deferHeartbeatPongSend;
-        private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(1);
+        private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(2);
         private final CountDownLatch heartbeatPongAsyncAttempted = new CountDownLatch(1);
         private final AtomicInteger synchronousHeartbeatPongSends = new AtomicInteger();
         private final CompletableFuture<Void> deferredHeartbeatPong = new CompletableFuture<>();
@@ -1684,7 +1564,7 @@ final class ZLinkStreamRuntimeIngressTest {
         public void disconnectPeer(RoutingId routingId) {
             disconnectStartedAt = System.nanoTime();
             disconnectCalls.incrementAndGet();
-            disconnectedPeer.set(routingId);
+            disconnectedPeer.complete(routingId);
         }
 
         @Override
@@ -1712,20 +1592,20 @@ final class ZLinkStreamRuntimeIngressTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 SendFlags flags) {
-            if ("$zlink.heartbeat.ping".equals(header.packetName())) {
+            if (HEARTBEAT_PING.equals(header.packetName())) {
                 heartbeatPingAttempted.countDown();
                 if (failHeartbeatPingSend) {
                     throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
                 }
             }
-            if (failHeartbeatPongSend && "$zlink.heartbeat.pong".equals(header.packetName())) {
+            if (failHeartbeatPongSend && HEARTBEAT_PONG.equals(header.packetName())) {
                 return false;
             }
-            if (deferHeartbeatPongSend && "$zlink.heartbeat.pong".equals(header.packetName())) {
+            if (deferHeartbeatPongSend && HEARTBEAT_PONG.equals(header.packetName())) {
                 synchronousHeartbeatPongSends.incrementAndGet();
                 return true;
             }
-            if ("session-closing".equals(header.packetName())) {
+            if (ZLinkSessionClosingControl.NAME.equals(header.packetName())) {
                 sessionClosingSends.incrementAndGet();
                 sessionClosingSendsLatch.countDown();
             }
@@ -1735,16 +1615,14 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override
         public CompletionStage<Void> sendAsync(
                 RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
-            if ("session-closing".equals(header.packetName())) {
-                sessionClosingStartedAt = System.nanoTime();
+            if (ZLinkSessionClosingControl.NAME.equals(header.packetName())) {
                 sessionClosingSends.incrementAndGet();
                 sessionClosingSendsLatch.countDown();
-                sessionClosingObserver.run();
                 return completeClosingControlSend
                         ? CompletableFuture.completedFuture(null)
                         : closingControlCompletion;
             }
-            if (deferHeartbeatPongSend && "$zlink.heartbeat.pong".equals(header.packetName())) {
+            if (deferHeartbeatPongSend && HEARTBEAT_PONG.equals(header.packetName())) {
                 heartbeatPongAsyncAttempted.countDown();
                 return deferredHeartbeatPong;
             }

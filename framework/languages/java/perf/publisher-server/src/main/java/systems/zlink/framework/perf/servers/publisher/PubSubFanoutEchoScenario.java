@@ -33,8 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
 // own originals are intersected with this process's window-success set by the runner (§15.4).
 public final class PubSubFanoutEchoScenario {
     private static final class PublishedSets {
-        final FanoutSupport.SequenceBitSet window = new FanoutSupport.SequenceBitSet();
-        final FanoutSupport.SequenceBitSet settle = new FanoutSupport.SequenceBitSet();
+        final FanoutSupport.SequenceBitSet windowSuccess = new FanoutSupport.SequenceBitSet();
     }
 
     private final ZLinkFanoutClient fanout;
@@ -44,8 +43,8 @@ public final class PubSubFanoutEchoScenario {
     private final RoleConfig config;
     private final Path sequenceFile;
     private final AtomicLong issued = new AtomicLong(); // run-wide: warmup and measured ranges never overlap
-    private volatile long measuredBase; // `issued` when the measured epoch was reset
     private volatile PublishedSets sets = new PublishedSets();
+    private volatile long measuredBase;
 
     public PubSubFanoutEchoScenario(ZLinkFanoutClient fanout, ObjectProvider<ZLinkFrameworkRuntime> runtimeProvider,
             Measurement measurement,
@@ -108,6 +107,7 @@ public final class PubSubFanoutEchoScenario {
             }
             long sequence = issued.incrementAndGet();
             boolean warmup = "0".equals(measurement.resetSeq());
+            PublishedSets current = sets;
             PerfPublishEvent message = new PerfPublishEvent(config.runId(), config.cellId(), measurement.resetSeq(),
                     warmup ? "warmup" : "measured", DecimalText.of(sequence), FanoutSupport.TOPIC, DecimalText.of(started),
                     PerfClock.DOMAIN, measurement.pattern().base64());
@@ -120,15 +120,16 @@ public final class PubSubFanoutEchoScenario {
             return Optional.of(new CompletionLoop.Iteration<>(call, (ignored, error) -> {
                 if (error == null) {
                     long completed = PerfClock.now();
-                    measurement.completeOperation(started, null, completed);
                     if (warmup) {
+                        measurement.completeOperation(started, null, completed);
                         if (measurement.setupEvidence().isEmpty()) {
                             measurement.setupEvidence(List.of(Evidence.of("warmupMarkerPublished",
                                     "ZLinkFanoutClient.publish.submit", message.sequence())));
                         }
                     } else {
-                        PublishedSets current = sets;
-                        (completed < measurement.endTicks() ? current.window : current.settle).trySet(sequence);
+                        if (measurement.completeOperation(started, null, completed)) {
+                            current.windowSuccess.trySet(sequence);
+                        }
                     }
                 } else {
                     measurement.completeOperation(started, error);
@@ -140,12 +141,10 @@ public final class PubSubFanoutEchoScenario {
     private void enrich(PerfSnapshot snapshot) {
         PublishedSets current = sets;
         FanoutSupport.applyCommon(snapshot, false);
-        FanoutSupport.value(snapshot, "messages.publishedInWindow", DecimalText.of(current.window.count()));
-        FanoutSupport.value(snapshot, "messages.settlePublished", DecimalText.of(current.settle.count()));
-        FanoutSupport.value(snapshot, "messages.published", DecimalText.of(current.window.count() + current.settle.count()));
+        FanoutSupport.value(snapshot, "messages.publishedInWindow", DecimalText.of(current.windowSuccess.count()));
         Object seconds = snapshot.window.get("measuredSeconds");
         if (seconds instanceof Double measured && measured > 0) {
-            FanoutSupport.value(snapshot, "fanout.publishOpsPerSec", current.window.count() / measured);
+            FanoutSupport.value(snapshot, "fanout.publishOpsPerSec", current.windowSuccess.count() / measured);
         } else {
             FanoutSupport.nullValue(snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.");
         }
@@ -159,11 +158,9 @@ public final class PubSubFanoutEchoScenario {
         if (!measurement.finalSnapshot() || !"complete".equals(snapshot.phase) || !"1".equals(snapshot.resetSeq)) {
             return;
         }
-        long last = issued.get();
-        long base = measuredBase;
         FanoutSupport.writeOnce(sequenceFile, new FanoutSupport.PublisherSequences(config.runId(), config.cellId(),
-                snapshot.resetSeq, "measured",
-                last > base ? List.of(new FanoutSupport.SequenceRange(DecimalText.of(base + 1), DecimalText.of(last))) : List.of(),
-                current.window.ranges(), current.settle.ranges()));
+                snapshot.resetSeq, "measured", issued.get() > measuredBase
+                        ? List.of(new FanoutSupport.SequenceRange(DecimalText.of(measuredBase + 1), DecimalText.of(issued.get())))
+                        : List.of(), current.windowSuccess.ranges()));
     }
 }

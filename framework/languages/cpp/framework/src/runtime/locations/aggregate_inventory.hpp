@@ -1,10 +1,14 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/locations/location_repository.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <nlohmann/json.hpp>
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,8 +23,12 @@
 namespace zlink::framework::runtime::aggregate_inventory
 {
 
-inline constexpr std::size_t page_item_limit = 1024;
-inline constexpr std::size_t page_byte_limit = 1024u * 1024u;
+inline constexpr int format_version = 1;
+inline constexpr std::string_view flat_tree_root_domain = "zlink:aggregate-inventory-root:v1";
+inline constexpr std::string_view indexed_tree_root_domain = "zlink:aggregate-inventory-root:v2";
+
+inline constexpr std::size_t page_item_limit = protocol::maintenanceAggregateParticipants;
+inline constexpr std::size_t page_byte_limit = protocol::maintenanceAggregateBytes;
 
 using json_t = nlohmann::json;
 using bytes_t = std::vector<std::byte>;
@@ -52,19 +60,11 @@ struct tree_t
     std::size_t participant_count = 0;
 };
 
-inline constexpr std::size_t index_item_limit = 1024;
+inline constexpr std::size_t index_item_limit = page_item_limit;
 
 inline std::string hex (const bytes_t &bytes)
 {
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string result;
-    result.reserve (bytes.size () * 2);
-    for (const auto byte : bytes) {
-        const auto value = std::to_integer<std::uint8_t> (byte);
-        result.push_back (digits[value >> 4]);
-        result.push_back (digits[value & 0x0f]);
-    }
-    return result;
+    return zlink::framework::detail::encode_hex (std::span<const std::byte> (bytes));
 }
 
 inline bytes_t unhex (std::string_view value)
@@ -98,22 +98,24 @@ inline bytes_t bytes_from_string (std::string_view value)
 
 inline json_t encode_participant (const aggregate_participant_t &participant)
 {
-    json_t result{{"key", participant.key.value},
-                  {"expectedStoreVersion", participant.expected_store_version},
-                  {"ownerTransition", static_cast<int> (participant.owner_transition)},
-                  {"authorityPayload", hex (participant.authority_payload)},
-                  {"membershipMutation", hex (participant.membership_mutation)}};
+    json_t result{
+      {location_record_fields::key, participant.key.value},
+      {location_record_fields::expectedStoreVersion, participant.expected_store_version},
+      {location_record_fields::ownerTransition, static_cast<int> (participant.owner_transition)},
+      {location_record_fields::authorityPayload, hex (participant.authority_payload)},
+      {location_record_fields::membershipMutation, hex (participant.membership_mutation)}};
     return result;
 }
 
 inline aggregate_participant_t decode_participant (const json_t &value)
 {
     aggregate_participant_t result{
-      {value.at ("key").get<std::string> ()},
-      value.at ("expectedStoreVersion").get<std::string> (),
-      static_cast<authority_generation_transition_t> (value.at ("ownerTransition").get<int> ()),
-      unhex (value.at ("authorityPayload").get<std::string> ()),
-      unhex (value.at ("membershipMutation").get<std::string> ())};
+      {value.at (location_record_fields::key).get<std::string> ()},
+      value.at (location_record_fields::expectedStoreVersion).get<std::string> (),
+      static_cast<authority_generation_transition_t> (
+        value.at (location_record_fields::ownerTransition).get<int> ()),
+      unhex (value.at (location_record_fields::authorityPayload).get<std::string> ()),
+      unhex (value.at (location_record_fields::membershipMutation).get<std::string> ())};
     return result;
 }
 
@@ -123,8 +125,10 @@ inline bytes_t encode_page (std::size_t index,
     json_t entries = json_t::array ();
     for (const auto &participant : participants)
         entries.push_back (encode_participant (participant));
-    const auto encoded =
-      json_t{{"version", 1}, {"pageIndex", index}, {"entries", std::move (entries)}}.dump ();
+    const auto encoded = json_t{{location_record_fields::version, format_version},
+                                {location_record_fields::pageIndex, index},
+                                {location_record_fields::entries, std::move (entries)}}
+                           .dump ();
     return bytes_from_string (encoded);
 }
 
@@ -137,14 +141,17 @@ decode_page (const bytes_t &encoded, std::optional<std::size_t> expected_page_in
         const auto text =
           std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
-        if (value.value ("version", 0) != 1 || !value.contains ("pageIndex")
+        if (value.value (location_record_fields::version, 0) != format_version
+            || !value.contains (location_record_fields::pageIndex)
             || (expected_page_index
-                && value.at ("pageIndex").get<std::size_t> () != *expected_page_index)
-            || !value.at ("entries").is_array () || value.at ("entries").size () > page_item_limit)
+                && value.at (location_record_fields::pageIndex).get<std::size_t> ()
+                     != *expected_page_index)
+            || !value.at (location_record_fields::entries).is_array ()
+            || value.at (location_record_fields::entries).size () > page_item_limit)
             return std::nullopt;
         std::vector<aggregate_participant_t> participants;
-        participants.reserve (value.at ("entries").size ());
-        for (const auto &entry : value.at ("entries")) {
+        participants.reserve (value.at (location_record_fields::entries).size ());
+        for (const auto &entry : value.at (location_record_fields::entries)) {
             const auto participant = decode_participant (entry);
             if (participant.key.value.empty () || participant.expected_store_version.empty ()
                 || participant.owner_transition != authority_generation_transition_t::new_owner)
@@ -167,11 +174,11 @@ inline bytes_t encode_index_page (std::size_t level,
     for (const auto &digest : child_digests)
         entries.push_back (hex (bytes_t (digest.begin (), digest.end ())));
     return bytes_from_string (json_t{
-      {"version", 1},
-      {"level", level},
-      {"pageIndex", page_index},
-      {"childStart", child_start},
-      {"entries",
+      {location_record_fields::version, format_version},
+      {location_record_fields::level, level},
+      {location_record_fields::pageIndex, page_index},
+      {location_record_fields::childStart, child_start},
+      {location_record_fields::entries,
        std::move (entries)}}.dump ());
 }
 
@@ -187,14 +194,17 @@ decode_index_page (const bytes_t &encoded,
         const auto text =
           std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
-        if (value.value ("version", 0) != 1 || !value.contains ("level")
-            || !value.contains ("pageIndex") || !value.contains ("childStart")
-            || !value.at ("entries").is_array () || value.at ("entries").empty ()
-            || value.at ("entries").size () > index_item_limit)
+        if (value.value (location_record_fields::version, 0) != format_version
+            || !value.contains (location_record_fields::level)
+            || !value.contains (location_record_fields::pageIndex)
+            || !value.contains (location_record_fields::childStart)
+            || !value.at (location_record_fields::entries).is_array ()
+            || value.at (location_record_fields::entries).empty ()
+            || value.at (location_record_fields::entries).size () > index_item_limit)
             return std::nullopt;
-        const auto level = value.at ("level").get<std::size_t> ();
-        const auto page_index = value.at ("pageIndex").get<std::size_t> ();
-        const auto child_start = value.at ("childStart").get<std::size_t> ();
+        const auto level = value.at (location_record_fields::level).get<std::size_t> ();
+        const auto page_index = value.at (location_record_fields::pageIndex).get<std::size_t> ();
+        const auto child_start = value.at (location_record_fields::childStart).get<std::size_t> ();
         if ((expected_level && level != *expected_level)
             || (expected_page_index && page_index != *expected_page_index)
             || (expected_child_start && child_start != *expected_child_start))
@@ -203,8 +213,8 @@ decode_index_page (const bytes_t &encoded,
         result.level = level;
         result.page_index = page_index;
         result.child_start = child_start;
-        result.child_digests.reserve (value.at ("entries").size ());
-        for (const auto &entry : value.at ("entries")) {
+        result.child_digests.reserve (value.at (location_record_fields::entries).size ());
+        for (const auto &entry : value.at (location_record_fields::entries)) {
             const auto digest = unhex (entry.get<std::string> ());
             if (digest.size () != digest_t{}.size ())
                 return std::nullopt;
@@ -223,7 +233,7 @@ decode_index_page (const bytes_t &encoded,
 
 inline digest_t tree_root (const std::vector<page_t> &pages, std::size_t participant_count)
 {
-    bytes_t input = bytes_from_string ("zlink:aggregate-inventory-root:v1");
+    bytes_t input = bytes_from_string (flat_tree_root_domain);
     const auto append_u64 = [&input] (std::uint64_t value) {
         for (int shift = 56; shift >= 0; shift -= 8)
             input.push_back (std::byte ((value >> shift) & 0xffu));
@@ -237,7 +247,7 @@ inline digest_t tree_root (const std::vector<page_t> &pages, std::size_t partici
 
 inline digest_t indexed_tree_root (const tree_t &tree)
 {
-    bytes_t input = bytes_from_string ("zlink:aggregate-inventory-root:v2");
+    bytes_t input = bytes_from_string (indexed_tree_root_domain);
     const auto append_u64 = [&input] (std::uint64_t value) {
         for (int shift = 56; shift >= 0; shift -= 8)
             input.push_back (std::byte ((value >> shift) & 0xffu));
