@@ -1903,6 +1903,11 @@ void mesh_node_runtime_t::request_stop () noexcept
     _stopping.store (true, std::memory_order_release);
 }
 
+void mesh_node_runtime_t::cancel_pending_dispatch_waits () noexcept
+{
+    spot_node_runtime_t (_state->spot_state).cancel_dispatch_waits ();
+}
+
 void mesh_node_runtime_t::stop () noexcept
 {
     // Stop timer producers before draining their serial/worker consumers, and

@@ -43,6 +43,11 @@
 namespace zlink::framework
 {
 
+namespace runtime
+{
+class serial_execution_queue_t;
+}
+
 namespace runtime::protocol
 {
 struct actor_route_fence_t;
@@ -56,7 +61,9 @@ class spot_context_access_t;
 class actor_dispatch_admission_token_t;
 struct mesh_node_builder_state_t;
 void drain_spot_node_executors (spot_node_builder_state_t &node);
-void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node);
+void visit_spot_node_dispatch_queues (
+  spot_node_builder_state_t &node,
+  const std::function<void (runtime::serial_execution_queue_t &)> &visitor);
 
 template <typename THandler> struct timer_handler_factory_t
 {
@@ -558,7 +565,7 @@ task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t
         }
     }
     catch (...) {
-        co_return current_exception_to_message_result ("spot handler threw an exception");
+        co_return current_exception_result<zlink::message_t> ("spot handler threw an exception");
     }
 }
 
@@ -1254,7 +1261,9 @@ class spot_context_t
     task_t<bool> close_erased ();
 
     friend void detail::drain_spot_node_executors (detail::spot_node_builder_state_t &node);
-    friend void detail::cancel_spot_node_dispatch_queues (detail::spot_node_builder_state_t &node);
+    friend void detail::visit_spot_node_dispatch_queues (
+      detail::spot_node_builder_state_t &node,
+      const std::function<void (runtime::serial_execution_queue_t &)> &visitor);
 
     std::shared_ptr<detail::spot_context_state_t> _state;
     std::shared_ptr<detail::worker_scheduler_t> _worker_scheduler;

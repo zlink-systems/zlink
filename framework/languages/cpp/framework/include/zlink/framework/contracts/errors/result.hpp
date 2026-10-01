@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace zlink::framework
@@ -17,7 +18,7 @@ struct result_access_t;
 template <typename T> class result_t
 {
   public:
-    static result_t success (T value) { return result_t (std::move (value)); }
+    static result_t success (T value) { return result_t (std::in_place, std::move (value)); }
 
     static result_t failure (framework_error_kind_t kind, std::string message)
     {
@@ -58,7 +59,13 @@ template <typename T> class result_t
   private:
     friend struct detail::result_access_t;
 
-    explicit result_t (T value) : _value (std::move (value)) {}
+    explicit result_t (std::in_place_t, T &&value)
+    {
+        if constexpr (std::is_move_constructible_v<T>)
+            _value.emplace (std::move (value));
+        else
+            _value.emplace (value);
+    }
     explicit result_t (framework_exception_t error) : _error (std::move (error)) {}
 
     std::optional<T> _value;

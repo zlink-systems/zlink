@@ -256,10 +256,16 @@ inbound_message_context_t resolve_inbound_context (const inbound_message_context
 class handler_registry_state_t
 {
   public:
+    std::stop_source wait_stop;
     std::map<handler_key_t, handler_entry_t> handlers;
     std::shared_ptr<const filter_list_t> filters = std::make_shared<const filter_list_t> ();
     handler_registry_t::failure_observer_t failure_observer;
 };
+
+void cancel_handler_waits (handler_registry_t &registry) noexcept
+{
+    registry._state->wait_stop.request_stop ();
+}
 
 void configure_handler_invocation_executor ()
 {
@@ -312,16 +318,16 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
                                           const message_context_t &context,
                                           terminal_invoker_t terminal) const
 {
-    const detail::ambient_context_scope_t invocation (nullptr, this);
+    const detail::ambient_context_scope_t invocation (nullptr, this,
+                                                      _state->wait_stop.get_token ());
     const auto filters = _state->filters;
     if (filters->empty ()) {
         try {
             return terminal ();
         }
         catch (...) {
-            task_t<zlink::message_t>::promise_type failure;
-            failure.unhandled_exception ();
-            return failure.get_return_object ();
+            return task_t<zlink::message_t> (
+              detail::current_exception_result<zlink::message_t> ("handler threw an exception"));
         }
     }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
@@ -385,6 +391,8 @@ handler_registry_t::invoke (std::string_view channel_name,
                         owned_message = std::make_shared<zlink::message_t> (message),
                         owned_inbound = detail::resolve_inbound_context (
                           inbound, entry->descriptor, channel_name, packet_name)] () mutable {
+        const detail::ambient_context_scope_t owner_context (nullptr, this,
+                                                             _state->wait_stop.get_token ());
         result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler failed");
         try {

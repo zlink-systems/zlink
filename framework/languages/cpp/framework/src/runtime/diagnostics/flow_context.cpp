@@ -80,6 +80,11 @@ const bool ambient_flow_hooks_installed = [] {
 
 } // namespace
 
+// The static runtime target retains this TU's ambient hook registration.
+extern "C" void zlink_framework_ambient_context_link_anchor ()
+{
+}
+
 std::string flow_id_t::create ()
 {
     std::array<std::uint8_t, 16> bytes{};

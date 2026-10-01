@@ -874,11 +874,11 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             || header.message_name == spot_actor_disconnect_route_request_t::packet_name) {
             /* One implementation (dispatch_request_async); a caller without a
              * deferred record terminal waits for it here. */
-            ::zlink::framework::task_completion_source_t<zlink::message_t> completion;
-            auto result = completion.task ();
+            auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+            auto result = completion->task ();
             if (!dispatch_request_async (received, header, services,
                                          [completion] (result_t<zlink::message_t> value) mutable {
-                                             completion.complete (std::move (value));
+                                             completion->complete (std::move (value));
                                          }))
                 return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
                                                             "SPOT route request decode failed");
@@ -887,11 +887,11 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
               detail::encoded_payload_from_raw (body.value ()));
-            task_completion_source_t<zlink::message_t> completion;
-            auto result = completion.task ();
+            auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+            auto result = completion->task ();
             dispatch_actor_commit_request (std::move (request), received, header, services,
                                            [completion] (result_t<zlink::message_t> value) mutable {
-                                               completion.complete (std::move (value));
+                                               completion->complete (std::move (value));
                                            });
             return result.result ();
         }

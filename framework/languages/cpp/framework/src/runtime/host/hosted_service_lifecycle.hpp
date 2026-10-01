@@ -43,6 +43,8 @@ class hosted_service_lifecycle_t
         return true;
     }
 
+    virtual void cancel_execution_waits () noexcept {}
+
     virtual void force_close_sessions () noexcept {}
 
     virtual bool participates_in_drain_propagation () const noexcept { return false; }

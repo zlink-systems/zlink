@@ -77,13 +77,14 @@ http_client_runtime_t::submit (http_request_t request) const
 {
     const auto timeout = request.timeout.value_or (_options.timeout);
     const auto deadline = std::chrono::steady_clock::now () + timeout;
-    zlink::framework::task_completion_source_t<raw_http_response_t> completion (
-      completion_scheduler ());
-    auto task = completion.task ();
+    auto completion =
+      std::make_shared<zlink::framework::task_completion_source_t<raw_http_response_t>> ();
+    auto task = zlink::framework::detail::with_task_resume_scheduler (completion->task (),
+                                                                      completion_scheduler ());
     auto runtime = shared_from_this ();
     auto execute_scheduler = _options.execute_scheduler;
     if (!execute_scheduler) {
-        completion.complete (
+        completion->complete (
           zlink::framework::detail::result_access_t::failure<raw_http_response_t> (
             request_protocol_error ("HTTP client coroutine execute scheduler is not configured")));
         return task;
@@ -91,16 +92,16 @@ http_client_runtime_t::submit (http_request_t request) const
     try {
         execute_scheduler->execute (
           [runtime, request = std::move (request), deadline, completion] () mutable {
-              completion.complete (runtime->execute_with_deadline (std::move (request), deadline));
+              completion->complete (runtime->execute_with_deadline (std::move (request), deadline));
           });
     }
     catch (const std::exception &ex) {
-        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
+        completion->complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
           zlink::framework::detail::boundary_error_t::closed,
           std::string ("HTTP client coroutine execute scheduler rejected work: ") + ex.what ()));
     }
     catch (...) {
-        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
+        completion->complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
           zlink::framework::detail::boundary_error_t::closed,
           "HTTP client coroutine execute scheduler rejected work"));
     }

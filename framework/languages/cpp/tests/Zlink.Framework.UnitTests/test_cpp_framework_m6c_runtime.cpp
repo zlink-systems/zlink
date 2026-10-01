@@ -990,8 +990,9 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
 
-    auto reply_source = std::make_shared<task_completion_source_t<zlink::message_t>> ();
-    auto result_source = std::make_shared<task_completion_source_t<reply_t>> ();
+    auto reply_source =
+      std::make_shared<zlink::framework::task_completion_source_t<zlink::message_t>> ();
+    auto result_source = std::make_shared<zlink::framework::task_completion_source_t<reply_t>> ();
     auto result_task = result_source->task ();
     const auto submitted = state->run_serial_sync ("temporary-channel-call-yield", [&] {
         auto pending =

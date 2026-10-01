@@ -374,6 +374,27 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
+if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
+  foreach(context_anchor IN ITEMS
+      zlink_framework_execution_context_link_anchor
+      zlink_framework_ambient_context_link_anchor)
+    if(MSVC)
+      if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        target_link_options(zlink_framework INTERFACE "/INCLUDE:_${context_anchor}")
+      else()
+        target_link_options(zlink_framework INTERFACE "/INCLUDE:${context_anchor}")
+      endif()
+    elseif(APPLE)
+      target_link_options(zlink_framework INTERFACE "LINKER:-u,_${context_anchor}")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+        target_link_options(zlink_framework INTERFACE "LINKER:-u,_${context_anchor}")
+      else()
+        target_link_options(zlink_framework INTERFACE "LINKER:-u,${context_anchor}")
+      endif()
+    endif()
+  endforeach()
+endif()
 if(ZLINK_FRAMEWORK_CPP_SHARED)
   # C++ exports metrics through runtime.status(), not an OpenTelemetry provider API.
   # Adding a provider-injection boundary would therefore be a spec change.
@@ -1470,7 +1491,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_task_completion_source
     COMMAND test_cpp_framework_task_completion_source
-    LABELS "framework-contract;framework-unit;async"
+    LABELS "framework-contract;async"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_sample_parity

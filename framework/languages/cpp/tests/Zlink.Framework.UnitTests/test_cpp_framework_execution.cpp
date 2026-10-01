@@ -2871,8 +2871,8 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
         }
     }
 
-    // Active cancellation is cooperative: the owner remains valid and the
-    // observer remains pending until the callback task acknowledges terminal.
+    // Shutdown settles the owned waiter while preserving its pending source.
+    // The terminal callback releases the owner before late source completion.
     {
         auto executor =
           std::make_shared<runtime::offload_executor_t> (1, "spot-serial-active-cancel");
@@ -2882,6 +2882,7 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
           *executor, runtime::serial_execution_queue_options_t{});
         auto queue = owner->serial_queue;
         auto callback_terminal = std::make_shared<task_completion_source_t<void>> ();
+        auto source_task = callback_terminal->task ();
         std::mutex gate;
         std::condition_variable changed;
         bool entered = false;
@@ -2916,28 +2917,21 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
         owner.reset ();
         {
             std::unique_lock lock (gate);
-            if (changed.wait_for (lock, std::chrono::milliseconds (50),
-                                  [&] { return result.has_value (); })
-                || weak_owner.expired ()) {
-                return false;
-            }
-        }
-        callback_terminal->complete (result_t<void>::success ());
-        {
-            std::unique_lock lock (gate);
             if (!changed.wait_for (lock, std::chrono::seconds (1),
                                    [&] { return result.has_value (); })) {
                 return false;
             }
         }
+        if (source_task.result_for (std::chrono::milliseconds (0)) || completion_calls.load () != 1
+            || !callback_terminal->complete (result_t<void>::success ())
+            || callback_terminal->complete (result_t<void>::success ())
+            || !source_task.result_for (std::chrono::milliseconds (0))
+            || completion_calls.load () != 1) {
+            return false;
+        }
         queue->drain ();
         queue.reset ();
-        // The worker releases the finished turn's completion, which holds the
-        // owner, after the queue reports itself empty: a completion may own the
-        // queue itself, so the queue cannot release it earlier.
-        const auto owner_released_by = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-        while (!weak_owner.expired () && std::chrono::steady_clock::now () < owner_released_by)
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        executor->drain ();
         if (*result || result->error_kind () != framework_error_kind_t::shutting_down
             || completion_calls.load () != 1 || !weak_owner.expired ()) {
             return false;
@@ -5831,9 +5825,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    // Host shutdown uses the same cooperative lifecycle cancellation seam but
-    // keeps its own terminal reason. It must not be rewritten as a deadline,
-    // and the terminal owner remains held until the active callback settles.
+    // Host shutdown ends the registered source waiter once with ShuttingDown.
+    // Its original source remains pending until the application completes it.
     auto shutdown_lifecycle = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool shutdown_lifecycle_entered{false};
     std::atomic_int shutdown_lifecycle_failure_calls{0};
@@ -5876,12 +5869,15 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex shutdown_lifecycle_mutex;
     std::condition_variable shutdown_lifecycle_changed;
     std::optional<result_t<actor_join_reply_t>> shutdown_lifecycle_result;
+    std::atomic_int shutdown_lifecycle_terminals{0};
+    auto shutdown_source_task = shutdown_lifecycle->task ();
     owner.finalize_remote_actor_to_spot_async (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
       [&] (result_t<actor_join_reply_t> result) {
           {
               std::lock_guard lock (shutdown_lifecycle_mutex);
+              ++shutdown_lifecycle_terminals;
               shutdown_lifecycle_result.emplace (std::move (result));
           }
           shutdown_lifecycle_changed.notify_all ();
@@ -5897,20 +5893,19 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->serial_queue->cancel_pending ();
     {
         std::unique_lock lock (shutdown_lifecycle_mutex);
-        if (shutdown_lifecycle_changed.wait_for (lock, std::chrono::milliseconds (40), [&] {
-                return shutdown_lifecycle_result.has_value ();
-            })) {
-            return false;
-        }
-    }
-    shutdown_lifecycle->complete (result_t<void>::success ());
-    {
-        std::unique_lock lock (shutdown_lifecycle_mutex);
         if (!shutdown_lifecycle_changed.wait_for (lock, std::chrono::seconds (1), [&] {
                 return shutdown_lifecycle_result.has_value ();
             })) {
             return false;
         }
+    }
+    if (shutdown_source_task.result_for (std::chrono::milliseconds (0))
+        || shutdown_lifecycle_terminals.load () != 1
+        || !shutdown_lifecycle->complete (result_t<void>::success ())
+        || shutdown_lifecycle->complete (result_t<void>::success ())
+        || !shutdown_source_task.result_for (std::chrono::milliseconds (0))
+        || shutdown_lifecycle_terminals.load () != 1) {
+        return false;
     }
     if (*shutdown_lifecycle_result
         || shutdown_lifecycle_result->error_kind () != framework_error_kind_t::shutting_down
