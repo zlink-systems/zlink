@@ -107,10 +107,29 @@ case "$prefix" in
   *) echo "Core release prefix escaped cache root: $prefix" >&2; exit 2 ;;
 esac
 
+release_tag="core/v${version}"
+release_checksums_name="release-checksums.txt"
+command -v node >/dev/null 2>&1 || {
+  echo "node is required to read and write Core release provenance" >&2
+  exit 1
+}
+
 manifest="$prefix/share/zlink/core-package-provenance.json"
 if [[ "$force" -eq 0 && -f "$manifest" ]]; then
-  manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n1)"
-  if [[ "$manifest_version" = "$version" ]]; then
+  # Prints the recorded checksums digest only for a clean release package of this version.
+  manifest_checksums_sha="$(node -e '
+const [path, version, tag] = process.argv.slice(1);
+try {
+  const m = JSON.parse(require("fs").readFileSync(path, "utf8"));
+  const sha = m.release && m.release.checksumsSha256;
+  if (m.version === version && m.package === "zlink-core" &&
+      m.source && m.source.dirty === false && m.release.tag === tag &&
+      /^[0-9a-f]{64}$/.test(sha)) process.stdout.write(sha);
+} catch {}
+' "$manifest" "$version" "$release_tag")"
+  release_checksums="$prefix/share/zlink/$release_checksums_name"
+  if [[ -n "$manifest_checksums_sha" && -f "$release_checksums" &&
+        "$(sha256_of "$release_checksums")" = "$manifest_checksums_sha" ]]; then
     printf '%s\n' "$prefix"
     exit 0
   fi
@@ -124,12 +143,6 @@ command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || {
   echo "sha256sum or shasum is required to verify the Core release" >&2
   exit 1
 }
-command -v node >/dev/null 2>&1 || {
-  echo "node is required to write Core release provenance" >&2
-  exit 1
-}
-
-release_tag="core/v${version}"
 release_base="https://github.com/zlink-systems/zlink/releases/download/${release_tag}"
 binary_name="libzlink-${platform}"
 if [[ "$platform" == windows-* ]]; then
@@ -227,7 +240,7 @@ stage="$work/prefix"
 mkdir -p "$stage/include" "$stage/share/zlink"
 cp -a "$source_root/core/include/." "$stage/include/"
 cp -a "$binary_prefix/include/." "$stage/include/"
-cp "$checksums" "$stage/share/zlink/release-checksums.txt"
+cp "$checksums" "$stage/share/zlink/$release_checksums_name"
 cp "$release_provenance" "$stage/share/zlink/release-provenance.txt"
 
 case "$platform" in
