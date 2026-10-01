@@ -76,6 +76,10 @@ export {
   registerHandlerFilterScope as registerIntegrationHandlerFilterScope,
   type ZLinkHandlerFilterScopeRunner
 } from './runtime/channels/handler-filter-scope';
+export {
+  disposeOwnedInstance as disposeIntegrationHandler,
+  disposeOwnedInstances as disposeIntegrationHandlers
+} from './runtime/handlers/handler-instance-scope';
 
 export interface ZLinkNestIntegrationRuntimeHost extends Pick<
   import('./contracts').ZLinkFrameworkRuntime,
@@ -190,14 +194,17 @@ export function createIntegrationActorManager(
 ): ZLinkActorManager {
   const host = runtimeHost(runtime);
   const runtimeOptions = host.createActorManagerOptions();
-  const manager = new DefaultZLinkActorManager({
-    actorFactories: registration.actorFactories,
-    ...runtimeOptions,
-    boundSessionFactory:
-      runtimeOptions.boundSessionFactory ??
-      host.boundSessionFactory.create.bind(host.boundSessionFactory),
-    providerResolver
-  });
+  const manager = new DefaultZLinkActorManager(
+    {
+      actorFactories: registration.actorFactories,
+      ...runtimeOptions,
+      boundSessionFactory:
+        runtimeOptions.boundSessionFactory ??
+        host.boundSessionFactory.create.bind(host.boundSessionFactory),
+      providerResolver
+    },
+    host.detachedTaskRunner()
+  );
   host.setActorManager(manager);
   return manager;
 }
@@ -239,6 +246,7 @@ export function createIntegrationSpotManager(
       ...(spotNode.spotActorRequestHandlers ?? [])
     ]),
     ...runtimeOptions,
+    detachedTaskRunner: host.detachedTaskRunner(),
     spotRouteResolver: runtimeOptions.spotRouteResolver,
     routedTransport: host.routeTransport,
     providerResolver,

@@ -9,7 +9,15 @@ const { NestFactory } = require('@nestjs/core');
 const zlink = require('@zlink-systems/zlink');
 
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
 const nestjs = require('../../packages/nestjs/dist');
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const channelProtocol = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   holdTcpEndpoint,
@@ -519,6 +527,63 @@ test('ZLinkModule.forRoot maps zlinkRequestHandler providers from NestJS DI', as
   );
 
   await app.close();
+});
+
+test('public channel request releases all Nest filters when one release fails', async () => {
+  const endpoint = await reserveTcpEndpoint();
+  const released = [];
+  class FirstFilter {
+    invoke(_context, next) {
+      return next();
+    }
+    dispose() {
+      released.push('first');
+    }
+  }
+  class LastFilter {
+    invoke(_context, next) {
+      return next();
+    }
+    dispose() {
+      released.push('last');
+      throw new Error('node-scope release failed');
+    }
+  }
+  class ScopeRequest {}
+  class ScopeHandler {
+    handle() {
+      return { ok: true };
+    }
+  }
+  const builder = nestjs.zlinkFramework().options({ filters: [FirstFilter, LastFilter] });
+  builder
+    .addClientServerChannel('node-scope')
+    .server()
+    .listen(Number(new URL(endpoint).port))
+    .addRequestHandler('ScopeRequest', ScopeHandler);
+  class ScopeModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRoot(builder.build())],
+    providers: [FirstFilter, LastFilter, ScopeHandler]
+  })(ScopeModule);
+  const app = await NestFactory.createApplicationContext(ScopeModule, {
+    logger: false,
+    abortOnError: false
+  });
+  const registration = framework.createFrameworkRegistration({
+    channels: { 'node-scope': { client: { manualConnections: [endpoint] } } }
+  });
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  try {
+    await runtime.start();
+    await waitForClientServerTargets(runtime.clientServerRuntime, 'node-scope', 1);
+    const client = new framework.DefaultZLinkChannelClient(registration, runtime.channelTransport);
+    await assert.rejects(client.requestToChannel('node-scope', new ScopeRequest()).submit());
+    assert.deepEqual(released, ['last', 'first']);
+  } finally {
+    await runtime.shutdown();
+    await app.close();
+  }
 });
 
 test('request-scoped handler filters share the channel dispatch scope with the handler', async () => {
@@ -1611,6 +1676,7 @@ test('ZLinkModule.forRoot attaches discovered packet handlers to Instance Spot f
   }]);
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     instanceSpotFactories: new Map([[
       'matchmaking',
       new Map([['matchmaker', MatchmakerSpot]])
@@ -2401,6 +2467,55 @@ test('ZLinkModule.forRootFactory boots through NestJS when async capability prov
   assert.equal(app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false }), null);
   assert.equal(app.get(nestjs.ZLINK_SPOT_PUBLISHER_CLIENT, { strict: false }), null);
   await app.close();
+});
+
+test('host detached task runner observes a self teardown release failure', async () => {
+  const {
+    runWithLifecycleHandler,
+    disposeLifecycleHandlers
+  } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+  const runtime = new framework.ZLinkFrameworkRuntimeHost(
+    {
+      registration: framework.createFrameworkRegistration()
+    },
+    {
+      backendAdapterFactory: {
+        createChannelAdapter() {
+          return {
+            createContext: () => ({
+              ...fakeCoreHwmContext(),
+              nativeInstance: {},
+              shutdown() {},
+              async dispose() {}
+            })
+          };
+        },
+        createMonitoringAdapter: createNoopMonitoringAdapter
+      }
+    }
+  );
+  await runtime.start();
+  const releaseFailure = new Error('host self teardown release failed');
+  let report;
+  const observed = new Promise((resolve) => {
+    report = resolve;
+  });
+  const unsubscribe = runtime.errorSink.onRuntimeTaskException(report);
+  try {
+    class Handler {
+      dispose() {
+        throw releaseFailure;
+      }
+    }
+    const activation = {};
+    await runWithLifecycleHandler(activation, Handler, undefined, () =>
+      disposeLifecycleHandlers(activation, runtime.detachedTaskRunner())
+    );
+    assert.equal((await observed).error, releaseFailure);
+  } finally {
+    unsubscribe();
+    await runtime.stop();
+  }
 });
 
 test('framework runtime host start and stop are idempotent and ordered', async () => {

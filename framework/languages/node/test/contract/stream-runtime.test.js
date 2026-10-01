@@ -7,6 +7,10 @@ const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
@@ -71,6 +75,11 @@ const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.ZLinkStreamBindingRuntime, 'function');
@@ -2245,7 +2254,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
   });
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', PlayerFactory]])
-  });
+  }, detachedTaskRunner);
   host.setActorManager(manager);
   host.spotNodeRuntime = {
     primaryMeshNode: {
@@ -4566,6 +4575,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
     }
   }
   const callbackManager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CallbackSpot],
     entrySpotCallbacks: { async onLeaveActor() {} }
   });
