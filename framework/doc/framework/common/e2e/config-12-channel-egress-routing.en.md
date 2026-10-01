@@ -222,7 +222,7 @@ until timeout.
 **Verification question:** Does a request end in `Unavailable` when a
 known target's connection isn't ready?
 
-- Start condition: After the caller discovers the target descriptor,
+- Start condition: After a RouteMesh caller discovers the target descriptor,
   the runner blocks the network toward that target. Confirm via public
   status that the Channel isn't ready.
 - Procedure: The caller sends one request containing an operation ID.

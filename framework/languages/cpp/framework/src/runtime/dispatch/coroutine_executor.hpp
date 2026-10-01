@@ -55,7 +55,7 @@ class coroutine_executor_t
     template <typename TResult>
     task_t<TResult> submit (std::function<boost::asio::awaitable<result_t<TResult>> ()> work)
     {
-        detail::task_completion_source_t<TResult> completion;
+        task_completion_source_t<TResult> completion;
         auto task = completion.task ();
         boost::asio::co_spawn (
           _pool,
@@ -95,6 +95,10 @@ class coroutine_executor_t
 };
 
 coroutine_executor_t &handler_coroutine_executor ();
+// Installs the Framework runtime's execution and ambient context hooks. The
+// host calls it when its runtime starts; without it Framework tasks behave as
+// plain provider tasks (no runtime scheduler, no blocking rejection).
+void install_host_context_hooks () noexcept;
 void configure_handler_coroutine_executor (std::size_t worker_count);
 void shutdown_handler_coroutine_executor () noexcept;
 

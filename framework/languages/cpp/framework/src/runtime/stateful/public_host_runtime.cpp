@@ -1324,7 +1324,7 @@ void public_host_runtime_t::configure_instance_spot_operations (
 namespace
 {
 
-using close_completion_t = std::shared_ptr<detail::task_completion_source_t<spot_close_commit_t>>;
+using close_completion_t = std::shared_ptr<task_completion_source_t<spot_close_commit_t>>;
 
 void complete_close_step (const close_completion_t &completion, spot_close_commit_t commit)
 {
@@ -1355,7 +1355,7 @@ release_closing_authority (std::shared_ptr<zlink::framework::location_repository
     return [store = std::move (store), authority_key = std::move (authority_key),
             closing_version = std::move (closing_version),
             before_delete = std::move (before_delete), after_delete = std::move (after_delete)] () {
-        auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+        auto completion = std::make_shared<task_completion_source_t<bool>> ();
         auto output = completion->task ();
         if (before_delete) {
             auto ready = before_delete ();
@@ -1392,7 +1392,7 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                                                   std::uint64_t object_generation,
                                                   std::uint64_t authority_owner_generation)
 {
-    auto completion = std::make_shared<detail::task_completion_source_t<spot_close_commit_t>> ();
+    auto completion = std::make_shared<task_completion_source_t<spot_close_commit_t>> ();
     auto output = completion->task ();
     if (stable_type.empty () || spot_id.empty () || object_generation == 0
         || authority_owner_generation == 0) {
@@ -1527,7 +1527,7 @@ bool public_host_runtime_t::evict_instance_spot (const std::string &stable_type,
 task_t<spot_close_commit_t>
 public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t target)
 {
-    auto completion = std::make_shared<detail::task_completion_source_t<spot_close_commit_t>> ();
+    auto completion = std::make_shared<task_completion_source_t<spot_close_commit_t>> ();
     auto output = completion->task ();
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::function<std::optional<location_owner_token_t> ()> owner_resolver;

@@ -327,16 +327,11 @@ move where the owner changes, only
 a provider-issued value marking the order in which the authority owner
 changed for the same object incarnation — increases.
 
-If the moving Actor is bound to a Session, once the target restores the Actor
-and finishes owner/membership commit, queue merge, switching to the regular
-route, and lifecycle callbacks, the target runtime sends command 44
-`sessionRelocationRoute` commit one-way to the Session owner to update the
-binding route to the target owner. The full sequence of this protocol, and
-its sequence diagram, are owned by
-[Spot And Actor Membership §4.2](05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node),
-and the seal/held-message/route-switch responsibilities the Session owner
-carries are owned by
-[Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
+When an Actor bound to a Session moves,
+[Spot And Actor Membership §4.2](05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node)
+defines when command 44 `sessionRelocationRoute` is submitted, and
+[Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)
+defines the Session owner's handling.
 
 The following .NET excerpt is an example to help understand the common rule
 of registering factory and relocation policy together. It doesn't require the

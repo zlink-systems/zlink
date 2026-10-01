@@ -13,7 +13,7 @@ task_t<store_read_result_t> read_from_provider (task_t<store_read_result_t> pend
 
 int main ()
 {
-    detail::task_completion_source_t<store_read_result_t> source;
+    task_completion_source_t<store_read_result_t> source;
     auto read = read_from_provider (source.task ());
     source.complete (result_t<store_read_result_t>::success (store_missing_t{}));
     return read.result () && std::holds_alternative<store_missing_t> (read.result ().value ()) ? 0

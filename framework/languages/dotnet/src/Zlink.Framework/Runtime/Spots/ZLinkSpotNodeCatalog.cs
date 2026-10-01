@@ -307,7 +307,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         unit.Instance,
                         selection,
                         deadline,
-                        CompleteRelocatedSourceAsync,
+                        DetachRelocatedSourceAsync,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -334,19 +334,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
     }
 
-    private async ValueTask CompleteRelocatedSourceAsync(
-        ZLinkSpotActivation activation,
-        CancellationToken cancellationToken
-    )
+    private async ValueTask DetachRelocatedSourceAsync(ZLinkSpotActivation activation)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (lifecycle is not null)
-            await lifecycle
-                .SpotLocations.ForgetTrackedAsync(
-                    activation.RuntimeSpotId,
-                    activation.ObjectGeneration
-                )
-                .ConfigureAwait(false);
         await _lane
             .RunAsync(() =>
             {
@@ -355,7 +344,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                 _closing.Remove(activation.SpotId);
             })
             .ConfigureAwait(false);
-        await ScheduleRelocatedSourceCleanupAsync(runtime, activation).ConfigureAwait(false);
     }
 
     internal static async ValueTask ScheduleRelocatedSourceCleanupAsync(
@@ -368,28 +356,41 @@ internal sealed class ZLinkSpotNodeCatalog(
         var waitForPerActorMembers = activation.PerActorShellRelocationPlan is not null;
         async ValueTask CompleteAfterMessageFollowAsync(CancellationToken detachedCancellationToken)
         {
-            try
-            {
-                var messageFollow = activation
-                    .WaitForMessageFollowDrainedAsync(detachedCancellationToken)
-                    .AsTask();
-                if (waitForPerActorMembers)
-                    await activation
-                        .InvokePerActorRelocationClosingAfterDrainAsync(
-                            messageFollow,
-                            detachedCancellationToken
+            var failures = new ZLinkFailureCollector();
+            if (runtime.LocationLifecycle is { } locationLifecycle)
+                await failures
+                    .CaptureAsync(() =>
+                        locationLifecycle.SpotLocations.ForgetTrackedAsync(
+                            activation.RuntimeSpotId,
+                            activation.ObjectGeneration
                         )
-                        .ConfigureAwait(false);
-                else
-                    await messageFollow.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-                when (detachedCancellationToken.IsCancellationRequested) { }
-            finally
-            {
-                await activation.DisposeAsync().ConfigureAwait(false);
-                ZLinkRuntimeMetrics.RecordSpotClosed(activation.MeshName, activation.KindName);
-            }
+                    )
+                    .ConfigureAwait(false);
+            await failures
+                .CaptureAsync(async () =>
+                {
+                    try
+                    {
+                        var messageFollow = activation
+                            .WaitForMessageFollowDrainedAsync(detachedCancellationToken)
+                            .AsTask();
+                        if (waitForPerActorMembers)
+                            await activation
+                                .InvokePerActorRelocationClosingAfterDrainAsync(
+                                    messageFollow,
+                                    detachedCancellationToken
+                                )
+                                .ConfigureAwait(false);
+                        else
+                            await messageFollow.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                        when (detachedCancellationToken.IsCancellationRequested) { }
+                })
+                .ConfigureAwait(false);
+            await failures.CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
+            ZLinkRuntimeMetrics.RecordSpotClosed(activation.MeshName, activation.KindName);
+            failures.ThrowIfAny();
         }
 
         if (

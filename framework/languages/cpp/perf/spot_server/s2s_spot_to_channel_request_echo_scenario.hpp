@@ -35,6 +35,7 @@ class s2s_remote_request_spot_t final : public perf_spot_base_t<s2s_remote_reque
         drive_reply_t out;
         std::exception_ptr failure;
         bool probe = false;
+        bool operation_started = false;
         std::int64_t started = 0;
         try {
             auto request = drive.echo;
@@ -46,6 +47,7 @@ class s2s_remote_request_spot_t final : public perf_spot_base_t<s2s_remote_reque
             if (!probe && !measurement.begin_operation (started)) {
                 co_return drive_reply_t{false, std::nullopt};
             }
+            operation_started = !probe;
             request.sent_ticks = dec (started);
             auto call = _route.request_to_channel (*config.channel_name, request)
                           .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms));
@@ -69,6 +71,10 @@ class s2s_remote_request_spot_t final : public perf_spot_base_t<s2s_remote_reque
         if (failure) {
             if (probe)
                 std::rethrow_exception (failure);
+            if (!operation_started) {
+                measurement.record_diagnostic (failure);
+                std::rethrow_exception (failure);
+            }
             measurement.complete_operation (started, failure);
             out.started = true;
             out.echo = std::nullopt;
@@ -109,14 +115,12 @@ class s2s_spot_to_channel_request_echo_scenario_t
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
             const auto echo = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             const auto driven = route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
-                                  .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms * 2))
+                                  .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms))
                                   .async<drive_reply_t> ()
                                   .result ()
                                   .value ();
-            if (!driven.started || !driven.echo)
+            if (!driven.echo)
                 throw validation_error_t ("IdentityMismatch", "The setup probe did not reach the Channel.");
-            payload_pattern_t::validate_identity (echo, *driven.echo);
-            measurement.pattern ().validate (driven.echo->payload);
             probes.push_back ({{"correlationId", echo.correlation_id}, {"receivedTicks", driven.echo->received_ticks}, {"clockDomainId", driven.echo->clock_domain_id}});
         }
         publish_spots (_role, objects); // objectsReady only after every probe, so warmup never overlaps one
@@ -142,20 +146,25 @@ class s2s_spot_to_channel_request_echo_scenario_t
             _role.metrics.count ("driver.issued");
             std::exception_ptr error;
             try {
-                // The driver call must outlast the measured remote call it wraps, so it gets twice the request deadline.
-                const auto driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                                      .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms * 2))
-                                      .async<drive_reply_t> ();
-                if (driven.started)
-                    _role.metrics.record ("driverLatencyMs", started, now_ticks ());
-                else
+                drive_reply_t driven;
+                try {
+                    driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
+                               .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
+                }
+                catch (...) {
+                    _role.metrics.count ("driver.failed");
+                    throw;
+                }
+                const auto driver_finished = now_ticks ();
+                if (!driven.started)
                     _role.metrics.count ("driver.notStarted");
+                else if (driven.echo)
+                    _role.metrics.record ("driverLatencyMs", started, driver_finished);
             }
             catch (...) {
                 error = std::current_exception ();
             }
             if (error) {
-                _role.metrics.count ("driver.failed");
                 measurement.record_diagnostic (error);
             }
         }

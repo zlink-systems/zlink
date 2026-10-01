@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { PerfClock } from '../shared/clock';
 import type { ZLinkFanoutRuntime } from '@zlink-systems/framework';
 import { DecimalText, PerfPublishEvent, PerfValidationException, RoleConfig, nullReason } from '../shared/contracts';
 import { Measurement, PerfMetricsSnapshot } from '../shared/measurement';
@@ -6,16 +7,15 @@ import { FanoutMetrics, SequenceBitSet, SubscriberSequences } from '../server-su
 import { ObjectsReadiness } from '../server-support/server-application';
 import { until } from '../server-support/wait';
 
-// §10.11 Subscriber evidence: which measured sequences this process received first inside its own window or settle
-// (§15.4). It counts nothing the Publisher published; the runner intersects both originals.
+// §10.11 Subscriber evidence: which measured sequences this process first received inside its own window (§15.4).
+// It counts nothing the Publisher published; the runner intersects both originals.
 class Round {
   readonly window = new SequenceBitSet();
-  readonly settle = new SequenceBitSet();
+  readonly seen = new SequenceBitSet();
   duplicates = 0;
   warmupEvents = 0;
   ignoredWarmupInMeasured = 0;
   outsideWindow = 0;
-  sealed = false; // set when the runner collects the final snapshot: later events are missing deliveries
 }
 
 export class FanoutReceipts {
@@ -43,7 +43,7 @@ export class FanoutReceipts {
     }
   }
 
-  record(message: PerfPublishEvent): void {
+  record(message: PerfPublishEvent, receivedTicks = PerfClock.now()): void {
     const { config, measurement } = this;
     const current = this.round;
     if (message.runId !== config.runId || message.cellId !== config.cellId || message.topic !== FanoutMetrics.topic ||
@@ -60,10 +60,9 @@ export class FanoutReceipts {
       return;
     }
     if (message.resetSeq !== measurement.resetSeq) throw new PerfValidationException('PhaseMismatch', 'Measured event resetSeq differs from this epoch.');
-    // The runner ends the settle (§4.1): receipts after the window are settle until it reads the final snapshot.
-    const target = current.sealed ? undefined : measurement.phase === 'measured' ? current.window : measurement.phase === 'settle' || measurement.phase === 'complete' ? current.settle : undefined;
-    if (target === undefined) current.outsideWindow++;
-    else if (current.window.contains(sequence) || current.settle.contains(sequence) || !target.trySet(sequence)) current.duplicates++;
+    if (!current.seen.trySet(sequence)) { current.duplicates++; return; }
+    if (receivedTicks < measurement.startTicks || receivedTicks >= measurement.endTicks) current.outsideWindow++;
+    else current.window.trySet(sequence);
   }
 
   private enrich(snapshot: PerfMetricsSnapshot): void {
@@ -71,17 +70,16 @@ export class FanoutReceipts {
     FanoutMetrics.applyCommon(snapshot, true);
     FanoutMetrics.value(snapshot, 'fanout.duplicateEvents', String(current.duplicates));
     snapshot.runtimeMetrics.fanoutReceipts = { name: 'subscriber receipts', unit: 'event', type: 'object', value: {
-      uniqueInWindow: String(current.window.count), uniqueInSettle: String(current.settle.count), warmupEvents: String(current.warmupEvents),
+      uniqueInWindow: String(current.window.count), measuredEventsSeen: String(current.seen.count), warmupEvents: String(current.warmupEvents),
       warmupInMeasuredEpoch: String(current.ignoredWarmupInMeasured), measuredOutsideWindow: String(current.outsideWindow) } };
     snapshot.provenance.fanout = { channelName: this.config.channelName, topic: FanoutMetrics.topic, subscribedTopics: [],
       delivery: 'typed ZLinkFanoutHandler<PerfPublishEvent>',
-      sequenceEvidence: { method: 'one bit per received sequence, window and settle sets', retainedBytes: String(current.window.retainedBytes + current.settle.retainedBytes),
+      sequenceEvidence: { method: 'one bit per measured sequence seen and one bit per window receipt', retainedBytes: String(current.window.retainedBytes + current.seen.retainedBytes),
         timingEvidence: 'not collected: no shared clock domain', original: `subscriber-${this.config.roleInstance}-sequences.json` } };
     if (!this.measurement.finalSnapshot || snapshot.phase !== 'complete' || snapshot.resetSeq !== '1') return;
-    current.sealed = true;
     const original: SubscriberSequences = {
       runId: this.config.runId, cellId: this.config.cellId, resetSeq: snapshot.resetSeq, phase: 'measured', subscriberId: this.config.roleInstance,
-      windowRanges: current.window.ranges(), settleRanges: current.settle.ranges(), duplicateEvents: String(current.duplicates),
+      windowRanges: current.window.ranges(), duplicateEvents: String(current.duplicates),
       nullReasons: { '/timingEvidence': nullReason('CLOCK_DOMAIN_UNVERIFIED', 'Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2).') },
       timingEvidence: null
     };

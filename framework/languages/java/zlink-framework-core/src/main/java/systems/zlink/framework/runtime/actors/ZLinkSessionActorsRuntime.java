@@ -52,7 +52,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkSessionActorsRuntime.class.getName());
     static final Duration RELAY_SUBMIT_TIMEOUT = Duration.ofSeconds(30);
-    private static final ZLinkSessionRelayHeaders RELAY_HEADERS = new ZLinkSessionRelayHeaders();
+    private final ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
@@ -143,21 +143,20 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         CompletionStage<Void> submit(LongFunction<CompletionStage<Void>> operation);
     }
 
-    public static void enterRelayDispatch(ZLinkStreamHeader header) {
-        RELAY_HEADERS.enter(header);
+    public void enterRelayDispatch(ZLinkStreamHeader header) {
+        relayHeaders.enter(header);
     }
 
-    public static void enterRelayDispatch(
-            ZLinkSessionDispatchContext dispatch, ZLinkStreamHeader header) {
-        RELAY_HEADERS.enter(dispatch, header);
+    public void enterRelayDispatch(ZLinkSessionDispatchContext dispatch, ZLinkStreamHeader header) {
+        relayHeaders.enter(dispatch, header);
     }
 
-    public static void exitRelayDispatch() {
-        RELAY_HEADERS.exit();
+    public void exitRelayDispatch() {
+        relayHeaders.exit();
     }
 
-    public static void exitRelayDispatch(ZLinkSessionDispatchContext dispatch) {
-        RELAY_HEADERS.exit(dispatch);
+    public void exitRelayDispatch(ZLinkSessionDispatchContext dispatch) {
+        relayHeaders.exit(dispatch);
     }
 
     public ZLinkSessionActorsRuntime(
@@ -536,7 +535,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                     null,
                                                                                     true,
                                                                                     defaultCodec,
-                                                                                    RELAY_HEADERS,
+                                                                                    relayHeaders,
                                                                                     flow,
                                                                                     () ->
                                                                                             isCurrentBinding(
@@ -663,7 +662,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         localActorDispatcher,
                                                         nativeSessionRelayAttached,
                                                         defaultCodec,
-                                                        RELAY_HEADERS,
+                                                        relayHeaders,
                                                         flow,
                                                         () -> isCurrentBinding(binding.get()),
                                                         operation ->

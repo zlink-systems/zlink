@@ -745,7 +745,7 @@ can accept new work" from the timestamp returned by the Store. This time is call
 regardless of the routing ID allocation method.
 
 ```text
-renew interval + renew timeout < owner lease TTL - owner lease fencing margin
+max(renew interval, renew timeout) + renew timeout < owner lease TTL - owner lease fencing margin
 ```
 
 | Setting (per host) | Default |
@@ -755,7 +755,7 @@ renew interval + renew timeout < owner lease TTL - owner lease fencing margin
 | Renew timeout | 3 seconds |
 | Owner lease fencing margin | 5 seconds |
 
-Every value must be positive. Violating the relationship above is a startup error.
+Every value must be positive. Violating the relationship above is a startup error. The next renewal starts renew interval after the previous renewal started; if the previous renewal hasn't finished yet, it starts after that renewal finishes.
 Automatic RID descriptor registration also uses the same host-run combination and
 deadline.
 
@@ -812,17 +812,29 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
 | `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
+| `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 
-Applying `Preserve`, `NewOwner`, or `Delete` to a Reserved record is `Conflict` and
+Applying `Preserve`, `NewOwner`, `Reincarnate`, or `Delete` to a Reserved record is `Conflict` and
 changes nothing. An Active owner change is only done via `NewOwner` or the final change of
 a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
-one Store request. `Preserve` and `Delete` verify the current owner lease. `NewOwner`
+one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
 verifies the target lease and the capacity that relocation pre-secured. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
+
+**An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
+`Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
+authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
+the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and the
+owner lease is valid. If so, it re-reads the capacity, counter, and descriptor records the request
+needs, rebuilds all of its conditions and changes, and requests it again. Otherwise the operation's
+existing result classification applies. Factories and application callbacks aren't run again. This
+repetition happens within the operation's deadline with no separate retry cap, except that
+[§10](#10-when-a-store-response-isnt-received) decides when the repetition of a relocation target's
+`NewOwner` and a `SpotWide` whole-unit batch ends.
 
 A regular `Preserve` has no relocation reservation information. Only for a standalone
 relocation, when updating the completion-record payload location or recording target
@@ -1082,7 +1094,7 @@ status and isn't used as an application message's target list or placement condi
   build a `Missing` entry.
 - A paged list requires object kind as a filter, and accepts stable type and MeshName as
   optional filters.
-- One page returns `1..1000` entries.
+- One page returns `1..1000` entries. When the caller doesn't set the size, it's 100.
 - One encoded page is at most 4 MiB. If adding the next entry would cross the limit, that
   entry begins the next continuation page. Existing field-length limits keep one entry
   within this bound.
@@ -1474,7 +1486,7 @@ whether the Store changed is unknown. In this case the Framework re-reads the sa
 and expected `StoreVersion` to confirm the result, and only retries if needed.
 
 A Relocation Store write must support being read or stored again using the same reference
-the Framework fixed in advance. Payload not pointed to by the Location Store is deleted
+the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Confirming that the same bytes are stored ends it as a success. When the re-read finds nothing, the same bytes are stored again under the same reference. When the put returns `Conflict` or the re-read finds different bytes, it is treated as the same collision and the store starts again with a new reference. This proceeds within that operation's deadline, with no retry cap and no separate time limit. A payload the Location Store already points to that is missing or fails its checksum follows the `DataLost` handling below, not this rule. Payload not pointed to by the Location Store is deleted
 after retention ends. If a provider keeps input bytes even after an async request finishes,
 it must make a copy. Bytes returned as a success result must not change afterward.
 

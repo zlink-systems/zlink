@@ -203,14 +203,16 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                         header.requestSequence().isPresent(),
                         boundActor.orElse(null));
         CompletionStage<Void> stage;
+        ZLinkSessionActorsRuntime relayRuntime =
+                actors instanceof ZLinkSessionActorsRuntime runtime ? runtime : null;
         try {
-            ZLinkSessionActorsRuntime.enterRelayDispatch(dispatch, header);
+            if (relayRuntime != null) relayRuntime.enterRelayDispatch(dispatch, header);
             try {
                 stage =
                         Objects.requireNonNull(
                                 session.onDispatch(dispatch, payload), "session onDispatch result");
             } finally {
-                ZLinkSessionActorsRuntime.exitRelayDispatch();
+                if (relayRuntime != null) relayRuntime.exitRelayDispatch();
             }
         } catch (RuntimeException ex) {
             stage = CompletableFuture.failedFuture(ex);
@@ -218,7 +220,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         CompletableFuture<Void> result = new CompletableFuture<>();
         stage.whenComplete(
                 (ignored, error) -> {
-                    ZLinkSessionActorsRuntime.exitRelayDispatch(dispatch);
+                    if (relayRuntime != null) relayRuntime.exitRelayDispatch(dispatch);
                     completeDispatch(header, error, result);
                 });
         return result;

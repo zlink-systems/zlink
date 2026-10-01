@@ -8,6 +8,7 @@ import systems.zlink.framework.perf.FanoutSupport;
 import systems.zlink.framework.perf.Measurement;
 import systems.zlink.framework.perf.NullReason;
 import systems.zlink.framework.perf.ObjectsReadiness;
+import systems.zlink.framework.perf.PerfClock;
 import systems.zlink.framework.perf.PerfPublishEvent;
 import systems.zlink.framework.perf.PerfSnapshot;
 import systems.zlink.framework.perf.PerfValidationException;
@@ -22,17 +23,16 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 
-// §10.11 Subscriber evidence: which measured sequences this process received first inside its own window or settle (§15.4).
+// §10.11 Subscriber evidence: which measured sequences this process first received inside its own window (§15.4).
 // It counts nothing the Publisher published; the runner intersects both originals.
 public final class FanoutReceipts {
     private static final class Round {
         final FanoutSupport.SequenceBitSet window = new FanoutSupport.SequenceBitSet();
-        final FanoutSupport.SequenceBitSet settle = new FanoutSupport.SequenceBitSet();
+        final FanoutSupport.SequenceBitSet seen = new FanoutSupport.SequenceBitSet();
         final AtomicLong duplicates = new AtomicLong();
         final AtomicLong warmupEvents = new AtomicLong();
         final AtomicLong ignoredWarmupInMeasured = new AtomicLong();
         final AtomicLong outsideWindow = new AtomicLong();
-        volatile boolean sealed; // set when the runner collects the final snapshot: later events are missing deliveries
     }
 
     private final ZLinkFanoutRuntime fanoutRuntime;
@@ -66,7 +66,7 @@ public final class FanoutReceipts {
                 });
     }
 
-    public void record(PerfPublishEvent message) {
+    public void record(PerfPublishEvent message, long handlerEntryTicks) {
         Round current = round;
         if (!config.runId().equals(message.runId()) || !config.cellId().equals(message.cellId())
                 || !FanoutSupport.TOPIC.equals(message.topic())
@@ -93,19 +93,12 @@ public final class FanoutReceipts {
         if (!message.resetSeq().equals(measurement.resetSeq())) {
             throw new PerfValidationException("PhaseMismatch", "Measured event resetSeq differs from this epoch.");
         }
-        // The runner ends the settle (§4.1): receipts after the window are settle until it reads the final snapshot.
-        FanoutSupport.SequenceBitSet target = null;
-        if (!current.sealed) {
-            switch (measurement.phase()) {
-                case "measured" -> target = current.window;
-                case "settle", "complete" -> target = current.settle;
-                default -> target = null;
-            }
-        }
-        if (target == null) {
-            current.outsideWindow.incrementAndGet();
-        } else if (current.window.contains(sequence) || current.settle.contains(sequence) || !target.trySet(sequence)) {
+        if (!current.seen.trySet(sequence)) {
             current.duplicates.incrementAndGet();
+        } else if (measurement.windowContainsTicks(handlerEntryTicks)) {
+            current.window.trySet(sequence);
+        } else {
+            current.outsideWindow.incrementAndGet();
         }
     }
 
@@ -115,14 +108,14 @@ public final class FanoutReceipts {
         FanoutSupport.value(snapshot, "fanout.duplicateEvents", DecimalText.of(current.duplicates.get()));
         Map<String, Object> receipts = new LinkedHashMap<>();
         receipts.put("uniqueInWindow", DecimalText.of(current.window.count()));
-        receipts.put("uniqueInSettle", DecimalText.of(current.settle.count()));
+        receipts.put("measuredEventsSeen", DecimalText.of(current.seen.count()));
         receipts.put("warmupEvents", DecimalText.of(current.warmupEvents.get()));
         receipts.put("warmupInMeasuredEpoch", DecimalText.of(current.ignoredWarmupInMeasured.get()));
         receipts.put("measuredOutsideWindow", DecimalText.of(current.outsideWindow.get()));
         snapshot.runtimeMetrics.put("fanoutReceipts", ProcessSampler.named("subscriber receipts", "event", "object", receipts));
         Map<String, Object> evidence = new LinkedHashMap<>();
-        evidence.put("method", "one bit per received sequence, window and settle sets");
-        evidence.put("retainedBytes", DecimalText.of(current.window.retainedBytes() + current.settle.retainedBytes()));
+        evidence.put("method", "one bit per first measured sequence and one in-window sequence set");
+        evidence.put("retainedBytes", DecimalText.of(current.window.retainedBytes() + current.seen.retainedBytes()));
         evidence.put("timingEvidence", "not collected: no shared clock domain");
         evidence.put("original", "subscriber-" + config.roleInstance() + "-sequences.json");
         Map<String, Object> fanoutProvenance = new LinkedHashMap<>();
@@ -135,12 +128,11 @@ public final class FanoutReceipts {
         if (!measurement.finalSnapshot() || !"complete".equals(snapshot.phase) || !"1".equals(snapshot.resetSeq)) {
             return;
         }
-        current.sealed = true;
         Map<String, NullReason> reasons = new LinkedHashMap<>();
         reasons.put("/timingEvidence", new NullReason("CLOCK_DOMAIN_UNVERIFIED",
                 "Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2)."));
         FanoutSupport.writeOnce(sequenceFile, new FanoutSupport.SubscriberSequences(config.runId(), config.cellId(),
-                snapshot.resetSeq, "measured", config.roleInstance(), current.window.ranges(), current.settle.ranges(),
+                snapshot.resetSeq, "measured", config.roleInstance(), current.window.ranges(),
                 DecimalText.of(current.duplicates.get()), reasons, null));
     }
 

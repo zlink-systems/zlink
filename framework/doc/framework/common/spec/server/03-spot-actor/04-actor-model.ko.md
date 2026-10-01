@@ -279,14 +279,11 @@ queue와 timer 정보는 이동 후에도 유지한다. 두 policy 모두 같은
 값인 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authorityownergeneration)만
 증가한다.
 
-이동하는 Actor가 Session에 bind되어 있으면, target에서 Actor를 복원하고 owner·membership
-commit, queue 병합, regular route 전환과 lifecycle callback을 끝낸 뒤 target runtime이
-command 44 `sessionRelocationRoute` commit을 one-way로 Session owner에 보내 binding
-route를 target owner로 갱신한다. 이 protocol의 전체 순서와 sequence diagram은
-[Spot과 Actor membership §4.2](05-spot-actor-membership.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)가
-소유하고, Session owner가 담당하는 seal·held message·route 전환은
+Session에 bind된 Actor의 이동에서 command 44 `sessionRelocationRoute`를 제출하는 시점은
+[Spot과 Actor membership §4.2](05-spot-actor-membership.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)가,
+Session owner의 처리는
 [Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
-소유한다.
+정한다.
 
 다음 .NET 발췌는 factory와 relocation policy를 함께 등록하는 공통 규칙을 이해하기
 위한 예시다. 다른 언어에 같은 signature를 요구하지 않으며, 정확한 .NET 계약은

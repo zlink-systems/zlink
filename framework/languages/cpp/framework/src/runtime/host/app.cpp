@@ -378,7 +378,6 @@ class app_state_t
     struct lifecycle_waiter_t : public std::enable_shared_from_this<lifecycle_waiter_t<TResult>>
     {
         task_completion_source_t<TResult> completion;
-        std::atomic_bool completed = false;
         std::optional<std::stop_callback<std::function<void ()>>> cancellation;
 
         task_t<TResult> task () { return completion.task (); }
@@ -396,15 +395,11 @@ class app_state_t
 
         void complete (TResult result)
         {
-            if (completed.exchange (true, std::memory_order_acq_rel))
-                return;
             completion.complete (result_t<TResult>::success (std::move (result)));
         }
 
         void cancel ()
         {
-            if (completed.exchange (true, std::memory_order_acq_rel))
-                return;
             completion.complete (detail::boundary_failure<TResult> (
               detail::boundary_error_t::cancelled, "lifecycle waiter was cancelled"));
         }
@@ -1867,8 +1862,7 @@ void app_t::_apply_zlink_framework ()
                   trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
                                                   dispatch_message_kind_t::request, *trace_context);
               }
-              auto completion =
-                std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
+              auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
               auto output = completion->task ();
               const auto submitted =
                 co_await selected.value ().source->activate_instance_spot_remote (
@@ -2290,13 +2284,13 @@ void app_t::_apply_zlink_framework ()
               const auto deadline = std::chrono::steady_clock::now () + budget;
               if (!source)
                   co_return co_await deliver_relay (actor, header, payload, source, {}, budget, {});
-              std::shared_ptr<detail::task_completion_source_t<reply_t>> completion;
+              std::shared_ptr<task_completion_source_t<reply_t>> completion;
               std::optional<runtime::foundation::call_id_t> operation;
               auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
               auto &native = *session_owner_runtime;
               const bool request = header.kind () == detail::stream_message_kind_t::request;
               auto retain = [&] () -> runtime::stateful::stream_relay_delivery_t {
-                  completion = std::make_shared<detail::task_completion_source_t<reply_t>> ();
+                  completion = std::make_shared<task_completion_source_t<reply_t>> ();
                   operation =
                     request
                       ? native.transport ().register_local_operation (
@@ -2836,6 +2830,7 @@ try {
     }
     std::vector<hosted_service_t *> started;
     try {
+        runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
         _state->start_hosted_services (provider, started);
@@ -3947,6 +3942,19 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
 
     const bool force_stopped = std::holds_alternative<shutdown_forced_t> (result);
     if (force_stopped) {
+        // User cleanup returns cooperatively: framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#2-execution-gate--owner-처리-순서
+        detail::cancel_handler_waits (state.handlers);
+        for (const auto &service : state.hosted_services) {
+            if (auto *lifecycle = detail::lifecycle_of (service.get ())) {
+                lifecycle->cancel_execution_waits ();
+                lifecycle->visit_relocation_nodes ([] (const auto &node) {
+                    if (node)
+                        node->cancel_pending_dispatch_waits ();
+                });
+                if (!lifecycle->wait_for_accepted_callbacks_until (deadline_at))
+                    force (shutdown_force_reason_t::teardown_failed);
+            }
+        }
         /* graceful-drain-handoff §7: active sessions receive the reason code
          * before forced teardown; the notification is bounded and never
          * blocks the terminal result indefinitely. */

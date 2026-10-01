@@ -165,6 +165,7 @@ class raw_client_server_client_t
     {
         bool ready;
         std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
+        bool connecting = false;
     };
     task_t<pump_status_t> pump_status_task () const;
     task_t<std::size_t>

@@ -89,13 +89,13 @@ class logical_multicast_executor_t
     {
         std::function<result_t<void> ()> work;
         std::function<task_t<void> ()> async_work;
-        std::shared_ptr<detail::task_completion_source_t<void>> completion;
+        std::shared_ptr<task_completion_source_t<void>> completion;
         std::chrono::steady_clock::time_point deadline;
     };
 
     task_t<void> enqueue (multicast_job_t job, std::chrono::milliseconds timeout)
     {
-        job.completion = std::make_shared<detail::task_completion_source_t<void>> ();
+        job.completion = std::make_shared<task_completion_source_t<void>> ();
         auto task = job.completion->task ();
         job.deadline = std::chrono::steady_clock::now () + timeout;
         bool overflow = false;

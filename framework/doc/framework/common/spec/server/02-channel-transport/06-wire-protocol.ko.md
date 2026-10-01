@@ -630,7 +630,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
-  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
+  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** 다른 node에 있는 target의 canonical
   capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
   `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
   leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.

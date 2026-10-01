@@ -42,6 +42,13 @@ if (-not [IO.Path]::IsPathRooted($CacheDir)) {
 $cacheRoot = [IO.Path]::GetFullPath($CacheDir)
 $prefix = Join-Path (Join-Path $cacheRoot $Version) $Platform
 $manifestPath = Join-Path $prefix "share\zlink\core-package-provenance.json"
+$releaseChecksumsName = "release-checksums.txt"
+$releaseChecksumsPath = Join-Path (Join-Path $prefix "share\zlink") $releaseChecksumsName
+$releaseTag = "core/v$Version"
+
+function Get-Sha256([string]$Path) {
+  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 
 if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   try {
@@ -54,7 +61,11 @@ if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     }
     $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($existing.version -eq $Version -and $existing.package -eq "zlink-core" -and
-        $existing.platform -eq $Platform) {
+        $existing.platform -eq $Platform -and $existing.source.dirty -eq $false -and
+        $existing.release.tag -eq $releaseTag -and
+        $existing.release.checksumsSha256 -match "^[0-9a-f]{64}$" -and
+        (Test-Path -LiteralPath $releaseChecksumsPath -PathType Leaf) -and
+        (Get-Sha256 $releaseChecksumsPath) -eq $existing.release.checksumsSha256) {
       Write-Output $prefix
       exit 0
     }
@@ -63,7 +74,6 @@ if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   }
 }
 
-$releaseTag = "core/v$Version"
 $releaseBase = "https://github.com/zlink-systems/zlink/releases/download/$releaseTag"
 $binaryName = "libzlink-$Platform"
 $binaryArchiveName = "$binaryName.zip"
@@ -84,10 +94,6 @@ function Get-ReleaseValue([string]$Key, [string]$Path) {
     throw "Release provenance is missing $Key"
   }
   return $line.Substring($Key.Length + 1)
-}
-
-function Get-Sha256([string]$Path) {
-  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
 try {
@@ -167,7 +173,7 @@ try {
   New-Item -ItemType Directory -Path $stageShare -Force | Out-Null
   Copy-Item -Path (Join-Path $sourceInclude "*") -Destination $stageInclude -Recurse -Force
   Copy-Item -Path (Join-Path (Join-Path $binaryPrefix "include") "*") -Destination $stageInclude -Recurse -Force
-  Copy-Item -LiteralPath $checksums -Destination (Join-Path $stageShare "release-checksums.txt")
+  Copy-Item -LiteralPath $checksums -Destination (Join-Path $stageShare $releaseChecksumsName)
   Copy-Item -LiteralPath $releaseProvenance -Destination (Join-Path $stageShare "release-provenance.txt")
 
   $stageBin = Join-Path $stage "bin"

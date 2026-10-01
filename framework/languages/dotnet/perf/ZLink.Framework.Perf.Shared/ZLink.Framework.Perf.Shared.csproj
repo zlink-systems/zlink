@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ZLink.Framework.Perf.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="../../../../perf/schema/histogram-bounds.json" Link="histogram-bounds.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
