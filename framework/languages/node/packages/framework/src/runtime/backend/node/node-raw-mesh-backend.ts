@@ -62,6 +62,7 @@ import {
   type ServiceSpot,
   type StreamSessionActorAuthorityFence,
   type StreamSessionService,
+  MeshNodeRuntimeState,
   MeshPeerRuntimeState,
   OperationKind,
   ReadyDomain,
@@ -747,7 +748,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       source: 1,
       state:
         this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === false
-          ? 1
+          ? MeshPeerRuntimeState.Connecting
           : peerStateCode(peer.descriptor.state),
       routingId: peer.descriptor.nodeRoutingId as RoutingId,
       lifecycleGeneration: peer.descriptor.lifecycleGeneration,
@@ -2663,8 +2664,21 @@ function requireRawReadyBatch(batch: ReadyBatch): RawReadyBatch {
   return batch;
 }
 
-function stateCode(state: ServiceNodeDescriptor['state']): number {
-  return ['preparing', 'serving', 'retiring', 'draining', 'stopped', 'error'].indexOf(state) + 1;
+function stateCode(state: ServiceNodeDescriptor['state']): MeshNodeRuntimeState {
+  switch (state) {
+    case 'preparing':
+      return MeshNodeRuntimeState.Preparing;
+    case 'serving':
+      return MeshNodeRuntimeState.Serving;
+    case 'retiring':
+      return MeshNodeRuntimeState.Retiring;
+    case 'draining':
+      return MeshNodeRuntimeState.Draining;
+    case 'stopped':
+      return MeshNodeRuntimeState.Stopped;
+    case 'error':
+      return MeshNodeRuntimeState.Error;
+  }
 }
 
 function peerStateCode(state: ServiceNodeDescriptor['state']): number {

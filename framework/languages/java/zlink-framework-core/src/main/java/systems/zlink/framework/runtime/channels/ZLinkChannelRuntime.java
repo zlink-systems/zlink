@@ -193,6 +193,10 @@ public final class ZLinkChannelRuntime
         return sockets;
     }
 
+    public void signalTopologyStatus() {
+        sockets.signalTopologyChanged();
+    }
+
     public void setHostStateSupplier(Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.hostState = Objects.requireNonNull(hostState, "hostState");
     }
@@ -776,7 +780,8 @@ public final class ZLinkChannelRuntime
                         timeoutExecutor,
                         infrastructureExecutor,
                         messageDispatcher::dispatchPublish,
-                        fanoutApplicationTopics);
+                        fanoutApplicationTopics,
+                        sockets::signalTopologyChanged);
         manualFanoutRuntime = runtime;
         for (ChannelRegistration channel : manualChannels) {
             channel.subscriberConnections().attach(runtime.connections(channel.name()));

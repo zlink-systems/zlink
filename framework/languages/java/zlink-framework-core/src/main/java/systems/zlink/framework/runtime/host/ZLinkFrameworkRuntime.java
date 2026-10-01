@@ -1968,6 +1968,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         runtimeStatusPublisher.signal();
         routeMeshRuntime.signalAll();
+        channels.signalTopologyStatus();
     }
 
     private CompletionStage<Void> publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState state) {
@@ -1986,6 +1987,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             }
                             runtimeStatusPublisher.signal();
                             routeMeshRuntime.signalAll();
+                            channels.signalTopologyStatus();
                         })
                 .exceptionallyCompose(
                         failure -> {
@@ -2045,6 +2047,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             // Metrics are observational and cannot make runtime teardown fail.
         }
         backendContext.close();
+    }
+
+    boolean closing() {
+        return closeGate.closing();
     }
 
     private CompletionStage<Void> closeCoreAsync() {

@@ -40,6 +40,7 @@ for (const weight of [100, 0]) {
       assert.equal(status.targets.length, 1);
       assert.equal(status.targets[0].weight, weight);
       assert.equal(status.targets[0].state, framework.ZLinkPeerState.Ready);
+      assert.equal(status.targets[0].unavailableReason, undefined);
 
       const client = app.get(nestjs.ZLINK_CHANNEL_CLIENT);
       for (const call of [
@@ -137,6 +138,30 @@ test('ClientServer topology counts distinct local and remote Ready Servers toget
   }
 });
 
+test('Disconnected ClientServer target reports not_connected and no_ready_target', async () => {
+  const remote = await createApp(channel => {
+    channel.server().listen(0).addRequestHandler('Ping', PingHandler);
+  });
+  let local;
+  try {
+    const endpoint = remote.get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+      .getListenerStatus('clientServer', 'work').endpoint;
+    local = await createApp(channel => channel.client().connect(endpoint));
+    const runtime = local.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
+    await waitForClientServerTargets(runtime, 'work', 1);
+    const ready = runtime.snapshot('work').targets[0];
+    await remote.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).shutdown();
+    await waitForClientServerTargets(runtime, 'work', 0);
+    const target = runtime.snapshot('work').targets.find(value => value.nodeRid === ready.nodeRid);
+    assert.ok(target);
+    assert.equal(target.state, framework.ZLinkPeerState.NotConnected);
+    assert.equal(target.unavailableReason, framework.ZLinkTopologyReason.NoReadyTarget);
+  } finally {
+    if (local !== undefined) await local.close();
+    await remote.close();
+  }
+});
+
 function createApp(configure) {
   const builder = nestjs.zlinkFramework();
   builder.configureDispatch().messageFlow('normal');
@@ -148,3 +173,42 @@ function createApp(configure) {
   })(AppModule);
   return NestFactory.createApplicationContext(AppModule, { logger: false, abortOnError: false });
 }
+
+test('local Server descriptor changes publish without physical Client events or observers', async () => {
+  const internal = require('../../packages/framework/dist/internal');
+  const { ZLinkChannelSocketRegistry } = require('../../packages/framework/dist/runtime/channels/channel-socket-registry');
+  const registration = internal.createFrameworkRegistration({ channels: { work: { server: { bind: 'tcp://127.0.0.1:0' }, sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }] } } });
+  const sockets = new ZLinkChannelSocketRegistry(registration, {}, {});
+  const descriptor = { channelName: 'work', serverRid: 'local', lifecycleGeneration: 1n, weight: 100, state: framework.ZLinkFrameworkRuntimeState.Serving };
+  sockets.setClientServerServerDescriptor(descriptor, 'work');
+  const manager = {
+    clientServerTopology: name => ({ localRole: 'server', descriptors: sockets.clientServerActiveTargets(name) }),
+    observeClientServerTopology(name, callback) {
+      const monitor = sockets.clientServerMonitoringSource(name);
+      monitor.onChange(callback);
+      return () => { void monitor.dispose(); };
+    }
+  };
+  let physicalEvents = 0;
+  const physicalMonitor = sockets.clientServerMonitoringSource('work');
+  physicalMonitor.onEvent(() => { physicalEvents += 1; });
+  const runtime = new internal.ZLinkClientServerRuntimeProjection(() => manager);
+  assert.equal(runtime.snapshot('work').sequence, 1n);
+  sockets.setClientServerServerDescriptor({ ...descriptor, state: framework.ZLinkFrameworkRuntimeState.Draining }, 'work');
+  sockets.setClientServerServerDescriptor(descriptor, 'work');
+  assert.equal(runtime.snapshot('work').sequence, 3n);
+  const events = runtime.observe('work')[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.sequence, 3n);
+  sockets.setClientServerServerDescriptor({ ...descriptor, state: framework.ZLinkFrameworkRuntimeState.Draining }, 'work');
+  const draining = (await events.next()).value.status;
+  assert.equal(draining.sequence, 4n);
+  assert.equal(draining.targets[0].state, framework.ZLinkPeerState.Draining);
+  sockets.setClientServerServerDescriptor(undefined, 'work');
+  const removed = (await events.next()).value.status;
+  assert.equal(removed.sequence, 5n);
+  assert.equal(removed.targets.length, 0);
+  assert.equal(physicalEvents, 0);
+  await events.return();
+  runtime.stopObservers();
+  await physicalMonitor.dispose();
+});

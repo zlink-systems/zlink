@@ -25,9 +25,7 @@ internal sealed record ZLinkMeshPeerSnapshot(
     ulong LifecycleGeneration,
     ulong DescriptorRevision,
     string Endpoint,
-    string AdmissionState,
-    bool Ready,
-    string DrainState,
+    MeshPeerState State,
     IReadOnlyList<string> ChannelNames,
     string? LastFailure
 );
@@ -50,7 +48,14 @@ internal sealed record ZLinkLocationRuntimeSnapshot(
     string State,
     DateTimeOffset? LastSuccessAt,
     DateTimeOffset? LastFailureAt
-);
+)
+{
+    internal const string ReadyState = "ready";
+    internal const string HealthyState = "healthy";
+    internal const string DegradedState = "degraded";
+    internal const string NotConfiguredState = "not_configured";
+    internal const string UnknownState = "unknown";
+}
 
 internal sealed record ZLinkInstanceSpotTypeSnapshot(
     string InstanceSpotType,
