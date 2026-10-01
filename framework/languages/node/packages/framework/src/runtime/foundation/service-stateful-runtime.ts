@@ -1,5 +1,18 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { ZLinkFrameworkException } from '../../contracts';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { awaitWithAbort } from '../abort';
+import { shouldCompactBackingArray } from '../admission';
+import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import { flowIfEnabled } from '../diagnostics/message-flow';
 import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -8,21 +21,25 @@ import {
   internalFrameworkWireReply,
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
-import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
-import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
 import {
-  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
-  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
-} from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { flowIfEnabled } from '../diagnostics/message-flow';
+  decodeActorJoin28,
+  encodeActorJoin28,
+  type ActorJoin28
+} from '../protocol/service_wire_pilot_codec.generated';
+import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
+import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from './message-follow-suppression-registry';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from './operation-identity';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
   RawServicePumpResult
 } from './raw-service-mesh-runtime';
+import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
+import type { ServiceMailboxRecord } from './service-mailbox';
+import { validateServiceMetadataFrame } from './service-metadata-codec';
 import {
   ActorLifecycleKind,
   OperationKind,
@@ -34,11 +51,6 @@ import {
   type ServiceStreamSessionBinding,
   type StreamSessionActorAuthorityFence
 } from './service-runtime-contracts';
-import type { ServiceMailboxRecord } from './service-mailbox';
-import {
-  MessageFollowSuppressionRegistry,
-  type MessageFollowSuppressionFence
-} from './message-follow-suppression-registry';
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
@@ -50,6 +62,8 @@ import {
   type ServiceSpotState
 } from './service-stateful-registry';
 import {
+  M6bServiceWireCommand,
+  M6bServiceWireFlag,
   decodeStatefulHeader,
   decodeStatefulReply,
   encodeActorCreateHeader,
@@ -67,17 +81,15 @@ import {
   encodeStatefulReply,
   encodeUserSpotCloseHeader,
   encodeUserSpotCreateHeader,
-  M6bServiceWireCommand,
-  M6bServiceWireFlag,
   sessionBindingFromWire,
+  type ServiceActorCreateRecord,
   type ServiceActorRouteFence,
   type ServiceBoundSessionActorAuthority,
-  type ServiceRetiredBoundSessionRouteFence,
-  type ServiceActorCreateRecord,
+  type ServiceDirectSpotRouteFence,
   type ServiceInstanceActivationTarget,
   type ServiceInstanceRouteFence,
   type ServiceMessageFollowRoute,
-  type ServiceDirectSpotRouteFence,
+  type ServiceRetiredBoundSessionRouteFence,
   type ServiceSpotRouteFence,
   type ServiceStatefulReplyTail,
   type ServiceStatefulWireRecord,
@@ -85,22 +97,20 @@ import {
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
 import {
-  decodeActorJoin28,
-  encodeActorJoin28,
-  type ActorJoin28
-} from '../protocol/service_wire_pilot_codec.generated';
-import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
-
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET
+} from './service-wire-binary-primitives';
+import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
 import {
+  ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   encodeApplicationPayload,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
+  type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
-import { validateServiceMetadataFrame } from './service-metadata-codec';
-import { ZLinkFrameworkException } from '../../contracts';
+const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
+
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
 const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;
@@ -1486,7 +1496,7 @@ export class ServiceStatefulRuntime {
             this.nodeRid,
             sourceSpotId,
             'request',
-            { high: 2n, low: pending.id },
+            { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
             pending.id,
             metadataFrame !== undefined
           ),
@@ -3602,7 +3612,15 @@ export class ServiceStatefulRuntime {
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
-      parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
+      parts: [
+        Buffer.from([
+          SERVICE_WIRE_MAGIC[0],
+          SERVICE_WIRE_MAGIC[1],
+          SERVICE_WIRE_MAJOR,
+          M6bServiceWireCommand.boundSessionBind,
+          0
+        ])
+      ],
       sourceRoutingId: binding.sessionOwnerNodeRid,
       stateful: {
         receiveKind: ReceiveKind.ActorBinding,
@@ -3828,7 +3846,13 @@ export class ServiceStatefulRuntime {
     control: ActorControlPayload,
     onTerminalCompletion?: () => void | Promise<void>
   ): void {
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.actorJoined,
+      0
+    ]);
     let terminalAttempted = false;
     void (async () => {
       const applicationJobOwner = await this.raw.reserveLocalIngress();
@@ -3874,7 +3898,13 @@ export class ServiceStatefulRuntime {
   ): boolean {
     const actor = binding.actor;
     const sessionOwner = requireSessionOwnerIdentity(binding);
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.boundSessionBind,
+      0
+    ]);
     const applicationJob = requireApplicationJobOwner(ingress).takeInitial('infrastructure');
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
@@ -4152,7 +4182,10 @@ export class ServiceStatefulRuntime {
           stop.signal.throwIfAborted();
           if (!durableRequestCanReplay(error)) throw error;
           if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-          const retryDelayMs = Math.min(20, deadlineMs - performance.now());
+          const retryDelayMs = Math.min(
+            STATEFUL_OPERATION_RETRY_TICK_MS,
+            deadlineMs - performance.now()
+          );
           if (retryDelayMs <= 0) {
             throw durableOperationExhausted(operationKind, wasAdmitted, error);
           }
@@ -4203,8 +4236,8 @@ export class ServiceStatefulRuntime {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         try {
           const result = await this.ingress({
-            command: header[3]!,
-            flags: header[4]!,
+            command: header[SERVICE_WIRE_COMMAND_OFFSET]!,
+            flags: header[SERVICE_WIRE_FLAGS_OFFSET]!,
             sourceRoutingId: this.nodeRid,
             requestSequence,
             reply: finish,
@@ -4241,8 +4274,8 @@ export class ServiceStatefulRuntime {
         void ServiceStatefulRuntime.detachedIngressScope(async () => {
           try {
             await this.ingress({
-              command: parts[0]![3]!,
-              flags: parts[0]![4]!,
+              command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+              flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
               sourceRoutingId: this.nodeRid,
               sourceNodeGeneration: this.nodeGeneration,
               parts,
@@ -4260,8 +4293,8 @@ export class ServiceStatefulRuntime {
       }
       try {
         const result = await this.ingress({
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           sourceNodeGeneration: this.nodeGeneration,
           parts,
@@ -4305,8 +4338,8 @@ export class ServiceStatefulRuntime {
       void (async () => {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         const localIngress: RawServiceIngressRecord = {
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           requestSequence: pending.id,
           parts,
@@ -4922,7 +4955,10 @@ export class ServiceStatefulRuntime {
         }
         const current = this.peekSpotMessageFollow(state)!;
         try {
-          const metadata = (current.ingress.parts[0]![4]! & M6bServiceWireFlag.metadata) !== 0;
+          const metadata =
+            (current.ingress.parts[0]![SERVICE_WIRE_FLAGS_OFFSET]! &
+              M6bServiceWireFlag.metadata) !==
+            0;
           const parts = [
             encodeSpotHeader(
               current.wire.kind,
@@ -5061,7 +5097,7 @@ export class ServiceStatefulRuntime {
     if (state.queuedCount === 0) {
       state.queued.length = 0;
       state.queuedHead = 0;
-    } else if (state.queuedHead >= 1024 && state.queuedHead * 2 >= state.queued.length) {
+    } else if (shouldCompactBackingArray(state.queuedHead, state.queued.length)) {
       state.queued.splice(0, state.queuedHead);
       state.queuedHead = 0;
     }
@@ -5321,7 +5357,7 @@ function userSpotDeadline(deadlineUnixMs: bigint): {
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
   const timeout = setTimeout(
     () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, 0x7fff_ffff))
+    Math.max(0, Math.min(delay, MAX_NODE_TIMER_DELAY_MS))
   );
   return {
     signal: controller.signal,
@@ -5801,7 +5837,7 @@ function topicMatches(filter: string, topic: string): boolean {
 function emptyPayload(): ServiceApplicationPayload {
   return {
     packetName: 'ZLinkFrameworkEmpty',
-    contentType: 'application/octet-stream',
+    contentType: ZlinkStreamContentType.Raw,
     payload: Buffer.alloc(0)
   };
 }

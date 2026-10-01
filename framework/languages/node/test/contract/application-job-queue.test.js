@@ -15,6 +15,27 @@ const {
   ApplicationIngressRecordOwner
 } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
 
+for (const profile of ['constructor', '__proto__']) {
+  test(`application job queue rejects inherited profile ${profile} before resolving processors`, () => {
+    for (const maxQueuedApplicationJobs of [undefined, 1n]) {
+      let processorReads = 0;
+      assert.throws(
+        () =>
+          resolveApplicationJobQueueConfiguration({ profile, maxQueuedApplicationJobs }, () => {
+            processorReads++;
+            return 1n;
+          }),
+        {
+          name: 'TypeError',
+          message: 'applicationJobQueueProfile must be a supported profile.'
+        }
+      );
+      assert.equal(processorReads, 0);
+    }
+  });
+}
+
+
 test('application job queue resolves the exact profile matrix and manual override', () => {
   const expected = new Map([
     ['compact', 32n],

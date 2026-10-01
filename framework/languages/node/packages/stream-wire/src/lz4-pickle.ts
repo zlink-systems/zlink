@@ -1,3 +1,8 @@
+const LZ4_MIN_MATCH_LENGTH = 4;
+const LZ4_MATCH_OFFSET_BYTES = 2;
+const LZ4_EXTENDED_LENGTH_NIBBLE = 15;
+const LZ4_EXTENDED_LENGTH_BYTE = 255;
+
 // Resolved inside the function body rather than in a parameter default: see the
 // note on defaultHeaderFlags in index.ts. Emscripten's dead-code pass deletes a
 // binding whose only references are parameter defaults.
@@ -97,15 +102,16 @@ function decodeLz4Block(source: Uint8Array, resultLength: number): Uint8Array {
     if (sourceOffset >= source.length) {
       break;
     }
-    if (source.length - sourceOffset < 2) {
+    if (source.length - sourceOffset < LZ4_MATCH_OFFSET_BYTES) {
       throw new Error('LZ4 match offset is incomplete.');
     }
     const matchOffset = source[sourceOffset] | (source[sourceOffset + 1] << 8);
-    sourceOffset += 2;
+    sourceOffset += LZ4_MATCH_OFFSET_BYTES;
     if (matchOffset === 0 || matchOffset > targetOffset) {
       throw new Error('LZ4 match offset is invalid.');
     }
-    const matchLength = readLz4Length(source, token & 0x0f, () => sourceOffset++) + 4;
+    const matchLength =
+      readLz4Length(source, token & 0x0f, () => sourceOffset++) + LZ4_MIN_MATCH_LENGTH;
     if (target.length - targetOffset < matchLength) {
       throw new Error('LZ4 match run exceeds output size.');
     }
@@ -123,7 +129,7 @@ function decodeLz4Block(source: Uint8Array, resultLength: number): Uint8Array {
 
 function readLz4Length(source: Uint8Array, nibble: number, nextOffset: () => number): number {
   let length = nibble;
-  if (length !== 15) {
+  if (length !== LZ4_EXTENDED_LENGTH_NIBBLE) {
     return length;
   }
   for (;;) {
@@ -133,7 +139,7 @@ function readLz4Length(source: Uint8Array, nibble: number, nextOffset: () => num
     }
     const value = source[offset];
     length += value;
-    if (value !== 255) {
+    if (value !== LZ4_EXTENDED_LENGTH_BYTE) {
       return length;
     }
   }

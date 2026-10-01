@@ -5,6 +5,13 @@ import {
   ZlinkStreamException
 } from '../Contracts';
 
+const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
+
+/** Returns whether the consumed prefix should compact the backing array. */
+export function shouldCompactBackingArray(head: number, length: number): boolean {
+  return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
+}
+
 export function connectorError(
   code: ZlinkStreamErrorCode,
   message: string,

@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 export interface ServiceProbe {
   readonly nodeRoutingId: string;
   readonly connectionId: string;
@@ -139,7 +140,7 @@ export class ServiceLivenessRegistry {
 
   private allocateProbeId(): bigint {
     const result = this.nextProbeId++;
-    if (this.nextProbeId > 0xffff_ffff_ffff_ffffn) this.nextProbeId = 1n;
+    if (this.nextProbeId > UINT64_MAX) this.nextProbeId = 1n;
     return result;
   }
 }
