@@ -1095,15 +1095,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .Async<EchoReply>();
             Assert.Equal("local:ready", admitted.Value);
             provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await using var states = provider
-                .GetRequiredService<IZLinkClientServerRuntime>()
-                .ObserveAsync("work", timeout.Token)
-                .GetAsyncEnumerator();
-            while (await states.MoveNextAsync())
-                if (states.Current.Status.Targets.All(target => target.Weight == 0))
-                    break;
-            Assert.Single(states.Current.Status.Targets);
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work");
+            var target = Assert.Single(status.Targets);
+            Assert.Equal(0, target.Weight);
+            Assert.Equal(0, status.ReadyTargetCount);
             var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             {
