@@ -485,6 +485,29 @@ test('transferred actor materialization creates a fresh actor before restoring s
   assert.deepEqual(lifecycle, ['factory', 'destroy:alice:2', 'cleanup:alice']);
 });
 
+test('Entry relocation staging preserves absent joined Spot membership', async () => {
+  class PlayerActor {
+    constructor(context) { this.context = context; }
+  }
+  const node = createMockSpotNode({
+    restoreActorAuthority(actorId, _type, generation, _owner, spotId) {
+      assert.equal(spotId, undefined);
+      return { nodeRid: 'target-node', actorId, generation };
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: context => new PlayerActor(context) }]]),
+    nativeActorNode: node
+  });
+  try {
+    const actor = await manager.prepareRelocationActor('entry-actor', 'player', 7n, 11n, undefined, 13n, 3n);
+    assert.equal(actor.context.spotId, undefined);
+    assert.equal(manager.getState('entry-actor').spotId, undefined);
+  } finally {
+    await manager.abortRelocationActor('entry-actor');
+  }
+});
+
 test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
   const events = [];
   class RelocatedActor {

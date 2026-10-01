@@ -207,7 +207,7 @@ export class ZLinkLocalNativeActorJoin {
         actorType,
         actorRef.generation,
         state.locationGeneration ?? actorRef.generation,
-        String(target.spotId),
+        target.spotKind === ZLinkSpotKind.Entry ? undefined : String(target.spotId),
         spotGeneration,
         membershipEpoch
       );
@@ -247,10 +247,6 @@ export class ZLinkLocalNativeActorJoin {
         frameworkPayloadContentType(request)
       );
     }
-    if (response.accepted)
-      await this.options.postCommitBinder?.bind(
-        toFrameworkActorRef(state.nativeActorRef!, meshName)
-      );
     return {
       accepted: response.accepted,
       actor: toFrameworkActorRef(state.nativeActorRef ?? actorRef, meshName),

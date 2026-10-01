@@ -408,7 +408,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     actorType: string,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
+    spotId: RoutingId | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint,
     signal?: AbortSignal,
@@ -434,7 +434,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         actorType,
         objectGeneration,
         authorityOwnerGeneration,
-        String(spotId),
+        spotId === undefined ? undefined : String(spotId),
         spotGeneration,
         membershipEpoch
       );
@@ -457,7 +457,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         await registry.restore(transfer.adapterKey, actor, transfer.state, signal);
       }
       state.setLocationGeneration(authorityOwnerGeneration);
-      state.setJoinedSpot(spotId, undefined, membershipEpoch);
+      if (spotId !== undefined) state.setJoinedSpot(spotId, undefined, membershipEpoch);
       return actor;
     } catch (error) {
       if (nativeRef !== undefined) node.discardRelocatedActor?.(nativeRef);

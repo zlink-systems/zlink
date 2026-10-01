@@ -967,17 +967,19 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     stableType: string,
     generation: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: string,
+    spotId: string | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint
   ): ZLinkBackendActorRef {
-    return this.requireStateful().restoreActorAuthority(
+    const stateful = this.requireStateful();
+    const entry = spotId === undefined ? stateful.entrySpot().ref : undefined;
+    return stateful.restoreActorAuthority(
       actorId,
       stableType,
       generation,
       authorityOwnerGeneration,
-      spotId,
-      spotGeneration,
+      entry?.spotId ?? spotId!,
+      entry?.generation ?? spotGeneration,
       membershipEpoch
     ).ref;
   }
