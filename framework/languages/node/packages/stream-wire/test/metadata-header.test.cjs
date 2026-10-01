@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const wire = require('../dist');
+const { namedReplyHeader } = require('../../../test/contract/helpers/named-reply-header');
 
 test('wire metadata size includes the standalone count byte and matches the shared encoder', () => {
   assert.equal(wire.streamWireMetadataSize(new Map()), 1);
@@ -68,10 +69,7 @@ test('F20 empty reply names decode while nonempty Response and Error names fail'
       metadata: new Map()
     });
     assert.equal(wire.decodeStreamWireHeader(header).name, '');
-    const named = new Uint8Array(header.length + 1);
-    named.set(header);
-    named[12] = 1;
-    named[13] = 65;
+    const named = namedReplyHeader(kind);
     assert.throws(() => wire.decodeStreamWireHeader(named), /Stream packet name is invalid/);
   }
 });
