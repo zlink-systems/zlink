@@ -491,7 +491,7 @@ Close 절차는 다음 순서로 진행한다.
 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
 찾아 새 incarnation을 닫지 않는다. Seal 전에 accepted된 operation은 기존 generation에서 완료할
-수 있지만 seal 뒤 operation은 closing 또는 stale 결과로 끝난다.
+수 있지만 seal 뒤 operation은 closing 또는 stale 결과로 끝난다. 단, Instance intent가 있는 operation은 [장애 대응 §4.4](../05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)의 `Closing` 행을 따른다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
 authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다. Close는

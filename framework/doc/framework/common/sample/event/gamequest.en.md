@@ -483,11 +483,14 @@ cannot distinguish "no replacement ran" from "the runner looked at the wrong fil
 **The last three rows require actually creating those situations.**
 
 - §9-8 holds only if the next intent runs after `ClosePlayerQuestMsg`. All five languages have a
-  path that sends that message. Accepting `ClosePlayerQuestMsg` isn't Close completion, so the next
-  intent is sent right away without separately confirming that the Close finished. An Instance
-  intent that meets an in-progress Close waits until that Close releases the authority
+  path that sends that message. Accepting `ClosePlayerQuestMsg` guarantees neither that the Close
+  started nor that it finished, so the scenario starts the next Instance intent after it observes
+  the owner entering its `OnClosing` callback. That observation only confirms entry into
+  `Closing`; it doesn't mean the Close finished. An Instance intent that meets an in-progress
+  Close waits until that Close releases the authority
   ([failure handling §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)).
-  A fixed wait, a resend, or an `OnClosing` log doesn't stand in for confirming Close completion.
+  The scenario verifies the next intent's terminal and the event stream replay in the new
+  generation. A fixed wait or a resend doesn't stand in for Close completion.
 - §9-9 holds only if the next gameplay call runs after the Ready owner process is killed. This needs
   no new endpoint or message type — the existing `KillMonsterReq` suffices — but it does require
   **runner stage control: read an owner-ready marker, identify and kill that Mission process, then

@@ -468,10 +468,12 @@ Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission �
 **마지막 세 행은 그 상황을 실제로 만들어야 한다.**
 
 - §9-8은 `ClosePlayerQuestMsg` 뒤 다음 intent를 실행해야 성립한다. 다섯 언어 모두 그 message를 보낼
-  통로가 있다. `ClosePlayerQuestMsg`의 수락은 Close 완료가 아니므로, 다음 intent는 Close 완료를 따로
-  확인하지 않고 바로 보낸다. 진행 중인 Close를 만난 Instance intent는 그 Close가 authority를 해제할 때까지
-  기다린다([장애 대응 §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)).
-  고정 대기, 재전송이나 `OnClosing` 로그로 Close 완료를 대신 확인하지 않는다.
+  통로가 있다. `ClosePlayerQuestMsg`의 수락은 Close의 시작도 완료도 보장하지 않으므로, 시나리오는 owner의
+  `OnClosing` callback 진입을 관찰한 뒤 다음 Instance intent를 시작한다. 이 관찰은 `Closing` 진입을
+  확인하는 데만 쓰며 Close 완료를 뜻하지 않는다. 진행 중인 Close를 만난 Instance intent는 그 Close가
+  authority를 해제할 때까지 기다린다([장애 대응 §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)).
+  시나리오는 다음 intent의 terminal과 새 generation의 event stream replay를 검증한다. 고정 대기나
+  재전송으로 Close 완료를 대신하지 않는다.
 - §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나
   message type 없이 기존 `KillMonsterReq`로 가능하지만, **runner가 owner-ready 표시를 읽어 그
   Mission process를 특정해 죽이고 client를 그 뒤에 진행시키는 단계 제어가 필요하다.** §9-9는

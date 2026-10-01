@@ -587,7 +587,7 @@ generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
 move, `Unavailable`. The framework doesn't re-find the current ref and
 close a new incarnation. An operation accepted before the seal can complete
 on the existing generation, but an operation after the seal ends with a
-closing or stale result.
+closing or stale result, except that an operation with Instance intent follows the `Closing` row of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't

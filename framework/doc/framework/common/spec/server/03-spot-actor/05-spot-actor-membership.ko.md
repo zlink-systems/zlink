@@ -421,7 +421,7 @@ Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체
 공통 흐름에서 Actor Join에만 필요한 target admission, membership과 lifecycle callback을
 정의한다. 이동하는 Actor가 Session에 bind되어 있으면 target runtime이 command 44
 `sessionRelocationRoute`를 제출하는 시점은 아래 8-step 흐름의 8번이 정한다. Command 44의 구성과
-Session owner의 검증·route 적용·seal 해제는
+Session owner의 처리는
 [Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
 소유한다.
 
@@ -472,14 +472,11 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
 5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 또는 Restore 요청 때 등록한 temporary queue를 사용한다.
 6. Cutover 검증 뒤 target의 owner·membership·capacity·generation CAS는 [공통 relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Join membership 변경은 이 CAS에 포함한다.
 7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다.
-8. Actor가 Session에 bind되어 있으면 target runtime이 CAS와 queue 개방 뒤 Session owner에 target
-   route 적용과 seal 해제를 one-way로 알린다. Session owner는 기본 3,000ms의
-   `SessionRelocationSealTimeout` 안에 그 update를 받으면 route를 바꾸고 held message를 제출한
-   뒤 seal을 해제한다. Timeout이면 physical STREAM connection을 종료하고 Session state를 정리한다.
-   이 step에서 target이 보내는 message는 command 44 `sessionRelocationRoute`이며, commit에 담는
-   값과 Session owner의 처리 규칙은
-   [Session–Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가
-   정의한다.
+8. Actor가 Session에 bind되어 있으면 target runtime은 CAS와 queue 개방 뒤 command 44
+   `sessionRelocationRoute` commit을 Session owner에 one-way로 제출한다. Command 구성과 Session
+   owner의 검증·route 적용·held message·seal·timeout 처리는
+   [Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
+   정한다.
 
 승인이 `Accepted`여도 그 뒤의 relocation policy 검사(`DisableRelocation`), capacity
 충돌이나 state 호환성 실패로 이동이 시작되지 않을 수 있다. 준비 자원은 `RelocationId`와
@@ -549,9 +546,8 @@ sequenceDiagram
         TargetRuntime->>TargetQueue: [local] application dispatch 개방
         TargetQueue->>TargetActor: [local] queue 순서대로 message 처리
         opt bound session이 있으면
-            TargetRuntime->>SessionOwner: [send] 그 binding route 적용·held 제출·seal 해제
-            SessionOwner->>SessionOwner: [local] binding route와 current ActorRef snapshot 교체
-            Note over TargetRuntime,SessionOwner: timeout이면 physical Session 종료 · late update는 Warning
+            TargetRuntime-)SessionOwner: [send] command 44 sessionRelocationRoute
+            Note over TargetRuntime,SessionOwner: Session owner의 처리는 Session–Actor binding §8
         end
     else Rejected
         TargetSpot-->>SourceRuntime: [reply] Actor 수용 Rejected와 optional application reply
