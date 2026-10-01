@@ -171,6 +171,7 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | `--terminal` | 일반은 `ordinary`, worker는 `yield` | §10.5·§10.8 handler가 `ordinary`/`yield`를 소비; 나머지는 ordinary 고정 |
 | `--channel-topology` | `routemesh` | `channel-echo-only` bootstrap이 `routemesh`/`clientserver`를 소비; 나머지 S2S Channel은 RouteMesh 고정 |
 | `--codec` | `json`만 수락 | Typed payload 설정 검증과 serializer metadata 기록 |
+| `--package-source` | `published`; `published` 또는 `local` | 공통 runner가 build에 넘기는 참조 방식(§6.5) |
 | `--output` | `perf-results/<run-id>` | Writer·공통 runner가 사용하는 run root |
 | `--run-id` | UTC 표기+고유 suffix | 공통 runner가 자원·로그·결과 identity에 사용; `[A-Za-z0-9_-]+` |
 | `--endpoint-config` | 공통 runner 생성 파일 | Standalone client가 읽는 실제 endpoint manifest |
@@ -359,6 +360,10 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 - **측정할 버전은 언어별 Framework 버전 하나만 정한다.** 그 값은 `framework/perf/schema/packages.json`
   한 곳에 두고, binding과 Core는 그 Framework package가 선언한 의존성을 따른다. 사용자가 Framework를
   설치하면 받는 조합이 그것이기 때문이다. 새 Framework release가 publish되면 이 파일만 바꾼다.
+- **`--package-source local`은 checkout의 Framework·binding·Core를 참조한다.** 아직 publish되지 않은
+  변경을 확인하는 개발용이다. 참조 방식은 sample의 저장소 모드와 [local package 절차][local-package]를
+  그대로 쓰고, perf 전용 장치를 두지 않는다. 결과의 provenance에 `packageSource=local`과 실제 산출물
+  version·hash를 남기며 그 셀은 `baselineEligible=false`다. Release에 대응하는 결과가 아니기 때문이다.
 
 ```text
 framework/perf/
@@ -1872,3 +1877,4 @@ counter를 함께 보존한다. 내부 permit leak·source handoff 검증을 per
 [j-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/java/03-stream-connector.ko.md
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md
 [workspace]: ../../../../../doc/building/framework-workspace.ko.md
+[local-package]: ../../../../../scripts/local-package/README.ko.md
