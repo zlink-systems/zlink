@@ -20,11 +20,11 @@ class stream_sequences_t
 };
 
 // Starts stream x inflight loop coroutines; `loop(stream)` is the scenario's measured loop and returns when the window closes.
-template <typename TLoop> void spawn_stream_loops (const loops_t &loops, const role_t &role, TLoop loop)
+template <typename TLoop> void spawn_stream_loops (const loops_t &loops, role_t &role, TLoop loop)
 {
     for (int stream = 0; stream < *role.config.workload.logical_streams; ++stream)
         for (int slot = 0; slot < role.config.workload.inflight; ++slot)
-            loops->spawn (loop (stream));
+            loops->spawn (loop (stream), [&role] (std::exception_ptr error) { role.measurement.record_diagnostic (std::move (error)); });
 }
 
 // The return Channel handler of a send/send caller (§10.4, §10.10): the echo arrives as a second one-way send and the

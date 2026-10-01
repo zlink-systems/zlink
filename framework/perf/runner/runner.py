@@ -20,8 +20,8 @@ import urllib.request
 import uuid
 
 from environment import ROOT, collect, digest
-from launchers import Launcher, launcher
-from results import aggregate, null_reason, settle_status, write_json
+from launchers import Launcher, declared_framework_version, launcher
+from results import aggregate, null_reason, write_json
 from roles import plan_roles
 from scenarios import (BY_NAME, CLIENT, EXECUTABLES, MODE_VALUES, OPTIONS, PAYLOADS, ROLE_KINDS, TERMINAL_VALUES,
                        TOPOLOGY_VALUES, Cell, check, expand, owner_files, selected, values)
@@ -71,6 +71,7 @@ def options(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--terminal", choices=TERMINAL_VALUES)
     parser.add_argument("--channel-topology", choices=TOPOLOGY_VALUES)
     parser.add_argument("--codec", choices=("json",), default="json")
+    parser.add_argument("--package-source", choices=("published", "local"), default="published")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-id", default=time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:10])
     args = parser.parse_args(argv)
@@ -129,10 +130,13 @@ def role_executables(args: argparse.Namespace) -> list[str]:
 def build(args: argparse.Namespace, executables: list[str]) -> None:
     logs = args.output / "logs"
     logs.mkdir()
+    build_environment = os.environ | {"ZLINK_PERF_FRAMEWORK_VERSION": declared_framework_version(args.language),
+                                      "ZLINK_PERF_PACKAGE_SOURCE": args.package_source}
     for role in executables:
         path = logs / ("build-" + role + ".log")
         with path.open("x") as log:
-            result = subprocess.run(launcher(args.language).build(args.perf_dir, role), cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(launcher(args.language).build(args.perf_dir, role), cwd=ROOT, stdout=log,
+                                    stderr=subprocess.STDOUT, env=build_environment)
         if result.returncode:
             raise RuntimeError(f"Release build failed; {path}")
 
@@ -227,7 +231,8 @@ class ClientControl:
         self.log = log.open("ab")
         self.buffer = b""
 
-    def receive(self, seconds: float) -> dict:
+    # A control message is either the one "prepared" report (key "snapshot") or a command reply (key "response").
+    def receive(self, seconds: float, key: str) -> dict:
         deadline = time.monotonic() + seconds
         while True:
             while b"\n" in self.buffer:
@@ -238,7 +243,7 @@ class ClientControl:
                     value = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # Diagnostic text is preserved; only typed control JSON is evidence.
-                if not isinstance(value, dict) or "ok" not in value:
+                if not isinstance(value, dict) or "ok" not in value or key not in value:
                     continue
                 if not value["ok"]:
                     raise RuntimeError("Client control failure: " + json.dumps(value))
@@ -261,9 +266,9 @@ class ClientControl:
         self.process.stdin.write((json.dumps(value) + "\n").encode())
         self.process.stdin.flush()
 
-    def call(self, command: str, request: dict | None = None, seconds: float = 5) -> object:
+    def call(self, command: str, request: dict | None, seconds: float) -> object:
         self.send(command, request)
-        value = self.receive(seconds)["response"]
+        value = self.receive(seconds, "response")["response"]
         if isinstance(value, dict) and (value.get("accepted") is False or value.get("ok") is False):
             raise RuntimeError("Phase acknowledgement rejected: " + json.dumps(value))
         return value
@@ -278,9 +283,31 @@ class ClientControl:
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def get_json(url: str, timeout: float = 5) -> dict:
+def get_json(url: str, timeout: float) -> dict:
     with HTTP.open(url, timeout=timeout) as response:
         return json.load(response)
+
+
+def post_json(url: str, body: dict, timeout: float) -> dict:
+    request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with HTTP.open(request, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Admin HTTP {error.code}: {body}") from error
+
+
+def reset_ack_matches(acknowledgement: object, request: dict) -> bool:
+    return isinstance(acknowledgement, dict) and acknowledgement.get("ok") is True and all(
+        acknowledgement.get(key) == request[key] for key in ("runId", "cellId", "resetSeq"))
+
+
+def trigger_ack_matches(acknowledgement: object, request: dict, config_hash: str) -> bool:
+    return isinstance(acknowledgement, dict) and acknowledgement.get("accepted") is True and all(
+        acknowledgement.get(key) == request[key] for key in ("runId", "cellId", "resetSeq", "phase")) and \
+        acknowledgement.get("configHash") == config_hash
 
 
 def stage_ready(ready: dict, level: bool | str) -> bool:
@@ -290,8 +317,10 @@ def stage_ready(ready: dict, level: bool | str) -> bool:
     return ready["ready" if level else "infrastructureReady"]
 
 
-def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell: Path, stage: str, language: Launcher) -> list[dict]:
-    deadline = time.monotonic() + 30
+def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell: Path, stage: str, language: Launcher,
+               workload: dict) -> list[dict]:
+    deadline = time.monotonic() + workload["setupTimeoutMs"] / 1000
+    admin_timeout = workload["adminTimeoutMs"] / 1000
     observed = {}
     pending = list(roles)
     while pending:
@@ -299,7 +328,11 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
         for role in list(pending):
             key = role["role"] + "-" + str(role["roleInstance"])
             try:
-                ready = get_json(role["metrics"]["baseUrl"] + "/perf/ready", min(5, max(0.001, deadline - time.monotonic())))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready = get_json(role["metrics"]["baseUrl"] + "/perf/ready",
+                                 min(admin_timeout, remaining))
                 observed[key] = ready
                 if stage_ready(ready, full):
                     pending.remove(role)
@@ -323,9 +356,32 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
                         "Required public status: " + language.clientserver_interface + "; readiness meaning: "
                         "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md:194. " +
                         language.clientserver_gate, language.clientserver_interface)
-            raise TimeoutError("Public readiness evidence did not converge inside setupTimeoutMs=30000")
+            raise TimeoutError(f"Public readiness evidence did not converge inside setupTimeoutMs={workload['setupTimeoutMs']}")
     write_json(cell / "tmp" / (stage + "-readiness.json"), observed)
     return list(observed.values())
+
+
+def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
+    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline."""
+    pending = list(roles)
+    admin_timeout = workload["adminTimeoutMs"] / 1000
+    observed = {}
+    while pending:
+        owned.check()
+        for role in list(pending):
+            name = f"server-{role['role']}-{role['roleInstance']}.json"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats", min(admin_timeout, remaining))
+            observed[name] = snapshot
+            if snapshot.get("phase") == "complete":
+                pending.remove(role)
+        if pending and time.monotonic() >= deadline:
+            write_json(owned.cell / "tmp" / (stage + "-completion-failed.json"), observed)
+            raise TimeoutError(f"Role phase did not complete inside setupTimeoutMs={workload['setupTimeoutMs']}")
+        if pending:
+            time.sleep(0.02)
 
 
 def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, str]:
@@ -336,7 +392,7 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                 "inflight": v["inflight"], "connections": v.get("connections"),
                 "logicalStreams": v.get("logical_streams"), "clientCount": v["client_count"],
                 "connectConcurrency": v.get("connect_concurrency"),
-                "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "settleTimeoutMs": 5000,
+                "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "driverTimeoutMs": 2000,
                 "setupTimeoutMs": 30000, "adminTimeoutMs": 5000, "socketSendTimeoutMs": 1000}
     pool = v.get("worker_pool_size")
     comparable = {"language": args.language, "scenario": scenario.name, "mode": cell.mode, "terminal": cell.terminal,
@@ -345,9 +401,10 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                   "spotMapping": {"count": cell.spot_count, "rule": "streamId mod spotCount"} if cell.spot_count else None,
                   "actorMapping": None if not scenario.uses(objects="actor") else
                   "one Actor per connector ID" if cs else "one ActorId per logical stream",
+                  "packageSource": args.package_source,
                   "subscriberCount": cell.subscriber_count,
                   "worker": {"algorithm": "xorshift32-v1", "taskMillis": v["worker_task_millis"], "minThreads": pool, "maxThreads": pool,
-                             "maxQueueLength": 4096, "idleTimeoutMs": 60000, "workerTimeoutMs": workload["requestTimeoutMs"]} if scenario.worker else None,
+                             "idleTimeoutMs": 60000, "workerTimeoutMs": workload["requestTimeoutMs"]} if scenario.worker else None,
                   "splitRule": "q=N/P,r=N%P,count=q+(i<r),first=i*q+min(i,r)" if cs else "one source; stream IDs 0..N-1",
                   "workload": workload, "serializer": env["serializer"],
                   "cpu": {key: env[key] for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity")},
@@ -379,7 +436,8 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
     roles = []
     issues = []
     try:
-        common = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "workload": config["workload"],
+        common = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "language": args.language,
+                  "workload": config["workload"],
                   "worker": comparable["worker"], "store": store.config(config_hash) if scenario.store else None,
                   "diagnostics": lambda name: {"level": "Normal", "flowFile": str(cell / "logs" / ("message-flow-" + name.removeprefix("server-") + ".log"))}
                   if args.operation == "diagnostic" else None,
@@ -392,12 +450,13 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             server_files.append(role.name + ".json")
             roles.append({**role.manifest, "configFile": role.config_file})
             owned.start(role.name, [*language.command(args.perf_dir, role.executable), "--config", str(cell / role.config_file)], role.ports)
-        manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "workload": config["workload"],
+        manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "language": args.language,
+                    "workload": config["workload"],
                     "roles": roles, "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                                   "loadedArtifactsFile": "loaded-artifacts.json",
                                                   "commit": env["commit"], "serializer": env["serializer"]}}
         write_json(cell / "endpoints.json", manifest)
-        wait_ready(owned, roles, False, cell, "infrastructure", language)
+        wait_ready(owned, roles, False, cell, "infrastructure", language, config["workload"])
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
             process = owned.start(name, [*language.command(args.perf_dir, CLIENT), "--endpoint-config", str(cell / "endpoints.json"),
@@ -406,7 +465,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             clients.append(client)
         setup_snapshots = []
         for index, client in enumerate(clients):
-            prepared = client.receive(config["workload"]["setupTimeoutMs"] / 1000)
+            prepared = client.receive(config["workload"]["setupTimeoutMs"] / 1000, "snapshot")
             write_json(cell / "tmp" / f"client-{index}-setup.json", prepared)
             setup_snapshots.append(prepared["snapshot"])
         if scenario.driver == "clients":
@@ -415,61 +474,65 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             if requested != config["workload"]["connections"] or connected * 100 < requested * 99:
                 raise InvalidSetupError(f"Global connector preparation {connected}/{requested} is below 99%; see tmp/client-*-setup.json")
         # §16.1: warmup starts after infrastructure and objects; consumersReady (probe echo, PS marker) is the measured barrier.
-        wait_ready(owned, roles, "objects", cell, "probe", language)
+        wait_ready(owned, roles, "objects", cell, "probe", language, config["workload"])
         for phase, reset_seq in (("warmup", "0"), ("measured", "1")):
             if phase == "measured":
                 request = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq}
-                reset_evidence = {"roles": clients[0].call("resetRoles", request, seconds=5 * len(roles)),
-                                  "clients": [client.call("reset", request) for client in clients]}
-                if any(ack["resetSeq"] != reset_seq or not ack["ok"] for ack in reset_evidence["roles"] + reset_evidence["clients"]):
-                    raise RuntimeError("resetSeq barrier did not converge")
+                role_acks = []
+                for role in roles:
+                    ack = post_json(role["metrics"]["baseUrl"] + "/perf/reset", request,
+                                    config["workload"]["adminTimeoutMs"] / 1000)
+                    role_acks.append({"role": role["role"], "roleInstance": role["roleInstance"], "acknowledgement": ack})
+                client_acks = [client.call("reset", request, config["workload"]["adminTimeoutMs"] / 1000)
+                               for client in clients]
+                reset_evidence = {"roles": role_acks, "clients": client_acks}
                 write_json(cell / "tmp" / "reset-barrier.json", reset_evidence)
-                wait_ready(owned, roles, True, cell, "measured", language)
+                if any(not reset_ack_matches(entry["acknowledgement"], request) for entry in role_acks) or \
+                        any(not reset_ack_matches(ack, request) for ack in client_acks):
+                    raise RuntimeError("resetSeq barrier did not converge")
+                wait_ready(owned, roles, True, cell, "measured", language, config["workload"])
             trigger = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq, "phase": phase}
             barrier = []
-            sent = time.monotonic_ns()
-            role_acks = clients[0].call("triggerRoles", trigger, seconds=5 * len(roles))
-            barrier.append({"participant": "receiver/source role triggers", "sentTicks": str(sent), "ackTicks": str(time.monotonic_ns()), "acknowledgements": role_acks})
+            role_acks = []
+            for role in roles:
+                sent = time.monotonic_ns()
+                ack = post_json(role["applicationTriggerUrl"], trigger,
+                                config["workload"]["adminTimeoutMs"] / 1000)
+                entry = {"participant": f"role {role['role']}-{role['roleInstance']}", "sentTicks": str(sent),
+                         "ackTicks": str(time.monotonic_ns()), "acknowledgement": ack}
+                barrier.append(entry)
+                role_acks.append(ack)
             for index, client in enumerate(clients):
                 sent = time.monotonic_ns()
-                ack = client.call("start", trigger)
+                ack = client.call("start", trigger, config["workload"]["adminTimeoutMs"] / 1000)
                 barrier.append({"participant": f"client-{index}", "sentTicks": str(sent), "ackTicks": str(time.monotonic_ns()), "acknowledgement": ack})
             write_json(cell / "tmp" / (phase + "-start-barrier.json"), {"clockDomainId": f"coordinator-{os.getpid()}",
                        "clockSource": "time.monotonic_ns", "observedStartSkewBoundNs": str(int(barrier[-1]["ackTicks"]) - int(barrier[0]["sentTicks"])),
                        "exactCrossProcessStartSkewNs": None, "nullReasons": {"/exactCrossProcessStartSkewNs": null_reason(
                            "CLOCK_DOMAIN_UNVERIFIED", "Process clock epochs are not asserted to be shared.")}, "participants": barrier})
+            if any(not trigger_ack_matches(ack, trigger, config_hash) for ack in role_acks):
+                raise RuntimeError("Role phase trigger was rejected; see the start barrier evidence")
             duration = config["workload"]["warmupSeconds" if phase == "warmup" else "durationSeconds"]
             for client in clients:
                 client.send("wait")
+            completion_deadline = time.monotonic() + duration + config["workload"]["setupTimeoutMs"] / 1000
             for client in clients:
-                acknowledgement = client.receive(duration + 5)["response"]
-                if not acknowledgement["ok"]:
-                    raise RuntimeError("Client phase failed; collect its firstErrors evidence")
-            # §4.1: the settle ends when the cohort is terminal (per the scenario's aggregation) or at settleTimeoutMs.
-            settle_start, bound = time.monotonic(), config["workload"]["settleTimeoutMs"] / 1000
-            while True:
-                time.sleep(0.02)
-                owned.check()
-                stats = {f"server-{role['role']}-{role['roleInstance']}.json": get_json(role["metrics"]["baseUrl"] + "/perf/stats")
-                         for role in roles}
-                elapsed = time.monotonic() - settle_start
-                if not all(snapshot["phase"] == "complete" for snapshot in stats.values()):
-                    if elapsed >= bound:
-                        raise TimeoutError(f"Role phase did not settle inside settleTimeoutMs={config['workload']['settleTimeoutMs']}")
-                    continue
-                settle = settle_status(scenario.aggregation if phase == "measured" else "echo", stats, owners, elapsed, bound)
-                if settle["done"]:
-                    break
-            if phase == "measured":
-                write_json(cell / "settle.json", settle)
+                remaining = completion_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"Client phase did not complete inside setupTimeoutMs={config['workload']['setupTimeoutMs']}")
+                acknowledgement = client.receive(remaining, "response")["response"]
+                if not acknowledgement.get("ok") or acknowledgement.get("phase") != "complete":
+                    raise RuntimeError("Client phase did not complete successfully; collect its firstErrors evidence")
+            wait_roles_complete(owned, roles, config["workload"], completion_deadline, phase)
             for role in roles:
                 filename = f"server-{role['role']}-{role['roleInstance']}.json"
-                snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats?final=1")  # the read that ends the settle
+                snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats?final=1",
+                                    config["workload"]["adminTimeoutMs"] / 1000)
                 write_json(cell / ("tmp/warmup-" + filename if phase == "warmup" else filename), snapshot)
                 if phase == "warmup" and any(snapshot["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")):
                     raise RuntimeError("Warmup failed; " + filename)
             for index, client in enumerate(clients):
-                snapshot = client.call("stats")
+                snapshot = client.call("stats", None, config["workload"]["adminTimeoutMs"] / 1000)
                 write_json(cell / (f"tmp/warmup-client-{index}.json" if phase == "warmup" else f"client-{index}.json"), snapshot)
         loaded = []
         for name, process in owned.processes:
@@ -492,14 +555,15 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             filename = cell / f"server-{role['role']}-{role['roleInstance']}.json"
             if not filename.exists():
                 try:
-                    write_json(filename, get_json(role["metrics"]["baseUrl"] + "/perf/stats"))
+                    write_json(filename, get_json(role["metrics"]["baseUrl"] + "/perf/stats",
+                                                  config["workload"]["adminTimeoutMs"] / 1000))
                 except (OSError, ValueError) as collection_error:
                     issues.append({"code": "CollectionFailure", "message": str(collection_error), "sourceFile": filename.name})
         for index, client in enumerate(clients):
             filename = cell / f"client-{index}.json"
             if not filename.exists():
                 try:
-                    write_json(filename, client.call("stats"))
+                    write_json(filename, client.call("stats", None, config["workload"]["adminTimeoutMs"] / 1000))
                 except (OSError, ValueError, RuntimeError, TimeoutError) as collection_error:
                     issues.append({"code": "CollectionFailure", "message": str(collection_error), "sourceFile": filename.name})
     finally:
@@ -514,6 +578,11 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
     return result
 
 
+def run_exit_code(results: list[dict], store: RunStore) -> int:
+    store_removed = store.removal is None or store.removal.get("removed") is True
+    return 0 if store_removed and all(result["status"] == "valid" for result in results) else 1
+
+
 def main(argv: list[str]) -> int:
     args = options(argv)
     if args.output.exists():
@@ -524,9 +593,17 @@ def main(argv: list[str]) -> int:
     preflight(args, env)
     print("run_root=" + str(args.output), flush=True)
     build(args, executables)
-    env = collect(args.language, args.perf_dir, executables)
-    env["frameworkVersion"] = agreed_framework_version(env["frameworkVersion"], env["declaredFrameworkVersion"])
-    if not env["packages"]:
+    local_dotnet = args.language == "dotnet" and args.package_source == "local"
+    env = collect(args.language, args.perf_dir, executables, require_versions=not local_dotnet)
+    env["packageSource"] = args.package_source
+    if args.package_source == "published":
+        env["frameworkVersion"] = agreed_framework_version(env["frameworkVersion"], env["declaredFrameworkVersion"])
+    elif local_dotnet:
+        if not env["bindingVersion"]:
+            raise ValueError("The .NET local package build did not report its resolved Zlink binding version")
+        env["frameworkVersion"] = agreed_framework_version(
+            env["frameworkVersion"] or env["declaredFrameworkVersion"], env["declaredFrameworkVersion"])
+    if args.package_source == "published" and not env["packages"]:
         raise ValueError("No restored Zlink package in the role outputs; perf must reference published packages")
     write_json(args.output / "env.json", env)
     store = RunStore(args.run_id, args.output)
@@ -544,7 +621,7 @@ def main(argv: list[str]) -> int:
                 "cells": [{"cellId": r["cellId"],
                 "resultFile": r["cellId"] + "/result.json", "status": r["status"]} for r in results]})
     (args.output / "summary.txt").write_text("".join((args.output / r["cellId"] / "summary.txt").read_text() for r in results))
-    return 0 if all(r["status"] == "valid" for r in results) else 1
+    return run_exit_code(results, store)
 
 
 if __name__ == "__main__":

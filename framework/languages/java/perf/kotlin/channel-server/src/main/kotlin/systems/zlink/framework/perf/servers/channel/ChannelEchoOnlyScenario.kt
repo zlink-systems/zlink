@@ -92,16 +92,17 @@ internal class KotlinChannelEchoOnlyScenario(
                             val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation()
                             if (started < 0) break
-                            val sent = request.withSentTicks(started)
                             try {
-                                val reply = client.kotlin().requestToChannel<PerfEchoReply>(config.channelName(), sent)
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                PayloadPattern.validateIdentity(sent, reply)
-                                measurement.pattern().validate(reply.payload())
+
+                                    val sent = request.withSentTicks(started)
+                                    val reply = client.kotlin().requestToChannel<PerfEchoReply>(config.channelName(), sent)
+                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
+                                    PayloadPattern.validateIdentity(sent, reply)
+                                    measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
-                                if (error is CancellationException) throw error
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException) throw error
                             }
                         }
                     }

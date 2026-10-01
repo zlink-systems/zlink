@@ -20,6 +20,7 @@ import systems.zlink.framework.perf.PerfEchoReply
 import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.kotlin.completionStage
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 class SpotWorkerOffloadEchoScenario(
@@ -31,6 +32,7 @@ class SpotWorkerOffloadEchoScenario(
     private val readiness: ObjectsReadiness,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -43,8 +45,7 @@ class SpotWorkerOffloadEchoScenario(
             val applied = mapOf("minThreads" to worker.minThreads(), "maxThreads" to worker.maxThreads(), "idleTimeoutMs" to worker.idleTimeoutMs())
             val workerOptions = linkedMapOf<String, Any?>(
                 "algorithm" to worker.algorithm(), "taskMillis" to worker.taskMillis(), "applied" to applied,
-                "callTimeoutMs" to worker.workerTimeoutMs(), "maxQueueLength" to null,
-                "maxQueueLengthReason" to "The Java public ZLinkWorkerOptions has no queue length; the requested ${worker.maxQueueLength()} is not applied.",
+                "callTimeoutMs" to worker.workerTimeoutMs(),
             )
             app.bean(ScenarioMetrics::class.java) {
                 ScenarioMetrics(app.measurement())
@@ -68,6 +69,7 @@ class SpotWorkerOffloadEchoScenario(
     fun prepare(): CompletionStage<Void> = completionStage {
         val created = KotlinSpotRole.createSpots(config, manager, mesh)
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val probes = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true)
@@ -91,16 +93,17 @@ class SpotWorkerOffloadEchoScenario(
                             val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation()
                             if (started < 0) break
-                            val sent = request.withSentTicks(started)
                             try {
-                                val reply = spots.kotlin().requestToSpot<PerfEchoReply>(config.spotIds()[stream % config.spotIds().size], sent)
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                PayloadPattern.validateIdentity(sent, reply)
-                                measurement.pattern().validate(reply.payload())
+
+                                    val sent = request.withSentTicks(started)
+                                    val reply = spots.kotlin().requestToSpot<PerfEchoReply>(streamTargets[stream], sent)
+                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
+                                    PayloadPattern.validateIdentity(sent, reply)
+                                    measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
-                                if (error is CancellationException) throw error
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException) throw error
                             }
                         }
                     }

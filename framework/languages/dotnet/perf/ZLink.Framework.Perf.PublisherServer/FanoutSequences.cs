@@ -11,14 +11,12 @@ public sealed record PublisherSequences : Identity
 {
     public required SequenceRange[] attemptedRanges { get; init; }
     public required SequenceRange[] windowSuccessRanges { get; init; }
-    public required SequenceRange[] settleSuccessRanges { get; init; }
 }
 
 public sealed record SubscriberSequences : Identity
 {
     public required int subscriberId { get; init; }
     public required SequenceRange[] windowRanges { get; init; }
-    public required SequenceRange[] settleRanges { get; init; }
     public required ulong duplicateEvents { get; init; }
     public required Dictionary<string, NullReason> nullReasons { get; init; }
     public required object[]? timingEvidence { get; init; }
@@ -94,10 +92,10 @@ public sealed class SequenceBitSet
 public static class FanoutMetrics
 {
     public const string Topic = "perf.echo";
-    private static readonly string[] IntersectionKeys = ["fanout.subscriberCount", "fanout.uniqueDelivered",
-        "fanout.deliveredInWindow", "fanout.settleDelivered", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
+    private static readonly string[] IntersectionKeys = ["fanout.subscriberCount",
+        "fanout.deliveredInWindow", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
         "fanout.deliveryOpsPerSec"];
-    private static readonly string[] EchoKeys = ["messages.completed", "messages.settleCompleted", "throughput.kops"];
+    private static readonly string[] EchoKeys = ["messages.completed", "throughput.kops"];
 
     public static void Value(PerfMetricsSnapshot snapshot, string key, object? value)
     {
@@ -112,22 +110,22 @@ public static class FanoutMetrics
     {
         foreach (var key in IntersectionKeys)
             Null(snapshot, key, "NOT_APPLICABLE", "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4).");
-        foreach (var prefix in new[] { "latency", "settle.latency" })
+        foreach (var prefix in new[] { "latency" })
             foreach (var suffix in MetricCatalog.LatencySuffixes)
                 Null(snapshot, prefix + "." + suffix, "NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
-        foreach (var key in new[] { "latencyMs", "settleLatencyMs" })
+        foreach (var key in new[] { "latencyMs" })
         {
             MetricCatalog.Null(snapshot.histograms, snapshot.nullReasons, "histograms", key, "NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
             snapshot.nullReasons.Remove("/histograms/" + key + "/maxNs");
         }
         foreach (var key in EchoKeys)
             Null(snapshot, key, "NOT_APPLICABLE", "A fanout cell records publish admission, not echo completion (§10.11).");
-        foreach (var prefix in new[] { "fanout.deliveryLatency", "fanout.settleDeliveryLatency" })
+        foreach (var prefix in new[] { "fanout.deliveryLatency" })
             foreach (var suffix in MetricCatalog.LatencySuffixes)
                 Null(snapshot, prefix + "." + suffix, hasDeliveryOwner ? "CLOCK_DOMAIN_UNVERIFIED" : "NOT_APPLICABLE",
                     hasDeliveryOwner ? "Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2)."
                         : "Delivery latency is observed by Subscriber processes.");
-        foreach (var key in new[] { "fanoutDeliveryLatencyMs", "fanoutSettleDeliveryLatencyMs" })
+        foreach (var key in new[] { "fanoutDeliveryLatencyMs" })
             MetricCatalog.Null(snapshot.histograms, snapshot.nullReasons, "histograms", key,
                 hasDeliveryOwner ? "CLOCK_DOMAIN_UNVERIFIED" : "NOT_APPLICABLE",
                 hasDeliveryOwner ? "No verified shared clock domain between Publisher and Subscriber processes (§15.2)."
@@ -136,13 +134,9 @@ public static class FanoutMetrics
 
     public static void WriteOnce(string path, object original)
     {
-        try
-        {
-            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-            using var writer = new StreamWriter(stream);
-            writer.Write(PerfJson.Write(original));
-            writer.Write('\n');
-        }
-        catch (IOException) when (File.Exists(path)) { } // the original of this cell is already written; it is never replaced
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        using var writer = new StreamWriter(stream);
+        writer.Write(PerfJson.Write(original));
+        writer.Write('\n');
     }
 }

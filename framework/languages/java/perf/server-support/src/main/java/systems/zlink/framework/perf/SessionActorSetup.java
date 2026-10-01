@@ -117,13 +117,8 @@ public final class SessionActorSetup {
             observed.put("createMaxMs", createMaxNs / 1e6);
             observed.put("bindMeanMs", bound == 0 ? 0 : bindNs / 1e6 / bound);
             observed.put("bindMaxMs", bindMaxNs / 1e6);
-            readiness.set(bound > 0 && failed == 0, failed > 0 ? "Actor create or bind failed." : "No Actor is bound to a session yet.",
-                    List.of(Evidence.of("actorCreateAndBind",
-                            "ZLinkActorManager.getOrCreate + ZLinkSessionActors.bindOrGet", observed)));
-            // The Session role has no typed reply of its own: its setup probe is the admitted relay of a bound Actor.
-            if (bound > 0) {
-                measurement.setupEvidence(List.of(Evidence.of("relayAdmission", "ZLinkSessionActor.relay", Map.of("bound", bound))));
-            }
+            readiness.recordEvidence(List.of(Evidence.of("actorCreateAndBind",
+                    "ZLinkActorManager.getOrCreate + ZLinkSessionActors.bindOrGet", observed)));
         }
     }
 }

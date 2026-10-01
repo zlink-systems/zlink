@@ -10,6 +10,7 @@ public final class PerfSnapshot {
     public final String runId;
     public final String cellId;
     public final String resetSeq;
+    public final String language;
     public final String role;
     public final int roleInstance;
     public final String configHash;
@@ -25,7 +26,7 @@ public final class PerfSnapshot {
     public final Map<String, Object> runtimeMetrics;
     public final Map<String, Object> provenance;
 
-    PerfSnapshot(String runId, String cellId, String resetSeq, String role, int roleInstance, String configHash,
+    PerfSnapshot(String runId, String cellId, String resetSeq, String language, String role, int roleInstance, String configHash,
             String phase, Map<String, Object> window, Map<String, Object> clock,
             List<Map<String, Object>> serializedMessageBytes, Map<String, Object> metrics,
             Map<String, Object> histograms, Map<String, NullReason> nullReasons, Object publicStatus,
@@ -33,6 +34,7 @@ public final class PerfSnapshot {
         this.runId = runId;
         this.cellId = cellId;
         this.resetSeq = resetSeq;
+        this.language = language;
         this.role = role;
         this.roleInstance = roleInstance;
         this.configHash = configHash;
@@ -55,7 +57,7 @@ public final class PerfSnapshot {
         document.put("runId", runId);
         document.put("cellId", cellId);
         document.put("resetSeq", resetSeq);
-        document.put("language", "java");
+        document.put("language", language);
         document.put("role", role);
         document.put("roleInstance", roleInstance);
         document.put("configHash", configHash);

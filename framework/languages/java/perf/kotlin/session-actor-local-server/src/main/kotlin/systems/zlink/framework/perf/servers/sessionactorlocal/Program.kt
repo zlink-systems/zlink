@@ -24,6 +24,6 @@ fun main(args: Array<String>) {
             .enableActorDispatch()
             .registerSession(KotlinPerfSessionActorRelayHandler::class.java)
     }
-    app.bean(ObjectsReadiness::class.java) { ObjectsReadiness(false, "No Actor is bound to a session yet.") }
+    app.bean(ObjectsReadiness::class.java) { ObjectsReadiness(true, "") }
     app.start()
 }

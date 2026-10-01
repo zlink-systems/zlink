@@ -23,6 +23,7 @@ import systems.zlink.framework.perf.Polling
 import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.SendSendCorrelation
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.perf.kotlin.completionStage
 import systems.zlink.framework.spots.ZLinkSpotManager
 
@@ -37,6 +38,7 @@ class S2sSpotToChannelSendSendEchoScenario(
     private val metrics: ScenarioMetrics,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -62,11 +64,12 @@ class S2sSpotToChannelSendSendEchoScenario(
             mesh.snapshot(config.meshName()).channels().any { it.channelName() == config.channelName() && it.isReady() && it.readyTargetCount() > 0 }
         }, 10, config.workload().setupTimeoutMs().toLong()).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val probes = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true).withReturnSpotId(spotId)
             val driven = spots.kotlin().requestToSpot<PerfDriveReply>(spotId, PerfDriveRequest(request))
-                .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong() * 2)).await()
+                .timeout(Duration.ofMillis(config.workload().driverTimeoutMs().toLong())).await()
             check(driven.started()) { "Send/send setup probe was not started." }
             val entry = correlations.find(request.correlationId())
                 ?: throw PerfValidationException("UnknownCorrelation", "Setup probe registered no correlation.")
@@ -83,27 +86,52 @@ class S2sSpotToChannelSendSendEchoScenario(
                 repeat(config.workload().inflight()) {
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
-                            val spotId = config.spotIds()[stream % config.spotIds().size]
+                            val spotId = streamTargets[stream]
                             val request = measurement.request(stream, sequences.incrementAndGet(stream), false).withReturnSpotId(spotId)
-                            val driverStarted = PerfClock.now()
                             metrics.count("driver.issued")
-                            try {
-                                val driven = spots.kotlin().requestToSpot<PerfDriveReply>(spotId, PerfDriveRequest(request))
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong() * 2)).await()
-                                if (!driven.started()) {
-                                    metrics.count("driver.notStarted")
-                                    continue
-                                }
-                                val entry = correlations.find(request.correlationId())
-                                    ?: throw PerfValidationException("UnknownCorrelation", "The started drive registered no correlation.")
-                                val result = correlations.completeAsync(entry).await()
-                                measurement.completeOperation(entry.startedTicks(), result.error(), result.completedTicks())
-                                if (result.error() == null) metrics.record("driverLatencyMs", driverStarted, PerfClock.now())
-                            } catch (error: Exception) {
-                                if (error is CancellationException) throw error
+                            val driverStarted = PerfClock.now()
+                            var driverCompletedTicks = 0L
+                            var driverError: Throwable? = null
+                            val driven = try {
+                                val reply = spots.kotlin().requestToSpot<PerfDriveReply>(spotId, PerfDriveRequest(request))
+                                    .timeout(Duration.ofMillis(config.workload().driverTimeoutMs().toLong())).await()
+                                driverCompletedTicks = PerfClock.now()
+                                reply
+                            } catch (error: Throwable) {
                                 metrics.count("driver.failed")
                                 measurement.recordDiagnostic(error)
+                                driverError = error
+                                null
                             }
+                            if (driven != null && !driven.started()) {
+                                metrics.count("driver.notStarted")
+                                continue
+                            }
+                            var fatal = driverError?.takeIf { it is CancellationException || it !is Exception }
+                            val entry = correlations.find(request.correlationId())
+                            if (entry == null) {
+                                if (driven?.started() == true) {
+                                    measurement.recordDiagnostic(PerfValidationException(
+                                        "UnknownCorrelation", "The started drive registered no correlation.",
+                                    ))
+                                }
+                            } else {
+                                val accounted = correlations.completeAsync(entry).thenAccept { result ->
+                                    val counted = measurement.completeOperation(entry.startedTicks(), result.error(), result.completedTicks())
+                                    if (driverError == null && counted) {
+                                        metrics.record("driverLatencyMs", driverStarted, driverCompletedTicks)
+                                    }
+                                }
+                                if (fatal == null) {
+                                    try {
+                                        accounted.await()
+                                    } catch (error: Throwable) {
+                                        if (error is CancellationException || error !is Exception) fatal = error
+                                        else measurement.recordDiagnostic(error)
+                                    }
+                                }
+                            }
+                            if (fatal != null) throw fatal
                         }
                     }
                 }
