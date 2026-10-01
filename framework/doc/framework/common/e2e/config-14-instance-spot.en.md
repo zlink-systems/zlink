@@ -529,8 +529,10 @@ Instance intent runs on a new generation, and work without it ends with `NotFoun
 previous handler, and does it end with the one result its intent decides?
 
 - Starting condition: Close-callback entry can be confirmed through public application evidence.
-- Procedure: Right after Close entry, one Instance-intent request and one request without intent are
-  sent, each with a unique operation ID.
+- Procedure: The serving host's `OnClosing` callback is held by an application signal. After its
+  entry is observed, one Instance-intent request and one request without intent are sent, each with
+  a unique operation ID. After the request without intent ends with `NotFound` and evidence shows the
+  Instance-intent request reached the owner, the callback is released.
 - Verification: The previous instance's handler has neither operation ID. The Instance-intent
   request is processed exactly once on the new generation, and the request without intent ends
   with `NotFound`.
