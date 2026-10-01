@@ -39,6 +39,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -81,6 +82,8 @@ final class ZLinkFanoutNoDropTest {
         try (Scenario scenario = Scenario.start(true, true, SEND_TIMEOUT);
                 ExecutorService publisher = Executors.newSingleThreadExecutor()) {
             fillToBackpressure(scenario);
+            byte[] expected =
+                    new ZLinkJsonMessageSerializer().serialize(payload(MAX_FILL_ATTEMPTS)).bytes();
             CountDownLatch publishEntered = new CountDownLatch(1);
             CompletableFuture<Void> completion =
                     CompletableFuture.runAsync(
@@ -94,15 +97,10 @@ final class ZLinkFanoutNoDropTest {
             assertNull(
                     receiveNow(scenario.fast),
                     "the blocked record was partially delivered to the ready subscriber");
-            assertNotNull(
-                    receive(scenario.slow, RECEIVE_TIMEOUT),
-                    "the slow subscriber had no queued record to release");
-
-            completion.get(5, TimeUnit.SECONDS);
-            byte[] fastRecord = receive(scenario.fast, RECEIVE_TIMEOUT);
-            assertNotNull(fastRecord);
             assertArrayEquals(
-                    fastRecord, receiveMatching(scenario.slow, fastRecord, RECEIVE_TIMEOUT));
+                    expected, receiveMatching(scenario.slow, expected, RECEIVE_TIMEOUT));
+            completion.get(5, TimeUnit.SECONDS);
+            assertArrayEquals(expected, receive(scenario.fast, RECEIVE_TIMEOUT));
         }
     }
 
@@ -199,7 +197,11 @@ final class ZLinkFanoutNoDropTest {
             if (!subscriber.subscribe(received, RecvFlags.DONT_WAIT)) {
                 return null;
             }
-            return received.firstPart().toByteArray();
+            Message payload =
+                    received.isSinglePart()
+                            ? received.singlePartOrThrow()
+                            : received.parts().get(1);
+            return payload.toByteArray();
         }
     }
 
