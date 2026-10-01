@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -525,6 +527,7 @@ final class ZLinkMeshApplicationDispatcherTest {
 
         assertEquals(0, waiting.toCompletableFuture().get(2, TimeUnit.SECONDS));
         assertEquals(3, GatedNodeHandler.threeCompleted.get(2, TimeUnit.SECONDS));
+        assertInstanceOf(ExecutorService.class, framework.handlerExecutor()).close();
         assertEquals(0, framework.applicationJobQueue().snapshot().permitsInUse());
     }
 
