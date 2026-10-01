@@ -563,6 +563,10 @@ host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_k
               static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestRejected);
             break;
         case framework_error_kind_t::unavailable:
+            result.terminal_result = 105;
+            result.failure_code = static_cast<std::uint32_t> (
+              runtime::protocol::framework_error_code::routeNotConnected);
+            break;
         default:
             result.terminal_result = 105;
             result.failure_code =
