@@ -364,14 +364,15 @@ processes of the same executable, each with a distinct `roleInstance` and metric
   the language name and the location of that language's role executables, and pass the §5 CLI input
   through to the shared runner unchanged. Each language's role processes and clients still own the
   measured loop and the Framework calls (§6).
-- **Perf references the Framework and bindings packages published to the public registries.** It uses
+- **By default (`--package-source published`), perf references the Framework and bindings packages published to the public registries.** It uses
   the same mechanism as the sample user mode ([Framework workspace §2][workspace]). A result maps to a
   release only when it measures the artifacts users receive.
-- **Fix only one Framework version per language.** Keep it in `framework/perf/schema/packages.json`
+- **With published, fix only one Framework version per language.** Keep it in `framework/perf/schema/packages.json`
   alone; bindings and Core follow the dependencies that Framework package declares. That is the
   combination users receive when they install the Framework. When a new Framework release is
   published, change only this file.
-- **`--package-source local` references the checkout's Framework, bindings and Core.** It is for
+- **`--package-source local` uses the checkout's Framework sources and the repository-mode binding
+  references.** Core uses the release artifact validated by the local package procedure. It is for
   development checks of changes not yet published. It uses the sample repository mode and the
   [local package procedure][local-package] as they are, with no perf-specific mechanism. Results record
   `packageSource=local` and the actual artifact versions and hashes in provenance, and such cells are
@@ -1632,7 +1633,7 @@ deadlines, Spot/Actor mapping, topology/discovery and worker settings.
 | `invalid` | Comparison premises fail, such as zero denominator, inadequate preparation or incompatible schemas |
 | `unsupported` | Required public calls/declarations could not be confirmed/executed in that language; not counted complete |
 
-Only `valid` echo cells with zero failure, timeout, cancellation and validation errors
+Only `packageSource=published`, `valid` echo cells with zero failure, timeout, cancellation and validation errors
 are adopted as successful echo baselines with `baselineEligible=true`. `inflightAtEnd` is not a failure and does not affect adoption.
 PS has no lossless contract, so missing delivery alone is not an error; a valid publish denominator
 and subscriber originals support comparison with the recorded ratio.

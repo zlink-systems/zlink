@@ -354,14 +354,14 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 - **언어별 `scripts/`의 세 script는 공통 runner의 진입점이다.** 언어 이름과 그 언어의
   role executable 위치를 정하고, §5의 CLI 입력은 그대로 공통 runner에 넘긴다. Measured loop와
   Framework 호출은 계속 각 언어의 role process와 client가 소유한다(§6).
-- **Perf는 공개 registry에 publish된 Framework·bindings package를 참조한다.** 참조 방식은
+- **기본(`--package-source published`)은 공개 registry에 publish된 Framework·bindings package를 참조한다.** 참조 방식은
   sample의 사용자 모드([Framework workspace §2][workspace])와 같은 장치를 쓴다. 사용자가
   받는 것과 같은 산출물을 측정해야 결과를 release에 대응시킬 수 있기 때문이다.
-- **측정할 버전은 언어별 Framework 버전 하나만 정한다.** 그 값은 `framework/perf/schema/packages.json`
+- **published에서 측정할 버전은 언어별 Framework 버전 하나만 정한다.** 그 값은 `framework/perf/schema/packages.json`
   한 곳에 두고, binding과 Core는 그 Framework package가 선언한 의존성을 따른다. 사용자가 Framework를
   설치하면 받는 조합이 그것이기 때문이다. 새 Framework release가 publish되면 이 파일만 바꾼다.
-- **`--package-source local`은 checkout의 Framework·binding·Core를 참조한다.** 아직 publish되지 않은
-  변경을 확인하는 개발용이다. 참조 방식은 sample의 저장소 모드와 [local package 절차][local-package]를
+- **`--package-source local`은 checkout의 Framework 소스와 저장소 모드의 binding 참조를 쓴다.** Core는
+  local package 절차에 따라 검증된 release 산출물을 쓴다. 아직 publish되지 않은 변경을 확인하는 개발용이다. 참조 방식은 sample의 저장소 모드와 [local package 절차][local-package]를
   그대로 쓰고, perf 전용 장치를 두지 않는다. 결과의 provenance에 `packageSource=local`과 실제 산출물
   version·hash를 남기며 그 셀은 `baselineEligible=false`다. Release에 대응하는 결과가 아니기 때문이다.
 
@@ -1603,7 +1603,7 @@ Spot/Actor mapping, topology/discovery, worker 설정을 남긴다.
 | `invalid` | 분모 0, 준비 기준 미달, 서로 다른 schema 등으로 해당 비교의 전제가 성립하지 않음 |
 | `unsupported` | 필요한 public 호출/선언을 해당 언어에서 확인·실행하지 못함; 필수 완료 수에 포함하지 않음 |
 
-성공 echo baseline은 `valid`이고 실패·timeout·cancelled·validation 오류가 0인 셀만
+성공 echo baseline은 `packageSource=published`이고 `valid`이며 실패·timeout·cancelled·validation 오류가 0인 셀만
 `baselineEligible=true`로 채택한다. `inflightAtEnd`는 실패가 아니므로 채택 조건에 들어가지 않는다. PS는 lossless 계약이 아니므로 누락만으로 error를 만들지 않으며,
 유효한 publish 분모와 subscriber 원본이 있으면 ratio를 보존한 채 비교한다.
 PS baseline 채택의 허용 deliveryRatio는 비교 계획에 명시하며 미지정이면 `baselineEligible=false`다.
