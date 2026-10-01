@@ -486,10 +486,9 @@ cannot distinguish "no replacement ran" from "the runner looked at the wrong fil
   path that sends that message. Accepting `ClosePlayerQuestMsg` guarantees neither that the Close
   started nor that it finished, so after it observes the owner entering its `OnClosing` callback
   the scenario sends the Instance intent request `SyncQuestProgressReq` from the same client.
-  That observation only confirms entry into `Closing`; it doesn't mean the Close finished. For an
-  Instance intent that meets `Closing`, the Framework waits until that Close releases the authority
-  and then delivers it to the new generation
-  ([failure handling §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)).
+  That observation only confirms that the Close request is already in. The request is placed after
+  the Close work item and runs on the new generation on the same node
+  ([Spot address messaging §7](../../spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
   The scenario verifies that one request's terminal and the event stream replay in the new
   generation. It uses no fixed wait and no resend.
 - §9-9 holds only if the next gameplay call runs after the Ready owner process is killed. This needs

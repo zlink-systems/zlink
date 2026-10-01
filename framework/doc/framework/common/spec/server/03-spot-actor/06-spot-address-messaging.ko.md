@@ -481,17 +481,22 @@ shutdown과 `Relocate`는 별도 운영 lifecycle로 Instance Spot을 정리하�
 
 Close 절차는 다음 순서로 진행한다.
 
-1. Expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
-2. Local admission을 seal하고 seal 전에 수락한 turn·timer를 정해진 boundary까지 처리한다.
-3. `OnClosing`을 Close당 최대 한 번 호출한 뒤 handler scope, timer와 local activation resource를 한 번
+1. Close 요청은 그 Spot의 실행 순서에 Close 작업 하나로 들어간다. Close 요청 전에 수락한 message와
+   timer는 기존 generation에서 평소대로 실행한다. Close 요청 뒤 이 node에 도착한 message는 Close 작업
+   뒤에 놓인다.
+2. Close 작업 차례가 오면 expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
+   `OnClosing`을 Close당 최대 한 번 호출한 뒤 handler scope, timer와 local activation resource를 한 번
    정리한다. `OnClosing` 호출이 실패하면 그 실패를 diagnostics에 기록하고 정리를 계속한다. Close를
    재개해도 이미 호출한 `OnClosing`은 다시 호출하지 않는다.
-4. 같은 owner·generation fence로 authority를 해제한다.
+3. Close 작업 뒤에 놓인 message 가운데 Instance intent가 있으면, 같은 owner·generation fence로
+   authority를 같은 node의 새 `ObjectGeneration`으로 넘긴다. 새 incarnation은 기존 수용 공간을 이어받고
+   저장된 상태를 복원한 뒤, Close 작업 뒤에 놓인 message를 도착 순서대로 실행한다. 그런 message가
+   없으면 같은 fence로 authority를 해제한다.
 
-같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
+Close 작업 뒤에 놓인 message 가운데 Instance intent가 없는 message는 [§9](#9-실패와-관측)의 결과로
+끝난다. 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
-찾아 새 incarnation을 닫지 않는다. Seal 전에 accepted된 operation은 기존 generation에서 완료할
-수 있지만 seal 뒤 operation은 closing 또는 stale 결과로 끝난다. Instance intent는 [장애 대응 §4.4](../05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)를 따른다.
+찾아 새 incarnation을 닫지 않는다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
 authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다. Close는
@@ -509,7 +514,7 @@ generation, `SpotRef`, target node RID와 lifecycle generation, expected
 Target은 service admission에서 확인한 peer identity와 target lifecycle을 먼저 검증하고 current
 User Spot authority를 Store에서 직접 읽는다. 그다음 object generation, owner generation,
 `StoreVersion`, active Actor membership, `Closing`과 relocation 상태를 모두 확인한 뒤에만
-Closing CAS와 local admission seal을 시작한다. 이 확인과 1단계는 §7의 lifecycle lane 규칙에 따라
+Close 작업을 그 Spot의 실행 순서에 넣는다. 이 확인과 1단계는 §7의 lifecycle lane 규칙에 따라
 실행한다.
 
 Command 20의 close 성공 tail은 `closed` bool 하나다. `false`는 같은 incarnation이 이미 없거나
@@ -553,7 +558,8 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | `Closing`은 `Rejected`, `Draining`은 `ShuttingDown`이다. Owner에 도달한 신규 작업의 수락 여부는 §7 2단계의 local admission seal이 판정한다. Instance intent는 [장애 대응 §4.4](../05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)의 `Closing` 행을 따른다. 그 밖의 operation에는 이 행의 terminal kind를 적용한다. |
+| `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. Instance intent가 없는 작업은 `Missing`과 같은 `NotFound`다. |
+| `Draining` owner에 신규 admission을 요청했다 | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |
 | Request가 실패했다 | 다른 Spot ID, MeshName이나 owner로 우회하지 않는다. |

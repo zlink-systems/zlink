@@ -123,7 +123,7 @@ Location Store를 왕복하면 대부분 다른 process(Redis 등)를 오가는 
 | 보관하는 이유 | 경로만 캐시하고 fence를 빼면 낡은 owner로 보내 놓고도 그 사실을 알지 못한다. Owner 경로와 수락 판단에 필요한 fence 값을 함께 보관하는 이유다. |
 | 기본 설정 | `RouteCacheMaxAge` 기본값은 15초다. 0이면 route cache를 사용하지 않는다. |
 | 저장하지 않는 결과 | `Missing`, `Creating`과 Store failure는 캐시에 두지 않는다. 이전 실패만으로 다음 call을 끝내지 않는다. 이 상태를 캐시하면 잠깐의 실패가 캐시 수명만큼 지속되는 장애가 된다. |
-| 즉시 무효화하는 조건 | 더 큰 `StoreVersion`, stale route 결과, Store recovery event, owner lease invalidation, owner가 Close seal 때문에 거부한 reply 또는 **relay 통지**를 확인하면 entry를 제거한다. |
+| 즉시 무효화하는 조건 | 더 큰 `StoreVersion`, stale route 결과, Store recovery event, owner lease invalidation 또는 **relay 통지**를 확인하면 entry를 제거한다. |
 | Relay 통지 | Actor나 Spot이 다른 MeshNode로 옮겨진 뒤에도 이전 owner에 도착한 message를 새 owner에게 대신 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow) relay가 message를 새 owner로 넘기면 원 송신 runtime에 통지한다. 통지를 받은 runtime은 해당 entry를 제거하고 다음 call에서 owner를 다시 조회한다. |
 | 실행 중 설정 변경 | `RouteCacheMaxAge`의 실행 중 변경 규칙은 [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)이 정한다. |
 

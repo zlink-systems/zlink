@@ -947,8 +947,8 @@ packet으로 이 결과를 대신하지 않는다.
 Framework는 `Ready` 위치를 잠시 캐시에 둘 수 있다. Cache에는 ID, `ObjectGeneration`,
 `AuthorityOwnerGeneration`, `StoreVersion`, owner lease, node 실행 세대와 route를 저장한다.
 `RouteCacheMaxAge` 기본값은 15초이며 owner가 새 작업을 받을 수 있는 마지막 시각을 넘지
-못한다. `Missing`, `Creating`과 Store 오류는 캐시에 두지 않는다. 즉시 무효화하는 조건은
-[Routing §2.2](../03-spot-actor/08-routing.ko.md#22-최근-ready-route를-사용하는-조건)가 정한다. 실행 중 변경한 `RouteCacheMaxAge`는 새 cache entry부터 적용하며 기존 entry의 수명을 연장하지 않는다.
+못한다. `Missing`, `Creating`과 Store 오류는 캐시에 두지 않는다. 더 높은 `StoreVersion`이나
+owner lease 만료를 확인하면 즉시 제거한다. 실행 중 변경한 `RouteCacheMaxAge`는 새 cache entry부터 적용하며 기존 entry의 수명을 연장하지 않는다.
 
 이동 직후 이전 owner로 들어온 message는 새 owner에게 전달할 수 있다. 이 기능을 Message
 Follow라고 하며, 기간인 `MessageFollowDuration`의 기본값은 30초다. 값이 0이면 각각 cache 또는

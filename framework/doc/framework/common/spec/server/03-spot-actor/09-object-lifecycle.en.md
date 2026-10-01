@@ -82,10 +82,10 @@ later stage doesn't infer the Store result again.
 | `Missing` | Lookup version proving authority absence | Creation coordinator |
 | `Creating` | Attempt and reservation fence | Waiter for the same attempt |
 | `Ready` | Route and authority/owner-lease fences | Route admission |
-| `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter, except that Instance intent seeing `Closing` goes to the transition wait of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter |
 
 The resolver's `Unavailable` preserves the authority state without a Ready route. Instance
-intent seeing `Creating` goes to the waiter above, seeing `Closing` goes to the transition wait of [failure handling §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure); during idle cleanup it follows the route
+intent seeing `Creating` goes to the waiter above; during idle cleanup it follows the route
 refresh in §5. [Spot messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability)
 decides the result for a `Closing` direct call without Instance intent. It isn't the
 same state as `Missing`, which means no authority exists. Only after an explicit `Close`,
