@@ -18,7 +18,7 @@ usage() {
     cat <<'EOF'
 사용법:
   release-check.sh [--dry-run] core <X.Y.Z>
-  release-check.sh [--dry-run] bindings <cpp|node|java|dotnet> <X.Y.Z>
+  release-check.sh [--dry-run] bindings <cpp|node|java|dotnet|go|python|rust> <X.Y.Z>
   release-check.sh [--dry-run] framework <cpp|node|java|dotnet> <X.Y.Z>
   release-check.sh --write [--dry-run] core <X.Y.Z>
   release-check.sh --write [--dry-run] bindings cpp <X.Y.Z>
@@ -26,7 +26,8 @@ usage() {
 
 --write는 vcpkg port·Conan recipe(vcpkg.json·portfile.cmake·conandata.yml·
 conanfile.py)에 릴리스 태그·자산의 버전·SHA를 채운다. core 대상과
-bindings/framework의 cpp 언어에서만 의미가 있다(다른 언어는 npm·NuGet·Maven이라
+bindings/framework의 cpp 언어에서만 의미가 있다(다른 언어는 package registry나
+Go module tag를 사용하므로
 이 자동화의 대상이 아니다). --write와 함께 쓴 --dry-run은 값을 계산해 보여주기만
 하고 파일을 바꾸지 않는다.
 EOF
@@ -289,6 +290,32 @@ def validate_nuget():
         effective_id = package_id.group(1) if package_id else path.stem
         if not (effective_id == "Zlink" or effective_id.startswith("Zlink.")):
             error(f"{path.relative_to(root)}: 공개 PackageId가 Zlink.*가 아님: {effective_id}")
+
+
+def validate_go():
+    major = int(version.split(".")[0])
+    expected_module = "zlink.systems/zlink" + (f"/v{major}" if major >= 2 else "")
+    contains("bindings/go/go.mod", f"module {expected_module}")
+    contains(".github/workflows/bindings-release.yml", "tag_name: go/v${{ needs.resolve.outputs.go_version }}")
+
+
+def validate_python():
+    contains("bindings/python/pyproject.toml", '[project]', 'name = "zlink"', f'version = "{version}"')
+    contains(".github/workflows/bindings-release.yml", "tag_name: python/v${{ needs.resolve.outputs.python_version }}")
+
+
+def validate_rust():
+    manifest = text("bindings/rust/Cargo.toml")
+    package = manifest.split("[package]", 1)[-1].split("[", 1)[0]
+    if not re.search(r'(?m)^name = "zlink"$', package):
+        error("bindings/rust/Cargo.toml: package name이 zlink가 아님")
+    if not re.search(rf'(?m)^version = "{re.escape(version)}"$', package):
+        error(f"bindings/rust/Cargo.toml: package version이 {version}이 아님")
+    for relative in ("bindings/rust/Cargo.lock", "bindings/rust/perf/single/Cargo.lock", "bindings/rust/perf/multi/Cargo.lock"):
+        source = text(relative)
+        if not re.search(rf'(?m)^name = "zlink"\nversion = "{re.escape(version)}"$', source):
+            error(f"{relative}: zlink package version이 {version}이 아님")
+    contains(".github/workflows/bindings-release.yml", "tag_name: rust/v${{ needs.resolve.outputs.rust_version }}")
 
 
 def validate_maven():
@@ -781,6 +808,9 @@ validators = {
     "nuget": validate_nuget,
     "maven": validate_maven,
     "cpp": validate_cpp,
+    "go": validate_go,
+    "python": validate_python,
+    "rust": validate_rust,
 }
 if action == "write":
     if mode != "cpp":
@@ -817,6 +847,9 @@ check_package_metadata() {
                 dotnet) check_metadata_item "$root" nuget NuGet 'Zlink nupkg 메타데이터' ;;
                 java) check_metadata_item "$root" maven Maven 'systems.zlink 2개·Central bundle' ;;
                 cpp) check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-cpp recipe·port 버전과 SHA' ;;
+                go) check_metadata_item "$root" go 'Go module' 'module path·go/v 태그' ;;
+                python) check_metadata_item "$root" python PyPI 'pyproject 버전·python/v 태그' ;;
+                rust) check_metadata_item "$root" rust crates.io 'Cargo manifest·lock 버전·rust/v 태그' ;;
             esac
             ;;
         framework)
@@ -879,6 +912,9 @@ print_deployment_targets() {
                 node) printf '| 1 | node/v%s | npm |\n' "$RELEASE_VERSION" ;;
                 java) printf '| 1 | java/v%s | Maven Central |\n' "$RELEASE_VERSION" ;;
                 dotnet) printf '| 1 | dotnet/v%s | nuget.org |\n' "$RELEASE_VERSION" ;;
+                go) printf '| 1 | go/v%s | Go module + GitHub Release |\n' "$RELEASE_VERSION" ;;
+                python) printf '| 1 | python/v%s | PyPI + GitHub Release |\n' "$RELEASE_VERSION" ;;
+                rust) printf '| 1 | rust/v%s | crates.io + GitHub Release |\n' "$RELEASE_VERSION" ;;
             esac
             ;;
         framework)
@@ -917,8 +953,8 @@ main() {
             ((${#positional[@]} == 3)) \
                 || { usage >&2; die 2 "$RELEASE_TARGET 릴리스에는 언어가 필요합니다."; }
             RELEASE_LANGUAGE=${positional[1]}
-            case "$RELEASE_LANGUAGE" in
-                cpp|node|java|dotnet) ;;
+            case "$RELEASE_TARGET/$RELEASE_LANGUAGE" in
+                bindings/cpp|bindings/node|bindings/java|bindings/dotnet|bindings/go|bindings/python|bindings/rust|framework/cpp|framework/node|framework/java|framework/dotnet) ;;
                 *) usage >&2; die 2 "지원하지 않는 $RELEASE_TARGET 언어입니다: $RELEASE_LANGUAGE" ;;
             esac
             RELEASE_VERSION=${positional[2]}
