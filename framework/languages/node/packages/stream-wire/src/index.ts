@@ -333,8 +333,7 @@ export function encodeStreamWireHeader(
   const flags = flagOverrides ?? defaultHeaderFlags;
   const reply = isReplyKind(header.kind);
   const packetName = reply ? '' : header.name;
-  if (!reply) validateStreamWirePacketName(packetName);
-  const nameBytes = utf8Encode(packetName);
+  const nameBytes = reply ? new Uint8Array() : validateStreamWirePacketName(packetName);
   const hasRequestSeq = header.requestSeq !== undefined;
   const hasMetadata = header.metadata.size > 0;
   const correlationBytes =
@@ -663,11 +662,12 @@ function decodeStreamWireMetadataAt(
   return { metadata, offset };
 }
 
-function validateStreamWirePacketName(name: string): void {
+function validateStreamWirePacketName(name: string): Uint8Array {
   const nameBytes = utf8Encode(name);
-  if (name.trim().length === 0 || nameBytes.length > 255) {
+  if (name.trim().length === 0 || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
     throw new Error('Stream packet name is invalid.');
   }
+  return nameBytes;
 }
 
 function isReplyKind(kind: number): boolean {

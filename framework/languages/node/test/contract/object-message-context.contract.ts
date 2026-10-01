@@ -19,7 +19,7 @@ function exactContextSurface(
 ): void {
   const actorId: string = actorContext.actorId;
   const actorGeneration: bigint = actorContext.objectGeneration;
-  const spotGeneration: number = spotContext.objectGeneration;
+  const spotGeneration: bigint = spotContext.objectGeneration;
   void [actorId, actorGeneration, spotGeneration, messageContext];
 
   // @ts-expect-error Actor handler registration belongs to the containing Spot.

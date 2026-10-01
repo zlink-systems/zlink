@@ -28,6 +28,8 @@ const enum ValueKind {
   Bytes = 6
 }
 
+const FIXED64_BYTE_LENGTH = Float64Array.BYTES_PER_ELEMENT;
+
 export function createDynamicValueProtobufType(): {
   encode(value: unknown): { finish(): Uint8Array };
   decode(reader: Uint8Array): unknown;
@@ -82,8 +84,11 @@ export function encodeDynamicValue(value: unknown): Buffer {
   if (typeof value === 'object') {
     return encodeFields([
       encodeVarintField(DynamicValueField.Kind, ValueKind.Object),
-      ...Object.entries(value as Record<string, unknown>).map(([key, entryValue]) =>
-        encodeBytesField(DynamicValueField.Object, encodeObjectEntry(key, entryValue))
+      ...Object.getOwnPropertyNames(value).map((key) =>
+        encodeBytesField(
+          DynamicValueField.Object,
+          encodeObjectEntry(key, (value as Record<string, unknown>)[key])
+        )
       )
     ]);
   }
@@ -96,7 +101,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
   let numberValue = 0;
   let stringValue = '';
   let bytesValue = Buffer.alloc(0);
-  const objectValue: Record<string, unknown> = {};
+  let objectValue: Record<string, unknown> | undefined;
   const arrayValue: unknown[] = [];
 
   for (const field of readFields(bytes)) {
@@ -115,7 +120,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
         break;
       case DynamicValueField.Object: {
         const entry = decodeObjectEntry(readBytesPayload(field));
-        objectValue[entry.key] = entry.value;
+        (objectValue ??= Object.create(null))[entry.key] = entry.value;
         break;
       }
       case DynamicValueField.Array:
@@ -139,7 +144,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
     case ValueKind.String:
       return stringValue;
     case ValueKind.Object:
-      return objectValue;
+      return objectValue ? Object.setPrototypeOf(objectValue, Object.prototype) : {};
     case ValueKind.Array:
       return arrayValue;
     case ValueKind.Bytes:
@@ -178,7 +183,7 @@ function encodeVarintField(fieldNumber: number, value: number | bigint): Buffer 
 }
 
 function encodeDoubleField(fieldNumber: number, value: number): Buffer {
-  const payload = Buffer.allocUnsafe(8);
+  const payload = Buffer.allocUnsafe(FIXED64_BYTE_LENGTH);
   payload.writeDoubleLE(value);
   return Buffer.concat([encodeVarint(fieldKey(fieldNumber, WireType.Fixed64)), payload]);
 }
@@ -211,7 +216,7 @@ function encodeVarint(value: number | bigint): Buffer {
 type WireField = {
   readonly fieldNumber: number;
   readonly wireType: number;
-  readonly payload: Buffer;
+  readonly payload: Buffer | bigint;
 };
 
 function readFields(bytes: Buffer): WireField[] {
@@ -222,39 +227,41 @@ function readFields(bytes: Buffer): WireField[] {
     offset = key.offset;
     const fieldNumber = Number(key.value >> 3n);
     const wireType = Number(key.value & 0x07n);
+    let end: number;
     if (wireType === WireType.Varint) {
       const value = readVarint(bytes, offset);
-      fields.push({ fieldNumber, wireType, payload: bytes.subarray(offset, value.offset) });
+      fields.push({ fieldNumber, wireType, payload: value.value });
       offset = value.offset;
+      continue;
     } else if (wireType === WireType.Fixed64) {
-      fields.push({ fieldNumber, wireType, payload: bytes.subarray(offset, offset + 8) });
-      offset += 8;
+      end = offset + FIXED64_BYTE_LENGTH;
     } else if (wireType === WireType.LengthDelimited) {
       const length = readVarint(bytes, offset);
       offset = length.offset;
-      const end = offset + Number(length.value);
-      fields.push({ fieldNumber, wireType, payload: bytes.subarray(offset, end) });
-      offset = end;
+      end = offset + Number(length.value);
     } else {
       throw new Error(`Protobuf serializer cannot read wire type '${wireType}'.`);
     }
+    requirePayloadEnd(bytes, end);
+    fields.push({ fieldNumber, wireType, payload: bytes.subarray(offset, end) });
+    offset = end;
   }
   return fields;
 }
 
 function readVarintPayload(field: WireField): bigint {
   ensureWireType(field, WireType.Varint);
-  return readVarint(field.payload, 0).value;
+  return field.payload as bigint;
 }
 
 function readDoublePayload(field: WireField): number {
   ensureWireType(field, WireType.Fixed64);
-  return field.payload.readDoubleLE();
+  return (field.payload as Buffer).readDoubleLE();
 }
 
 function readBytesPayload(field: WireField): Buffer {
   ensureWireType(field, WireType.LengthDelimited);
-  return field.payload;
+  return field.payload as Buffer;
 }
 
 function ensureWireType(field: WireField, expected: WireType): void {
@@ -265,6 +272,12 @@ function ensureWireType(field: WireField, expected: WireType): void {
   }
 }
 
+function requirePayloadEnd(bytes: Buffer, end: number): void {
+  if (end > bytes.length) {
+    throw new Error('Protobuf field payload is truncated.');
+  }
+}
+
 function readVarint(
   bytes: Buffer,
   start: number
@@ -272,12 +285,12 @@ function readVarint(
   let value = 0n;
   let shift = 0n;
   let offset = start;
-  while (offset < bytes.length) {
-    const byte = BigInt(bytes[offset]);
-    value |= (byte & 0x7fn) << shift;
+  while (true) {
+    requirePayloadEnd(bytes, offset + 1);
+    const byte = bytes[offset];
+    value |= BigInt(byte & 0x7f) << shift;
     offset += 1;
-    if ((byte & 0x80n) === 0n) return { value, offset };
+    if ((byte & 0x80) === 0) return { value, offset };
     shift += 7n;
   }
-  throw new Error('Protobuf varint is truncated.');
 }
