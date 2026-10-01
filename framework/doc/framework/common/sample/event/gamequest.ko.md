@@ -471,13 +471,10 @@ Api node가 출력한다. `replacement-handler-invoked` 0회는 **두 Mission �
   통로가 있다. `ClosePlayerQuestMsg`의 수락은 Close의 시작도 완료도 보장하지 않으므로, 시나리오는 owner의
   `OnClosing` callback 진입을 관찰한 뒤 같은 client에서 Instance intent request
   `SyncQuestProgressReq`를 보낸다. 이 관찰은 `Closing` 진입을 확인하는 데만 쓰며 Close 완료를 뜻하지 않는다.
-  Resolver가 `Closing`을 확인한 Instance intent는 그 Close가 authority를 해제할 때까지 기다린다([장애 대응 §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)).
-  Cache된 route로 seal된 owner에 도달한 request는 `Rejected`로 끝나고 그 route는 cache에서 제거된다. 이때
-  시나리오는 같은 client에서 새 `SyncQuestProgressReq` operation을 한 번 시작한다. `SyncQuestProgressReq`는
-  같은 사실로 다시 실행해도 결과가 같으므로 새 operation이 중복 영향을 만들지 않는다([오류 모델 §7](../../spec/server/00-foundation/07-framework-error-model.ko.md#7-재시도-판단)).
-  새 operation의 resolver는 `Closing`이면 기다리고, authority가 이미 해제됐으면 `Missing`에서 cold
-  activation을 시작한다. 시나리오는 마지막 request의 terminal과 새 generation의 event stream replay를
-  검증한다. 고정 대기나 반복 재전송으로 Close 완료를 대신하지 않는다.
+  `Closing`을 만난 Instance intent는 Framework가 그 Close의 authority 해제까지 기다린 뒤 새 generation으로
+  전달한다([장애 대응 §4.4](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)).
+  시나리오는 그 request 하나의 terminal과 새 generation의 event stream replay를 검증한다. 고정 대기나
+  재전송을 쓰지 않는다.
 - §9-9는 Ready owner process를 강제 종료한 뒤 다음 gameplay call을 실행해야 성립한다. 새 endpoint나
   message type 없이 기존 `KillMonsterReq`로 가능하지만, **runner가 owner-ready 표시를 읽어 그
   Mission process를 특정해 죽이고 client를 그 뒤에 진행시키는 단계 제어가 필요하다.** §9-9는

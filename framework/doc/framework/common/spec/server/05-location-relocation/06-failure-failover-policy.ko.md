@@ -161,7 +161,7 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | Owner lease가 유효한 `Ready` | 현재 owner로 message를 보낸다. Cold activation을 시작하지 않는다. |
 | `Ready` owner process가 종료되었거나 owner lease가 무효임 | Authority record를 자동 해제하지 않고 다른 node에서 새 incarnation을 만들지 않는다. Operation은 `Unavailable`로 끝난다. |
 | Application의 explicit `Close`가 authority release까지 완료됨 | 이후 조회 결과는 `Missing`이다. 다음 Instance intent message는 새 `ObjectGeneration`의 cold activation을 시작할 수 있다. |
-| Application의 explicit `Close`가 진행 중인 `Closing` | Binding operation을 시작하기 전 resolver가 `Closing` authority를 확인한 Instance intent는 원 operation deadline 안에서 그 authority의 전이가 끝날 때까지 기다린 뒤 현재 authority로 이 표를 다시 적용한다. Deadline을 넘으면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)다. Owner에 도달한 operation의 수락·실패 결과는 [Spot 주소 메시징 §7·§9](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)를, 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다. |
+| Application의 explicit `Close`가 진행 중인 `Closing` | Instance intent가 `Closing`을 만나면 — resolver가 `Closing` authority를 확인했든, owner가 Close seal 때문에 admission하지 않았다는 reply를 받았든 — 요청자는 원 operation deadline 안에서 그 authority의 전이가 끝날 때까지 기다린 뒤 현재 authority로 이 표를 다시 적용한다. 같은 `OperationId`로 진행하며 handler는 한 번만 실행된다. Deadline을 넘으면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)다. One-way는 binding 제출과 함께 완료되므로([Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)) resolver에서 만난 경우에만 기다린다. |
 | 계획된 `Relocate`가 진행 중이거나 완료됨 | Relocation 계약에 따라 같은 object와 `ObjectGeneration`을 target으로 옮긴다. Cold activation이나 crash failover로 처리하지 않는다. |
 
 따라서 "process가 종료된 뒤 lease가 만료되면 다음 message가 다른 node에서 Instance Spot을
