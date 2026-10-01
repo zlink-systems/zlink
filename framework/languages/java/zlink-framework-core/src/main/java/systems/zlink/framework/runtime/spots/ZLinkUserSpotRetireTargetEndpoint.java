@@ -269,11 +269,17 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             productionReplayer(target, request))
                                     .thenCompose(
                                             backlog -> {
-                                                staging.publishHidden(
-                                                        backlog, actorOwnerGenerations);
-                                                target.published().set(true);
-                                                staging.openAdmission(target.staged());
-                                                return staging.drainDurableBacklog(backlog);
+                                                return staging.publishHidden(
+                                                                backlog, actorOwnerGenerations)
+                                                        .thenCompose(
+                                                                ignored -> {
+                                                                    target.published().set(true);
+                                                                    staging.openAdmission(
+                                                                            target.staged());
+                                                                    return staging
+                                                                            .drainDurableBacklog(
+                                                                                    backlog);
+                                                                });
                                             })
                                     .thenCompose(ignored -> switchSessionRoutes(request))
                                     .thenCompose(ignored -> normalizer.normalize(request))
@@ -1388,7 +1394,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                 target.publishRequested()
                                                         .completeExceptionally(
                                                                 new IllegalStateException(
-                                                                        "canonical Actor Join target was superseded"));
+                                                                        "canonical Actor Join"
+                                                                                + " target was"
+                                                                                + " superseded"));
                                                 actorStaging
                                                         .discard(target.staged())
                                                         .exceptionally(

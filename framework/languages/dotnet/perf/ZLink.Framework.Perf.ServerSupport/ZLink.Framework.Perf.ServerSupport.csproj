@@ -2,7 +2,5 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../ZLink.Framework.Perf.Shared/ZLink.Framework.Perf.Shared.csproj" />
-    <ProjectReference Include="../../src/Zlink.Framework/Zlink.Framework.csproj" />
-    <ProjectReference Include="../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj" />
   </ItemGroup>
 </Project>

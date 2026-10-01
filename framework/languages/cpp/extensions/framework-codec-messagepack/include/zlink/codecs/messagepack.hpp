@@ -2,7 +2,6 @@
 #pragma once
 
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 
 namespace zlink::framework_codecs
 {
@@ -13,12 +12,6 @@ class messagepack_codec_extension_t
     template <typename TBuilder> void register_framework_codecs (TBuilder &codecs) const
     {
         (void) codecs;
-    }
-
-    void register_connector_codecs (zlink::stream_connector::codec_registry_t &codecs) const
-    {
-        codecs.enable_codec (zlink::stream_connector::codec_t::message_pack)
-          .use_default_codec (zlink::stream_connector::codec_t::message_pack);
     }
 
   public:

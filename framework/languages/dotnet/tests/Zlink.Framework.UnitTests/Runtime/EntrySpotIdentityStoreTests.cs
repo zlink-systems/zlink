@@ -75,11 +75,7 @@ public sealed class EntrySpotIdentityStoreTests
             ZLinkLocationWriteIntent.NewClaim
         );
         var tracker = new ZLinkOwnerLeaseTracker(store, runtimeOptions);
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store,
-            tracker,
-            new ZLinkObservedLocationGenerations()
-        );
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
         await using var lifecycle = new ZLinkLocationLifecycle(runtime, resolvers);
 
         Assert.Equal(

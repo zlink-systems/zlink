@@ -10,10 +10,12 @@
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <set>
+#include <utility>
 
 namespace zlink::framework::runtime
 {
@@ -524,7 +526,7 @@ class in_memory_location_repository_t : public location_repository_t
                       return completed (
                         authority_compare_exchange_result_t{authority_conflict_t{found->second}});
                   if (!store_revisions_available ()
-                      || !next_generation (_authority_owner_generation))
+                      || !issue_generations ({{&_authority_owner_generation, 1}}))
                       return completed (
                         authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
                   auto snapshot = found->second;
@@ -781,11 +783,10 @@ class in_memory_location_repository_t : public location_repository_t
               if (!capacity_available (*target_descriptor, request.target, request.capacity_bundle))
                   return completed (
                     object_reserve_result_t{object_placement_capacity_exhausted_t{}});
-              if (!store_revisions_available () || _object_generation >= max_generation
-                  || _authority_owner_generation >= max_generation)
+              if (!store_revisions_available ()
+                  || !issue_generations (
+                    {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
                   return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
-              ++_object_generation;
-              ++_authority_owner_generation;
 
               const auto store_version = next_store_version ();
               object_reservation_fence_t fence{
@@ -1027,8 +1028,7 @@ class in_memory_location_repository_t : public location_repository_t
                                    return participant.owner_transition
                                           == authority_generation_transition_t::new_owner;
                                }));
-              if (!store_revisions_available (aggregate->second.request.participants.size ())
-                  || _authority_owner_generation > max_generation - participant_count)
+              if (!store_revisions_available (aggregate->second.request.participants.size ()))
                   return completed (aggregate_commit_result_t::generation_exhausted);
               const auto now = clock_t::now ();
               for (const auto &participant : aggregate->second.request.participants) {
@@ -1062,6 +1062,9 @@ class in_memory_location_repository_t : public location_repository_t
                                                    authority->second.allocation.capacity_bundle))
                       return completed (aggregate_commit_result_t::stale);
               }
+              auto next_owner_generation = _authority_owner_generation;
+              if (!issue_generations ({{&_authority_owner_generation, participant_count}}))
+                  return completed (aggregate_commit_result_t::generation_exhausted);
               for (std::size_t index = 0; index < aggregate->second.request.participants.size ();
                    ++index) {
                   const auto &participant = aggregate->second.request.participants[index];
@@ -1071,8 +1074,7 @@ class in_memory_location_repository_t : public location_repository_t
                   snapshot.store_now = now;
                   if (participant.owner_transition
                       == authority_generation_transition_t::new_owner) {
-                      ++_authority_owner_generation;
-                      snapshot.authority_owner_generation = _authority_owner_generation;
+                      snapshot.authority_owner_generation = ++next_owner_generation;
                       snapshot.owner = aggregate->second.request.target_owner;
                       const auto source_allocation = snapshot.allocation;
                       snapshot.allocation.target = target;
@@ -1517,11 +1519,15 @@ class in_memory_location_repository_t : public location_repository_t
         return channel_name + "\x1f" + rid.to_hex ();
     }
 
-    static bool next_generation (std::uint64_t &counter)
+    static bool
+    issue_generations (std::initializer_list<std::pair<std::uint64_t *, std::size_t>> counters)
     {
-        if (counter >= max_generation)
-            return false;
-        ++counter;
+        for (const auto &[counter, count] : counters) {
+            if (count > max_generation || *counter > max_generation - count)
+                return false;
+        }
+        for (const auto &[counter, count] : counters)
+            *counter += count;
         return true;
     }
 

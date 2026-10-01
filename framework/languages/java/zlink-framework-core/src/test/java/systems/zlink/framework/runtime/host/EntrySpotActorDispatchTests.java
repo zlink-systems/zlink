@@ -96,6 +96,35 @@ final class EntrySpotActorDispatchTests {
     private static final ZLinkMessageSerializer PROTOBUF_SERIALIZER = new ProbeProtobufSerializer();
 
     @Test
+    void spotShutdownFromSerialTurnReturnsWithoutBlockingOnInfrastructure() throws Exception {
+        TestBackend backend = startBackend();
+        systems.zlink.framework.execution.ZLinkSerialExecutionQueue serial =
+                new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            AtomicReference<CompletionStage<Void>> closing = new AtomicReference<>();
+            serial.enqueue(
+                            () -> {
+                                assertTrue(
+                                        systems.zlink.framework.runtime.internal.handlers
+                                                        .ZLinkSuspendInvocationContext
+                                                        .currentSerialExecutionTurn()
+                                                != null);
+                                closing.set(
+                                        ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
+                                                        runtime.spotManager())
+                                                .closeAsync());
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            closing.get().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        } finally {
+            serial.close();
+        }
+    }
+
+    @Test
     void entrySpotActorDispatchNoBindRequestRepliesViaNoBindAndDoesNotBindSession()
             throws Exception {
         TestBackend backend = startBackend();

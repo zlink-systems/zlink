@@ -340,7 +340,11 @@ final class ZLinkUserSpotOperationHandler
                                                                                             return CompletableFuture
                                                                                                     .failedFuture(
                                                                                                             moving(
-                                                                                                                    "User Spot authority changed before Closing"));
+                                                                                                                    "User Spot"
+                                                                                                                            + " authority"
+                                                                                                                            + " changed"
+                                                                                                                            + " before"
+                                                                                                                            + " Closing"));
                                                                                         }
                                                                                         return authorityStore
                                                                                                 .compareExchange(
@@ -358,7 +362,11 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                     ZLinkAuthorityStored
                                                                                                                             stored)) {
                                                                                                                 throw moving(
-                                                                                                                        "User Spot authority changed before Closing");
+                                                                                                                        "User Spot"
+                                                                                                                                + " authority"
+                                                                                                                                + " changed"
+                                                                                                                                + " before"
+                                                                                                                                + " Closing");
                                                                                                             }
                                                                                                             closingVersion
                                                                                                                     .set(
@@ -554,7 +562,11 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                                     activation
                                                                                                                                             .existingCloseCoordinator());
                                                                                                                     throw moving(
-                                                                                                                            "User Spot authority changed while closing");
+                                                                                                                            "User Spot"
+                                                                                                                                    + " authority"
+                                                                                                                                    + " changed"
+                                                                                                                                    + " while"
+                                                                                                                                    + " closing");
                                                                                                                 }
                                                                                                                 return authorityStore
                                                                                                                         .compareExchange(
@@ -570,7 +582,11 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                                             instanceof
                                                                                                                                             ZLinkAuthorityDeleted)) {
                                                                                                                                         throw moving(
-                                                                                                                                                "User Spot authority changed while closing");
+                                                                                                                                                "User Spot"
+                                                                                                                                                        + " authority"
+                                                                                                                                                        + " changed"
+                                                                                                                                                        + " while"
+                                                                                                                                                        + " closing");
                                                                                                                                     }
                                                                                                                                     return null;
                                                                                                                                 });
@@ -634,8 +650,13 @@ final class ZLinkUserSpotOperationHandler
         }
         ZLinkMessage reply = prepared.created().response().reply();
         if (!prepared.created().response().accepted()) {
-            lifecycle.discardReserved(prepared);
-            return abort(admission.reservation())
+            return lifecycle
+                    .discardReserved(prepared)
+                    .handle(
+                            (ignored, failure) ->
+                                    SpotActivationBase.finishCleanup(
+                                            failure, abort(admission.reservation())))
+                    .thenCompose(stage -> stage)
                     .thenApply(
                             ignored ->
                                     response(
@@ -656,30 +677,44 @@ final class ZLinkUserSpotOperationHandler
                         node.status().lifecycleGeneration());
         return authorityStore
                 .commit(admission.reservation(), ready, OPEN)
-                .thenApply(
+                .thenCompose(
                         result -> {
                             if (result != ZLinkObjectCommitResult.COMMITTED
                                     && result != ZLinkObjectCommitResult.ALREADY_COMMITTED) {
-                                lifecycle.discardReserved(prepared);
-                                throw stale("User Spot Ready commit lost its reservation");
+                                return SpotActivationBase.finishCleanup(
+                                                stale(
+                                                        "User Spot Ready commit lost its"
+                                                                + " reservation"),
+                                                lifecycle.discardReserved(prepared))
+                                        .thenApply(
+                                                ignored ->
+                                                        (ZLinkInternalMeshNode
+                                                                        .UserSpotCreateResponse)
+                                                                null);
                             }
-                            lifecycle.publishReserved(prepared);
-                            node.rememberSpotAuthority(
-                                    new ZLinkInternalMeshNode.SpotAuthorityRoute(
-                                            request.intent().spotId(),
-                                            snapshot.objectGeneration(),
-                                            node.status().routingId(),
-                                            node.status().lifecycleGeneration(),
-                                            snapshot.authorityOwnerGeneration(),
-                                            snapshot.ownerLeaseGeneration(),
-                                            snapshot.ownerId(),
-                                            meshName,
-                                            snapshot.storeVersion()));
-                            return response(
-                                    ZLinkServiceM6BWireCodec.UserSpotCreateResult.CREATED,
-                                    request,
-                                    snapshot.objectGeneration(),
-                                    reply);
+                            return lifecycle
+                                    .publishReserved(prepared)
+                                    .thenApply(
+                                            ignored -> {
+                                                node.rememberSpotAuthority(
+                                                        new ZLinkInternalMeshNode
+                                                                .SpotAuthorityRoute(
+                                                                request.intent().spotId(),
+                                                                snapshot.objectGeneration(),
+                                                                node.status().routingId(),
+                                                                node.status().lifecycleGeneration(),
+                                                                snapshot.authorityOwnerGeneration(),
+                                                                snapshot.ownerLeaseGeneration(),
+                                                                snapshot.ownerId(),
+                                                                meshName,
+                                                                snapshot.storeVersion()));
+                                                return response(
+                                                        ZLinkServiceM6BWireCodec
+                                                                .UserSpotCreateResult.CREATED,
+                                                        request,
+                                                        snapshot.objectGeneration(),
+                                                        reply);
+                                            });
                         });
     }
 

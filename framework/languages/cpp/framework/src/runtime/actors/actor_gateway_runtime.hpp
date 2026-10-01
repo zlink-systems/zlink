@@ -210,7 +210,8 @@ class actor_gateway_state_t
       actor_context_t,
       const stream_header_t &,
       const zlink::message_t &,
-      std::optional<bound_session_relay_source_t>)>;
+      std::optional<bound_session_relay_source_t>,
+      std::chrono::milliseconds)>;
     using disconnect_dispatcher_t = std::function<task_t<void> (const actor_ref_t &)>;
     using bound_session_registrar_t = std::function<result_t<void> (const actor_ref_t &)>;
     using bound_session_sender_t = std::function<task_t<result_t<void>> (
@@ -351,7 +352,8 @@ class actor_gateway_runtime_t
                                 bool session_sequence_baseline_unknown = false);
     result_t<actor_bound_session_transition_t>
     record_bound_session_route_transition (const actor_ref_t &actor_ref,
-                                           actor_bound_session_route_t route);
+                                           actor_bound_session_route_t route,
+                                           std::function<void ()> publish = {});
     result_t<void> record_session_relay_source (const actor_ref_t &actor_ref,
                                                 zlink::routing_id_t session_rid,
                                                 std::uint64_t binding_generation);

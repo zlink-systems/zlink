@@ -14,7 +14,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
-import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
@@ -37,7 +36,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     private final long lifecycleGeneration;
     private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();
     private final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendActorJoinRequest> actorJoins = new ConcurrentLinkedQueue<>();
     private final Queue<ZLinkBackendActorLifecycleEvent> lifecycles = new ConcurrentLinkedQueue<>();
     private final Set<String> topics = ConcurrentHashMap.newKeySet();
     private volatile String spotId;
@@ -217,16 +215,14 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
 
     @Override
     public ZLinkBackendActorJoinRequest recvActorJoin(ZLinkBackendRecvMode mode) {
-        return actorJoins.poll();
+        return null;
     }
 
     @Override
     public void replyActorJoin(
             ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) {
-        if (!(request.nativeRequest() instanceof PendingJoin pending)) {
-            throw new IllegalArgumentException("unknown raw Spot join request");
-        }
-        pending.complete(joinResultCode, copy(parts));
+        throw new UnsupportedOperationException(
+                "raw Spot local Actor Join records are not supported");
     }
 
     @Override
@@ -288,25 +284,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
         }
         raise(ZLinkBackendSpotDispatchEvent.SUBSCRIBE_READABLE);
         return true;
-    }
-
-    CompletionStage<Void> enqueueJoin(ZLinkBackendActorJoinRequest request) {
-        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
-        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct = async.handleJoin(request);
-            if (direct != null) {
-                return direct;
-            }
-        }
-        synchronized (this) {
-            if (owner.localSpot(spotId) != this) {
-                request.parts().forEach(Message::close);
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("target Spot is closed"));
-            }
-            actorJoins.add(request);
-        }
-        return raise(ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE);
     }
 
     CompletionStage<Void> enqueueLifecycle(ZLinkBackendActorLifecycleEvent event) {
@@ -379,42 +356,10 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
         while ((topic = subscriptions.poll()) != null) {
             topic.parts().forEach(Message::close);
         }
-        ZLinkBackendActorJoinRequest join;
-        while ((join = actorJoins.poll()) != null) {
-            join.parts().forEach(Message::close);
-            if (join.nativeRequest() instanceof PendingJoin pending) {
-                pending.fail(new IllegalStateException("target Spot is closed"));
-            }
-        }
         lifecycles.clear();
     }
 
     static List<Message> copy(List<Message> parts) {
         return parts.stream().map(Message::from).toList();
     }
-
-    static final class PendingJoin {
-        private final CompletableFuture<JoinReply> completion = new CompletableFuture<>();
-        private final ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-
-        CompletionStage<JoinReply> completion() {
-            return completion;
-        }
-
-        void complete(int resultCode, List<Message> parts) {
-            if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) {
-                parts.forEach(Message::close);
-                throw new IllegalStateException("actor join already completed");
-            }
-            completion.complete(new JoinReply(resultCode, parts));
-        }
-
-        void fail(Throwable failure) {
-            if (terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
-                completion.completeExceptionally(failure);
-            }
-        }
-    }
-
-    record JoinReply(int resultCode, List<Message> parts) {}
 }

@@ -87,6 +87,40 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     }
 
     @Test
+    void discardWaitsForSpotCleanupAndPreservesItsFailure() {
+        FakeBackend backend = new FakeBackend();
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        backend.discardSpotResult = cleanup;
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+
+        var discarded = owner.discard(staged).toCompletableFuture();
+        assertTrue(backend.operations.contains("discard:spot"));
+        assertFalse(discarded.isDone());
+        var failure = new IllegalStateException("spot cleanup failed");
+        cleanup.completeExceptionally(failure);
+        assertSame(failure, assertThrows(CompletionException.class, discarded::join).getCause());
+    }
+
+    @Test
+    void publicationWaitsForSpotPublicationAndPreservesItsFailure() {
+        FakeBackend backend = new FakeBackend();
+        CompletableFuture<Void> publication = new CompletableFuture<>();
+        backend.publishSpotResult = publication;
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+
+        var published =
+                owner.publishAndReplay(
+                                staged, (lane, record) -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture();
+        assertFalse(published.isDone());
+        var failure = new IllegalStateException("spot publication failed");
+        publication.completeExceptionally(failure);
+        assertSame(failure, assertThrows(CompletionException.class, published::join).getCause());
+    }
+
+    @Test
     void failedBacklogReplayDoesNotWithholdLaterAcceptedRecord() {
         FakeBackend backend = new FakeBackend();
         var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
@@ -428,6 +462,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         private int rejectAdmissionAt;
         private boolean allowSpotReplay;
         private CompletionStage<Void> discardActorResult = CompletableFuture.completedFuture(null);
+        private CompletionStage<Void> discardSpotResult = CompletableFuture.completedFuture(null);
+        private CompletionStage<Void> publishSpotResult = CompletableFuture.completedFuture(null);
 
         @Override
         public <T> CompletionStage<T> admitApplicationJob(
@@ -496,9 +532,11 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void publishSpot(Object value) {
+        public CompletionStage<Void> publishSpot(Object value) {
             live.add((String) value);
             operations.add("publish:" + value);
+
+            return publishSpotResult;
         }
 
         @Override
@@ -531,8 +569,10 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void discardSpot(Object value) {
+        public CompletionStage<Void> discardSpot(Object value) {
             operations.add("discard:spot");
+
+            return discardSpotResult;
         }
     }
 
@@ -577,7 +617,9 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void publishSpot(Object value) {}
+        public CompletionStage<Void> publishSpot(Object value) {
+            return CompletableFuture.completedFuture(null);
+        }
 
         @Override
         public void publishActor(Object value) {}
@@ -594,8 +636,10 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public void discardSpot(Object value) {
+        public CompletionStage<Void> discardSpot(Object value) {
             discardedSpotInstances.add(value);
+
+            return CompletableFuture.completedFuture(null);
         }
     }
 

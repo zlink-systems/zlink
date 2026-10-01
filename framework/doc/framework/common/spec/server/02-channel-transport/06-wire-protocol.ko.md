@@ -328,6 +328,7 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 - ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
 - ClientServer connection에서 service wire record는 infrastructure command에만 사용한다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
 - ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
+- ClientServer application metadata의 내부 wire 표현은 [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 정한다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness

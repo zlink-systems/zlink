@@ -25,7 +25,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -1287,54 +1286,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             Thread.sleep(20);
             assertEquals(1, callbackCount.get());
-        }
-    }
-
-    @Test
-    void actorJoinCommitsMembershipBeforeLeaveLifecycle() throws Exception {
-        try (var context = Zlink.createContext();
-                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            RoutingId nodeRid = RoutingId.from("jvm-m6b-join-node");
-            RoutingId targetRid = RoutingId.from("jvm-m6b-join-target");
-            node.setRoutingId(nodeRid);
-            ZLinkBackendSpot target = node.spotNode().createSpot(targetRid.toString());
-            target.onDispatchEvent(
-                    info -> {
-                        if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE) {
-                            return;
-                        }
-                        var request = target.recvActorJoin(ZLinkBackendRecvMode.DONT_WAIT);
-                        target.replyActorJoin(request, 0, List.of());
-                    });
-
-            ZLinkBackendActorRef actor;
-            try (Message create = Message.from("create")) {
-                actor = node.spotNode().createActor("actor-1", create);
-            }
-            var joined =
-                    node.spotNode()
-                            .joinActor(
-                                    actor,
-                                    nodeRid,
-                                    targetRid.toString(),
-                                    target.lifecycleGeneration(),
-                                    List.of(),
-                                    Duration.ofSeconds(1))
-                            .toCompletableFuture()
-                            .get(1, TimeUnit.SECONDS);
-
-            assertEquals(ZLinkBackendRequestResult.OK, joined.result());
-            assertEquals(targetRid.toString(), joined.joinedSpotId());
-            assertEquals(2, joined.joinEpoch());
-
-            node.spotNode()
-                    .leaveActor(actor, targetRid.toString(), Duration.ofSeconds(1))
-                    .toCompletableFuture()
-                    .get(1, TimeUnit.SECONDS);
-            var lifecycle = target.recvActorLifecycle(ZLinkBackendRecvMode.DONT_WAIT);
-            assertNotNull(lifecycle);
-            assertEquals(ZLinkBackendActorLifecycleEventKind.LEFT, lifecycle.kind());
-            assertEquals(3, lifecycle.info().joinEpoch());
         }
     }
 
@@ -3039,16 +2990,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         message.parts().forEach(Message::close);
                         return accepted;
                     }
-
-                    @Override
-                    public CompletionStage<Void> handleJoin(
-                            systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendActorJoinRequest
-                                    request) {
-                        request.parts().forEach(Message::close);
-                        return admission.enqueue(
-                                () -> CompletableFuture.completedFuture(null), null);
-                    }
                 });
 
         AtomicReference<String> reply = new AtomicReference<>();
@@ -3096,30 +3037,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     spot.enqueueTopic(
                             new ZLinkBackendTopicMessage(
                                     Optional.empty(), "updates", List.of(Message.from("late")))));
-            assertEquals(
-                    ZLinkFrameworkErrorKind.REJECTED,
-                    ((ZLinkFrameworkException)
-                                    assertThrows(
-                                                    java.util.concurrent.CompletionException.class,
-                                                    () ->
-                                                            spot.enqueueJoin(
-                                                                            new systems.zlink
-                                                                                    .framework
-                                                                                    .runtime
-                                                                                    .internal
-                                                                                    .backend
-                                                                                    .ZLinkBackendActorJoinRequest(
-                                                                                    null,
-                                                                                    null,
-                                                                                    List.of(
-                                                                                            Message
-                                                                                                    .from(
-                                                                                                            "late")),
-                                                                                    null))
-                                                                    .toCompletableFuture()
-                                                                    .join())
-                                            .getCause())
-                            .kind());
             try (ZLinkBackendReceived accepted = acceptedRoute.join()) {
                 assertNotNull(accepted);
                 accepted.reply().accept(List.of(response));

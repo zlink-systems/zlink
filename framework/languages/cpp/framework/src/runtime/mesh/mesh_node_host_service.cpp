@@ -1784,11 +1784,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto native_id = std::string (spot_id);
                   auto native_spot = std::make_shared<host::spot_handle_t> (
                     source->native_node ().shared_from_this (), object);
-                  {
-                      std::lock_guard<std::recursive_mutex> lock (registration->spot_state->mutex);
-                      registration->spot_state->native_spots_by_id.insert_or_assign (native_id,
-                                                                                     native_spot);
-                  }
+                  registration->spot_state->lane
+                    .run_checked ([&] {
+                        registration->spot_state->native_spots_by_id.insert_or_assign (native_id,
+                                                                                       native_spot);
+                    })
+                    .get ();
                   detail::spot_node_runtime_t spots (registration->spot_state);
                   std::optional<detail::local_spot_create_result_t> created;
                   try {
@@ -1798,12 +1799,15 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         object.authority_owner_generation));
                   }
                   catch (...) {
-                      std::lock_guard<std::recursive_mutex> lock (registration->spot_state->mutex);
-                      const auto found =
-                        registration->spot_state->native_spots_by_id.find (native_id);
-                      if (found != registration->spot_state->native_spots_by_id.end ()
-                          && found->second == native_spot)
-                          registration->spot_state->native_spots_by_id.erase (found);
+                      registration->spot_state->lane
+                        .run_checked ([&] {
+                            const auto found =
+                              registration->spot_state->native_spots_by_id.find (native_id);
+                            if (found != registration->spot_state->native_spots_by_id.end ()
+                                && found->second == native_spot)
+                                registration->spot_state->native_spots_by_id.erase (found);
+                        })
+                        .get ();
                       throw;
                   }
                   std::optional<protocol::application_payload_t> application_reply;

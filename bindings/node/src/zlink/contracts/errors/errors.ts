@@ -10,6 +10,7 @@ import {
   RequestResult,
   SubmitResult,
 } from './results';
+import { constants } from 'node:os';
 export {
   BindResult,
   CloseResult,
@@ -44,6 +45,29 @@ class ResultError<TResult extends number> extends ZlinkError {
   }
 }
 
+const EFSM = 156384763;
+export const ETERM = 156384765;
+
+function representativeRequestErrno(result: RequestResult): number {
+  switch (result) {
+    case RequestResult.Ok: return 0;
+    case RequestResult.TimedOut: return constants.errno.ETIMEDOUT;
+    case RequestResult.NotFound: return constants.errno.ENOENT;
+    case RequestResult.Terminated: return ETERM;
+    case RequestResult.ProtocolError: return constants.errno.EPROTO;
+    case RequestResult.InternalError: return constants.errno.EIO;
+    case RequestResult.Rejected: return constants.errno.EACCES;
+    case RequestResult.Conflict: return constants.errno.EEXIST;
+    case RequestResult.Busy: return constants.errno.EBUSY;
+    case RequestResult.NotConnected: return constants.errno.ENOTCONN;
+    case RequestResult.InvalidArgument: return constants.errno.EINVAL;
+    case RequestResult.InvalidState: return EFSM;
+    case RequestResult.NotSupported: return constants.errno.ENOTSUP;
+    case RequestResult.Backpressured: return constants.errno.EAGAIN;
+    default: return constants.errno.EIO;
+  }
+}
+
 /** Thrown when submitting a send or publish fails. */
 export class SubmitError extends ResultError<SubmitResult> {
   constructor(result: SubmitResult, nativeErrno = 0) {
@@ -53,7 +77,7 @@ export class SubmitError extends ResultError<SubmitResult> {
 
 /** Thrown when a request fails or its reply reports an error. */
 export class RequestError extends ResultError<RequestResult> {
-  constructor(result: RequestResult, nativeErrno = 0) {
+  constructor(result: RequestResult, nativeErrno = representativeRequestErrno(result)) {
     super('RequestError', result, nativeErrno);
   }
 }

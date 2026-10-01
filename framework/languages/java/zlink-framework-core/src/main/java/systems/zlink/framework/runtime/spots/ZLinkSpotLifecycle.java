@@ -82,9 +82,10 @@ final class ZLinkSpotLifecycle {
         if (removed == null) {
             return CompletableFuture.completedFuture(false);
         }
-        removed.close();
-        return locations
-                .releaseUserSpotAsync(removed.context.nodeRid(), spotId)
+        return removed.closeAsync()
+                .thenCompose(
+                        ignored ->
+                                locations.releaseUserSpotAsync(removed.context.nodeRid(), spotId))
                 .whenComplete(
                         (ignored, error) -> {
                             ZLinkRuntimeMetrics.add("zlink.spot.count", -1, Map.of("kind", "user"));
@@ -169,9 +170,9 @@ final class ZLinkSpotLifecycle {
                                                                 created)));
     }
 
-    void publishReserved(PreparedUserSpot prepared) {
+    CompletionStage<Void> publishReserved(PreparedUserSpot prepared) {
         if (prepared.existing()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         if (!prepared.created().response().accepted()) {
             throw new IllegalStateException("Rejected User Spot cannot cross the Ready barrier");
@@ -180,20 +181,20 @@ final class ZLinkSpotLifecycle {
         activation.admittedBy(prepared.meshName());
         SpotActivation current = spots.putIfAbsent(prepared.spotId(), activation);
         if (current != null && current != activation) {
-            activation.close();
-            throw new IllegalStateException("User Spot Ready publication lost local admission");
+            return SpotActivationBase.finishCleanup(
+                    new IllegalStateException("User Spot Ready publication lost local admission"),
+                    activation.closeAsync());
         }
         ZLinkRuntimeMetrics.add("zlink.spot.count", 1, Map.of("kind", "user"));
         ZLinkRuntimeMetrics.increment("zlink.spot.created", Map.of("kind", "user"));
+        return CompletableFuture.completedFuture(null);
     }
 
-    void discardReserved(PreparedUserSpot prepared) {
-        if (!prepared.existing()) {
-            SpotActivation activation = prepared.created().activation();
-            if (activation != null) {
-                activation.close();
-            }
+    CompletionStage<Void> discardReserved(PreparedUserSpot prepared) {
+        if (!prepared.existing() && prepared.created().activation() != null) {
+            return prepared.created().activation().closeAsync();
         }
+        return CompletableFuture.completedFuture(null);
     }
 
     Object preparedSpot(PreparedUserSpot prepared) {
@@ -302,10 +303,13 @@ final class ZLinkSpotLifecycle {
                     new IllegalStateException(
                             "User Spot relocation source changed during cleanup"));
         }
-        current.close(ZLinkSpotCloseReason.RELOCATION_OUT, deadline);
-        ZLinkRuntimeMetrics.add("zlink.spot.count", -1, Map.of("kind", "user"));
-        ZLinkRuntimeMetrics.increment("zlink.spot.closed", Map.of("kind", "user"));
-        return CompletableFuture.completedFuture(null);
+        return current.closeAsync(ZLinkSpotCloseReason.RELOCATION_OUT, deadline)
+                .thenRun(
+                        () -> {
+                            ZLinkRuntimeMetrics.add("zlink.spot.count", -1, Map.of("kind", "user"));
+                            ZLinkRuntimeMetrics.increment(
+                                    "zlink.spot.closed", Map.of("kind", "user"));
+                        });
     }
 
     CloseReadiness closeReadiness(String spotId, long objectGeneration) {
@@ -442,19 +446,27 @@ final class ZLinkSpotLifecycle {
         AtomicReference<RuntimeException> firstFailure = new AtomicReference<>();
         List<EntrySpotActivation> closingEntrySpots = List.copyOf(entrySpots);
         List<SpotActivation> closingSpots = List.copyOf(spots.values());
+        List<CompletableFuture<Void>> closedEntries = new ArrayList<>();
         for (EntrySpotActivation entrySpot : closingEntrySpots) {
-            recordCloseFailure(firstFailure, closeComponent(() -> entrySpot.close(deadline), null));
+            closedEntries.add(
+                    entrySpot
+                            .closeAsync(deadline)
+                            .handle(
+                                    (ignored, error) -> {
+                                        recordCloseFailure(firstFailure, error);
+                                        return (Void) null;
+                                    })
+                            .toCompletableFuture());
         }
         for (SpotActivation spot : closingSpots) {
-            recordCloseFailure(
-                    firstFailure,
-                    closeComponent(
-                            () ->
-                                    spot.close(
-                                            systems.zlink.framework.spots.ZLinkSpotCloseReason
-                                                    .HOST_SHUTDOWN,
-                                            deadline),
-                            null));
+            closedEntries.add(
+                    spot.closeAsync(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline)
+                            .handle(
+                                    (ignored, error) -> {
+                                        recordCloseFailure(firstFailure, error);
+                                        return (Void) null;
+                                    })
+                            .toCompletableFuture());
         }
         if (!entrySpots.isEmpty()) {
             ZLinkRuntimeMetrics.add(
@@ -465,35 +477,44 @@ final class ZLinkSpotLifecycle {
             ZLinkRuntimeMetrics.add("zlink.spot.count", -spots.size(), Map.of("kind", "user"));
         }
         spots.clear();
-        List<CompletableFuture<Void>> cleanups = new ArrayList<>();
-        for (EntrySpotActivation entrySpot : closingEntrySpots) {
-            cleanups.add(
-                    locations
-                            .releaseEntrySpotAsync(entrySpot.context.nodeRid())
-                            .handle(
-                                    (ignored, error) -> {
-                                        recordCloseFailure(firstFailure, error);
-                                        return (Void) null;
-                                    })
-                            .toCompletableFuture());
-        }
-        for (SpotActivation spot : closingSpots) {
-            cleanups.add(
-                    locations
-                            .releaseUserSpotAsync(spot.context.nodeRid(), spot.backendSpot.spotId())
-                            .handle(
-                                    (ignored, error) -> {
-                                        recordCloseFailure(firstFailure, error);
-                                        return (Void) null;
-                                    })
-                            .toCompletableFuture());
-        }
-        return CompletableFuture.allOf(cleanups.toArray(CompletableFuture[]::new))
+        return CompletableFuture.allOf(closedEntries.toArray(CompletableFuture[]::new))
                 .thenCompose(
-                        ignored ->
-                                firstFailure.get() == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : CompletableFuture.failedFuture(firstFailure.get()));
+                        closed -> {
+                            List<CompletableFuture<Void>> cleanups = new ArrayList<>();
+                            for (EntrySpotActivation entrySpot : closingEntrySpots) {
+                                cleanups.add(
+                                        locations
+                                                .releaseEntrySpotAsync(entrySpot.context.nodeRid())
+                                                .handle(
+                                                        (ignored, error) -> {
+                                                            recordCloseFailure(firstFailure, error);
+                                                            return (Void) null;
+                                                        })
+                                                .toCompletableFuture());
+                            }
+                            for (SpotActivation spot : closingSpots) {
+                                cleanups.add(
+                                        locations
+                                                .releaseUserSpotAsync(
+                                                        spot.context.nodeRid(),
+                                                        spot.backendSpot.spotId())
+                                                .handle(
+                                                        (ignored, error) -> {
+                                                            recordCloseFailure(firstFailure, error);
+                                                            return (Void) null;
+                                                        })
+                                                .toCompletableFuture());
+                            }
+                            return CompletableFuture.allOf(
+                                            cleanups.toArray(CompletableFuture[]::new))
+                                    .thenCompose(
+                                            ignored ->
+                                                    firstFailure.get() == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : CompletableFuture.failedFuture(
+                                                                    firstFailure.get()));
+                        });
     }
 
     private static void recordCloseFailure(
@@ -519,13 +540,15 @@ final class ZLinkSpotLifecycle {
         return releaseRecreatableSpots(ZLinkSpotCloseReason.HOST_SHUTDOWN, Instant.now());
     }
 
-    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
+    CompletionStage<Void> notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
+        List<CompletableFuture<Void>> closing = new ArrayList<>();
         for (EntrySpotActivation activation : List.copyOf(entrySpots)) {
-            activation.notifyClosing(deadline);
+            closing.add(activation.closingStage(deadline).toCompletableFuture());
         }
         for (SpotActivation activation : List.copyOf(spots.values())) {
-            activation.notifyClosing(reason, deadline);
+            closing.add(activation.closingStage(reason, deadline).toCompletableFuture());
         }
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new));
     }
 
     CompletionStage<Void> releaseRecreatableSpots(ZLinkSpotCloseReason reason, Instant deadline) {
@@ -544,16 +567,21 @@ final class ZLinkSpotLifecycle {
             }
         }
         AtomicReference<RuntimeException> firstFailure = new AtomicReference<>();
-        for (SpotActivation activation : released) {
-            recordCloseFailure(
-                    firstFailure, closeComponent(() -> activation.close(reason, deadline), null));
-        }
         List<CompletableFuture<Void>> cleanups = new ArrayList<>(released.size());
         for (SpotActivation activation : released) {
             cleanups.add(
-                    locations
-                            .releaseUserSpotAsync(
-                                    activation.context.nodeRid(), activation.backendSpot.spotId())
+                    activation
+                            .closeAsync(reason, deadline)
+                            .handle(
+                                    (ignored, error) -> {
+                                        recordCloseFailure(firstFailure, error);
+                                        return (Void) null;
+                                    })
+                            .thenCompose(
+                                    ignored ->
+                                            locations.releaseUserSpotAsync(
+                                                    activation.context.nodeRid(),
+                                                    activation.backendSpot.spotId()))
                             .handle(
                                     (ignored, error) -> {
                                         recordCloseFailure(firstFailure, error);

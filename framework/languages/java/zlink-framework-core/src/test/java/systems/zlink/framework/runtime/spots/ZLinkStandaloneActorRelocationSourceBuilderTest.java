@@ -669,7 +669,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public void publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(Object spot) {
                         throw unused();
                     }
 
@@ -694,7 +694,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     }
 
                     @Override
-                    public void discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(Object spot) {
                         throw unused();
                     }
                 });

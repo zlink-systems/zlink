@@ -68,11 +68,11 @@
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
 #include <zlink/stream_connector_throwing.hpp>
 #include <zlink/stream_connector/contracts/calls/zlink_stream_calls.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 #include <zlink/stream_connector/contracts/compression.hpp>
 #include <zlink/stream_connector/contracts/connector.hpp>
 #include <zlink/stream_connector/contracts/result.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 #include <zlink/stream_connector/contracts/version.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_assert.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
