@@ -1,12 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
-import { guardStateLaneCompletion, trackDiagnosticCompletion } from '../execution/state-lane';
 import type {
   ActorRef,
   RoutingId,
   Type,
-  ZLinkMessage,
   ZLinkActor,
   ZLinkBoundSession,
+  ZLinkMessage,
   ZLinkSessionActor,
   ZLinkSessionActors,
   ZLinkSessionClient,
@@ -18,18 +16,27 @@ import type {
   ZLinkSessionSendCall,
   ZLinkStream
 } from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkSubmitResult } from '../messaging/submission-result';
-import { requireOneWayCompletion } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 import { throwIfAborted } from '../abort';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 import { ZLinkConfigurationException } from '../configuration';
 import {
+  guardStateLaneCompletion,
+  isStructuralGuardEnabled,
+  trackDiagnosticCompletion
+} from '../execution/state-lane';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
+import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
+import { type ZLinkSubmitResult, requireOneWayCompletion } from '../messaging/submission-result';
+
+import {
   messageToBytes,
-  type ZLinkStreamFrameHeader,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind,
+  type ZLinkStreamFrameHeader,
   type ZLinkStreamReplyMessageKind
 } from './protocol';
 import {
@@ -37,11 +44,8 @@ import {
   DefaultZLinkSessionReplyCall,
   DefaultZLinkSessionSendCall
 } from './session-calls';
-import { ZLinkSessionRequestTracker, type ZLinkPendingSessionRequest } from './session-requests';
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
-import type { ServiceActorRef } from '../foundation/service-stateful-registry';
-import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
-import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+import { ZLinkSessionRequestTracker, type ZLinkPendingSessionRequest } from './session-requests';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
@@ -654,7 +658,7 @@ function sameRetiredSession(
   );
 }
 
-if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+if (isStructuralGuardEnabled()) {
   const controlsGetter = Object.getOwnPropertyDescriptor(
     DefaultZLinkSessionContext.prototype,
     'actorSlotControls'

@@ -177,11 +177,9 @@ int main ()
             return 183;
 
         // The decoder remains a JSON parser: field order and unknown fields do
-        // not matter, duplicate members retain nlohmann's last-member result,
-        // and non-object metadata is ignored.  Keep these semantics pinned
-        // before replacing the DOM with a streaming parser.
+        // not matter and duplicate members retain nlohmann's last-member result.
         const auto reordered = codec.decode_header (zlink::message_t::from (
-          R"({"unknown":{"nested":[1,true]},"metadata":42,"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
+          R"({"unknown":{"nested":[1,true]},"metadata":{},"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
         if (!reordered || reordered.value ().kind != msg::message_kind_t::command
             || reordered.value ().channel_name != "last"
             || reordered.value ().message_name != "last-message"
@@ -191,6 +189,21 @@ int main ()
             || reordered.value ().error_code || reordered.value ().error_message
             || reordered.value ().flow_id || reordered.value ().flow_origin) {
             return 176;
+        }
+        const auto invalid_utf8 = codec.decode_header (zlink::message_t::from (
+          std::string (R"({"formatMarker":242,"kind":3,"channelName":"api","messageName":")")
+          + std::string ("\xc3\x28", 2) + R"(","contentType":"application/json","metadata":{}})"));
+        if (invalid_utf8
+            || invalid_utf8.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
+            return 1;
+        }
+        const auto scalar_metadata = codec.decode_header (zlink::message_t::from (
+          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42})"));
+        if (scalar_metadata
+            || scalar_metadata.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
+            return 189;
         }
         const auto invalid_kind = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":"3","channelName":"c","messageName":"m"})"));
@@ -215,9 +228,9 @@ int main ()
         }
         const auto empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value"}})"));
-        if (!empty_metadata_key
-            || empty_metadata_key.value ().metadata
-                 != std::map<std::string, std::string>{{"", "value"}}) {
+        if (empty_metadata_key
+            || empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 185;
         }
         const auto invalid_empty_metadata_key = codec.decode_header (zlink::message_t::from (
@@ -229,9 +242,9 @@ int main ()
         }
         const auto restored_empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1,"":"value"}})"));
-        if (!restored_empty_metadata_key
-            || restored_empty_metadata_key.value ().metadata
-                 != std::map<std::string, std::string>{{"", "value"}}) {
+        if (restored_empty_metadata_key
+            || restored_empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 187;
         }
         const auto invalidated_empty_metadata_key = codec.decode_header (zlink::message_t::from (

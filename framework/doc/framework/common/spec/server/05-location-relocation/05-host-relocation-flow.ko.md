@@ -743,8 +743,9 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
    (성공 또는 실패)만 기다리며, 게시 뒤 전파를 위한 시간 대기는 두지 않는다.
 3. 이미 수락한 handler, request completion, relocation unit과 session barrier를 deadline까지
    처리한다.
-4. 새 object relocation은 시작하지 않는다. Actor membership과 local instance가 유효한
-   상태에서 모든 Entry, User, Instance Spot에 `HostShutdown` closing context를 전달한다.
+4. 새 object relocation은 시작하지 않는다. [Cancellation과 shutdown §5.1](../01-execution/03-cancellation-and-shutdown.ko.md#51-application-완료-소스를-기다리는-대기의-종료)을
+   따른 뒤, Actor membership과 local instance가 유효한 상태에서 모든 Entry, User, Instance
+   Spot에 `HostShutdown` closing context를 전달한다.
    Actor별 closing callback은 호출하지 않는다.
 5. Spot callback 뒤 local Actor와 Spot scope, owner record, descriptor, listener와
    transport를 순서대로 정리한다.

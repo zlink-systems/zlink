@@ -1,5 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { HTTP_ACCEPTED_CONTENT_ENCODINGS } from './compression';
+
+import { HttpContentType, HttpHeaderName } from './text';
+
 import { Readable } from 'node:stream';
 import { request, type Dispatcher } from 'undici';
 import type { BodyChunkProvider, DownloadSink, ZLinkHttpMethod } from '../types';
@@ -74,7 +78,7 @@ export class RequestPerformer {
 
       const status = response.statusCode;
       if (this.options.cookies) {
-        const setCookie = response.headers['set-cookie'];
+        const setCookie = response.headers[HttpHeaderName.SetCookie];
         const values = Array.isArray(setCookie)
           ? setCookie
           : setCookie === undefined
@@ -85,7 +89,7 @@ export class RequestPerformer {
         }
       }
 
-      const location = headerValue(response.headers, 'location');
+      const location = headerValue(response.headers, HttpHeaderName.Location);
       if (
         this.options.followRedirects > 0 &&
         isRedirectStatus(status) &&
@@ -138,11 +142,11 @@ export class RequestPerformer {
     hasBody: boolean
   ): Record<string, string> {
     const headers: Record<string, string> = {
-      'user-agent': httpClientUserAgent,
-      accept: 'application/json'
+      [HttpHeaderName.UserAgent]: httpClientUserAgent,
+      [HttpHeaderName.Accept]: HttpContentType.Json
     };
     if (this.options.compression) {
-      headers['accept-encoding'] = 'gzip, deflate';
+      headers[HttpHeaderName.AcceptEncoding] = HTTP_ACCEPTED_CONTENT_ENCODINGS;
     }
     // Proxy authentication is carried by the ProxyAgent dispatcher (see runtime.ts), not a header,
     // so it is not leaked to the target over a CONNECT tunnel.
@@ -152,7 +156,7 @@ export class RequestPerformer {
 
     if (!hasBody) {
       // A body source dropped by a redirect must not leave stale content-type metadata behind.
-      delete headers['content-type'];
+      delete headers[HttpHeaderName.ContentType];
     }
 
     if (this.options.cookies) {
@@ -162,7 +166,7 @@ export class RequestPerformer {
         target.protocol === 'https:'
       );
       if (cookieHeader.length > 0) {
-        headers['cookie'] = cookieHeader;
+        headers[HttpHeaderName.Cookie] = cookieHeader;
       }
     }
     return headers;
@@ -195,7 +199,7 @@ function applyHeaders(
 ): void {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
-    if (!keepAuthorization && lower === 'authorization') {
+    if (!keepAuthorization && lower === HttpHeaderName.Authorization) {
       continue;
     }
     target[lower] = value;

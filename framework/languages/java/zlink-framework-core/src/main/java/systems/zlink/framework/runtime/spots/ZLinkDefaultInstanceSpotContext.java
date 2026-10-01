@@ -119,10 +119,6 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         timers.freeze();
     }
 
-    void closeTimers() {
-        timers.close();
-    }
-
     CompletionStage<Void> closeTimersAsync() {
         return timers.closeAsync();
     }
@@ -135,10 +131,16 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         backendSpot.close();
     }
 
-    void closeResources() {
-        closeTimers();
-        closeHandlerInstances();
-        closeBackendSpot();
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                closeBackendSpot();
+                            }
+                        });
     }
 
     CompletionStage<Void> awaitQuiescence() {

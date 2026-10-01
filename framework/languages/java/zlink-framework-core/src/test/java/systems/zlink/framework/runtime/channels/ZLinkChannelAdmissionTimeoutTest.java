@@ -93,7 +93,6 @@ final class ZLinkChannelAdmissionTimeoutTest {
                                             "work",
                                             REQUEST_TIMEOUT,
                                             DEFAULT_TIMEOUT,
-                                            false,
                                             (client, timeout) ->
                                                     CompletableFuture.completedFuture("accepted"),
                                             (node, timeout) -> {
@@ -137,7 +136,6 @@ final class ZLinkChannelAdmissionTimeoutTest {
                                                 "work",
                                                 REQUEST_TIMEOUT,
                                                 DEFAULT_TIMEOUT,
-                                                false,
                                                 (dealer, timeout) -> {
                                                     submittedTimeout.set(timeout);
                                                     return CompletableFuture.completedFuture(
@@ -189,7 +187,6 @@ final class ZLinkChannelAdmissionTimeoutTest {
                                                 "work",
                                                 REQUEST_TIMEOUT,
                                                 DEFAULT_TIMEOUT,
-                                                false,
                                                 (dealer, timeout) -> {
                                                     submittedTimeout.set(timeout);
                                                     return CompletableFuture.completedFuture(

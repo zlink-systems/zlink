@@ -3,4 +3,4 @@
 sources:
   "1.12.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.12.0/zlink-cpp-1.12.0.tar.gz"
-    sha256: "dca53e8ff11e15faa43ac32447a62252bf0184e303557b3cf6541e6561c7ecfb"
+    sha256: "da06d2093288f16e1c9abb97246fc0136745dd4fd202cea852e4f73381d35462"

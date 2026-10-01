@@ -199,7 +199,7 @@ final class ZLinkChannelEnvelopeGoldenTest {
                             value,
                             value,
                             value,
-                            Map.of("metadata", value),
+                            Map.of("metadata", "stable"),
                             null,
                             null);
             byte[] expected = encodeWithPreviousStringWriter(header);
@@ -562,17 +562,14 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
-    void decodeKeepsMetadataDomSemantics() {
+    void decodeRequiresMetadataObjectAndKeepsLastDuplicateValue() {
         for (String metadata : List.of("null", "7", "[]", "\"text\"")) {
-            assertEquals(
-                    Map.of(),
-                    decode(
-                                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                                            + "\"messageName\":\"m\",\"metadata\":"
-                                            + metadata
-                                            + "}",
-                                    false)
-                            .metadata());
+            assertProtocolError(
+                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                            + "\"messageName\":\"m\",\"metadata\":"
+                            + metadata
+                            + "}",
+                    false);
         }
         assertEquals(
                 Map.of("tenant", "new"),

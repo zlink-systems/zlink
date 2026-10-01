@@ -159,11 +159,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         return timerContext.addTimer(name, period, handlerType, options);
     }
 
-    void closeTimers() {
-        timerContexts.forEach(DefaultSpotContext::closeTimers);
-        actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
+    CompletionStage<Void> closeTimersAsync() {
+        List<CompletableFuture<?>> closing = new ArrayList<>();
+        timerContexts.forEach(
+                context -> closing.add(context.closeTimersAsync().toCompletableFuture()));
+        actorTimers
+                .values()
+                .forEach(timer -> closing.add(timer.closeAsync().toCompletableFuture()));
         actorTimers.clear();
-        serials.close();
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, serials.closeAsync()))
+                .thenCompose(stage -> stage);
     }
 
     @Override
@@ -173,6 +181,18 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     void closeHandlerInstances() {
         handlerInstances.close();
+    }
+
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                backendSpot.close();
+                            }
+                        });
     }
 
     void sealTimerAdmission() {
@@ -617,13 +637,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return timers.add(name, period, handlerType, options);
     }
 
-    void closeTimers() {
-        timers.close();
-        actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
-        actorTimers.clear();
-        serials.close();
-    }
-
     CompletionStage<Void> closeTimersAsync() {
         List<CompletableFuture<?>> closing = new ArrayList<>();
         closing.add(timers.closeAsync().toCompletableFuture());
@@ -632,7 +645,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 .forEach(registry -> closing.add(registry.closeAsync().toCompletableFuture()));
         actorTimers.clear();
         return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
-                .thenCompose(ignored -> serials.closeAsync());
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, serials.closeAsync()))
+                .thenCompose(stage -> stage);
     }
 
     @Override
@@ -642,6 +658,18 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     void closeHandlerInstances() {
         handlerInstances.close();
+    }
+
+    CompletionStage<Void> closeResourcesAsync() {
+        return closeTimersAsync()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                closeHandlerInstances();
+                            } finally {
+                                backendSpot.close();
+                            }
+                        });
     }
 
     void sealTimerAdmission() {

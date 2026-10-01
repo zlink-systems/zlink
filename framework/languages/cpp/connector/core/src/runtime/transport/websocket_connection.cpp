@@ -193,19 +193,6 @@ parse_websocket_secure_endpoint (const std::string &endpoint)
     return parse_websocket_endpoint_with_prefix (endpoint, "wss://");
 }
 
-std::unique_ptr<stream_connection_t> connect_websocket (boost::asio::io_context &io_context,
-                                                        const websocket_endpoint_parts_t &endpoint)
-{
-    tcp::resolver resolver (io_context);
-    auto endpoints = resolver.resolve (endpoint.host, endpoint.port);
-    websocket::stream<tcp::socket> stream (io_context);
-    asio::connect (stream.next_layer (), endpoints);
-    stream.binary (true);
-    stream.handshake (endpoint.host, endpoint.target);
-    return std::make_unique<websocket_stream_connection_t<tcp::socket>> (std::move (stream),
-                                                                         io_context);
-}
-
 void connect_websocket_async (
   boost::asio::io_context &io_context,
   websocket_endpoint_parts_t endpoint,
@@ -269,32 +256,6 @@ void connect_websocket_async (
 }
 
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
-std::unique_ptr<stream_connection_t>
-connect_websocket_secure (boost::asio::io_context &io_context,
-                          const websocket_endpoint_parts_t &endpoint,
-                          bool skip_server_certificate_validation)
-{
-    auto context = std::make_shared<ssl::context> (ssl::context::tls_client);
-    context->set_default_verify_paths ();
-    websocket::stream<ssl::stream<tcp::socket>> stream (io_context, *context);
-    SSL_set_tlsext_host_name (stream.next_layer ().native_handle (), endpoint.host.c_str ());
-    if (skip_server_certificate_validation) {
-        stream.next_layer ().set_verify_mode (ssl::verify_none);
-    } else {
-        stream.next_layer ().set_verify_mode (ssl::verify_peer);
-        stream.next_layer ().set_verify_callback (ssl::host_name_verification (endpoint.host));
-    }
-
-    tcp::resolver resolver (io_context);
-    auto endpoints = resolver.resolve (endpoint.host, endpoint.port);
-    asio::connect (beast::get_lowest_layer (stream), endpoints);
-    stream.next_layer ().handshake (ssl::stream_base::client);
-    stream.binary (true);
-    stream.handshake (endpoint.host, endpoint.target);
-    return std::make_unique<websocket_stream_connection_t<ssl::stream<tcp::socket>>> (
-      std::move (stream), io_context, std::move (context));
-}
-
 void connect_websocket_secure_async (
   boost::asio::io_context &io_context,
   websocket_endpoint_parts_t endpoint,

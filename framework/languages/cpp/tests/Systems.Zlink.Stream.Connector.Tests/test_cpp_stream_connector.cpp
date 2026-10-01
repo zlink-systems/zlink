@@ -52,6 +52,12 @@
 #include <typeindex>
 #include <vector>
 
+template <typename T>
+concept exposes_codec_registry = requires (T &connector) { connector.codecs (); };
+
+static_assert (!exposes_codec_registry<zlink::stream_connector::connector_t>,
+               "typed codec selection belongs to creation options");
+
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::stream_connector::connector_t &> ().wait_for (
                    "packet", std::chrono::milliseconds (1))),
@@ -83,6 +89,25 @@ std::vector<std::uint8_t> as_bytes (std::string_view text)
 std::string as_string (const std::vector<std::uint8_t> &bytes)
 {
     return {bytes.begin (), bytes.end ()};
+}
+
+struct failed_protobuf_t
+{
+    static constexpr const char *packet_name = "failed.protobuf";
+    bool SerializeToString (std::string *bytes) const
+    {
+        *bytes = "partial";
+        return false;
+    }
+    bool ParseFromString (const std::string &) { return false; }
+};
+
+void from_stream_payload (zlink::stream_connector::codec_t,
+                          const std::vector<std::uint8_t> &payload,
+                          failed_protobuf_t &value)
+{
+    if (!value.ParseFromString (std::string (payload.begin (), payload.end ())))
+        throw std::runtime_error ("expected protobuf parse failure");
 }
 
 struct simple_named_t
@@ -1079,9 +1104,8 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
                                     bool compressed = false,
                                     std::optional<std::uint16_t> actor_slot = std::nullopt)
 {
-    const bool legacy_named_reply = (kind == zlink::stream_connector::message_kind_t::response
-                                     || kind == zlink::stream_connector::message_kind_t::error)
-                                    && !name.empty ();
+    const bool reply = kind == zlink::stream_connector::message_kind_t::response
+                       || kind == zlink::stream_connector::message_kind_t::error;
     zlink::stream_connector::detail::stream_header_t header;
     header.kind = kind;
     header.codec = kind == zlink::stream_connector::message_kind_t::error
@@ -1094,14 +1118,9 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
                              || kind == zlink::stream_connector::message_kind_t::error
                            ? std::optional<std::uint64_t>{seq}
                            : std::optional<std::uint64_t>{};
-    header.name = legacy_named_reply ? std::string{} : name;
+    header.name = reply ? std::string{} : name;
     header.actor_slot = actor_slot;
     auto header_bytes = zlink::stream_connector::detail::header_codec_t{}.encode (header);
-    if (legacy_named_reply) {
-        auto &bytes = header_bytes.value ();
-        bytes[12] = static_cast<std::uint8_t> (name.size ());
-        bytes.insert (bytes.begin () + 13, name.begin (), name.end ());
-    }
     zlink::stream_connector::connector_options_t options;
     options.compression = zlink::stream_connector::compression_t::lz4;
     if (compressed) {
@@ -1140,6 +1159,31 @@ int main ()
     using zlink::stream_connector::message_kind_t;
     using zlink::stream_connector::detail::header_codec_t;
     using zlink::stream_connector::detail::stream_header_t;
+
+    /* §9.2: encode failures retain their code on send and request surfaces. */
+    {
+        using namespace zlink::stream_connector;
+        connector_t connector;
+        int errors = 0;
+        auto subscription =
+          connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
+              if (error.code == error_code_t::send_failed)
+                  ++errors;
+          });
+        connector.send (failed_protobuf_t{}).submit ();
+        auto result = connector.request (failed_protobuf_t{}).submit<failed_protobuf_t> ();
+        int callbacks = 0;
+        connector.request (failed_protobuf_t{})
+          .submit<failed_protobuf_t> ([&] (result_t<failed_protobuf_t> value) {
+              if (!value && value.error_code () == error_code_t::send_failed)
+                  ++callbacks;
+          });
+        (void) connector.dispatch ();
+        if (result || result.error_code () != error_code_t::send_failed || errors != 1
+            || callbacks != 1)
+            return fail (323);
+        connector.close ();
+    }
 
     /* stream-connector §5.6/§7: close queues unbound callbacks in issue order
    * before the disconnected callback in both dispatch modes. */
@@ -1534,33 +1578,6 @@ int main ()
         flowed.pop_back ();
         if (header_codec_t{}.decode (flowed)) {
             return fail (217);
-        }
-    }
-
-    {
-        zlink::stream_connector::codec_registry_t codecs;
-        if (!codecs.supports (zlink::stream_connector::codec_t::raw)) {
-            return fail (142);
-        }
-        const auto message_pack_was_enabled =
-          codecs.supports (zlink::stream_connector::codec_t::message_pack);
-        bool default_rejected = false;
-        if (!message_pack_was_enabled) {
-            try {
-                codecs.use_default_codec (zlink::stream_connector::codec_t::message_pack);
-            }
-            catch (const std::invalid_argument &) {
-                default_rejected = true;
-            }
-        }
-        codecs.enable_codec (zlink::stream_connector::codec_t::message_pack)
-          .use_default_codec (zlink::stream_connector::codec_t::message_pack);
-        zlink::stream_connector::codec_registry_t moved_codecs (std::move (codecs));
-        zlink::stream_connector::codec_registry_t assigned_codecs;
-        assigned_codecs = std::move (moved_codecs);
-        if ((!message_pack_was_enabled && !default_rejected)
-            || !assigned_codecs.supports (zlink::stream_connector::codec_t::message_pack)) {
-            return fail (143);
         }
     }
 
@@ -2081,7 +2098,10 @@ int main ()
             buffer += inbound.parts ().empty () ? std::string{} : inbound.parts ()[0].to_string ();
             while (auto frame = try_read_server_frame (buffer)) {
                 if (frame->header.kind == zlink::stream_connector::message_kind_t::send
-                    && frame->compressed && frame->payload == "{}") {
+                    && frame->compressed && frame->payload == "{}"
+                    && frame->header.name == login_request_t::packet_name
+                    && frame->header.codec == zlink::stream_connector::codec_t::json
+                    && frame->header.metadata.values.at ("trace") == "t1") {
                     compressed_send_seen = true;
                 }
                 if (frame->header.kind == zlink::stream_connector::message_kind_t::send
@@ -2883,7 +2903,9 @@ int main ()
         websocket_connect_server_latch.wait_for (std::chrono::milliseconds (100));
         websocket_connect_server_thread.join ();
     }
-    if (!connector.codecs ().supports (zlink::stream_connector::codec_t::json)) {
+    if (connector.options ().typed_codec
+        && connector.options ().typed_codec->codec_id ()
+             != zlink::stream_connector::codec_t::json) {
         return fail (3);
     }
 
@@ -3003,10 +3025,11 @@ int main ()
     if (!ensure_message_required) {
         return fail (200);
     }
-    if (runtime.sent_packets ().size () != 1
-        || runtime.sent_packets ()[0].name != login_request_t::packet_name
-        || runtime.sent_packets ()[0].codec != zlink::stream_connector::codec_t::json
-        || runtime.sent_packets ()[0].metadata.values.at ("trace") != "t1") {
+    const auto typed_send_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!compressed_send_seen && std::chrono::steady_clock::now () < typed_send_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!compressed_send_seen) {
         return fail (5);
     }
     connector
@@ -3019,11 +3042,11 @@ int main ()
       .submit ();
     const auto compressible_large_send_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (runtime.sent_packets ().size () != 2
+    while (!compressible_large_send_seen
            && std::chrono::steady_clock::now () < compressible_large_send_deadline) {
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
-    const bool compressible_large_send_accepted = runtime.sent_packets ().size () == 2;
+    const bool compressible_large_send_accepted = compressible_large_send_seen;
     if (!compressible_large_send_accepted) {
         connector
           .send (zlink::stream_connector::packet_t{"compressible.fallback",
@@ -3083,18 +3106,24 @@ int main ()
           [&] (zlink::stream_connector::result_t<void> result) {
               async_send_seen = static_cast<bool> (result);
           });
-        if (!eventually ([&] {
-                return async_send_seen.load () && !async_send_connection->written.empty ()
-                       && async_send_state->sent_packets.size () == 1;
-            })
-            || async_send_state->sent_packets[0].name != "async.send") {
+        if (!eventually ([&] { return async_send_seen.load (); })
+            || async_send_connection->written.size () != 1) {
+            return fail (155);
+        }
+        std::string async_send_wire (async_send_connection->written[0].begin (),
+                                     async_send_connection->written[0].end ());
+        const auto async_send_frame = try_read_server_frame (async_send_wire);
+        if (async_send_connection->written.size () != 1 || !async_send_frame
+            || async_send_frame->header.name != "async.send"
+            || async_send_frame->payload != "payload") {
             return fail (155);
         }
 
         auto async_write_failure_state =
           std::make_shared<zlink::stream_connector::detail::connector_state_t> (async_send_options);
         async_write_failure_state->state = zlink::stream_connector::connection_state_t::connected;
-        async_write_failure_state->connection = std::make_shared<async_write_connection_t> (true);
+        auto async_write_failure_connection = std::make_shared<async_write_connection_t> (true);
+        async_write_failure_state->connection = async_write_failure_connection;
         std::atomic<bool> async_write_failure_seen{false};
         zlink::stream_connector::detail::submit_send_async (
           async_write_failure_state,
@@ -3110,7 +3139,7 @@ int main ()
                        && async_write_failure_state->state
                             == zlink::stream_connector::connection_state_t::disconnected;
             })
-            || !async_write_failure_state->sent_packets.empty ()
+            || async_write_failure_connection->written.size () != 1
             || async_write_failure_state->last_close_reason
                  != zlink::stream_connector::close_reason_t::transport_error) {
             return fail (158);
@@ -3877,7 +3906,9 @@ int main ()
     }
     immediate.close ();
 
-    if (connector.codecs ().supports (zlink::stream_connector::codec_t::message_pack)) {
+    if (connector.options ().typed_codec
+        && connector.options ().typed_codec->codec_id ()
+             == zlink::stream_connector::codec_t::message_pack) {
         return fail (11);
     }
 
@@ -6252,12 +6283,10 @@ int main ()
         reconnect_success_server_thread.join ();
         return fail (67);
     }
-    auto reconnect_success_runtime =
-      zlink::stream_connector::detail::connector_runtime_t::from (reconnect_success_connector);
     reconnect_success_connector.send (login_request_t{}).submit ();
     const auto reconnect_success_send_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (reconnect_success_runtime.sent_packets ().empty ()
+    while (!reconnect_success_send_seen
            && std::chrono::steady_clock::now () < reconnect_success_send_deadline) {
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
@@ -6281,8 +6310,9 @@ int main ()
           reconnect_states->push_back (state.current);
       });
     auto reconnect_result = reconnect_connector.connect ();
+    // §9: connection refusal is Disconnected; ConnectTimeout requires expiry.
     if (reconnect_result
-        || reconnect_result.error_code () != zlink::stream_connector::error_code_t::connect_timeout
+        || reconnect_result.error_code () != zlink::stream_connector::error_code_t::disconnected
         || !reconnect_connector.dispatch ()
         || std::find (reconnect_states->begin (), reconnect_states->end (),
                       zlink::stream_connector::connection_state_t::reconnecting)
@@ -6922,6 +6952,9 @@ int main ()
             const auto packet = make_server_frame (message_kind_t::send, 0, "actor.push", "payload",
                                                    false, std::uint16_t{7});
             boost::asio::write (socket, boost::asio::buffer (packet.to_string ()));
+            const auto failed_wait =
+              make_server_frame (message_kind_t::send, 0, "typed.wait", "invalid");
+            boost::asio::write (socket, boost::asio::buffer (failed_wait.to_string ()));
             const std::string unbound_payload{static_cast<char> (1), static_cast<char> (0),
                                               static_cast<char> (7)};
             const auto unbound = make_server_frame (message_kind_t::control, 0,
@@ -6992,6 +7025,16 @@ int main ()
           actor_handle->on<packet_t> ("actor.push", [&] (const packet_message_t &) {
               actor_events.push_back ("actor-packet");
           });
+        int typed_decode_errors = 0;
+        int typed_callback_calls = 0;
+        auto typed_error_subscription = actor_connector.on_error ([&] (const auto &error) {
+            if (error.code == zlink::stream_connector::error_code_t::frame_decode_failed)
+                ++typed_decode_errors;
+        });
+        auto typed_connector_subscription = actor_connector.on<failed_protobuf_t> (
+          "actor.push", [&] (const auto &) { ++typed_callback_calls; });
+        auto typed_actor_subscription = actor_handle->on<failed_protobuf_t> (
+          "actor.push", [&] (const auto &) { ++typed_callback_calls; });
         bool actor_sending_hook_seen = false;
         bool actor_reply_hook_seen = false;
         auto actor_sending_hook = actor_connector.on_request_sending (
@@ -7012,6 +7055,9 @@ int main ()
                                                           .payload = as_bytes ("actor-request")})
                                       .timeout (std::chrono::seconds (1))
                                       .submit<std::vector<std::uint8_t>> ();
+        const auto typed_wait = actor_connector.wait_for<failed_protobuf_t> ("typed.wait")
+                                  .timeout (std::chrono::seconds (1))
+                                  .submit ();
         while (actor_connector.pending_dispatch_count () != 0) {
             (void) actor_connector.dispatch ();
         }
@@ -7041,6 +7087,17 @@ int main ()
             actor_server_release.signal ();
             return fail (266);
         }
+        while (actor_connector.pending_dispatch_count () != 0)
+            (void) actor_connector.dispatch ();
+        if (typed_decode_errors != 2 || typed_callback_calls != 0 || typed_wait
+            || typed_wait.error_code ()
+                 != zlink::stream_connector::error_code_t::frame_decode_failed) {
+            actor_server_release.signal ();
+            return fail (322);
+        }
+        typed_connector_subscription.unsubscribe ();
+        typed_actor_subscription.unsubscribe ();
+        typed_error_subscription.unsubscribe ();
         actor_rebind_allowed.signal ();
         if (!actor_rebound_sent.wait_for (std::chrono::seconds (1))) {
             actor_server_release.signal ();

@@ -195,8 +195,7 @@ Receives the next subscription event in recv mode. `subscribed_out_` and `topic_
 is required when `topic_id_capacity_` is greater than 0 — if any of these pointers is NULL, the call fails with
 `ZLINK_RECV_INVALID_HANDLE` and `EFAULT` before reading an event or touching any output. `source_rid_out_` is an optional output that may be NULL. When it is not
 NULL and the event came from a peer that is still connected, `*source_rid_out_` is set to the Core-owned routing ID view of that peer,
-whose lifetime follows the [Socket Common borrowed-RID rule](README.en.md#3-pull-receive-and-completion-model) (valid until the same
-socket's next data receive API entry or close). For an unsubscribe event that Core synthesized because the peer disconnected, or an event
+whose lifetime and invalidation conditions follow the [Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv). For an unsubscribe event that Core synthesized because the peer disconnected, or an event
 whose peer disconnected before it was dequeued, `*source_rid_out_` is `NULL`. `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
 `topic_id_buf_` / `*topic_id_len_out_` receive the topic bytes (binary-safe).
 
@@ -244,7 +243,7 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 
 - When a raw XPUB has a subscription event, the caller observes `ZLINK_RECV_OK` together with `*subscribed_out_` (subscribe=1, unsubscribe=0), the subscribing peer's routing ID pointer, and binary-safe topic bytes.
 - `source_rid_out_` is an optional output that may be NULL.
-- For an event from a peer that is still connected, the `*source_rid_out_` routing ID view stays valid until the same socket's next data receive API entry or close, and a receive on another socket doesn't change it. Copy the value immediately to retain it.
+- For an event from a peer that is still connected, the lifetime and invalidation conditions of the `*source_rid_out_` routing ID view follow the [Socket Common borrowed-RID rule](README.en.md#zlink_recv-and-zlink_router_recv).
 - An unsubscribe event that Core synthesized because the peer disconnected, or an event whose peer disconnected before it was dequeued, returns `ZLINK_RECV_OK` with `*source_rid_out_ == NULL`.
 - When `flags_` has `ZLINK_RECV_FLAGS_DONTWAIT` set and no event is available, the result is `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 - If the topic is longer than `topic_id_capacity_`, the function writes the required length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`; the event is retained internally and the next receive with a sufficient buffer returns it once.

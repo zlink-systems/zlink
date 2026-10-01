@@ -376,29 +376,25 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 new IllegalStateException("Instance Spot does not own Actor lifecycle"));
     }
 
-    void close(ZLinkSpotCloseReason reason, Instant deadline) {
-        inStateLane(
-                () -> {
-                    context.sealClosingAdmission();
-                    drainRoutes();
-                    return null;
-                });
-        try {
-            notifyClosing(reason, deadline);
-        } finally {
-            closeResources();
-        }
+    CompletionStage<Void> closeAsync(ZLinkSpotCloseReason reason, Instant deadline) {
+        return onStateLane(
+                        () -> {
+                            context.sealClosingAdmission();
+                            drainRoutes();
+                            return null;
+                        })
+                .thenCompose(ignored -> closingStage(reason, deadline))
+                .handle((ignored, failure) -> finishCleanup(failure, closeResourcesAsync()))
+                .thenCompose(stage -> stage);
     }
 
-    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
-        host.awaitClosing(
-                closingCallback(
-                        () ->
-                                context.runClosing(
-                                        () ->
-                                                spot.onClosing(
-                                                        new ZLinkSpotClosingContext(
-                                                                reason, deadline)))));
+    CompletionStage<Void> closingStage(ZLinkSpotCloseReason reason, Instant deadline) {
+        return closingCallback(
+                () ->
+                        context.runClosing(
+                                () ->
+                                        spot.onClosing(
+                                                new ZLinkSpotClosingContext(reason, deadline))));
     }
 
     CompletionStage<Boolean> closeExplicit() {
@@ -521,7 +517,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                 released -> {
                                                                                     if (!released) {
                                                                                         throw new IllegalStateException(
-                                                                                                "Instance Spot authority changed during Close");
+                                                                                                "Instance"
+                                                                                                        + " Spot"
+                                                                                                        + " authority"
+                                                                                                        + " changed"
+                                                                                                        + " during"
+                                                                                                        + " Close");
                                                                                     }
                                                                                     host
                                                                                             .releaseClosingCoordinator(
@@ -569,9 +570,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         });
     }
 
-    void closeResources() {
-        CloseResources start =
-                inStateLane(
+    CompletionStage<Void> closeResourcesAsync() {
+        return onStateLane(
                         () -> {
                             if (resourcesClosed) {
                                 return null;
@@ -580,21 +580,19 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             ScheduledFuture<?> previous = idleCheck;
                             idleCheck = null;
                             return new CloseResources(previous);
+                        })
+                .thenCompose(
+                        start -> {
+                            if (start == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (start.cancelledIdleCheck() != null) {
+                                start.cancelledIdleCheck().cancel(false);
+                            }
+                            backendSpot.closeInstanceSpot();
+                            closeActiveRouteReceives();
+                            return context.closeResourcesAsync();
                         });
-        if (start == null) {
-            return;
-        }
-        if (start.cancelledIdleCheck() != null) {
-            start.cancelledIdleCheck().cancel(false);
-        }
-        backendSpot.closeInstanceSpot();
-        closeActiveRouteReceives();
-        context.closeResources();
-    }
-
-    @Override
-    public void close() {
-        close(ZLinkSpotCloseReason.EXPLICIT_CLOSE, Instant.now());
     }
 
     private record IdleSchedule(ScheduledFuture<?> previous, long delayNanos) {}

@@ -596,6 +596,90 @@ static void test_retained_multipart_wire_bytes ()
 
 int main ()
 {
+    {
+        std::ifstream input (ZLINK_CLIENT_SERVER_METADATA_FIXTURE_PATH);
+        assert (input.good ());
+        const auto fixture = nlohmann::json::parse (input);
+        messaging::envelope_codec_t codec;
+        for (const bool invalid_key : {false, true}) {
+            messaging::envelope_header_t outgoing;
+            outgoing.kind = messaging::message_kind_t::command;
+            outgoing.channel_name = "metadata";
+            outgoing.message_name = "probe";
+            const std::string invalid_utf8 ("\xed\xa0\x80", 3);
+            outgoing.metadata = invalid_key
+                                  ? std::map<std::string, std::string>{{invalid_utf8, "value"}}
+                                  : std::map<std::string, std::string>{{"key", invalid_utf8}};
+            bool rejected = false;
+            try {
+                (void) codec.encode_header (outgoing);
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                rejected =
+                  error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+            }
+            assert (rejected);
+        }
+        for (const auto &test : fixture.at ("cases")) {
+            nlohmann::json wire = {{"formatMarker", 242},
+                                   {"kind", 3},
+                                   {"channelName", "metadata"},
+                                   {"messageName", "probe"}};
+            if (test.contains ("metadata"))
+                wire["metadata"] = test["metadata"];
+            auto received = wire.dump ();
+            if (test.contains ("receivedEncoded")) {
+                auto received_header = wire;
+                received_header.erase ("metadata");
+                received = received_header.dump ();
+                received.pop_back ();
+                received +=
+                  ",\"metadata\":" + test.at ("receivedEncoded").get<std::string> () + "}";
+            }
+            const auto decoded = codec.decode_header (zlink::message_t::from (received), false);
+            const bool valid = test.at ("valid");
+            assert (static_cast<bool> (decoded) == valid);
+            if (valid) {
+                const auto encoded = codec.encode_header (decoded.value ()).to_string ();
+                const auto position = encoded.find ("\"metadata\":");
+                assert (position != std::string::npos);
+                const auto canonical = test.at ("encoded").get<std::string> ();
+                assert (encoded.compare (position + 11, canonical.size (), canonical) == 0);
+                assert (canonical.size () == test.at ("encodedSize").get<std::size_t> ());
+                const auto escaped =
+                  codec.decode_header (zlink::message_t::from (wire.dump (-1, ' ', true)), false);
+                assert (escaped && escaped.value ().metadata == decoded.value ().metadata);
+            } else {
+                assert (decoded.error_kind ()
+                        == zlink::framework::framework_error_kind_t::protocol_error);
+            }
+            if (!test.contains ("metadata") || !test["metadata"].is_object ())
+                continue;
+            messaging::envelope_header_t outgoing;
+            outgoing.kind = messaging::message_kind_t::command;
+            outgoing.channel_name = "metadata";
+            outgoing.message_name = "probe";
+            bool strings = true;
+            for (const auto &[key, value] : test["metadata"].items ()) {
+                if (!value.is_string ()) {
+                    strings = false;
+                    break;
+                }
+                outgoing.metadata.emplace (key, value.get<std::string> ());
+            }
+            if (!strings)
+                continue;
+            bool rejected = false;
+            try {
+                (void) codec.encode_header (outgoing);
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                rejected =
+                  error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+            }
+            assert (rejected != valid);
+        }
+    }
     test_application_payload_wire_bytes ();
     test_retained_multipart_wire_bytes ();
     {

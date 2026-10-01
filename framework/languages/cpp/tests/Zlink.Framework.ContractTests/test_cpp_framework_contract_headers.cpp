@@ -68,11 +68,11 @@
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
 #include <zlink/stream_connector_throwing.hpp>
 #include <zlink/stream_connector/contracts/calls/zlink_stream_calls.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 #include <zlink/stream_connector/contracts/compression.hpp>
 #include <zlink/stream_connector/contracts/connector.hpp>
 #include <zlink/stream_connector/contracts/result.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 #include <zlink/stream_connector/contracts/version.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_assert.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_codec.hpp>
@@ -1736,7 +1736,7 @@ int main ()
       "sample", "context-topic", &named_handler_t::handle_context);
     handlers.on_send<named_handler_t, named_request_t> ("sample", "send-topic",
                                                         &named_handler_t::send_context);
-    handlers.on_event<named_handler_t, named_request_t> ("sample", "publish-topic",
+    handlers.on_event<named_handler_t, named_request_t> ("sample",
                                                          &named_handler_t::publish_context);
     const auto *descriptor = handlers.find ("sample", "topic", named_request_t::packet_name);
     if (descriptor == nullptr || descriptor->packet_name != named_request_t::packet_name) {

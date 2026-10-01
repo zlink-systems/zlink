@@ -3,9 +3,9 @@ import {
   type ZlinkStreamEncodedPayload,
   type ZlinkStreamPayloadCodec
 } from '@zlink-systems/stream-connector';
-import { ZlinkStreamCodec } from '@zlink-systems/stream-wire';
+import { ZlinkStreamCodec, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 
-export const ZLINK_MESSAGEPACK_CONTENT_TYPE = 'application/x-msgpack';
+export const ZLINK_MESSAGEPACK_CONTENT_TYPE = ZlinkStreamContentType.MessagePack;
 export const zlinkStreamMessagePackCodecName = 'messagepack';
 
 export const zlinkStreamMessagePackCodec: ZlinkStreamPayloadCodec = {

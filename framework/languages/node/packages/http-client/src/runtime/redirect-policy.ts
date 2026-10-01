@@ -8,7 +8,15 @@ import { redirectFormatError } from './http-client-errors';
  * contract (allowed statuses, location resolution, method rewrite) from the request flow.
  */
 
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const RedirectStatus = {
+  MovedPermanently: 301,
+  Found: 302,
+  SeeOther: 303,
+  TemporaryRedirect: 307,
+  PermanentRedirect: 308
+} as const;
+
+const REDIRECT_STATUSES = new Set<number>(Object.values(RedirectStatus));
 
 export function isRedirectStatus(status: number): boolean {
   return REDIRECT_STATUSES.has(status);
@@ -31,7 +39,11 @@ export function rewriteForRedirect(
   method: ZLinkHttpMethod,
   body: string | undefined
 ): { method: ZLinkHttpMethod; body: string | undefined } {
-  if (status === 303 || ((status === 301 || status === 302) && method === 'POST')) {
+  if (
+    status === RedirectStatus.SeeOther ||
+    ((status === RedirectStatus.MovedPermanently || status === RedirectStatus.Found) &&
+      method === 'POST')
+  ) {
     return { method: 'GET', body: undefined };
   }
   return { method, body };

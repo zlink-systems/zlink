@@ -1286,15 +1286,9 @@ int main ()
                   "Actor dispatch does not separate general-message admission from exact Message "
                   "Follow and bound-session admission");
 
-    /* CPP-SESS-001 — a STREAM-originated Actor relay creates a fresh
-     * downstream request correlation. Reusing the upstream STREAM correlation
-     * would collide with the target exactly-once table when a replacement
-     * session retries the same packet. */
-    gate.require (
-      mesh_node_runtime.find ("codec.create_envelope (kind") != std::string::npos
-        && mesh_node_runtime.find ("envelope.correlation_id") == std::string::npos,
-      "CPP-SESS-001",
-      "STREAM Actor relay reuses an upstream correlation instead of creating a fresh request id");
+    /* CPP-SESS-001: binding §5 requires the original request correlation.
+     * The public request wire regression in session_seal_relay verifies this
+     * behavior instead of a source assertion about correlation generation. */
 
     /* CPP-SESS-004 — replacement callback completion must schedule the close
      * with an asynchronous timer. Sleeping in the callback would hold the

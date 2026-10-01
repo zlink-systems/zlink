@@ -110,7 +110,8 @@ internal static class TestHostScenarioConfigurator
             provider.GetRequiredService<IZLinkRouteClient>(),
             provider.GetRequiredService<TestHostEventSink>(),
             options.ChannelName!,
-            options.PublishValue ?? "dotnet-to-node"
+            options.PublishValue ?? "dotnet-to-node",
+            options.MetadataValue
         ));
     }
 

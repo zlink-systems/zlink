@@ -120,6 +120,26 @@ Cancellation, timeout, shutdown과 activation barrier
 개방이 경쟁해도 pending operation과 payload reservation을 한 번만 정리한다.
 
 
+### 5.1 Application 완료 소스를 기다리는 대기의 종료
+
+[Application이 직접 완료시키는 비동기 결과](01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름)를
+기다리기 위해 runtime이 등록·소유한 대기는 등록한 실행 문맥의 owner가 끝낸다.
+Runtime이 등록·소유하지 않는 application 대기는 협력적 종료 대상이며, 그 정리와 종료 결과는
+[Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)의
+bounded teardown 규칙을 따른다.
+
+- 정상 drain은 [Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)가
+  정한 deadline까지 이미 수락한 작업처럼 그 결과를 기다린다.
+- 강제 종료에서는 owner가 아직 재개되지 않은 대기를 `ShuttingDown`으로 한 번 끝내고,
+  그 turn의 실행 권한을 유지한 채 정리를 관찰한다. 이 절차는 해당 turn과 gate를 공유하는
+  closing callback의 실행 및 그 turn이 사용하는 scope의 정리보다 먼저 수행한다.
+  정리 관찰은 §14의 bounded teardown 범위 안에서 수행하고, 이후 resource 정리 순서와
+  실패·deadline 만료의 종료 결과는 §14를 따른다.
+- 이 `ShuttingDown`은 그 대기의 관찰 결과다. 원 결과를 바꾸지 않으며, 같은 완료 소스를 다른 host나
+  runtime 밖에서 기다리는 대기에는 영향을 주지 않는다.
+- 이후의 완료는 원 결과만 확정하고 이미 끝난 대기를 다시 재개하지 않는다. 완료 호출은 실행 문맥이
+  종료됐다는 이유로 실패하지 않는다.
+
 ## 6. 검증 요구
 
 공개 표면(각 언어의 cancellation 입력, 반환된 완료 결과·오류 kind, Logical Multicast의

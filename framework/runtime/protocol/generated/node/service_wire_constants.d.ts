@@ -1,5 +1,6 @@
 export declare const SERVICE_WIRE_MAGIC: readonly [90, 77];
 export declare const SERVICE_WIRE_MAJOR: 1;
+export declare const SERVICE_WIRE_METADATA_BYTES: 1024;
 export declare const SERVICE_WIRE_REQUIRED_CAPABILITY: "framework-service-v13";
 export declare const SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME: "ZLinkFrameworkMultipart";
 export declare const SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE: "application/x-zlink-multipart";

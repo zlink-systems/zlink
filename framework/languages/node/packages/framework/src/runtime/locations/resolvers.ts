@@ -1,26 +1,51 @@
+import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { ZLinkSpotKind } from '../../contracts/Spots';
+import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
+import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
+import { ZLinkStateLane } from '../execution/state-lane';
+import {
+  decodeServiceClosingSpotAuthority,
+  decodeServiceReadySpotAuthority
+} from '../foundation/service-authority-payload-codec';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
-import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { routingIdsEqual } from '../routing-id';
 import {
+  type SpotHandle,
+  type ZLinkActorSpotHandleResolver,
+  type ZLinkSpotHandleResolver,
+  createSpotHandle,
+  type ResolvedSpotHandle
+} from '../spots/spot-handle';
+
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { encodeAuthorityKey } from './authority-key-codec';
+import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
+import {
+  type ZLinkAuthoritySnapshot,
+  ZLinkFrameworkRuntimeState,
   ZLinkLocationRole,
   ZLinkLocationTopologyState,
-  ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
-  type ZLinkLocationReadiness,
-  type ZLinkLocationRuntimeQuery,
-  type ZLinkPeerLocationResolver,
   type ZLinkActorLocation,
   type ZLinkActorLocationKey,
+  type ZLinkLocationReadiness,
+  type ZLinkLocationRuntimeQuery,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
+  type ZLinkPeerLocationResolver,
   type ZLinkRouteLocation,
   type ZLinkRouteLocationKey,
   type ZLinkSpotLocation,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
+
 import type {
   ZLinkActorLocationStore,
   ZLinkAuthorityStore,
@@ -29,28 +54,7 @@ import type {
   ZLinkRouteLocationStore,
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
-import {
-  decodeServiceClosingSpotAuthority,
-  decodeServiceReadySpotAuthority
-} from '../foundation/service-authority-payload-codec';
-import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
-import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
-import { encodeAuthorityKey } from './authority-key-codec';
-import { ZLinkSpotKind } from '../../contracts/Spots';
-import type { ZLinkAuthoritySnapshot } from './internal-location-contracts';
-import type {
-  SpotHandle,
-  ZLinkActorSpotHandleResolver,
-  ZLinkSpotHandleResolver
-} from '../spots/spot-handle';
-import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { createSpotHandle, type ResolvedSpotHandle } from '../spots/spot-handle';
-import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
-import { routingIdsEqual } from '../routing-id';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { emitActorOwnerLeaseObservation } from '../diagnostics';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;
@@ -432,12 +436,14 @@ export class ZLinkStoreLocationResolvers
         authorityGeneration: current.authorityOwnerGeneration,
         remainingLeaseMs
       };
-      emitActorOwnerLeaseObservation({
-        actorId,
-        authorityGeneration: unavailable.authorityGeneration,
-        remainingLeaseMs,
-        decision: 'owner_unavailable'
-      });
+      if (isRelocationDebugEnabled()) {
+        emitActorOwnerLeaseObservation({
+          actorId,
+          authorityGeneration: unavailable.authorityGeneration,
+          remainingLeaseMs,
+          decision: 'owner_unavailable'
+        });
+      }
       return unavailable;
     }
     if (
@@ -495,7 +501,8 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkResolvedActorRoute | undefined> {
     return await this.lane.run(() => {
       if (route === undefined) return undefined;
-      const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+      const maxAgeMs =
+        this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
       if (maxAgeMs > 0) {
         this.directActorRoutes.set(actorId, {
           row: route,
@@ -732,7 +739,8 @@ export class ZLinkStoreLocationResolvers
     ownerLeaseGeneration: bigint,
     signal?: AbortSignal
   ): Promise<boolean> {
-    const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+    const maxAgeMs =
+      this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
     const remainingLeaseMs = await this.options.leaseTracker.remainingOwnerTokenLeaseMs(
       { ownerId, leaseGeneration: ownerLeaseGeneration },
       signal
@@ -915,7 +923,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     private readonly routerChannelIdForMesh: (meshName: string) => string,
     private readonly fallback?: ZLinkSpotRouteResolver,
     private readonly leaseTracker?: ZLinkOwnerLeaseTracker,
-    private readonly routeCacheMaxAgeMs = 15000,
+    private readonly routeCacheMaxAgeMs = zlinkDefaultLocationOptions.routeCacheMaxAgeMs,
     private readonly monotonicNowMs: () => number = () => performance.now(),
     private readonly targetNodeStateResolver?: (
       meshName: string,

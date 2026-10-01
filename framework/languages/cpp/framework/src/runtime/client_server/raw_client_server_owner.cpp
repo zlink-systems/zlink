@@ -525,9 +525,16 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     });
     if (!state.first)
         co_return client_server_pump_result_t::protocol_error;
+    std::optional<messaging::envelope_header_t> rejection_context;
     const auto header = messaging::envelope_codec_t{}.decode_header (
-      zlink::message_t::from (received.parts.front ()), false);
+      zlink::message_t::from (received.parts.front ()), false, &rejection_context);
     if (!header) {
+        if (received.reply_token) {
+            mesh::service_mailbox_record_t rejected{
+              state.second, mesh::service_mailbox_domain_t::application, std::move (received.parts),
+              std::move (received.source_routing_id), received.reply_token};
+            (void) reply (rejected, *header.error (), &rejection_context);
+        }
         co_return client_server_pump_result_t::protocol_error;
     }
     const auto &envelope = header.value ();
@@ -649,25 +656,35 @@ bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &re
     return delivered;
 }
 
-bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
-                                        const framework_exception_t &error)
+bool raw_client_server_server_t::reply (
+  const mesh::service_mailbox_record_t &request,
+  const framework_exception_t &error,
+  const std::optional<messaging::envelope_header_t> *decoded_context)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
         return false;
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    const auto request_header = messaging::envelope_codec_t{}.decode_header (
-      zlink::message_t::from (request.parts.front ()), false);
-    if (!request_header) {
-        throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
+    std::optional<messaging::envelope_header_t> owned_header;
+    if (!decoded_context) {
+        auto decoded = messaging::envelope_codec_t{}.decode_header (
+          zlink::message_t::from (request.parts.front ()), false);
+        if (decoded)
+            owned_header = std::move (decoded.value ());
+        decoded_context = &owned_header;
     }
+    if (!*decoded_context) {
+        owned_header.emplace ();
+        owned_header->channel_name = request.owner;
+        decoded_context = &owned_header;
+    }
+    const auto &decoded_header = **decoded_context;
     const auto port = _lane.run_checked ([this] { return _port; }).get ();
     if (!port)
         return false;
     zlink::framework::detail::channel_reply_writer_t writer;
-    auto header = writer.create_error_header (request_header.value ().channel_name,
-                                              request_header.value (), error);
+    auto header = writer.create_error_header (decoded_header.channel_name, decoded_header, error);
     //  The error reply body is the JSON literal `null`, matching the other
     //  language runtimes' error envelope emission.
     auto parts = envelope_wire_parts (writer.reply_raw_envelope (
@@ -1278,7 +1295,8 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
 }
 
 task_t<zlink::submit_result_t>
-raw_client_server_client_t::send (const protocol::application_payload_t &payload)
+raw_client_server_client_t::send (const protocol::application_payload_t &payload,
+                                  std::map<std::string, std::string> metadata)
 {
     const auto state = _lane
                          .run_checked ([this] {
@@ -1308,6 +1326,7 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     header.channel_name = channel;
     header.message_name = payload.packet_name;
     header.content_type = payload.content_type;
+    header.metadata = std::move (metadata);
     const auto wire = envelope_wire_parts (messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (payload.payload_bytes ())));
     trace_client_server_lazy ("client-send-wire", [&] {
@@ -1328,7 +1347,8 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
 
 task_t<client_server_request_completion_t>
 raw_client_server_client_t::request (const protocol::application_payload_t &payload,
-                                     std::chrono::milliseconds timeout)
+                                     std::chrono::milliseconds timeout,
+                                     std::map<std::string, std::string> metadata)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("ClientServer request timeout must be positive");
@@ -1366,6 +1386,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     auto header = codec.create_envelope (messaging::message_kind_t::request, channel,
                                          payload.packet_name, timeout);
     header.content_type = payload.content_type;
+    header.metadata = std::move (metadata);
     const auto correlation_id = header.correlation_id;
     trace_client_server_lazy ("client-request-submit", [&] {
         return "endpoint=" + endpoint + " channel=" + channel + " client="

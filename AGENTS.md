@@ -134,8 +134,8 @@ effort는 토큰 단가를 바꾸지 않고 추론 토큰(출력 단가)만 늘�
 작업 로그에 남긴다. Claude의 세션·주간 한도는 codex보다 빨리 닳으므로 비율을 넘겨 오래 쓰지 않는다.
 
 - 실행은 `codex exec -m <model id> -c model_reasoning_effort=<level> -C <worktree> …`로 하고,
-  이어서 할 때는 `codex exec resume <session id> "<후속 지시>"`로 같은 세션을 잇는다 — 새
-  세션을 열면 읽은 것을 다시 읽는다.
+  이어서 할 때는 `codex exec resume <session id> "<후속 지시>"`로 같은 세션을 잇는다. 이어서 할지 새
+  세션으로 할지는 [`supervisor-guide.ko.md`](./doc/principal/dev/supervisor-guide.ko.md) §3.1이 정한다.
 
 #### 공통 규칙
 
@@ -146,8 +146,8 @@ effort는 토큰 단가를 바꾸지 않고 추론 토큰(출력 단가)만 늘�
 - **sub-agent는 필요한 출력만 context에 넣는다.** 명령 출력은 그대로 토큰이 된다(2026-09-23: sol job 22회가
   1시간에 약 280만 토큰). 브리프에 다음을 적는다 — 빌드·테스트·포매터 출력은 로그 파일로 보내고 첫 실패,
   관련 구간, 마지막 요약만 읽는다. 파일은 필요한 줄 범위만 읽고 같은 세션에서 다시 읽지 않는다. 줄이는 것은
-  중간 출력이며, 완료 보고의 길이는 제한하지 않는다. 긴 세션을 여러 번 resume하면 누적 context가 매번 다시 들어가므로, 후속 수정은 좁은
-  브리프의 새 job이 더 싸면 그쪽을 쓴다.
+  중간 출력이며, 완료 보고의 길이는 제한하지 않는다. resume과 새 세션의 선택은
+  [`supervisor-guide.ko.md`](./doc/principal/dev/supervisor-guide.ko.md) §3.1이 정한다.
 - **투입한 sub-agent는 3분 단위로 동작을 확인한다.** 살아 있는지, 무엇을 건드리고 있는지,
   로그가 자라고 있는지를 본다. 멈췄거나 엉뚱한 곳을 파고 있으면 그때 바로잡는다 — 끝날 때까지
   기다렸다가 결과만 보면 되돌리는 비용이 커진다.
@@ -222,10 +222,13 @@ effort는 토큰 단가를 바꾸지 않고 추론 토큰(출력 단가)만 늘�
     필요해 보이면 멈추고 보고한다([5.1](#51-스펙-개정-절차)).
   - **Execution gate를 우회하는 동기화를 남기지 않는다.**
     [`02-handler-turn-and-execution-gate.ko.md`](./framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)가
-    기준이다. 다음 세 가지를 찾아, gate 하나가 결정하도록 고친다.
+    기준이다. Framework 내부 구현(runtime·dispatch·connector)에서 다음 세 가지를 찾아, gate 하나가 결정하도록 고친다.
     - gate가 이미 직렬화하는 상태를 lock·별도 queue·대기로 다시 보호하는 코드
     - 같은 실행 권한을 플래그·상태·generation 같은 두 번째 수단으로 판정하는 코드
     - handler turn 안에서 infrastructure 진행을 기다리는 코드
+
+    sample·perf 같은 애플리케이션 코드가 handler 안에서 public 비동기 API(request, Actor 생성·bind 등)를
+    기다리는 것은 public 계약이 허용한 사용이며 이 항목의 대상이 아니다.
   - 완료 보고에 점검 결과(발견 수, 고친 항목, 넘긴 항목)를 한 줄로 적는다.
 
 ## 4. 검증과 완료 보고

@@ -1,3 +1,4 @@
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import type { RoutingId } from '../../contracts/Common';
 import {
   type ZLinkActorLocationKey,
@@ -49,8 +50,8 @@ function encodeSegments(...segments: readonly string[]): string {
 
 function requireSpotId(value: string): string {
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > 255) {
-    throw new TypeError('SpotId must contain 1..255 UTF-8 bytes.');
+  if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES) {
+    throw new TypeError(`SpotId must contain 1..${ZLINK_MAX_SPOT_ID_BYTES} UTF-8 bytes.`);
   }
   return value;
 }

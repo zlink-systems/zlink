@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/stream_connector/contracts/result.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_interfaces.hpp>
@@ -48,6 +49,33 @@ std::vector<std::uint8_t> decode_typed_reply (const std::shared_ptr<void> &state
                                               codec_t codec,
                                               const std::vector<std::uint8_t> &payload);
 
+void publish_stream_error (const std::shared_ptr<void> &state, error_t error);
+
+template <typename TMessage>
+result_t<packet_t>
+encode_typed_packet (const std::shared_ptr<void> &state, packet_t packet, const TMessage &message)
+{
+#if ZLINK_HAS_EXCEPTIONS
+    try {
+#endif
+        auto encoded = to_packet_payload (message, 0);
+        if (!encoded) {
+            return result_t<packet_t>::failure (encoded.error ()->code, encoded.error ()->message);
+        }
+        packet.payload = encode_typed_payload (state, encoded.value ());
+        return result_t<packet_t>::success (std::move (packet));
+#if ZLINK_HAS_EXCEPTIONS
+    }
+    catch (const std::exception &error) {
+        return result_t<packet_t>::failure (error_code_t::send_failed, error.what ());
+    }
+    catch (...) {
+        return result_t<packet_t>::failure (error_code_t::send_failed,
+                                            "stream connector payload serialization failed");
+    }
+#endif
+}
+
 /* Rebuilds the received message from the packet the connector queued
  * (stream-connector §5.5): the wait surfaces hand the caller a message, not a
  * bare payload, so a predicate also sees the packet name, the metadata and the
@@ -73,6 +101,22 @@ result_t<message_t<TMessage>> decode_message (const std::shared_ptr<void> &state
         message.payload = std::move (decoded.value ());
     }
     return result_t<message_t<TMessage>>::success (std::move (message));
+}
+
+template <typename TMessage>
+std::function<void (const packet_t &)>
+typed_delivery (std::weak_ptr<void> weak_state,
+                std::function<void (const message_t<TMessage> &)> callback)
+{
+    return [weak_state, callback = std::move (callback)] (const packet_t &packet) {
+        const auto state = weak_state.lock ();
+        auto message = decode_message<TMessage> (state, packet);
+        if (!message) {
+            publish_stream_error (state, *message.error ());
+            return;
+        }
+        callback (message.value ());
+    };
 }
 
 result_t<request_reply_t>
@@ -141,10 +185,11 @@ class send_call_t
   private:
     friend class connector_t;
     friend class actor_t;
-    send_call_t (std::shared_ptr<void> state, packet_t packet);
+    send_call_t (std::shared_ptr<void> state, result_t<packet_t> packet);
 
     std::shared_ptr<void> _state;
-    packet_t _packet;
+    result_t<packet_t> _packet =
+      result_t<packet_t>::failure (error_code_t::configuration_error, "call has no connector");
     std::optional<detail::actor_binding_ref_t> _actor_binding;
 };
 
@@ -157,21 +202,24 @@ class request_call_t
     /// Overrides the packet name sent with this request.
     request_call_t &packet_name (std::string name)
     {
-        _packet.name = std::move (name);
+        if (_packet)
+            _packet.value ().name = std::move (name);
         return *this;
     }
 
     /// Adds or replaces one metadata value copied into the outbound request packet.
     request_call_t &metadata (std::string key, std::string value)
     {
-        _packet.metadata.with (std::move (key), std::move (value));
+        if (_packet)
+            _packet.value ().metadata.with (std::move (key), std::move (value));
         return *this;
     }
 
     /// Replaces the outbound request metadata.
     request_call_t &metadata (metadata_t metadata)
     {
-        _packet.metadata = std::move (metadata);
+        if (_packet)
+            _packet.value ().metadata = std::move (metadata);
         return *this;
     }
 
@@ -188,24 +236,25 @@ class request_call_t
     /// Marks the outbound request packet for compression when compression is available.
     request_call_t &compress ()
     {
-        _packet.compressed = true;
+        if (_packet)
+            _packet.value ().compressed = true;
         return *this;
     }
 
     /// Sends the request, waits for the correlated reply, and decodes it as TReply.
     template <typename TReply> result_t<TReply> submit ()
     {
-        if (!_state) {
-            return result_t<TReply>::failure (error_code_t::configuration_error,
-                                              "request call has no connector");
+        if (!_packet) {
+            return result_t<TReply>::failure (_packet.error ()->code, _packet.error ()->message);
         }
         const auto started = std::chrono::steady_clock::now ();
-        const auto request_name = _packet.name;
+        const auto request_name = _packet.value ().name;
         const auto actor_id =
           _actor_binding ? std::optional<std::string> (_actor_binding->actor_id) : std::nullopt;
-        request_sending_context_t sending{request_name, actor_id, _packet.metadata};
+        request_sending_context_t sending{request_name, actor_id, _packet.value ().metadata};
         detail::run_request_sending (_state, sending);
-        auto reply = detail::submit_request (_state, std::move (_packet), _timeout, _actor_binding);
+        auto reply =
+          detail::submit_request (_state, std::move (_packet.value ()), _timeout, _actor_binding);
         auto result = erased_result_t (_state, reply).template as<TReply> ();
         auto context = reply_context (request_name, actor_id, reply, result, started);
         detail::schedule_reply_received (_state, std::move (context));
@@ -215,22 +264,30 @@ class request_call_t
     /// Sends the request and invokes the callback with the decoded reply result.
     template <typename TReply> void submit (std::function<void (result_t<TReply>)> callback)
     {
-        if (!_state) {
+        if (!_packet) {
+            auto result =
+              result_t<TReply>::failure (_packet.error ()->code, _packet.error ()->message);
             if (callback) {
-                callback (result_t<TReply>::failure (error_code_t::configuration_error,
-                                                     "request call has no connector"));
+                if (_state) {
+                    detail::schedule_delivery (_state, [callback = std::move (callback),
+                                                        result = std::move (result)] () mutable {
+                        callback (std::move (result));
+                    });
+                } else {
+                    callback (std::move (result));
+                }
             }
             return;
         }
         auto state = _state;
         const auto started = std::chrono::steady_clock::now ();
-        const auto request_name = _packet.name;
+        const auto request_name = _packet.value ().name;
         const auto actor_id =
           _actor_binding ? std::optional<std::string> (_actor_binding->actor_id) : std::nullopt;
-        request_sending_context_t sending{request_name, actor_id, _packet.metadata};
+        request_sending_context_t sending{request_name, actor_id, _packet.value ().metadata};
         detail::run_request_sending (state, sending);
         auto reply_hook_ids = std::make_shared<std::vector<std::uint64_t>> ();
-        auto packet = std::move (_packet);
+        auto packet = std::move (_packet.value ());
         const auto timeout = _timeout;
         detail::submit_request_async (
           state, std::move (packet), timeout,
@@ -304,14 +361,15 @@ class request_call_t
     };
 
     request_call_t (std::shared_ptr<void> state,
-                    packet_t packet,
+                    result_t<packet_t> packet,
                     std::chrono::milliseconds default_timeout) :
         _state (std::move (state)), _packet (std::move (packet)), _timeout (default_timeout)
     {
     }
 
     std::shared_ptr<void> _state;
-    packet_t _packet;
+    result_t<packet_t> _packet =
+      result_t<packet_t>::failure (error_code_t::configuration_error, "call has no connector");
     std::chrono::milliseconds _timeout{0};
     std::optional<detail::actor_binding_ref_t> _actor_binding;
 };
@@ -419,12 +477,8 @@ template <typename TMessage> class wait_call_t
         submit ([promise, failure_message = std::move (failure_message)] (
                   result_t<message_t<TMessage>> result) mutable {
             try {
-                if (!result) {
-                    promise->set_exception (
-                      std::make_exception_ptr (std::runtime_error (failure_message)));
-                    return;
-                }
-                promise->set_value (std::move (result.value ()));
+                promise->set_value (zlink::stream_connector_throwing::detail::value_or_throw (
+                  std::move (result), &failure_message));
             }
             catch (...) {
                 promise->set_exception (std::current_exception ());
