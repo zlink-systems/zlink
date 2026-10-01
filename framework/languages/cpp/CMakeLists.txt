@@ -1405,8 +1405,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_executable(${target_name} ${source_file})
     target_link_libraries(${target_name} PRIVATE zlink::http_client)
     target_link_zlink_test_harness(${target_name})
+    # The shared runtime-context hook environment (tests without a host) lives
+    # with the framework unit tests and includes runtime headers.
     target_include_directories(${target_name} PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_DIR}/http-client/src)
+      ${ZLINK_FRAMEWORK_CPP_DIR}/http-client/src
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_DIR}/tests/Zlink.Framework.UnitTests)
     # Test sources include Boost (beast test server); they must resolve the
     # same Boost tree as the http client objects.
     zlink_framework_cpp_add_boost_headers(${target_name})
