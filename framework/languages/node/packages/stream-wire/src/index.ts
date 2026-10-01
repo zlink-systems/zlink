@@ -202,11 +202,14 @@ export function splitStreamWireFrames(chunk: Uint8Array): readonly Uint8Array[] 
   return frames;
 }
 
+/** @internal Reserved packet name prefix owned by the stream protocol. */
+export const ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX = '$zlink.';
+
 export const ZlinkStreamControlPacket = Object.freeze({
-  HeartbeatPing: '$zlink.heartbeat.ping',
-  HeartbeatPong: '$zlink.heartbeat.pong',
-  ActorBound: '$zlink.actor.bound',
-  ActorUnbound: '$zlink.actor.unbound',
+  HeartbeatPing: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.ping`,
+  HeartbeatPong: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.pong`,
+  ActorBound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.bound`,
+  ActorUnbound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.unbound`,
   SessionClosing: 'session-closing'
 } as const);
 
@@ -662,7 +665,8 @@ function decodeStreamWireMetadataAt(
   return { metadata, offset };
 }
 
-function validateStreamWirePacketName(name: string): Uint8Array {
+/** @internal Shared packet name structure validation for the connector. */
+export function validateStreamWirePacketName(name: string): Uint8Array {
   const nameBytes = utf8Encode(name);
   if (name.trim().length === 0 || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
     throw new Error('Stream packet name is invalid.');

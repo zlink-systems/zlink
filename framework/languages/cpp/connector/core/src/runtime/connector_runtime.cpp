@@ -3,7 +3,7 @@
 #include "connector_runtime.hpp"
 
 #include "runtime/protocol/framing.hpp"
-#include "runtime/protocol/packet_name_resolver.hpp"
+#include <zlink/detail/stream_packet_name.hpp>
 #include "runtime/transport/stream_connection.hpp"
 #include "runtime/transport/stream_transport_factory.hpp"
 #include "runtime/transport/websocket_connection.hpp"
@@ -495,6 +495,14 @@ void schedule_delivery (std::shared_ptr<connector_state_t> state,
     state->state_changed.notify_all ();
 }
 
+void publish_close_error (connector_state_t &state, boost::system::error_code error)
+{
+    if (error) {
+        publish_error (state, error_t{error_code_t::disconnected,
+                                      "Transport close failed: " + error.message ()});
+    }
+}
+
 void publish_error (connector_state_t &state, error_t error) noexcept
 {
     std::vector<std::uint64_t> handler_ids;
@@ -673,7 +681,8 @@ std::size_t packet_handler_count (connector_state_t &state, const dispatch_envel
 
 void count_received_locked (connector_state_t &state, const packet_t &packet)
 {
-    if (packet.name.empty () || packet.name.rfind ("$zlink.", 0) == 0) {
+    if (packet.name.empty ()
+        || packet.name.starts_with (zlink::detail::stream_wire::reserved_packet_name_prefix)) {
         return;
     }
     ++state.received_counts[packet.name];
@@ -1211,7 +1220,8 @@ class connect_attempt_guard_t
 class bounded_transport_connect_t : public std::enable_shared_from_this<bounded_transport_connect_t>
 {
   public:
-    void complete (boost::system::error_code error,
+    void complete (const std::shared_ptr<detail::connector_state_t> &state,
+                   boost::system::error_code error,
                    std::unique_ptr<detail::stream_connection_t> connection)
     {
         std::unique_lock<std::mutex> lock (_mutex);
@@ -1219,7 +1229,9 @@ class bounded_transport_connect_t : public std::enable_shared_from_this<bounded_
             lock.unlock ();
             if (connection) {
                 std::shared_ptr<detail::stream_connection_t> owned (std::move (connection));
-                owned->shutdown_and_close_async ();
+                owned->shutdown_and_close_async ([state] (boost::system::error_code close_error) {
+                    detail::publish_close_error (*state, close_error);
+                });
             }
             return;
         }
@@ -1257,44 +1269,50 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
         state->connect_control = control;
     }
     auto timeout_timer =
-      detail::post_runtime_operation_after (state, timeout, [operation, control] {
-          operation->complete (boost::asio::error::timed_out, nullptr);
+      detail::post_runtime_operation_after (state, timeout, [operation, control, state] {
+          operation->complete (state, boost::asio::error::timed_out, nullptr);
           control->cancel ();
       });
-    auto completion =
-      [operation] (boost::system::error_code error,
-                   std::unique_ptr<detail::stream_connection_t> connection) mutable {
-          operation->complete (error, std::move (connection));
-      };
+    auto completion = [operation,
+                       state] (boost::system::error_code error,
+                               std::unique_ptr<detail::stream_connection_t> connection) mutable {
+        operation->complete (state, error, std::move (connection));
+    };
+    const auto close_completion = [state] (boost::system::error_code close_error) {
+        detail::publish_close_error (*state, close_error);
+    };
 
     try {
         if (state->effective_transport == transport_t::websocket) {
             detail::connect_websocket_async (state->io_context, *parsed.websocket, control,
-                                             std::move (completion));
+                                             close_completion, std::move (completion));
         } else if (state->effective_transport == transport_t::websocket_secure) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
             detail::connect_websocket_secure_async (
               state->io_context, *parsed.websocket_secure,
-              state->options.skip_server_certificate_validation, control, std::move (completion));
+              state->options.skip_server_certificate_validation, control, close_completion,
+              std::move (completion));
 #else
-            operation->complete (boost::asio::error::operation_not_supported, nullptr);
+            operation->complete (state, boost::asio::error::operation_not_supported, nullptr);
 #endif
         } else if (state->effective_transport == transport_t::tls) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
             detail::connect_tls_async (state->io_context, *parsed.tls,
                                        state->options.skip_server_certificate_validation, control,
-                                       std::move (completion));
+                                       close_completion, std::move (completion));
 #else
-            operation->complete (boost::asio::error::operation_not_supported, nullptr);
+            operation->complete (state, boost::asio::error::operation_not_supported, nullptr);
 #endif
         } else {
             auto resolver = std::make_shared<boost::asio::ip::tcp::resolver> (state->io_context);
             auto socket = std::make_shared<boost::asio::ip::tcp::socket> (state->io_context);
-            control->set_cancel_handler ([resolver, socket] {
+            control->set_cancel_handler ([resolver, socket, close_completion] {
                 boost::system::error_code ignored;
                 resolver->cancel ();
                 socket->cancel (ignored);
-                socket->close (ignored);
+                boost::system::error_code close_error;
+                socket->close (close_error);
+                close_completion (close_error);
             });
             resolver->async_resolve (
               parsed.tcp->host, parsed.tcp->port,
@@ -1329,7 +1347,7 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
         }
     }
     catch (const boost::system::system_error &error) {
-        operation->complete (error.code (), nullptr);
+        operation->complete (state, error.code (), nullptr);
     }
 
     auto [error, connection] = operation->wait ();
@@ -1535,10 +1553,11 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         operations = detail::take_connection_operations_locked (*state);
     }
+    boost::system::error_code close_error;
     if (connection) {
         // Outside transport_mutex so pending completion handlers can still
         // finish their state transition without a lock inversion.
-        connection->shutdown_and_close ();
+        close_error = connection->shutdown_and_close ();
     }
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
@@ -1547,6 +1566,7 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
     }
     detail::close_bound_actors (state);
     detail::change_state (state, connection_state_t::closed);
+    detail::publish_close_error (*state, close_error);
     state->state_changed.notify_all ();
     detail::fail_connection_operations (state, std::move (operations),
                                         "stream connector is closed");
@@ -1737,10 +1757,10 @@ std::string connector_t::resolve_type_packet_name (std::string type_name) const
     return type_name;
 }
 
-packet_t connector_t::make_packet (std::type_index type, std::string packet_name) const
+packet_t connector_t::make_packet (std::string packet_name) const
 {
     packet_t packet;
-    packet.name = detail::packet_name_resolver_t{}.resolve (type, std::move (packet_name));
+    packet.name = std::move (packet_name);
     const auto state = detail::state_from (_state);
     packet.codec =
       state->options.typed_codec ? state->options.typed_codec->codec_id () : codec_t::json;

@@ -3,7 +3,6 @@ package systems.zlink.stream.connector;
 import systems.zlink.contracts.messaging.Message;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -30,7 +29,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
     private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
     private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
-    private static final int MAX_PACKET_NAME_BYTES = 255;
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ScheduledExecutorService timeouts =
@@ -316,40 +314,47 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor) {
         long start = System.nanoTime();
-        CompletableFuture<ZLinkStreamEncodedPayload> result = new CompletableFuture<>();
+        String requestName = payload.packetName();
         String actorId = actor == null ? null : actor.actorId();
-        java.util.function.BiConsumer<ZLinkStreamEncodedPayload, Throwable> complete =
-                (reply, failure) -> {
-                    List<ZLinkStreamReplyReceivedHandler> registered =
-                            List.copyOf(replyReceivedHandlers);
-                    byte[] replyBytes =
-                            reply == null || registered.isEmpty()
-                                    ? null
-                                    : reply.payload().toByteArray();
-                    Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
-                    if (failure == null) {
-                        result.complete(reply);
-                    } else {
-                        result.completeExceptionally(failure);
-                    }
-                    //  Spec 32 5.7: a request the caller cancelled ended with
-                    //  its cancellation, not a result the connector decided,
-                    //  so the reply received hook does not run for it.
-                    if (result.isCancelled()) {
-                        if (reply != null) {
-                            reply.payload().close();
-                        }
-                        return;
-                    }
-                    publishReplyReceived(
-                            payload.packetName(),
-                            actorId,
-                            elapsed,
-                            reply,
-                            replyBytes,
-                            failure,
-                            registered);
-                };
+        java.util.function.BiFunction<
+                        ZLinkStreamEncodedPayload, java.util.function.BooleanSupplier, Boolean>
+                onReply =
+                        (reply, complete) -> {
+                            List<ZLinkStreamReplyReceivedHandler> registered =
+                                    List.copyOf(replyReceivedHandlers);
+                            byte[] replyBytes =
+                                    reply == null || registered.isEmpty()
+                                            ? null
+                                            : reply.payload().toByteArray();
+                            Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+                            boolean completed = complete.getAsBoolean();
+                            if (completed)
+                                publishReplyReceived(
+                                        requestName,
+                                        actorId,
+                                        elapsed,
+                                        reply,
+                                        replyBytes,
+                                        null,
+                                        registered);
+                            return completed;
+                        };
+        java.util.function.BiFunction<Throwable, java.util.function.BooleanSupplier, Boolean>
+                onFailure =
+                        (failure, complete) -> {
+                            var registered = List.copyOf(replyReceivedHandlers);
+                            boolean completed = complete.getAsBoolean();
+                            if (completed)
+                                publishReplyReceived(
+                                        requestName,
+                                        actorId,
+                                        Duration.ofNanos(System.nanoTime() - start),
+                                        null,
+                                        null,
+                                        failure,
+                                        registered);
+                            return completed;
+                        };
         try {
             Map<String, String> metadata = new HashMap<>(payload.metadata());
             ZLinkStreamRequestSendingContext context =
@@ -369,66 +374,62 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             ZLinkStreamEncodedPayload outgoing =
                     new ZLinkStreamEncodedPayload(
                             payload.packetName(), payload.payload(), metadata, payload.codec());
-            CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                    sendRequestFrame(outgoing, timeout, compress, actor).toCompletableFuture();
-            pending.whenComplete(complete);
-            result.whenComplete(
-                    (ignored, failure) -> {
-                        if (result.isCancelled()) {
-                            pending.cancel(false);
-                        }
-                    });
+            return sendRequestFrame(outgoing, timeout, compress, actor, onReply, onFailure);
         } catch (RuntimeException failure) {
-            complete.accept(null, failure);
+            onFailure.apply(failure, () -> true);
+            return CompletableFuture.failedFuture(failure);
         }
-        return result;
     }
 
     private CompletionStage<ZLinkStreamEncodedPayload> sendRequestFrame(
             ZLinkStreamEncodedPayload payload,
             Duration timeout,
             boolean compress,
-            ZLinkStreamActorRegistry.DefaultActor actor) {
+            ZLinkStreamActorRegistry.DefaultActor actor,
+            java.util.function.BiFunction<
+                            ZLinkStreamEncodedPayload, java.util.function.BooleanSupplier, Boolean>
+                    onReply,
+            java.util.function.BiFunction<Throwable, java.util.function.BooleanSupplier, Boolean>
+                    onFailure) {
         Integer actorSlot = actorSlot(actor);
         long requestSeq = nextRequestSeq();
-        CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                pendingRequests.add(requestSeq, payload.packetName());
+        byte[] body = payloadCodec.encode(payload, compress);
+        ZLinkStreamWireProtocol.Header header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_REQUEST,
+                        ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
+                        ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
+                                | (payload.metadata().isEmpty()
+                                        ? 0
+                                        : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
+                                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
+                        requestSeq,
+                        payload.packetName(),
+                        payload.metadata(),
+                        nextCorrelationId(),
+                        null,
+                        0,
+                        actorSlot);
 
-        try {
-            byte[] body = payloadCodec.encode(payload, compress);
-            ZLinkStreamWireProtocol.Header header =
-                    new ZLinkStreamWireProtocol.Header(
-                            ZLinkStreamWireProtocol.KIND_REQUEST,
-                            ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
-                            ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
-                                    | (payload.metadata().isEmpty()
-                                            ? 0
-                                            : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
-                                    | (compress
-                                            ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED
-                                            : 0),
-                            requestSeq,
-                            payload.packetName(),
-                            payload.metadata(),
-                            nextCorrelationId(),
-                            null,
-                            0,
-                            actorSlot);
-
-            sendFrame(
-                            header,
-                            body,
-                            () -> pendingRequests.startTimeout(requestSeq, timeout, timeouts))
-                    .whenComplete(
-                            (ignored, ex) -> {
-                                if (ex != null) {
-                                    pendingRequests.fail(requestSeq, ex);
-                                }
-                            });
-        } catch (RuntimeException invalid) {
-            pendingRequests.fail(requestSeq, invalid);
-        }
-        return pending;
+        return sendFrame(
+                header,
+                body,
+                (write, writeFailure) ->
+                        sendChain.enqueueRequestDeferred(
+                                () -> traceWrite(header, write.get()),
+                                failure -> {
+                                    pendingRequests.fail(requestSeq, failure);
+                                    writeFailure.accept(failure);
+                                },
+                                pending -> {
+                                    pendingRequests.add(
+                                            requestSeq,
+                                            payload.packetName(),
+                                            pending,
+                                            onReply,
+                                            onFailure);
+                                    pendingRequests.startTimeout(requestSeq, timeout, timeouts);
+                                }));
     }
 
     private void dispatchRequestCallback(Runnable callback) {
@@ -508,11 +509,17 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> sendFrame(ZLinkStreamWireProtocol.Header header, byte[] payload) {
-        return sendFrame(header, payload, null);
+        return traceWrite(header, sendFrame(header, payload, sendChain::enqueueDeferred));
     }
 
-    private CompletionStage<Void> sendFrame(
-            ZLinkStreamWireProtocol.Header header, byte[] payload, Runnable onAccepted) {
+    private <T> CompletionStage<T> sendFrame(
+            ZLinkStreamWireProtocol.Header header,
+            byte[] payload,
+            java.util.function.BiFunction<
+                            java.util.function.Supplier<CompletionStage<Void>>,
+                            java.util.function.Consumer<Throwable>,
+                            CompletableFuture<T>>
+                    enqueue) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection
         //  the caller can act on (metadata limits, correlation id, send
@@ -544,8 +551,11 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                                 + payload.length
                                 + " correlation="
                                 + header.correlationId());
-        CompletableFuture<Void> publication =
-                lifecycle.enqueueFrame(sendChain, frame, onAccepted).toCompletableFuture();
+        return lifecycle.enqueueFrame(sendChain, frame, enqueue);
+    }
+
+    private CompletionStage<Void> traceWrite(
+            ZLinkStreamWireProtocol.Header header, CompletionStage<Void> publication) {
         publication.whenComplete(
                 (ignored, ex) -> {
                     if (ex == null) {
@@ -711,15 +721,13 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static String requirePacketName(String packetName) {
         //  Pre-send validation, so spec 32 9 makes every rejection here
         //  ValidationFailed and 9.2 requires it to carry that code.
-        if (packetName == null || packetName.isBlank()) {
-            throw ZLinkStreamException.validationFailed("packetName is required");
+        try {
+            ZLinkStreamWireProtocol.validatePacketName(packetName);
+        } catch (IllegalArgumentException invalid) {
+            throw ZLinkStreamException.validationFailed(invalid.getMessage(), invalid);
         }
         if (packetName.startsWith(RESERVED_PACKET_NAME_PREFIX)) {
             throw ZLinkStreamException.validationFailed("packetName uses a reserved zlink prefix");
-        }
-        if (packetName.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
-            throw ZLinkStreamException.validationFailed(
-                    "packetName must not exceed 255 UTF-8 bytes");
         }
         return packetName;
     }

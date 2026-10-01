@@ -15,9 +15,16 @@ internal sealed class RetryPolicy(HttpClientOptions options)
 {
     // Exponential backoff with full jitter: base 50ms, doubling per attempt, capped at 1s.
     // Fixed delays synchronize retries from many clients against an ailing server.
+    private const int MaximumBackoffMilliseconds = 1000;
+    private const int InitialBackoffMilliseconds = 50;
+    private const int MaximumBackoffShift = 5;
+
     private static TimeSpan DelayFor(int attempt)
     {
-        var ceilingMs = Math.Min(1000, 50 << Math.Min(attempt, 5));
+        var ceilingMs = Math.Min(
+            MaximumBackoffMilliseconds,
+            InitialBackoffMilliseconds << Math.Min(attempt, MaximumBackoffShift)
+        );
         return TimeSpan.FromMilliseconds(Random.Shared.Next(0, ceilingMs + 1));
     }
 
@@ -54,42 +61,20 @@ internal sealed class RetryPolicy(HttpClientOptions options)
                     new TimeoutException("HTTP request exceeded timeout", ex)
                 );
             }
-            catch (ZLinkFrameworkException ex)
+            catch (Exception ex)
             {
-                if (ex.RetryAdvice != ZLinkRetryAdvice.DoNotRetry && attempt < maxRetries)
-                    failure = ex;
-                else
-                    throw;
-            }
-            catch (HttpRequestException ex)
-            {
-                failure = new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    ex.Message,
-                    ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex
-                );
-            }
-            catch (System.Net.Sockets.SocketException ex)
-            {
-                failure = new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    ex.Message,
-                    ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex
-                );
-            }
-            catch (IOException ex)
-            {
-                failure = new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    ex.Message,
-                    ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex
-                );
+                failure = HttpFailureMapper.Map(ex, HttpFailureStage.Application);
             }
 
-            if (attempt < maxRetries)
+            if (
+                failure
+                    is ZLinkFrameworkException
+                    {
+                        Kind: ZLinkFrameworkErrorKind.Unavailable
+                            or ZLinkFrameworkErrorKind.DeadlineExceeded
+                    }
+                && attempt < maxRetries
+            )
             {
                 await Task.Delay(DelayFor(attempt), cancellationToken).ConfigureAwait(false);
                 continue;

@@ -2151,6 +2151,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
     "connector-unit;connector-integration;connector-e2e;connector-contract;connector-protocol;connector-transport;connector-typed;connector-coroutine;connector-dispatch;connector-timeout"
     contract)
+  add_zlink_connector_test(
+    test_cpp_stream_revision
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
+    "connector-unit;connector-contract;connector-timeout;connector-protocol"
+    contract)
   add_executable(test_cpp_stream_connector_no_exceptions
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_no_exceptions.cpp)
   target_compile_features(test_cpp_stream_connector_no_exceptions PRIVATE cxx_std_20)

@@ -12,7 +12,6 @@
 #include "runtime/protocol/framing/frame_codec.hpp"
 #include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/metadata_codec.hpp"
-#include "runtime/protocol/packet_name_resolver.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/read.hpp>
@@ -49,7 +48,6 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
-#include <typeindex>
 #include <vector>
 
 template <typename T>
@@ -285,7 +283,11 @@ class async_write_connection_t final : public zlink::stream_connector::detail::s
                                 : boost::system::error_code{});
     }
 
-    void shutdown_and_close () override { read_completion = {}; }
+    boost::system::error_code shutdown_and_close () override
+    {
+        read_completion = {};
+        return {};
+    }
 
     std::vector<std::vector<std::uint8_t>> written;
     std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> read_completion;
@@ -348,10 +350,11 @@ class scripted_read_connection_t final : public zlink::stream_connector::detail:
         completion ({});
     }
 
-    void shutdown_and_close () override
+    boost::system::error_code shutdown_and_close () override
     {
         std::lock_guard<std::mutex> lock (_mutex);
         _pending_read = {};
+        return {};
     }
 
   private:
@@ -436,11 +439,12 @@ class held_async_write_connection_t final
         return _written.at (index);
     }
 
-    void shutdown_and_close () override
+    boost::system::error_code shutdown_and_close () override
     {
         std::lock_guard lock (_mutex);
         _read_completion = {};
         _write_completion = {};
+        return {};
     }
 
   private:
@@ -523,10 +527,11 @@ class fed_read_connection_t final : public zlink::stream_connector::detail::stre
         return _written[index];
     }
 
-    void shutdown_and_close () override
+    boost::system::error_code shutdown_and_close () override
     {
         std::lock_guard lock (_mutex);
         _pending_read = {};
+        return {};
     }
 
   private:
@@ -576,10 +581,11 @@ class early_reply_connection_t final : public zlink::stream_connector::detail::s
         }
     }
 
-    void shutdown_and_close () override
+    boost::system::error_code shutdown_and_close () override
     {
         _pending_read = {};
         write_completion = {};
+        return {};
     }
 
     std::vector<std::vector<std::uint8_t>> written;
@@ -1874,15 +1880,6 @@ int main ()
         }
         if (probe.guard_destructions.load () != 1) {
             return fail (205);
-        }
-    }
-
-    {
-        zlink::stream_connector::detail::packet_name_resolver_t resolver;
-        if (resolver.resolve (std::type_index (typeid (login_request_t)), "explicit.name")
-              != "explicit.name"
-            || resolver.resolve (std::type_index (typeid (login_request_t))).empty ()) {
-            return fail (69);
         }
     }
 
