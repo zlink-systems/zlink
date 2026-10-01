@@ -16,7 +16,7 @@
 namespace zlink::framework
 {
 
-enum class mesh_node_state_t
+enum class topology_state_t
 {
     starting,
     ready,
@@ -71,7 +71,7 @@ struct mesh_placement_snapshot_t
 struct mesh_node_snapshot_t
 {
     std::string mesh_name;
-    mesh_node_state_t state;
+    topology_state_t state;
     bool is_ready = false;
     std::uint32_t ready_peer_count = 0;
     std::vector<mesh_channel_snapshot_t> channels;

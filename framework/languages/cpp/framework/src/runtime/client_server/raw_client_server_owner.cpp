@@ -852,7 +852,10 @@ task_t<bool> raw_client_server_client_t::ready_task () const
 task_t<raw_client_server_client_t::pump_status_t>
 raw_client_server_client_t::pump_status_task () const
 {
-    return _lane.run_task ([this] { return pump_status_t{_ready, _liveness.next_activity ()}; });
+    return _lane.run_task ([this] {
+        return pump_status_t{_ready, _liveness.next_activity (),
+                             !_closed && static_cast<bool> (_dealer)};
+    });
 }
 
 task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (

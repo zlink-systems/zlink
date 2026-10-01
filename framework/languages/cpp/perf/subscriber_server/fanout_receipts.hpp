@@ -27,11 +27,11 @@ class fanout_receipts_t
     {
         auto &fanout = _role.service<fw::fanout_runtime_t> ();
         const auto &channel = *_role.config.channel_name;
-        wait_for_public (_role, stopping, [&] { return fanout.snapshot (channel).ready_connection_count > 0; }, "a Ready publisher");
+        wait_for_public (_role, stopping, [&] { return fanout.snapshot (channel).ready_publisher_count > 0; }, "a Ready publisher");
         const auto status = fanout.snapshot (channel);
         _role.objects->set (true, "", json::array ({{{"kind", "fanoutStatus"}, {"source", "fanout_runtime_t.snapshot"},
-                                                     {"observedValue", {{"channelName", channel}, {"connectionIntentCount", status.connection_intent_count},
-                                                                        {"readyConnectionCount", status.ready_connection_count}}}}}));
+                                                     {"observedValue", {{"channelName", channel}, {"publisherCount", status.publishers.size ()},
+                                                                        {"readyPublisherCount", status.ready_publisher_count}}}}}));
     }
 
     void record (const publish_event_t &message, std::int64_t received_ticks)
