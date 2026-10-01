@@ -630,24 +630,32 @@ class actor_join_call_t
 };
 
 
-class relay_request_call_t : private detail::call_facade_t<relay_request_call_t, zlink::message_t>
+class relay_request_call_t : private request_call_t<zlink::message_t>
 {
   private:
-    using base_t = detail::call_facade_t<relay_request_call_t, zlink::message_t>;
+    using base_t = request_call_t<zlink::message_t>;
 
   public:
     explicit relay_request_call_t (result_t<zlink::message_t> result) : base_t (std::move (result))
     {
     }
 
+    relay_request_call_t &timeout (std::chrono::milliseconds timeout)
+    {
+        base_t::timeout (timeout);
+        return *this;
+    }
+
     using base_t::async;
-    using base_t::timeout;
     using base_t::yield;
 
   private:
     friend class session_actor_t;
 
-    explicit relay_request_call_t (task_t<zlink::message_t> task) : base_t (std::move (task)) {}
+    relay_request_call_t (std::string packet_name, base_t::submit_fn_t submit) :
+        base_t (std::move (packet_name), std::move (submit))
+    {
+    }
 };
 
 class bound_session_t
@@ -882,6 +890,10 @@ class session_actor_t
     task_t<void> relay_internal (detail::stream_header_t header,
                                  std::uint64_t relay_sequence,
                                  const zlink::message_t &payload);
+    task_t<zlink::message_t> relay_request_internal (detail::stream_header_t header,
+                                                     std::uint64_t relay_sequence,
+                                                     zlink::message_t payload,
+                                                     std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;

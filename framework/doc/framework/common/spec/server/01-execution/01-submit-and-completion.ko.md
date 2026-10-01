@@ -63,6 +63,12 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
 
 격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 pending stage의 기존 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
+**Application이 직접 완료시키는 비동기 결과와 제한 시간 관찰.** Application은 외부 사건으로 완료되는 비동기 결과를 만들고, application thread에서 그 결과를 제한 시간 동안 관찰할 수 있다.
+
+- 완료 소스는 첫 완료 하나만 확정하며, 이후 완료 시도는 결과를 바꾸지 않는다. 결과는 성공 값 또는 typed Framework 오류다. 같은 완료 소스에서 얻은 결과 handle은 모두 같은 원 결과를 관찰한다. 완료 소스나 결과 handle을 파괴해도 원 결과를 완료하거나 취소하지 않는다.
+- 제한 시간 관찰은 동기 blocking 종결자와 같은 문맥 규칙을 따른다 — runtime 실행 문맥에서는 `InvalidOperation`이다. 시간이 지나면 미완료를 알릴 뿐 원 결과를 완료·취소하지 않으며, 늦은 완료는 원 결과에 남는다. 관찰 시간 초과는 operation terminal이 아니다.
+- .NET·Java·Node.js는 언어 표준 타입(`TaskCompletionSource`, `CompletableFuture`, `Promise`)으로 이 능력을 제공하므로 Framework API를 따로 두지 않는다. C++은 Framework task 타입에 완료 소스와 제한 시간 관찰을 둔다. 이 완료 소스의 결과를 기다린 continuation은 완료한 thread가 아니라 await를 등록한 실행 문맥에서 재개하며, handler 안의 await는 일반 비동기 terminal처럼 그 handler turn을 유지한다. 이름과 형태는 [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.ko.md)이 정하고, host 종료와의 경계는 [Cancellation과 shutdown §5.1](03-cancellation-and-shutdown.ko.md#51-application-완료-소스를-기다리는-대기의-종료)이 정한다.
+
 `Yield`를 제공하는 실행 문맥과 call 목록은
 [Handler turn과 execution gate §16](02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 소유한다.
 

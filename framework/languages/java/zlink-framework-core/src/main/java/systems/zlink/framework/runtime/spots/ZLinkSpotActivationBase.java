@@ -26,7 +26,31 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
-abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoCloseable {
+abstract class SpotActivationBase<C extends SpotDispatchLine> {
+    static <T> CompletionStage<T> finishCleanup(Throwable failure, CompletionStage<T> cleanup) {
+        Throwable primary = unwrapCloseFailure(failure);
+        return cleanup.handle(
+                (value, cleanupFailure) -> {
+                    Throwable secondary = unwrapCloseFailure(cleanupFailure);
+                    if (primary != null) {
+                        if (secondary != null && secondary != primary)
+                            primary.addSuppressed(secondary);
+                        throw new java.util.concurrent.CompletionException(primary);
+                    }
+                    if (secondary != null)
+                        throw new java.util.concurrent.CompletionException(secondary);
+                    return value;
+                });
+    }
+
+    private static Throwable unwrapCloseFailure(Throwable failure) {
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        return failure;
+    }
+
     final ZLinkSpotRuntime host;
     final ZLinkSpotHandlerInvoker handlerInvoker;
     final Object spotSurface;

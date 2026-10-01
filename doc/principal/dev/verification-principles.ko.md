@@ -41,6 +41,7 @@
 | C++ 회귀 assertion이 결함을 잡나 | 기존 Release library에 연결한 test 실행 성공 | `NDEBUG`가 assertion을 제거했으면 검사 자체가 실행되지 않는다. Compile 명령의 `-UNDEBUG`와 수정 전 실패를 확인한다 | #1207 |
 | 심볼 지역화가 먹혔나 | 내 머신에서 통과 | **내 binutils에서** 먹히나 — 2.42는 되고 릴리스를 만드는 2.38은 안 됐다 | #418 |
 | ld64가 이 심볼을 강등하나 | 컴파일 시점 hidden visibility | 그 TU의 보통 심볼을 숨기나 — 템플릿·인라인 static은 vague linkage라 안 닿는다 | #418 |
+| .NET source 전체의 format이 맞나 | `format.sh --check dotnet`의 종료 코드 0 | 존재하는 source root에서 찾은 파일만 맞는다. WSL 사본에 `engines/Server`가 없어도 `find` 오류 뒤에 통과했다. 검사 root의 존재와 파일 수를 함께 확인한다 | #1082 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

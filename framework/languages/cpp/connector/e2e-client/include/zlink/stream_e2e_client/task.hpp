@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/stream_connector/contracts/result.hpp>
+#include <zlink/stream_connector/contracts/throwing_result.hpp>
 
 #include <condition_variable>
 #include <coroutine>
@@ -128,6 +129,10 @@ template <typename T, typename Promise> struct task_promise_base_t
         try {
             throw;
         }
+        catch (const zlink::stream_connector_throwing::stream_connector_error &error) {
+            outcome = result_t<T>::failure (error.code (), error.what ());
+            return;
+        }
         catch (const std::exception &error) {
             detail += std::string (": ") + error.what ();
         }
@@ -204,13 +209,7 @@ template <typename T> class task_t
 
     T await_resume ()
     {
-        auto result = consume_result ();
-        if (!result) {
-            const auto message =
-              result.error () ? result.error ()->message : "stream e2e task failed";
-            throw std::runtime_error (message);
-        }
-        return std::move (result.value ());
+        return zlink::stream_connector_throwing::value_or_throw (consume_result ());
     }
 
     void start () const { start_operation (); }
@@ -325,15 +324,7 @@ template <> class task_t<void>
         return true;
     }
 
-    void await_resume ()
-    {
-        auto result = consume_result ();
-        if (!result) {
-            const auto message =
-              result.error () ? result.error ()->message : "stream e2e task failed";
-            throw std::runtime_error (message);
-        }
-    }
+    void await_resume () { zlink::stream_connector_throwing::value_or_throw (consume_result ()); }
 
     void start () const { start_operation (); }
 

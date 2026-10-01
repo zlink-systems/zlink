@@ -2,10 +2,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 
 internal sealed class ZlinkStreamConnectorCallbacks(
     ZlinkStreamTaskRunner taskRunner,
-    ZlinkStreamDispatchMode dispatchMode
+    ZlinkStreamDispatchMode dispatchMode,
+    ZlinkStreamReceivedMessages receivedMessages
 )
 {
-    private readonly object _dispatchGate = new();
+    private readonly object _dispatchGate = receivedMessages.SyncRoot;
     private readonly LinkedList<ZlinkStreamDispatchEntry> _dispatchQueue = new();
 
     private readonly ZlinkStreamHandlerList<
@@ -262,7 +263,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 {
                     work = entry.Take(out var keep);
                     if (work is null && keep && _accepting)
-                        _dispatchQueue.AddLast(entry);
+                        entry.QueueNode = _dispatchQueue.AddLast(entry);
                 }
 
                 if (work is not null)
@@ -276,7 +277,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         {
             if (_accepting)
                 foreach (var entry in entries)
-                    _dispatchQueue.AddLast(entry);
+                    entry.QueueNode = _dispatchQueue.AddLast(entry);
             handedOff?.Invoke();
         }
     }
@@ -316,7 +317,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                     var next = node.Next;
                     work = node.Value.Take(out var keep);
                     if (work is not null || !keep)
-                        _dispatchQueue.Remove(node);
+                        node.Value.RemoveQueued();
                     if (work is not null)
                     {
                         reportErrors = node.Value.ReportErrors;
@@ -472,6 +473,15 @@ internal sealed class ZlinkStreamConnectorCallbacks(
 /// </summary>
 internal abstract class ZlinkStreamDispatchEntry
 {
+    internal LinkedListNode<ZlinkStreamDispatchEntry>? QueueNode { get; set; }
+
+    internal void RemoveQueued()
+    {
+        if (QueueNode?.List is { } queue)
+            queue.Remove(QueueNode);
+        QueueNode = null;
+    }
+
     public abstract bool ReportErrors { get; }
 
     /// <summary>Callbacks the entry runs if it is dispatched with the handlers registered now.</summary>

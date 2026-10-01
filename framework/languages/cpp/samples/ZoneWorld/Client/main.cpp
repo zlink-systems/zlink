@@ -100,15 +100,13 @@ se::task_t<void> wait_for_condition (std::function<bool ()> condition,
 zlink::stream_connector::connector_t make_connector (const std::string &endpoint)
 {
     zlink::stream_connector::connector_options_t options;
+    options.typed_codec = zlink::stream_connector::json_typed_codec ();
     options.endpoint = endpoint;
     options.connect_timeout = std::chrono::seconds (15);
     options.request_timeout = std::chrono::seconds (45);
     options.wait_timeout = std::chrono::seconds (45);
     options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
     auto connector = zlink::stream_connector::connector_factory_t::create (options);
-    connector.codecs ()
-      .enable_codec (zlink::stream_connector::codec_t::json)
-      .use_default_codec (zlink::stream_connector::codec_t::json);
     return connector;
 }
 

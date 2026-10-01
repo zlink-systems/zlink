@@ -1026,11 +1026,9 @@ public sealed class LocationLifecycleTests
                 );
             }
             var tracker = new ZLinkOwnerLeaseTracker(locationStore, Options, Time);
-            var observed = new ZLinkObservedLocationGenerations();
             var resolvers = new ZLinkStoreLocationResolvers(
                 locationStore,
                 tracker,
-                observed,
                 options: Options,
                 timeProvider: Time
             );
@@ -1039,8 +1037,7 @@ public sealed class LocationLifecycleTests
                 locationStore,
                 RegisteredMeshes,
                 tracker,
-                runtime,
-                observed
+                runtime
             );
             var node = new LifecycleNode(
                 RoutingId.From(nodeRid),

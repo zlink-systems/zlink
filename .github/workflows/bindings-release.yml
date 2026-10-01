@@ -768,10 +768,6 @@ jobs:
           fi
           cd bindings/rust
           cargo publish -p zlink --token "${CARGO_REGISTRY_TOKEN}"
-          sleep 30
-          cargo publish -p zlink-codec-json --token "${CARGO_REGISTRY_TOKEN}"
-          cargo publish -p zlink-codec-messagepack --token "${CARGO_REGISTRY_TOKEN}"
-          cargo publish -p zlink-codec-protobuf --token "${CARGO_REGISTRY_TOKEN}"
 
       - uses: actions/upload-artifact@v6
         with:

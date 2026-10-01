@@ -233,11 +233,13 @@ export function decodeStreamWireHeader(
     throw new Error('Stream packet name length is missing.');
   }
   const nameLength = header[offset++];
-  if ((!isReplyKind(kind) && nameLength === 0) || header.length - offset < nameLength) {
+  if (
+    (isReplyKind(kind) ? nameLength !== 0 : nameLength === 0) ||
+    header.length - offset < nameLength
+  ) {
     throw new Error('Stream packet name is invalid.');
   }
-  const decodedName = utf8Decode(header.subarray(offset, offset + nameLength));
-  const name = isReplyKind(kind) ? '' : decodedName;
+  const name = utf8Decode(header.subarray(offset, offset + nameLength));
   offset += nameLength;
   const decodedMetadata = hasMetadata
     ? decodeStreamWireHeaderMetadata(header, offset)
@@ -315,27 +317,33 @@ function asciiDecode(value: Uint8Array): string {
   return String.fromCharCode(...value);
 }
 
-export function encodeStreamWireMetadata(metadata: ReadonlyMap<string, string>): Uint8Array {
+/** Standalone metadata includes its count byte even when the map is empty. */
+export function streamWireMetadataSize(metadata: ReadonlyMap<string, string>): number {
   if (metadata.size > 255) {
     throw new Error('Metadata entry count must not exceed 255.');
   }
   let size = 1;
-  const encoded = [...metadata].map(([key, value]) => {
-    const keyBytes = utf8Encode(key);
-    const valueBytes = utf8Encode(value);
-    if (keyBytes.length === 0 || keyBytes.length > 255) {
+  for (const [key, value] of metadata) {
+    const keySize = utf8Size(key);
+    const valueSize = utf8Size(value);
+    if (keySize === 0 || keySize > 255) {
       throw new Error('Metadata key length is invalid.');
     }
-    if (valueBytes.length > 0xffff) {
+    if (valueSize > 0xffff) {
       throw new Error('Metadata value is too large.');
     }
-    size += 1 + keyBytes.length + 2 + valueBytes.length;
-    return { keyBytes, valueBytes };
-  });
-  const buffer = new Uint8Array(size);
+    size += 1 + keySize + 2 + valueSize;
+  }
+  return size;
+}
+
+export function encodeStreamWireMetadata(metadata: ReadonlyMap<string, string>): Uint8Array {
+  const buffer = new Uint8Array(streamWireMetadataSize(metadata));
   let offset = 0;
   buffer[offset++] = metadata.size;
-  for (const { keyBytes, valueBytes } of encoded) {
+  for (const [key, value] of metadata) {
+    const keyBytes = utf8Encode(key);
+    const valueBytes = utf8Encode(value);
     buffer[offset++] = keyBytes.length;
     buffer.set(keyBytes, offset);
     offset += keyBytes.length;
@@ -477,4 +485,25 @@ function readBigUInt64BE(buffer: Uint8Array, offset: number): bigint {
     value = (value << 8n) | BigInt(buffer[offset + index]);
   }
   return value;
+}
+
+/** TextEncoder replaces lone surrogates with the three-byte replacement character. */
+function utf8Size(value: string): number {
+  let size = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) size += 1;
+    else if (code < 0x800) size += 2;
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      size += 4;
+      index += 1;
+    } else size += 3;
+  }
+  return size;
 }

@@ -100,16 +100,19 @@ internal sealed class ZlinkStreamFrameSender(
             {
                 if (connection.CanWriteSegments)
                 {
-                    var prefix = ArrayPool<byte>.Shared.Rent(6);
+                    var prefix = ArrayPool<byte>.Shared.Rent(ZlinkStreamFrameCodec.PrefixSize);
                     try
                     {
                         ZlinkStreamFrameCodec.WritePrefix(
-                            prefix.AsSpan(0, 6),
+                            prefix.AsSpan(0, ZlinkStreamFrameCodec.PrefixSize),
                             header.Length,
                             payload.Length
                         );
                         await connection
-                            .WriteAsync(prefix.AsMemory(0, 6), cancellationToken)
+                            .WriteAsync(
+                                prefix.AsMemory(0, ZlinkStreamFrameCodec.PrefixSize),
+                                cancellationToken
+                            )
                             .ConfigureAwait(false);
                     }
                     finally

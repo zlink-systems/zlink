@@ -486,48 +486,38 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         }
     }
 
-    @Override
-    public void close() {
-        close(Instant.now());
+    CompletionStage<Void> closeAsync(Instant deadline) {
+        return closingStage(deadline)
+                .handle(
+                        (ignored, failure) -> {
+                            closePendingActorMessage();
+                            closeActiveRouteReceives();
+                            return finishCleanup(failure, context.closeResourcesAsync());
+                        })
+                .thenCompose(stage -> stage);
     }
 
-    void close(Instant deadline) {
-        try {
-            notifyClosing(deadline);
-        } finally {
-            closePendingActorMessage();
-            closeActiveRouteReceives();
-            context.closeTimers();
-            context.closeHandlerInstances();
-            backendSpot.close();
-        }
-    }
-
-    void notifyClosing(Instant deadline) {
-        host.awaitClosing(
-                closingCallback(
-                        () ->
-                                context.enqueueLifecycle(
-                                        () ->
-                                                host.runWithOutbound(
-                                                        context.dispatchOutbound(),
-                                                        () ->
-                                                                ZLinkHandlerStages
-                                                                        .fromStageSupplier(
-                                                                                () ->
-                                                                                        entrySpot
-                                                                                                .onClosing(
-                                                                                                        new systems
-                                                                                                                .zlink
-                                                                                                                .framework
-                                                                                                                .spots
-                                                                                                                .ZLinkSpotClosingContext(
-                                                                                                                systems
-                                                                                                                        .zlink
-                                                                                                                        .framework
-                                                                                                                        .spots
-                                                                                                                        .ZLinkSpotCloseReason
-                                                                                                                        .HOST_SHUTDOWN,
-                                                                                                                deadline)))))));
+    CompletionStage<Void> closingStage(Instant deadline) {
+        return closingCallback(
+                () ->
+                        context.enqueueLifecycle(
+                                () ->
+                                        host.runWithOutbound(
+                                                context.dispatchOutbound(),
+                                                () ->
+                                                        ZLinkHandlerStages.fromStageSupplier(
+                                                                () ->
+                                                                        entrySpot.onClosing(
+                                                                                new systems.zlink
+                                                                                        .framework
+                                                                                        .spots
+                                                                                        .ZLinkSpotClosingContext(
+                                                                                        systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .spots
+                                                                                                .ZLinkSpotCloseReason
+                                                                                                .HOST_SHUTDOWN,
+                                                                                        deadline))))));
     }
 }

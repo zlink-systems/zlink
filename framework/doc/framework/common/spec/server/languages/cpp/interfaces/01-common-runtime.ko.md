@@ -141,6 +141,7 @@ public:
  T &value();
  const framework_exception_t *error() const noexcept;
  framework_error_kind_t error_kind() const;
+ std::exception_ptr exception() const noexcept;
 };
 
 template <>
@@ -155,6 +156,7 @@ public:
  void value() const;
  const framework_exception_t *error() const noexcept;
  framework_error_kind_t error_kind() const;
+ std::exception_ptr exception() const noexcept;
 };
 
 template <typename T>
@@ -181,6 +183,7 @@ public:
  void await_suspend(std::coroutine_handle<> continuation);
  T await_resume();
  const result_t<T> &result() const;
+ std::optional<result_t<T>> result_for(std::chrono::milliseconds timeout) const;
 };
 
 template <>
@@ -204,6 +207,21 @@ public:
  void await_suspend(std::coroutine_handle<> continuation);
  void await_resume();
  const result_t<void> &result() const;
+ std::optional<result_t<void>> result_for(std::chrono::milliseconds timeout) const;
+};
+
+// T는 void이거나 복사 생성 가능해야 한다.
+// complete()는 이 호출이 결과를 확정했으면 true, 이미 확정됐으면 false다.
+template <typename T>
+class task_completion_source_t {
+public:
+ task_completion_source_t();
+ task_completion_source_t(task_completion_source_t &&) noexcept = default;
+ task_completion_source_t &operator=(task_completion_source_t &&) noexcept = default;
+ task_completion_source_t(const task_completion_source_t &) = delete;
+ task_completion_source_t &operator=(const task_completion_source_t &) = delete;
+ task_t<T> task() const;
+ bool complete(result_t<T> result);
 };
 
 class message_t {
@@ -360,10 +378,20 @@ worker를 제출하거나 turn을 반환하지 않고 `invalid_operation`으로 
 
 ### 7.4 오류 경계
 
-동기 validation과 명시적인 결과 객체를 반환하는 API는 `result_t<T>`로 실패를 반환한다. 비동기 call의
-`async()`은 실패하면 같은 오류 정보를 가진 `framework_exception_t`를 throw한다. Application의 오류 분기는
-`kind()`를 사용한다. `code()`는 timeout이나 transport처럼 platform 원인이 있을 때 진단 정보를 추가하지만
-공통 오류 분류를 대신하지 않는다.
+동기 validation과 명시적인 결과 객체를 반환하는 API는 `result_t<T>`로 실패를 반환한다. 비동기 operation의
+실패는 `async()`가 반환한 task의 실패 결과로 전달한다. 그 task의 `co_await`와 실패한 `result_t::value()`는
+보관된 예외를 다시 throw한다.
+
+- Framework 실패는 `framework_exception_t`다. Application의 오류 분기는 `kind()`를 사용한다. `code()`는
+  timeout이나 transport처럼 platform 원인이 있을 때 진단 정보를 추가하지만 공통 오류 분류를 대신하지 않는다.
+- 취소와 shutdown의 완료 의미는 [Framework 오류 모델 §5](../../../00-foundation/07-framework-error-model.ko.md#5-request-완료와-실패)와
+  [Cancellation과 shutdown](../../../01-execution/03-cancellation-and-shutdown.ko.md)을 따른다. C++는 공통 계약의
+  cancellation을 `std::system_error`(`std::errc::operation_canceled`)로 전달한다.
+
+`result_t`는 실패의 원래 예외 하나를 보관한다. `exception()`은 실패면 그 예외를, 성공이면 빈 pointer를
+반환한다. `error()`는 그 예외가 `framework_exception_t`일 때만 그것을 가리키고, 성공이나 취소에서는
+`nullptr`이다. `error_kind()`는 `error()`가 non-null이면 그 예외의 `kind()`를 반환하고, 그 밖에는
+`invalid_operation` kind의 `framework_exception_t`를 throw한다.
 
 
 같은 Spot의 dispatch 직렬화와 `yield()` 허용 범위는

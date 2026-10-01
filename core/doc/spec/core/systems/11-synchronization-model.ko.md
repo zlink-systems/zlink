@@ -86,6 +86,10 @@ gate이며, 그 결과(`EBUSY`)와 순서는 [Socket 공통 §2](../socket/READM
 소유한다. receive의 single-consumer 제약과 multipart owner 제약도 turn이 대체하지 않는다 —
 그 제약은 자기 계약을 따른다.
 
+data 수신 호출 하나는 public handle 상태어의 receive bit로 정한다. handle pin과 같은 CAS에서
+세우고 같은 `fetch_sub`로 내린다. bit가 서 있으면 진입은 즉시 `EBUSY`이며 기다리지 않는다 —
+lock이 아니라 admission이므로 §5의 재시도 규칙 대상이 아니다.
+
 **어떻게 쥐고 놓는가.** turn은 공개 API 진입 상태어의 한 bit다. 상태어는 진행 중 호출 수와
 close 상태를 같은 word에 담으므로, 획득과 해제는 **다른 bit를 보존하는 read-modify-write**로
 한다. 단순 store로 해제하면 그 사이 다른 thread가 바꾼 admission·close 상태를 덮어쓴다. 획득이
@@ -302,8 +306,9 @@ lock을 semaphore나 `try_lock` 재시도로 바꾸는 것은 형태를 바꾸�
 | ROUTER 선택 route 변경 | socket turn → ROUTER route lock → part helper lock(버퍼 부족으로 보류한 record를 버릴 때) |
 
 메시지당 hot path 비용은 다음과 같다. 정상 public send는 pipe mutex 0회, socket 상태어 CAS
-1회(획득)와 atomic 1회(반납)를 쓴다. 정상 public receive도 pipe와 fair queue에서 mutex 0회이며,
-multipart physical record는 record 전체가 같은 turn을 유지한다. 메시지 경계마다 C3 ledger writer가
+1회(획득)와 atomic 1회(반납)를 쓴다. 정상 public receive도 pipe와 fair queue에서 mutex 0회다.
+ROUTER·DEALER의 multipart record는 record scope 하나로 turn을 유지하고, PAIR·SUB·STREAM은 frame마다
+turn을 얻는다. 어느 쪽이든 다른 data 수신 호출은 receive bit가 막는다. 메시지 경계마다 C3 ledger writer가
 sequence exchange 1회와 release store 3회를 낸다. mailbox producer는 command당 lock 1회이고
 실제 신호는 위의 전이에서만 낸다.
 

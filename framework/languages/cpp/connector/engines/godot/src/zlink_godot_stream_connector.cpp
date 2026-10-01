@@ -98,7 +98,7 @@ class stream_connector_t::runtime_t
     std::map<std::uint64_t, std::shared_ptr<sending_entry_t>> sending_hooks;
     std::map<std::uint64_t, std::shared_ptr<reply_entry_t>> reply_hooks;
     std::uint64_t next_hook_id = 1;
-    connection_state_t current_state = connection_state_t::created;
+    zlink::stream_connector::subscription_t state_subscription;
     std::function<void (connection_state_t)> state_callback;
     std::function<void (std::function<void ()>)> main_thread_dispatcher;
     std::mutex pending_callbacks_mutex;
@@ -273,20 +273,20 @@ void stream_connector_t::connect (std::string endpoint)
     for (auto &[id, entry] : _runtime->reply_hooks) {
         _runtime->register_reply_hook (entry, _runtime);
     }
-    _runtime->current_state = connection_state_t::connecting;
-    _runtime->emit_state (_runtime->current_state);
-    const auto connected = _runtime->connector.connect ();
-    _runtime->current_state =
-      connected ? connection_state_t::connected : connection_state_t::disconnected;
-    _runtime->emit_state (_runtime->current_state);
+    _runtime->state_subscription = _runtime->connector.on_connection_state_changed (
+      [runtime = std::weak_ptr<runtime_t> (_runtime)] (
+        const zlink::stream_connector::connection_state_changed_t &event) {
+          if (auto owner = runtime.lock ()) {
+              owner->emit_state (static_cast<connection_state_t> (event.current));
+          }
+      });
+    (void) _runtime->connector.connect ();
 }
 
 void stream_connector_t::close ()
 {
     _runtime->subscriptions.clear ();
     _runtime->connector.close ();
-    _runtime->current_state = connection_state_t::closed;
-    _runtime->emit_state (_runtime->current_state);
 }
 
 void stream_connector_t::send_json (std::string packet_name, std::string json_payload)
@@ -350,8 +350,8 @@ subscription_t stream_connector_t::on (std::string packet_name,
 {
     const auto id = _runtime->next_subscription_id++;
     runtime_t::registration_t registration{std::move (packet_name), std::move (callback), {}};
-    if (_runtime->current_state != connection_state_t::created
-        && _runtime->current_state != connection_state_t::closed) {
+    if (_runtime->connector.state () != zlink::stream_connector::connection_state_t::created
+        && _runtime->connector.state () != zlink::stream_connector::connection_state_t::closed) {
         registration.handle = _runtime->bind_subscription (id, registration.name, _runtime);
     }
     _runtime->subscriptions.emplace (id, std::move (registration));
@@ -386,7 +386,7 @@ void stream_connector_t::set_main_thread_dispatcher (
 
 connection_state_t stream_connector_t::state () const
 {
-    return _runtime->current_state;
+    return static_cast<connection_state_t> (_runtime->connector.state ());
 }
 
 void stream_connector_t::on_connection_state_changed (

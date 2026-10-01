@@ -1039,16 +1039,7 @@ void public_host_runtime_t::close () noexcept
       })
       .get ();
     _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
-    auto retained_outbound = _sessions.take_all_retained_outbound ();
-    for (auto &settle : retained_outbound) {
-        if (!settle)
-            continue;
-        try {
-            settle (false);
-        }
-        catch (...) {
-        }
-    }
+    _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
     _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
@@ -4701,18 +4692,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               sealed->second.consumed = true;
                       })
                       .get ();
-                    /* Commit and abort both open the held pushes: commit to the
-                     * target route, abort to the source route (Session-Actor
-                     * binding §8.1). */
-                    for (auto &settle : admission.retained_outbound) {
-                        if (!settle)
-                            continue;
-                        try {
-                            settle (true);
-                        }
-                        catch (...) {
-                        }
-                    }
                     continue;
                 }
 
@@ -5598,9 +5577,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 }
 
 bool public_host_runtime_t::dispatch_bound_session_send (
-  const mesh::service_mailbox_record_t &mailbox_record,
-  std::function<void ()> retain_mailbox_reservation,
-  std::function<void ()> release_mailbox_reservation)
+  const mesh::service_mailbox_record_t &mailbox_record)
 {
     if (mailbox_record.parts.size () != 2)
         return false;
@@ -5616,45 +5593,24 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     const auto application =
       protocol::decode_application_payload (mailbox_record.parts.back (), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
-    const auto execute_delivery = [operations,
-                                   record] (std::vector<zlink::message_t> admitted_parts) {
-        if (operations.capture_send) {
-            auto capability = operations.capture_send (record);
-            return capability ? (*capability) (std::move (admitted_parts))
-                              : stateful::stateful_error_t::conflict;
-        }
-        return operations.send (record, std::move (admitted_parts));
-    };
-    auto retained_delivery =
-      [execute_delivery, parts,
-       release = std::move (release_mailbox_reservation)] (bool should_deliver) mutable {
-          if (should_deliver) {
-              try {
-                  (void) execute_delivery (std::move (parts));
-              }
-              catch (...) {
-              }
-          }
-          if (release) {
-              try {
-                  release ();
-              }
-              catch (...) {
-              }
-          }
-      };
-    const auto admitted = _sessions.admit_outbound (
+    std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
+    const auto admitted = _sessions.capture_outbound (
       record.actor.actor_id, record.actor.object_generation, record.expected_binding_generation,
-      retain_mailbox_reservation
-        ? stateful::stream_retained_outbound_t (std::move (retained_delivery))
-        : stateful::stream_retained_outbound_t{});
-    if (admitted.error != stateful::stateful_error_t::none)
-        return false;
-    if (admitted.kind == stateful::stream_outbound_admission_kind_t::retained) {
-        retain_mailbox_reservation ();
-        return true;
-    }
-    return execute_delivery (std::move (parts)) == stateful::stateful_error_t::none;
+      [&] {
+          if (operations.capture_send) {
+              auto capability = operations.capture_send (record);
+              if (!capability)
+                  return false;
+              delivery = std::move (*capability);
+          } else {
+              delivery = [operations, record] (std::vector<zlink::message_t> payload) {
+                  return operations.send (record, std::move (payload));
+              };
+          }
+          return true;
+      });
+    return admitted == stateful::stateful_error_t::none
+           && delivery (std::move (parts)) == stateful::stateful_error_t::none;
 }
 
 task_t<std::size_t> public_host_runtime_t::dispatch_ready (
@@ -5922,8 +5878,7 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
-                (void) dispatch_bound_session_send (mailbox_record, retain_mailbox_reservation,
-                                                    release_mailbox_reservation);
+                (void) dispatch_bound_session_send (mailbox_record);
                 ++count;
                 if (!release_state->retained (index))
                     release_mailbox_reservation ();

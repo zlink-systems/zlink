@@ -211,9 +211,8 @@ recv 모드에서 다음 구독 이벤트를 수신한다. `subscribed_out_`과 
 output이고, `topic_id_capacity_`가 0보다 크면 `topic_id_buf_`도 필수다 — 이 pointer 중 하나라도
 NULL이면 event를 읽거나 output을 바꾸기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`로 실패한다.
 `source_rid_out_`는 NULL을 허용하는 선택 output이다. NULL이 아니면, 아직 연결된 peer가 보낸
-이벤트에서는 `*source_rid_out_`가 그 peer의 Core 소유 routing ID view로 설정되며 수명은
-[Socket 공통의 borrowed RID 규칙](README.ko.md#3-pull-수신과-completion-모델)을 따른다(같은 socket의
-다음 data receive API 진입 또는 close까지 유효). peer 연결이 끊겨 Core가 만든 unsubscribe
+이벤트에서는 `*source_rid_out_`가 그 peer의 Core 소유 routing ID view로 설정되며 수명과
+무효화 조건은 [Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다. peer 연결이 끊겨 Core가 만든 unsubscribe
 이벤트이거나, 이벤트를 꺼내기 전에 그 peer가 끊겼으면 `*source_rid_out_`는 `NULL`이다.
 `*subscribed_out_`는
 subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
@@ -267,7 +266,7 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 **구독 이벤트 수신 (`zlink_xpub_recv`)**
 - raw XPUB에 구독 이벤트가 있으면 `ZLINK_RECV_OK`와 함께 `*subscribed_out_`(subscribe=1, unsubscribe=0), 구독 peer의 routing ID pointer, topic byte(binary-safe)가 관찰된다.
 - `source_rid_out_`은 NULL을 허용하는 선택 output이다.
-- 아직 연결된 peer의 이벤트에서 `*source_rid_out_`의 routing ID view는 같은 socket의 다음 data receive API 진입 또는 close까지 유효하며, 다른 socket의 receive는 이를 바꾸지 않는다. 값을 보관하려면 반환 즉시 복사한다.
+- 아직 연결된 peer의 이벤트에서 `*source_rid_out_`의 routing ID view의 수명과 무효화 조건은 [Socket 공통의 borrowed RID 규칙](README.ko.md#zlink_recv-와-zlink_router_recv)을 따른다.
 - peer 연결이 끊겨 Core가 만든 unsubscribe 이벤트, 또는 꺼내기 전에 peer가 끊긴 이벤트는 `ZLINK_RECV_OK`이지만 `*source_rid_out_ == NULL`이다.
 - `flags_`에 `ZLINK_RECV_FLAGS_DONTWAIT`가 설정되고 이벤트가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
 - topic이 `topic_id_capacity_`보다 길면 `*topic_id_len_out_`에 필요 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`·`ENOBUFS`를 반환하며, event는 내부에 보관되어 충분한 buffer의 다음 수신이 같은 event를 한 번 반환한다.

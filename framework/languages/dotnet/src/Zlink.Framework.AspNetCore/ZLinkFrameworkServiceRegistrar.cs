@@ -432,13 +432,9 @@ internal static class ZLinkFrameworkServiceRegistrar
             provider.GetRequiredService<ZLinkLocationOptions>(),
             health: provider.GetRequiredService<ZLinkLocationStoreHealth>()
         ));
-        // One observed-generation guard per runtime, shared by every read
-        // surface, so no read path ever rolls the view backwards.
-        services.AddSingleton<ZLinkObservedLocationGenerations>();
         services.AddSingleton(static provider => new ZLinkStoreLocationResolvers(
             provider.GetRequiredService<IZLinkLocationRepository>(),
             provider.GetRequiredService<ZLinkOwnerLeaseTracker>(),
-            provider.GetRequiredService<ZLinkObservedLocationGenerations>(),
             health: provider.GetRequiredService<ZLinkLocationStoreHealth>(),
             options: provider.GetRequiredService<ZLinkLocationOptions>()
         ));
@@ -464,7 +460,6 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.AddSingleton(provider => new ZLinkLocationRuntime(
             provider.GetRequiredService<ZLinkLocationOptions>(),
             provider.GetRequiredService<IZLinkLocationRepository>(),
-            observed: provider.GetRequiredService<ZLinkObservedLocationGenerations>(),
             metricScopes: registration
                 .SpotNodes.Keys.Select(static name => new KeyValuePair<string, string>(
                     "mesh",
@@ -496,7 +491,6 @@ internal static class ZLinkFrameworkServiceRegistrar
             registeredMeshNames,
             provider.GetRequiredService<ZLinkOwnerLeaseTracker>(),
             provider.GetRequiredService<ZLinkLocationRuntime>(),
-            provider.GetRequiredService<ZLinkObservedLocationGenerations>(),
             provider.GetRequiredService<ZLinkLocationStoreHealth>()
         ));
         services.AddSingleton<IZLinkLocationRuntimeQuery>(static provider =>

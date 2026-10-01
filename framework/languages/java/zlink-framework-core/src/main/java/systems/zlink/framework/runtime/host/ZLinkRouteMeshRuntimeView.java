@@ -128,13 +128,6 @@ final class ZLinkRouteMeshRuntimeView
                                             Math.toIntExact(readyTargets));
                                 })
                         .toList();
-        boolean hasAdmittedPeer =
-                nativePeers.stream().anyMatch(peer -> peer.state() == MeshPeerState.ADMITTED);
-        if (state == ZLinkTopologyState.READY
-                && hasAdmittedPeer
-                && channels.stream().anyMatch(channel -> !channel.isReady())) {
-            state = ZLinkTopologyState.DEGRADED;
-        }
         return new ZLinkMeshNodeSnapshot(
                 meshName,
                 state,
@@ -298,12 +291,9 @@ final class ZLinkRouteMeshRuntimeView
     }
 
     private static boolean requiredPeerUnavailable(MeshPeerEntry peer) {
-        return peer.state()
-                        != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState
-                                .ADMITTED
-                && peer.state()
-                        != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState
-                                .NOT_REQUIRED;
+        return peer.state() != MeshPeerState.ADMITTED
+                && peer.state() != MeshPeerState.DRAINING
+                && peer.state() != MeshPeerState.NOT_REQUIRED;
     }
 
     private static ZLinkTopologyState topologyState(MeshNodeState state) {

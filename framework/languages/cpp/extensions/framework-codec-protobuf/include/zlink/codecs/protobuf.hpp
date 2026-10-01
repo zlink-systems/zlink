@@ -3,7 +3,6 @@
 
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
 #include <zlink/framework/codecs/json_stream_connector.hpp>
-#include <zlink/stream_connector/contracts/codec_registry.hpp>
 
 #include <google/protobuf/message_lite.h>
 
@@ -57,9 +56,24 @@ struct protobuf_registration_key_t
  *    `from_protobuf(const TMessage&, TPayload&)`가 맡는다.
  *
  * 두 경우 모두 wire는 진짜 protobuf라서 다른 언어의 같은 `.proto`와 그대로 통한다. */
-class protobuf_codec_extension_t
+class protobuf_codec_extension_t : public zlink::stream_connector::typed_codec_t
 {
   public:
+    zlink::stream_connector::codec_t codec_id () const noexcept override
+    {
+        return zlink::stream_connector::codec_t::protobuf;
+    }
+
+    std::vector<std::uint8_t> encode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
+
+    std::vector<std::uint8_t> decode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
+
     template <typename TBuilder> void register_framework_codecs (TBuilder &codecs) const
     {
         codecs.template add_serializer<protobuf_registration_key_t> (
@@ -70,12 +84,6 @@ class protobuf_codec_extension_t
               return protobuf_registration_key_t{};
           },
           content_type);
-    }
-
-    void register_connector_codecs (zlink::stream_connector::codec_registry_t &codecs) const
-    {
-        codecs.enable_codec (zlink::stream_connector::codec_t::protobuf)
-          .use_default_codec (zlink::stream_connector::codec_t::protobuf);
     }
 
     static constexpr const char *content_type = "application/x-protobuf";

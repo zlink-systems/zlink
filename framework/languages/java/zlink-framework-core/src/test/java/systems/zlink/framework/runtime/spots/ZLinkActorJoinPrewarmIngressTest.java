@@ -469,7 +469,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public void publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(Object spot) {
                         throw new AssertionError("unused");
                     }
 
@@ -494,7 +494,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public void discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(Object spot) {
                         throw new AssertionError("unused");
                     }
                 });

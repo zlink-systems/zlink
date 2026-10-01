@@ -91,8 +91,11 @@ part가 된다([Message §4](../02-message.ko.md#4-multipart), [`zlink_multipart
 작으면 record를 소비하지 않고 `*part_count_out_`에 필요한 수를 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`
 (`errno == ENOBUFS`)을 반환한다. 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다(ROUTER에서
 선택에서 물러난 pipe의 record는 [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)의 예외).
-single-consumer·record 원자성·borrowed RID 수명 규칙은 [§2](#2-스레드-안전성)와 아래 함수 절이 정의한다.
-한 socket의 수신 소비자는 하나로 유지하며, 다른 스레드가 동시에 진입하면 `ZLINK_RECV_BUSY`(`errno == EBUSY`)다.
+수신 소비자 규칙은 이 절이 정의한다. Record 원자성은 [§2](#2-스레드-안전성), borrowed RID 수명은 아래
+함수 절을 따른다. 한 socket의 data 수신은 한 번에 호출 하나만 진행한다. 다른 data 수신 호출이 진행 중일 때
+들어온 호출은 진입이 허용되지 않으며, 아무 상태도 바꾸지 않고 `ZLINK_RECV_BUSY`(`errno == EBUSY`)를
+반환한다. 소비자는 진행 중인 호출이며 특정 thread에 고정되지 않는다. 순차 호출은 어느 thread에서 해도
+된다. Buffer 부족으로 보존한 record의 재시도는 아래 함수별 계약을 따른다.
 
 `ZLINK_POLLCOMPLETION`은 payload가 아니다. Poller wait는 completion을 제거하지 않으며
 `zlink_poller_event_t`에 operation payload를 추가하지 않는다. 준비된 socket의 caller는
@@ -611,9 +614,8 @@ part 수를 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환�
 `ZLINK_RECV_TERMINATED`(`errno == ETERM`), socket이 shutdown이면 `ZLINK_RECV_INVALID_STATE`
 (`errno == ESHUTDOWN`)다. 모든 실패는 output과 message 내용을 바꾸지 않는다.
 
-한 socket의 수신은 한 소비자만 진행한다(single-consumer). 다른 스레드가 동시에 수신에 진입하면
-`ZLINK_RECV_BUSY`(`errno == EBUSY`)다. 돌려준 source RID view는 **같은 socket의 다음 data recv에
-진입하거나 socket을 close할 때까지** 유효하다 — 다른 socket의 recv, poller wait, completion recv,
+수신 소비자 규칙은 [§3](#3-pull-수신과-completion-모델)을 따른다. 돌려준 source RID view는 **같은 socket에서 진입이 허용된
+다음 data recv에 진입하거나 socket을 close할 때까지** 유효하다 — 다른 socket의 recv, poller wait, completion recv,
 monitor recv는 이 view를 무효화하지 않는다. 더 오래 보관하려면 receive 직후 owned RID로 복사한다.
 `reply_token_out_`의 token은 wire sequence가 아니며 application은 해석·생성·변경하지 않는다.
 
@@ -1322,8 +1324,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_recv`는 raw `PAIR`·`DEALER`·`STREAM`에서만 성공하고, raw `PUB`·`XPUB`·`SUB`·`XSUB`·`ROUTER`에서는 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`이다.
 - `ZLINK_RECV_FLAGS_DONTWAIT`에 수신할 part가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
 - 성공한 수신은 part 소유권을 호출자에게 이전하고(정확히 한 번 close), 실패한 수신은 이전하지 않는다. `source_rid_out_`은 `STREAM`에서 Core-owned view, `PAIR`·`DEALER`에서 `NULL`이다.
-- 같은 socket의 다음 data recv 진입은 이전 borrowed RID를 무효화하지만 다른 socket의 data recv,
-  poller wait, completion recv와 monitor recv는 무효화하지 않는다.
+- Borrowed RID view의 수명과 무효화 조건은 [borrowed RID 규칙](#zlink_recv-와-zlink_router_recv)을 따른다.
 - `NONE` recv는 호출 진입 시 `RCVTIMEO` 0/positive/-1을 snapshot한다. Timeout은
   `ZLINK_RECV_NO_DATA`+`EAGAIN`, context 종료는 `ZLINK_RECV_TERMINATED`+`ETERM`, socket
   shutdown은 `ZLINK_RECV_INVALID_STATE`+`ESHUTDOWN`이며 output은 변하지 않는다.
