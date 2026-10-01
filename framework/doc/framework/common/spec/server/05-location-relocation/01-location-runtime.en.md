@@ -825,6 +825,14 @@ doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
 
+**A version conflict on a capacity record that several objects share isn't a result.** When an
+operation request above is `Conflict` only because of that capacity record's version condition, the
+Framework re-reads the authority record and the reservation and checks that they are unchanged since
+the first read. If they are, it re-reads the capacity record, recomputes the same change, and
+requests it again. If the authority record or the reservation changed, or the owner lease is
+invalid, that state is the result. This repetition happens only within the operation's deadline,
+with no separate retry cap.
+
 A regular `Preserve` has no relocation reservation information. Only for a standalone
 relocation, when updating the completion-record payload location or recording target
 readiness, can pre-secured reservation information be passed along. The Framework checks

@@ -742,6 +742,12 @@ relocation이 미리 확보한 수용 공간을 검증한다. Record가 없거�
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
+**여러 object가 함께 쓰는 수용 공간 record의 version 충돌은 결과가 아니다.** 위 작업 요청이 그 수용 공간
+record의 version 조건 때문에만 `Conflict`가 되면, Framework는 authority record와 reservation을 다시 읽어
+처음 읽은 그대로인지 확인한다. 그대로면 수용 공간 record를 다시 읽어 같은 변경을 다시 계산해 요청한다.
+Authority record나 reservation이 바뀌었거나 owner lease가 무효면 그 상태가 결과다. 이 반복은 그
+operation의 deadline 안에서만 하며 별도 횟수 상한을 두지 않는다.
+
 일반 `Preserve`에는 relocation reservation 정보가 없다. Standalone relocation에서 완료 기록
 payload의 위치를 갱신하거나 target 준비 완료를 기록할 때만 미리 확보한 reservation 정보를
 함께 전달할 수 있다. Framework는 authority key, 처음 읽은 `StoreVersion`, source·target
