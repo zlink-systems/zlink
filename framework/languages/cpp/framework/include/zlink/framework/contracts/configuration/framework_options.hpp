@@ -394,7 +394,7 @@ class handler_options_builder_t
         _state->add_installer (std::move (group_name), detail::handler_group_kind_t::publish,
                                [handlers] (const std::string &channel_name) {
                                    handlers->on_event<THandler, event_type> (
-                                     channel_name, "", &THandler::handle,
+                                     channel_name, &THandler::handle,
                                      {.execution = handler_execution_t::offload});
                                });
     }
