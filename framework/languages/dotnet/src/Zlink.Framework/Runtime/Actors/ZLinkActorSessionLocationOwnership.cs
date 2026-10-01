@@ -108,7 +108,7 @@ internal sealed partial class ZLinkActorSessionManager
         try
         {
             if (state.Handoff.SourceMembershipLeaveCompletion is { } leaveCompletion)
-                await leaveCompletion.ConfigureAwait(false);
+                await leaveCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception failure)
         {

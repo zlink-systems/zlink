@@ -179,6 +179,71 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Same(restored.Actor, state.Actor);
     }
 
+    [Fact]
+    public async Task CommittedSource_UnfinishedLeave_StopsWaitingAtCleanupDeadline()
+    {
+        using var services = new ServiceCollection()
+            .AddScoped<ProbeActorFactory>()
+            .BuildServiceProvider();
+        var node = new CapturingSpotNode();
+        node.SetRoutingId(RoutingId.From("source-node"));
+        var registration = new ZLinkFrameworkRegistration();
+        registration.SpotNodes["source-node"] = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "source-node",
+            ActorFactories = { ["probe"] = typeof(ProbeActorFactory) },
+        };
+        registration.ActorCatalog.Build(registration.SpotNodes.Values);
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new CapturingBackendAdapterFactory(node),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var sessions = new ZLinkActorSessionManager(
+            runtime,
+            services,
+            () => node,
+            null,
+            new ZLinkBoundSessionService(runtime)
+        );
+        _ = await sessions.CreateAndBindActorAsync("source-unfinished-leave", "probe");
+        Assert.True(sessions.TryGetCreatedActorState("source-unfinished-leave", out var state));
+        var source = state.NativeActorRef!.Value;
+        var target = new ZLinkBackendActorRef(
+            RoutingId.From("target-node"),
+            source.ActorId,
+            source.Generation
+        );
+        state.Handoff.BeginCapture();
+        state.Handoff.SealCapture(new SourceRetirementReservation(), "source-unfinished-leave");
+        _ = state.Handoff.FreezeCaptureCommitBoundary();
+        _ = state.Handoff.CutoverCaptureToMessageFollow(0, source, target, "mesh", 1, 1, 1, 2, 1, 2);
+        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        Assert.NotNull(state.Handoff.TryBeginSourceMembershipLeave("source-unfinished-leave"));
+        var diagnosed = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += exception =>
+            diagnosed.TrySetResult(exception);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await sessions
+            .FinalizeMigratedSourceAsync(state, source, deadline.Token)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(
+            await diagnosed.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Null(state.Actor);
+        Assert.False(sessions.IsCurrentLocalActor(source));
+    }
+
     private sealed class SourceRetirementFailingHandler : IAsyncDisposable
     {
         internal int DisposeCount { get; private set; }
