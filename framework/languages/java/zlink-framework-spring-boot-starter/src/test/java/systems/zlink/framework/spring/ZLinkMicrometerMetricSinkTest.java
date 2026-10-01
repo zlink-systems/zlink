@@ -33,10 +33,12 @@ final class ZLinkMicrometerMetricSinkTest {
         sink.increment("zlink.stream.connections.opened", Map.of());
         sink.add("zlink.stream.connections.active", 1, Map.of());
         sink.record("zlink.mesh_node.request.duration", Duration.ofMillis(50), Map.of());
+        sink.record("application.custom.summary", 0.25, Map.of());
 
         assertEquals(1.0, registry.get("zlink.stream.connections.opened").counter().count());
         assertEquals(1.0, registry.get("zlink.stream.connections.active").gauge().value());
         assertEquals(1, registry.get("zlink.mesh_node.request.duration").timer().count());
+        assertEquals(0.25, registry.get("application.custom.summary").summary().totalAmount());
         assertThrows(
                 IllegalArgumentException.class,
                 () -> sink.increment("zlink.channel.messages.dropped", Map.of("flow_id", "x")));

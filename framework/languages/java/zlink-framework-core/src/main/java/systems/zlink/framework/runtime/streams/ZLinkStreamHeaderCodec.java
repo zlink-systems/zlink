@@ -13,14 +13,10 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class ZLinkStreamHeaderCodec {
+    private static final int MAX_METADATA_ENTRY_COUNT = 255;
+    private static final int MAX_METADATA_KEY_BYTES = 255;
+    private static final int MAX_METADATA_VALUE_BYTES = 65535;
     static final int FORMAT_MARKER = 0xF2;
-    static final int KIND_SEND = 1;
-    static final int KIND_REQUEST = 2;
-    static final int KIND_RESPONSE = 3;
-    static final int KIND_ERROR = 4;
-    static final int KIND_CONTROL = 5;
-    private static final int CODEC_RAW = 0;
-    private static final int FLAG_HAS_REQUEST_SEQ = 0x01;
 
     private ZLinkStreamHeaderCodec() {}
 
@@ -34,7 +30,7 @@ public final class ZLinkStreamHeaderCodec {
         int flags = Byte.toUnsignedInt(bytes[3]);
         int offset = 4;
         Optional<Long> requestSeq = Optional.empty();
-        if ((flags & FLAG_HAS_REQUEST_SEQ) != 0) {
+        if ((flags & ZLinkStreamHeaderFlag.HAS_REQUEST_SEQUENCE.value()) != 0) {
             if (bytes.length - offset < Long.BYTES) {
                 throw new IllegalArgumentException("STREAM header request sequence is incomplete");
             }
@@ -87,11 +83,17 @@ public final class ZLinkStreamHeaderCodec {
         Optional<String> flowId = Optional.empty();
         Optional<ZLinkFlowOrigin> flowOrigin = Optional.empty();
         if ((flags & ZLinkStreamHeaderFlag.HAS_FLOW_ID.value()) != 0) {
-            if (bytes.length - offset < 37) {
+            if (bytes.length - offset < ZLinkFlowContext.FLOW_ID_TEXT_LENGTH + 1) {
                 throw new IllegalArgumentException("STREAM header flow fields are incomplete");
             }
-            flowId = Optional.of(new String(bytes, offset, 36, StandardCharsets.US_ASCII));
-            offset += 36;
+            flowId =
+                    Optional.of(
+                            new String(
+                                    bytes,
+                                    offset,
+                                    ZLinkFlowContext.FLOW_ID_TEXT_LENGTH,
+                                    StandardCharsets.US_ASCII));
+            offset += ZLinkFlowContext.FLOW_ID_TEXT_LENGTH;
             flowOrigin = Optional.of(decodeFlowOrigin(Byte.toUnsignedInt(bytes[offset++])));
         }
         Optional<Integer> actorSlot = Optional.empty();
@@ -109,9 +111,9 @@ public final class ZLinkStreamHeaderCodec {
         if (offset != bytes.length) {
             throw new IllegalArgumentException("STREAM header contains trailing bytes");
         }
-        if (kind == KIND_CONTROL
+        if (kind == ZLinkStreamMessageKind.CONTROL.value()
                 && (flags != 0
-                        || codec != CODEC_RAW
+                        || codec != ZLinkStreamCodec.RAW.value()
                         || requestSeq.isPresent()
                         || !metadata.isEmpty()
                         || correlationId.isPresent()
@@ -179,7 +181,7 @@ public final class ZLinkStreamHeaderCodec {
                 correlationId != null
                         && correlationId.isPresent()
                         && !correlationId.get().isEmpty();
-        if (kind == KIND_CONTROL && hasCorrelationId) {
+        if (kind == ZLinkStreamMessageKind.CONTROL.value() && hasCorrelationId) {
             throw new IllegalArgumentException(
                     "STREAM control packet must not contain a correlation id");
         }
@@ -188,12 +190,12 @@ public final class ZLinkStreamHeaderCodec {
             throw new IllegalArgumentException(
                     "STREAM flow id and origin must be present together");
         }
-        if (kind == KIND_CONTROL && hasFlow) {
+        if (kind == ZLinkStreamMessageKind.CONTROL.value() && hasFlow) {
             throw new IllegalArgumentException(
                     "STREAM control packet must not contain flow fields");
         }
         boolean hasActorSlot = actorSlot != null && actorSlot.isPresent();
-        if (kind == KIND_CONTROL && hasActorSlot) {
+        if (kind == ZLinkStreamMessageKind.CONTROL.value() && hasActorSlot) {
             throw new IllegalArgumentException(
                     "STREAM control packet must not contain an actor slot");
         }
@@ -206,8 +208,8 @@ public final class ZLinkStreamHeaderCodec {
         }
         int flags =
                 requestSeq.isPresent()
-                        ? initialFlags | FLAG_HAS_REQUEST_SEQ
-                        : initialFlags & ~FLAG_HAS_REQUEST_SEQ;
+                        ? initialFlags | ZLinkStreamHeaderFlag.HAS_REQUEST_SEQUENCE.value()
+                        : initialFlags & ~ZLinkStreamHeaderFlag.HAS_REQUEST_SEQUENCE.value();
         flags =
                 hasMetadata
                         ? flags | ZLinkStreamHeaderFlag.HAS_METADATA.value()
@@ -232,7 +234,7 @@ public final class ZLinkStreamHeaderCodec {
                                 + name.length
                                 + (hasMetadata ? 2 + metadataBytes.length : 0)
                                 + (hasCorrelationId ? 1 + correlationBytes.length : 0)
-                                + (hasFlow ? 37 : 0)
+                                + (hasFlow ? ZLinkFlowContext.FLOW_ID_TEXT_LENGTH + 1 : 0)
                                 + (hasActorSlot ? Short.BYTES : 0));
         buffer.put((byte) FORMAT_MARKER);
         buffer.put((byte) kind);
@@ -272,11 +274,13 @@ public final class ZLinkStreamHeaderCodec {
 
     private static boolean isKnownKind(byte value) {
         int kind = Byte.toUnsignedInt(value);
-        return kind >= KIND_SEND && kind <= 5;
+        return kind >= ZLinkStreamMessageKind.SEND.value()
+                && kind <= ZLinkStreamMessageKind.CONTROL.value();
     }
 
     private static boolean isReply(int kind) {
-        return kind == KIND_RESPONSE || kind == KIND_ERROR;
+        return kind == ZLinkStreamMessageKind.RESPONSE.value()
+                || kind == ZLinkStreamMessageKind.ERROR.value();
     }
 
     private static int encodeFlowOrigin(ZLinkFlowOrigin origin) {
@@ -324,17 +328,17 @@ public final class ZLinkStreamHeaderCodec {
         if (metadata == null || metadata.isEmpty()) {
             return new byte[0];
         }
-        if (metadata.size() > 255) {
+        if (metadata.size() > MAX_METADATA_ENTRY_COUNT) {
             throw new IllegalArgumentException("STREAM metadata entry count must not exceed 255");
         }
         int size = 1;
         for (Map.Entry<String, String> entry : metadata.entrySet()) {
             byte[] key = entry.getKey().getBytes(StandardCharsets.UTF_8);
             byte[] value = entry.getValue().getBytes(StandardCharsets.UTF_8);
-            if (key.length == 0 || key.length > 255) {
+            if (key.length == 0 || key.length > MAX_METADATA_KEY_BYTES) {
                 throw new IllegalArgumentException("STREAM metadata key length is invalid");
             }
-            if (value.length > 65535) {
+            if (value.length > MAX_METADATA_VALUE_BYTES) {
                 throw new IllegalArgumentException("STREAM metadata value is too large");
             }
             size += 1 + key.length + 2 + value.length;

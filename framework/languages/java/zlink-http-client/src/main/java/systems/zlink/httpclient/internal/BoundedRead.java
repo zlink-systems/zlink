@@ -14,6 +14,8 @@ import java.util.function.Supplier;
  */
 final class BoundedRead {
 
+    private static final int BUFFER_SIZE = 16 * 1024;
+
     interface ChunkConsumer {
         void accept(byte[] buffer, int length) throws IOException;
     }
@@ -27,7 +29,7 @@ final class BoundedRead {
             ChunkConsumer consumer)
             throws IOException {
         try (stream) {
-            byte[] buffer = new byte[16384];
+            byte[] buffer = new byte[BUFFER_SIZE];
             long total = 0;
             int read;
             while ((read = stream.read(buffer)) > 0) {

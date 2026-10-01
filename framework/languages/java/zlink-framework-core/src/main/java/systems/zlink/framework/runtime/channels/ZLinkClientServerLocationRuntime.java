@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -43,7 +44,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 final class ZLinkClientServerLocationRuntime implements AutoCloseable {
-    private static final String SECURITY_IDENTITY = "default";
     private final ZLinkLocationRepository store;
     private final Supplier<ZLinkLocationOwnerToken> owner;
     private final ZLinkChannelBackendAdapter backend;
@@ -765,7 +765,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 server.endpoint(),
                 weight,
                 state,
-                SECURITY_IDENTITY,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                 ownerToken.ownerId(),
                 ownerToken.leaseGeneration(),
                 Instant.EPOCH);

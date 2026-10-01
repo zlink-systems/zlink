@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -51,7 +52,7 @@ import java.util.logging.Logger;
 
 /** Dedicated classic fanout descriptor publication and subscriber discovery. */
 final class ZLinkFanoutLocationRuntime implements AutoCloseable {
-    private static final String SECURITY_IDENTITY = "default";
+    private static final long DISCOVERY_TICK_MILLIS = 10;
     private static final int MAX_DESCRIPTORS_PER_CHANNEL = 1024;
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkFanoutLocationRuntime.class.getName());
@@ -153,7 +154,10 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         if (start.started()) {
             ScheduledFuture<?> scheduled =
                     scheduler.scheduleAtFixedRate(
-                            () -> signalTick(start.epoch()), 0, 10, TimeUnit.MILLISECONDS);
+                            () -> signalTick(start.epoch()),
+                            0,
+                            DISCOVERY_TICK_MILLIS,
+                            TimeUnit.MILLISECONDS);
             boolean cancel =
                     inStateLane(
                             () -> {
@@ -837,7 +841,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 value.revision,
                 value.endpoint,
                 value.state,
-                SECURITY_IDENTITY,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                 owner.ownerId(),
                 owner.leaseGeneration(),
                 Instant.now());

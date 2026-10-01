@@ -755,7 +755,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private int allocateActorSlot() {
         return inStateLane(
                 () -> {
-                    if (nextActorSlot > 0xffff) {
+                    if (nextActorSlot > ZLinkBoundActor.MAX_ACTOR_SLOT) {
                         throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                                 "Session Actor slots are exhausted");

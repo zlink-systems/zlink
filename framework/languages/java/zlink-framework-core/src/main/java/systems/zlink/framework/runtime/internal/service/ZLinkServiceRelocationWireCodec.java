@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
@@ -153,11 +154,16 @@ public final class ZLinkServiceRelocationWireCodec {
     }
 
     private static boolean validFailureCode(int value) {
-        return value >= 0 && value <= 22 || value >= 33 && value <= 35;
+        return value >= ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                        && value <= ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_CREATE_REJECTED
+                || value >= ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE
+                        && value <= ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST;
     }
 
     private static boolean validTerminalResult(int value) {
-        return value == 0 || value >= 101 && value <= 113;
+        return value == RequestResult.OK.value()
+                || value >= RequestResult.TIMED_OUT.value()
+                        && value <= RequestResult.BACKPRESSURED.value();
     }
 
     private static boolean validTerminalFailure(int terminalResult, int failureCode) {

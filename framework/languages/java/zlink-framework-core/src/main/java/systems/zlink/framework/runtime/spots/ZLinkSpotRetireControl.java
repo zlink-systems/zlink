@@ -48,6 +48,7 @@ final class ZLinkSpotRetireControl {
     private static final int MAX_TEXT_BYTES = 4096;
     private static final int MAX_COMMAND_BYTES = 64 * 1024 * 1024;
     private static final int MAX_PARTICIPANTS = 1024;
+    private static final int MAX_RELOCATION_REPLY_PARTS = 64;
 
     private ZLinkSpotRetireControl() {}
 
@@ -864,7 +865,7 @@ final class ZLinkSpotRetireControl {
                         positive(input.readLong(), "targetAttemptGeneration");
                 int hopCount = input.readInt();
                 int partCount = input.readInt();
-                if (partCount < 1 || partCount > 64) {
+                if (partCount < 1 || partCount > MAX_RELOCATION_REPLY_PARTS) {
                     throw new IllegalArgumentException("relocation reply part count is invalid");
                 }
                 ArrayList<byte[]> parts = new ArrayList<>(partCount);

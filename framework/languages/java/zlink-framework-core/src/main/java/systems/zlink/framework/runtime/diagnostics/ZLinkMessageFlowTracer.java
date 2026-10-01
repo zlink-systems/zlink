@@ -22,6 +22,18 @@ import java.util.logging.Logger;
 
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
+    private static final int FNV_OFFSET_BASIS = 0x811c9dc5;
+    private static final int FNV_PRIME = 0x01000193;
+    private static final double UNSIGNED_HASH_RANGE = (double) (1L << Integer.SIZE);
+    private static final int UTF8_ASCII_LIMIT = 0x80;
+    private static final int UTF8_TWO_BYTE_LIMIT = 0x800;
+    private static final int UTF8_TWO_BYTE_PREFIX = 0xc0;
+    private static final int UTF8_THREE_BYTE_PREFIX = 0xe0;
+    private static final int UTF8_FOUR_BYTE_PREFIX = 0xf0;
+    private static final int UTF8_CONTINUATION_PREFIX = 0x80;
+    private static final int UTF8_CONTINUATION_PAYLOAD_BITS = 6;
+    private static final int UTF8_CONTINUATION_PAYLOAD_MASK =
+            (1 << UTF8_CONTINUATION_PAYLOAD_BITS) - 1;
     private static final Logger LOGGER = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
     private static final AtomicLong NEXT_SOURCE_GENERATION = new AtomicLong();
 
@@ -204,39 +216,77 @@ public final class ZLinkMessageFlowTracer {
             samplingKey = generation + ":" + localSamplingSequence.incrementAndGet();
         }
         long unsignedHash = Integer.toUnsignedLong(fnv1a(samplingKey));
-        return unsignedHash / 4294967296.0d < rate;
+        return unsignedHash / UNSIGNED_HASH_RANGE < rate;
     }
 
     static int fnv1a(String value) {
-        int hash = 0x811c9dc5;
+        int hash = FNV_OFFSET_BASIS;
         for (int index = 0; index < value.length(); index++) {
             char current = value.charAt(index);
-            if (current < 0x80) {
+            if (current < UTF8_ASCII_LIMIT) {
                 hash = fnv1aByte(hash, current);
-            } else if (current < 0x800) {
-                hash = fnv1aByte(hash, 0xc0 | current >>> 6);
-                hash = fnv1aByte(hash, 0x80 | current & 0x3f);
+            } else if (current < UTF8_TWO_BYTE_LIMIT) {
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_TWO_BYTE_PREFIX | current >>> UTF8_CONTINUATION_PAYLOAD_BITS);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | current & UTF8_CONTINUATION_PAYLOAD_MASK);
             } else if (Character.isHighSurrogate(current)
                     && index + 1 < value.length()
                     && Character.isLowSurrogate(value.charAt(index + 1))) {
                 int codePoint = Character.toCodePoint(current, value.charAt(++index));
-                hash = fnv1aByte(hash, 0xf0 | codePoint >>> 18);
-                hash = fnv1aByte(hash, 0x80 | codePoint >>> 12 & 0x3f);
-                hash = fnv1aByte(hash, 0x80 | codePoint >>> 6 & 0x3f);
-                hash = fnv1aByte(hash, 0x80 | codePoint & 0x3f);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_FOUR_BYTE_PREFIX
+                                        | codePoint >>> (3 * UTF8_CONTINUATION_PAYLOAD_BITS));
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | codePoint >>> (2 * UTF8_CONTINUATION_PAYLOAD_BITS)
+                                                & UTF8_CONTINUATION_PAYLOAD_MASK);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | codePoint >>> UTF8_CONTINUATION_PAYLOAD_BITS
+                                                & UTF8_CONTINUATION_PAYLOAD_MASK);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | codePoint & UTF8_CONTINUATION_PAYLOAD_MASK);
             } else if (Character.isSurrogate(current)) {
                 hash = fnv1aByte(hash, '?');
             } else {
-                hash = fnv1aByte(hash, 0xe0 | current >>> 12);
-                hash = fnv1aByte(hash, 0x80 | current >>> 6 & 0x3f);
-                hash = fnv1aByte(hash, 0x80 | current & 0x3f);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_THREE_BYTE_PREFIX
+                                        | current >>> (2 * UTF8_CONTINUATION_PAYLOAD_BITS));
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | current >>> UTF8_CONTINUATION_PAYLOAD_BITS
+                                                & UTF8_CONTINUATION_PAYLOAD_MASK);
+                hash =
+                        fnv1aByte(
+                                hash,
+                                UTF8_CONTINUATION_PREFIX
+                                        | current & UTF8_CONTINUATION_PAYLOAD_MASK);
             }
         }
         return hash;
     }
 
     private static int fnv1aByte(int hash, int value) {
-        return (hash ^ value) * 0x01000193;
+        return (hash ^ value) * FNV_PRIME;
     }
 
     private void reportProviderFailure(Throwable error) {

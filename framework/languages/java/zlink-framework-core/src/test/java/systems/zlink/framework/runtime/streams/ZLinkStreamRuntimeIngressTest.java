@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -158,9 +159,45 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.created.clear();
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
+        TestSession.connected = new CompletableFuture<>();
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
         runtimes.clear();
         lastRegistration = null;
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"DISCONNECTED", "transport failure"})
+    void reportsTransportCallbacksThroughPublicSessionMethods(String message) throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
+        stream.errorHandler.handle(
+                PEER_A,
+                MonitorEventType.DISCONNECTED.name().equals(message)
+                        ? MonitorEventType.DISCONNECTED
+                        : null,
+                0,
+                message);
+        List<String> expected =
+                Map.of(
+                                "DISCONNECTED", List.of("disconnected"),
+                                "transport failure",
+                                        List.of("error:transport failure", "disconnected"))
+                        .get(message);
+        assertEquals(expected, session.transportClosed.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void transportErrorMessageDoesNotOverrideTypedMonitorEvent() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
+        stream.errorHandler.handle(PEER_A, null, 0, "DISCONNECTED");
+        assertEquals(
+                List.of("error:DISCONNECTED", "disconnected"),
+                session.transportClosed.get(5, TimeUnit.SECONDS));
     }
 
     @Test
@@ -1322,6 +1359,9 @@ final class ZLinkStreamRuntimeIngressTest {
 
     public static final class TestSession implements ZLinkSession {
         private static final AtomicReference<TestSession> lastSession = new AtomicReference<>();
+        private static CompletableFuture<TestSession> connected = new CompletableFuture<>();
+        private final List<String> transportCallbacks = new ArrayList<>();
+        private final CompletableFuture<List<String>> transportClosed = new CompletableFuture<>();
         private static final AtomicInteger createdCount = new AtomicInteger();
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
@@ -1359,16 +1399,20 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public CompletionStage<Void> onConnected() {
+            connected.complete(this);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Void> onDisconnected() {
+            transportCallbacks.add("disconnected");
+            transportClosed.complete(List.copyOf(transportCallbacks));
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Void> onError(ZLinkStreamError error) {
+            transportCallbacks.add("error:" + error.message());
             return CompletableFuture.completedFuture(null);
         }
 

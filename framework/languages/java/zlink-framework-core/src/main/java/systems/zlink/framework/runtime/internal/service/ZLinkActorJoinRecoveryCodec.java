@@ -26,6 +26,52 @@ import java.util.UUID;
 
 /** Byte-stable ZLJR saved-work codec shared by canonical Actor Join recovery. */
 public final class ZLinkActorJoinRecoveryCodec {
+    private static final String FIELD_ACTOR_AUTHORITY_OWNER_GENERATION =
+            "ActorAuthorityOwnerGeneration";
+    private static final String FIELD_ACTOR_GENERATION = "ActorGeneration";
+    private static final String FIELD_ACTOR_ID = "ActorId";
+    private static final String FIELD_ACTOR_NODE_GENERATION = "ActorNodeGeneration";
+    private static final String FIELD_ACTOR_TYPE = "ActorType";
+    private static final String FIELD_EXPECTED_OWNER_LEASE_GENERATION =
+            "ExpectedOwnerLeaseGeneration";
+    private static final String FIELD_HANDOFF_FRAMES = "HandoffFrames";
+    private static final String FIELD_HANDOFF_ID = "HandoffId";
+    private static final String FIELD_OPERATION_ID_HIGH = "OperationIdHigh";
+    private static final String FIELD_OPERATION_ID_LOW = "OperationIdLow";
+    private static final String FIELD_RELOCATION_AGGREGATE_GENERATION =
+            "RelocationAggregateGeneration";
+    private static final String FIELD_RELOCATION_AGGREGATE_ID = "RelocationAggregateId";
+    private static final String FIELD_RELOCATION_CHECKSUM_CRC32C = "RelocationChecksumCrc32c";
+    private static final String FIELD_RELOCATION_CONTENT_TYPE = "RelocationContentType";
+    private static final String FIELD_RELOCATION_COORDINATOR_EXPECTED_AUTHORITY_STORE_VERSION =
+            "RelocationCoordinatorExpectedAuthorityStoreVersion";
+    private static final String FIELD_RELOCATION_COORDINATOR_LEASE_GENERATION =
+            "RelocationCoordinatorLeaseGeneration";
+    private static final String FIELD_RELOCATION_COORDINATOR_NODE_GENERATION =
+            "RelocationCoordinatorNodeGeneration";
+    private static final String FIELD_RELOCATION_COORDINATOR_NODE_RID =
+            "RelocationCoordinatorNodeRid";
+    private static final String FIELD_RELOCATION_COORDINATOR_OWNER_ID =
+            "RelocationCoordinatorOwnerId";
+    private static final String FIELD_RELOCATION_INVENTORY_DIGEST = "RelocationInventoryDigest";
+    private static final String FIELD_RELOCATION_REFERENCE = "RelocationReference";
+    private static final String FIELD_REPLY_CONTENT_TYPE = "ReplyContentType";
+    private static final String FIELD_REQUEST = "Request";
+    private static final String FIELD_REQUEST_CONTENT_TYPE = "RequestContentType";
+    private static final String FIELD_RESERVATION_TOKEN = "ReservationToken";
+    private static final String FIELD_RESERVED_PAYLOAD_BYTES = "ReservedPayloadBytes";
+    private static final String FIELD_SOURCE_NODE_RID = "SourceNodeRid";
+    private static final String FIELD_SOURCE_SPOT_ID = "SourceSpotId";
+    private static final String FIELD_TARGET_AUTHORITY_OWNER_GENERATION =
+            "TargetAuthorityOwnerGeneration";
+    private static final String FIELD_TARGET_NODE_GENERATION = "TargetNodeGeneration";
+    private static final String FIELD_TARGET_NODE_RID = "TargetNodeRid";
+    private static final String FIELD_TARGET_SPOT_AUTHORITY_OWNER_GENERATION =
+            "TargetSpotAuthorityOwnerGeneration";
+    private static final String FIELD_TARGET_SPOT_GENERATION = "TargetSpotGeneration";
+    private static final String FIELD_TARGET_SPOT_ID = "TargetSpotId";
+    private static final String RELOCATION_REFERENCE_PENDING = "pending";
+
     public static final String PACKET_NAME = "__zlink.actor.routed_join.recovery";
     public static final String CONTENT_TYPE = "application/x-zlink-actor-routed-join-recovery-v1";
     public static final String RECREATE_CONTENT_TYPE =
@@ -174,70 +220,79 @@ public final class ZLinkActorJoinRecoveryCodec {
             byte[] metadata, byte[] requestBytes, byte[] replyBytes) {
         try {
             JsonNode root = JSON.readTree(metadata);
-            JsonNode request = object(root, "Request");
-            if (!text(request, "Request").isEmpty() || !array(request, "HandoffFrames").isEmpty()) {
+            JsonNode request = object(root, FIELD_REQUEST);
+            if (!text(request, FIELD_REQUEST).isEmpty()
+                    || !array(request, FIELD_HANDOFF_FRAMES).isEmpty()) {
                 throw invalid("Actor Join recovery embedded bodies are not empty");
             }
-            UUID relocationId = UUID.fromString(requiredText(request, "RelocationAggregateId"));
-            String handoffId = requiredText(request, "HandoffId");
+            UUID relocationId =
+                    UUID.fromString(requiredText(request, FIELD_RELOCATION_AGGREGATE_ID));
+            String handoffId = requiredText(request, FIELD_HANDOFF_ID);
             if (!compact(relocationId).equals(handoffId)
-                    || !handoffId.equals(requiredText(request, "ReservationToken"))) {
+                    || !handoffId.equals(requiredText(request, FIELD_RESERVATION_TOKEN))) {
                 throw invalid("Actor Join recovery reservation identity changed");
             }
-            byte[] sourceRid = base64(request, "SourceNodeRid");
-            byte[] targetRid = base64(root, "TargetNodeRid");
-            if (!java.util.Arrays.equals(targetRid, base64(request, "TargetNodeRid"))) {
+            byte[] sourceRid = base64(request, FIELD_SOURCE_NODE_RID);
+            byte[] targetRid = base64(root, FIELD_TARGET_NODE_RID);
+            if (!java.util.Arrays.equals(targetRid, base64(request, FIELD_TARGET_NODE_RID))) {
                 throw invalid("Actor Join recovery target routing id changed");
             }
-            long actorGeneration = nonzeroU64(request, "ActorGeneration");
-            long actorAuthority = nonzeroU64(request, "ActorAuthorityOwnerGeneration");
-            long targetAuthority = nonzeroU64(root, "TargetAuthorityOwnerGeneration");
-            long operationHigh = u64(root, "OperationIdHigh");
-            long operationLow = u64(root, "OperationIdLow");
+            long actorGeneration = nonzeroU64(request, FIELD_ACTOR_GENERATION);
+            long actorAuthority = nonzeroU64(request, FIELD_ACTOR_AUTHORITY_OWNER_GENERATION);
+            long targetAuthority = nonzeroU64(root, FIELD_TARGET_AUTHORITY_OWNER_GENERATION);
+            long operationHigh = u64(root, FIELD_OPERATION_ID_HIGH);
+            long operationLow = u64(root, FIELD_OPERATION_ID_LOW);
             if (operationHigh == 0 && operationLow == 0) {
                 throw invalid("Actor Join recovery operation identity is missing");
             }
             Recovery value =
                     new Recovery(
-                            requiredText(request, "ActorId"),
-                            requiredText(request, "ActorType"),
+                            requiredText(request, FIELD_ACTOR_ID),
+                            requiredText(request, FIELD_ACTOR_TYPE),
                             relocationId,
-                            requiredText(request, "SourceSpotId"),
+                            requiredText(request, FIELD_SOURCE_SPOT_ID),
                             RoutingId.from(sourceRid),
                             actorGeneration,
                             actorAuthority,
-                            nonzeroU64(request, "ActorNodeGeneration"),
-                            nonzeroU64(request, "ExpectedOwnerLeaseGeneration"),
-                            requiredText(request, "RelocationContentType"),
-                            requiredText(request, "RequestContentType"),
+                            nonzeroU64(request, FIELD_ACTOR_NODE_GENERATION),
+                            nonzeroU64(request, FIELD_EXPECTED_OWNER_LEASE_GENERATION),
+                            requiredText(request, FIELD_RELOCATION_CONTENT_TYPE),
+                            requiredText(request, FIELD_REQUEST_CONTENT_TYPE),
                             requestBytes,
-                            requiredText(root, "TargetSpotId"),
+                            requiredText(root, FIELD_TARGET_SPOT_ID),
                             RoutingId.from(targetRid),
-                            nonzeroU64(root, "TargetNodeGeneration"),
-                            positiveU64(root, "TargetSpotGeneration"),
+                            nonzeroU64(root, FIELD_TARGET_NODE_GENERATION),
+                            positiveU64(root, FIELD_TARGET_SPOT_GENERATION),
                             targetAuthority,
-                            positiveU64(request, "TargetSpotAuthorityOwnerGeneration"),
+                            positiveU64(request, FIELD_TARGET_SPOT_AUTHORITY_OWNER_GENERATION),
                             new Coordinator(
-                                    requiredText(request, "RelocationCoordinatorOwnerId"),
-                                    nonzeroU64(request, "RelocationCoordinatorLeaseGeneration"),
-                                    RoutingId.from(base64(request, "RelocationCoordinatorNodeRid")),
-                                    nonzeroU64(request, "RelocationCoordinatorNodeGeneration"),
+                                    requiredText(request, FIELD_RELOCATION_COORDINATOR_OWNER_ID),
+                                    nonzeroU64(
+                                            request, FIELD_RELOCATION_COORDINATOR_LEASE_GENERATION),
+                                    RoutingId.from(
+                                            base64(request, FIELD_RELOCATION_COORDINATOR_NODE_RID)),
+                                    nonzeroU64(
+                                            request, FIELD_RELOCATION_COORDINATOR_NODE_GENERATION),
                                     requiredText(
                                             request,
-                                            "RelocationCoordinatorExpectedAuthorityStoreVersion")),
+                                            FIELD_RELOCATION_COORDINATOR_EXPECTED_AUTHORITY_STORE_VERSION)),
                             new ZLinkActorJoinOperationId(operationHigh, operationLow),
-                            requiredText(root, "ReplyContentType"),
+                            requiredText(root, FIELD_REPLY_CONTENT_TYPE),
                             replyBytes);
-            if (u64(request, "RelocationAggregateGeneration") != 1L
-                    || u64(request, "RelocationChecksumCrc32c") != 0L
-                    || !"pending".equals(requiredText(request, "RelocationReference"))
-                    || !allZero(base64(request, "RelocationInventoryDigest"), 32)
-                    || positiveU64(request, "ReservedPayloadBytes")
+            if (u64(request, FIELD_RELOCATION_AGGREGATE_GENERATION) != 1L
+                    || u64(request, FIELD_RELOCATION_CHECKSUM_CRC32C) != 0L
+                    || !RELOCATION_REFERENCE_PENDING.equals(
+                            requiredText(request, FIELD_RELOCATION_REFERENCE))
+                    || !allZero(base64(request, FIELD_RELOCATION_INVENTORY_DIGEST), 32)
+                    || positiveU64(request, FIELD_RESERVED_PAYLOAD_BYTES)
                             != reservedPayloadBytes(
                                     requestBytes.length, value.relocationContentType())
-                    || nonzeroU64(request, "TargetNodeGeneration") != value.targetNodeGeneration()
-                    || positiveU64(request, "TargetSpotGeneration") != value.targetSpotGeneration()
-                    || nonzeroU64(request, "TargetAuthorityOwnerGeneration") != targetAuthority) {
+                    || nonzeroU64(request, FIELD_TARGET_NODE_GENERATION)
+                            != value.targetNodeGeneration()
+                    || positiveU64(request, FIELD_TARGET_SPOT_GENERATION)
+                            != value.targetSpotGeneration()
+                    || nonzeroU64(request, FIELD_TARGET_AUTHORITY_OWNER_GENERATION)
+                            != targetAuthority) {
                 throw invalid("Actor Join recovery canonical fields changed");
             }
             validate(value);
@@ -252,25 +307,28 @@ public final class ZLinkActorJoinRecoveryCodec {
 
     private static byte[] encodeMetadata(Recovery value) {
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("ActorId", value.actorId());
-        request.put("ActorType", value.actorType());
-        request.put("HandoffId", compact(value.relocationId()));
+        request.put(FIELD_ACTOR_ID, value.actorId());
+        request.put(FIELD_ACTOR_TYPE, value.actorType());
+        request.put(FIELD_HANDOFF_ID, compact(value.relocationId()));
         request.put("BoundSessionNodeRid", null);
         request.put("BoundSessionRid", null);
-        request.put("RelocationContentType", value.relocationContentType());
-        request.put("RelocationReference", "pending");
-        request.put("RelocationChecksumCrc32c", 0);
-        request.put("RelocationAggregateId", value.relocationId().toString());
-        request.put("RelocationAggregateGeneration", 1);
-        request.put("RelocationInventoryDigest", Base64.getEncoder().encodeToString(new byte[32]));
-        request.put("RequestContentType", value.requestContentType());
-        request.put("Request", "");
-        request.put("HandoffFrames", List.of());
-        request.put("SourceSpotId", value.sourceSpotId());
-        request.put("SourceNodeRid", base64(value.sourceNodeRid()));
-        request.put("ActorGeneration", unsigned(value.actorGeneration()));
+        request.put(FIELD_RELOCATION_CONTENT_TYPE, value.relocationContentType());
+        request.put(FIELD_RELOCATION_REFERENCE, RELOCATION_REFERENCE_PENDING);
+        request.put(FIELD_RELOCATION_CHECKSUM_CRC32C, 0);
+        request.put(FIELD_RELOCATION_AGGREGATE_ID, value.relocationId().toString());
+        request.put(FIELD_RELOCATION_AGGREGATE_GENERATION, 1);
         request.put(
-                "ActorAuthorityOwnerGeneration", unsigned(value.actorAuthorityOwnerGeneration()));
+                FIELD_RELOCATION_INVENTORY_DIGEST,
+                Base64.getEncoder().encodeToString(new byte[32]));
+        request.put(FIELD_REQUEST_CONTENT_TYPE, value.requestContentType());
+        request.put(FIELD_REQUEST, "");
+        request.put(FIELD_HANDOFF_FRAMES, List.of());
+        request.put(FIELD_SOURCE_SPOT_ID, value.sourceSpotId());
+        request.put(FIELD_SOURCE_NODE_RID, base64(value.sourceNodeRid()));
+        request.put(FIELD_ACTOR_GENERATION, unsigned(value.actorGeneration()));
+        request.put(
+                FIELD_ACTOR_AUTHORITY_OWNER_GENERATION,
+                unsigned(value.actorAuthorityOwnerGeneration()));
         request.put("BoundSessionBindingToken", null);
         request.put("BoundSessionBindingGeneration", 0);
         request.put("BoundSessionObjectGeneration", 0);
@@ -282,45 +340,49 @@ public final class ZLinkActorJoinRecoveryCodec {
         request.put("BoundSessionAcceptedHighWater", 0);
         request.put("BoundSessionSessionOwnerId", null);
         request.put("BoundSessionSessionOwnerLeaseGeneration", 0);
-        request.put("ReservationToken", compact(value.relocationId()));
+        request.put(FIELD_RESERVATION_TOKEN, compact(value.relocationId()));
         request.put(
-                "ReservedPayloadBytes",
+                FIELD_RESERVED_PAYLOAD_BYTES,
                 unsigned(
                         reservedPayloadBytes(
                                 value.request().length, value.relocationContentType())));
-        request.put("TargetNodeRid", base64(value.targetNodeRid()));
-        request.put("TargetNodeGeneration", unsigned(value.targetNodeGeneration()));
-        request.put("TargetSpotGeneration", unsigned(value.targetSpotGeneration()));
+        request.put(FIELD_TARGET_NODE_RID, base64(value.targetNodeRid()));
+        request.put(FIELD_TARGET_NODE_GENERATION, unsigned(value.targetNodeGeneration()));
+        request.put(FIELD_TARGET_SPOT_GENERATION, unsigned(value.targetSpotGeneration()));
         request.put(
-                "TargetAuthorityOwnerGeneration", unsigned(value.targetAuthorityOwnerGeneration()));
+                FIELD_TARGET_AUTHORITY_OWNER_GENERATION,
+                unsigned(value.targetAuthorityOwnerGeneration()));
         request.put(
-                "TargetSpotAuthorityOwnerGeneration",
+                FIELD_TARGET_SPOT_AUTHORITY_OWNER_GENERATION,
                 unsigned(value.targetSpotAuthorityOwnerGeneration()));
-        request.put("RelocationCoordinatorOwnerId", value.coordinator().ownerId());
+        request.put(FIELD_RELOCATION_COORDINATOR_OWNER_ID, value.coordinator().ownerId());
         request.put(
-                "RelocationCoordinatorLeaseGeneration",
+                FIELD_RELOCATION_COORDINATOR_LEASE_GENERATION,
                 unsigned(value.coordinator().leaseGeneration()));
-        request.put("RelocationCoordinatorNodeRid", base64(value.coordinator().nodeRid()));
+        request.put(FIELD_RELOCATION_COORDINATOR_NODE_RID, base64(value.coordinator().nodeRid()));
         request.put(
-                "RelocationCoordinatorNodeGeneration",
+                FIELD_RELOCATION_COORDINATOR_NODE_GENERATION,
                 unsigned(value.coordinator().nodeGeneration()));
         request.put(
-                "RelocationCoordinatorExpectedAuthorityStoreVersion",
+                FIELD_RELOCATION_COORDINATOR_EXPECTED_AUTHORITY_STORE_VERSION,
                 value.coordinator().expectedAuthorityStoreVersion());
-        request.put("ActorNodeGeneration", unsigned(value.actorNodeGeneration()));
-        request.put("ExpectedOwnerLeaseGeneration", unsigned(value.expectedOwnerLeaseGeneration()));
+        request.put(FIELD_ACTOR_NODE_GENERATION, unsigned(value.actorNodeGeneration()));
+        request.put(
+                FIELD_EXPECTED_OWNER_LEASE_GENERATION,
+                unsigned(value.expectedOwnerLeaseGeneration()));
 
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("Request", request);
-        metadata.put("TargetSpotId", value.targetSpotId());
-        metadata.put("TargetNodeRid", base64(value.targetNodeRid()));
-        metadata.put("TargetNodeGeneration", unsigned(value.targetNodeGeneration()));
-        metadata.put("TargetSpotGeneration", unsigned(value.targetSpotGeneration()));
+        metadata.put(FIELD_REQUEST, request);
+        metadata.put(FIELD_TARGET_SPOT_ID, value.targetSpotId());
+        metadata.put(FIELD_TARGET_NODE_RID, base64(value.targetNodeRid()));
+        metadata.put(FIELD_TARGET_NODE_GENERATION, unsigned(value.targetNodeGeneration()));
+        metadata.put(FIELD_TARGET_SPOT_GENERATION, unsigned(value.targetSpotGeneration()));
         metadata.put(
-                "TargetAuthorityOwnerGeneration", unsigned(value.targetAuthorityOwnerGeneration()));
-        metadata.put("OperationIdHigh", unsigned(value.operationId().high()));
-        metadata.put("OperationIdLow", unsigned(value.operationId().low()));
-        metadata.put("ReplyContentType", value.replyContentType());
+                FIELD_TARGET_AUTHORITY_OWNER_GENERATION,
+                unsigned(value.targetAuthorityOwnerGeneration()));
+        metadata.put(FIELD_OPERATION_ID_HIGH, unsigned(value.operationId().high()));
+        metadata.put(FIELD_OPERATION_ID_LOW, unsigned(value.operationId().low()));
+        metadata.put(FIELD_REPLY_CONTENT_TYPE, value.replyContentType());
         metadata.put("Reply", "");
         try {
             return JSON.writeValueAsBytes(metadata);

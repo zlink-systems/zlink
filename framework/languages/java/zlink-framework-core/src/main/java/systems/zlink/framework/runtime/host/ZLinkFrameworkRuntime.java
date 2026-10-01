@@ -93,6 +93,11 @@ import java.util.logging.Logger;
 
 public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageFlowControl {
     public static final Duration DEFAULT_TERMINATION_DEADLINE = Duration.ofSeconds(30);
+    private static final long MONITORING_STORE_QUERY_TIMEOUT_MILLIS = 500;
+    private static final long RELOCATION_TARGET_WAIT_POLL_MILLIS = 25;
+    private static final long WORKLOAD_DRAIN_POLL_MILLIS = 10;
+    private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
+    private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
     private final ZLinkChannelRuntime channels;
     private final ZLinkMeshNodesRuntime meshNodes;
     private final ZLinkSpotRuntime spots;
@@ -761,7 +766,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (locationStores != null) {
             var store = locationStores.unifiedStore();
             try {
-                long storeDeadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
+                long storeDeadlineNanos =
+                        System.nanoTime()
+                                + TimeUnit.MILLISECONDS.toNanos(
+                                        MONITORING_STORE_QUERY_TIMEOUT_MILLIS);
                 String continuation = null;
                 do {
                     long remainingMillis =
@@ -1130,7 +1138,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             return CompletableFuture.runAsync(
                                             () -> {},
                                             CompletableFuture.delayedExecutor(
-                                                    25, TimeUnit.MILLISECONDS))
+                                                    RELOCATION_TARGET_WAIT_POLL_MILLIS,
+                                                    TimeUnit.MILLISECONDS))
                                     .thenCompose(
                                             ignored -> relocationPreflightUntilDeadline(deadline));
                         });
@@ -1203,7 +1212,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 return CompletableFuture.runAsync(
                                                 () -> {},
                                                 CompletableFuture.delayedExecutor(
-                                                        25, TimeUnit.MILLISECONDS))
+                                                        RELOCATION_TARGET_WAIT_POLL_MILLIS,
+                                                        TimeUnit.MILLISECONDS))
                                         .thenCompose(
                                                 ignored ->
                                                         relocateWithTargetWait(
@@ -2399,7 +2409,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
-        CompletableFuture.delayedExecutor(10L, TimeUnit.MILLISECONDS)
+        CompletableFuture.delayedExecutor(WORKLOAD_DRAIN_POLL_MILLIS, TimeUnit.MILLISECONDS)
                 .execute(
                         () -> {
                             CompletionStage<Void> retrySpotDrain =
@@ -2526,9 +2536,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (registration.handlerExecutor() instanceof ExecutorService executor) {
             executor.shutdown();
             try {
-                if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                if (!executor.awaitTermination(
+                        EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
                     executor.shutdownNow();
-                    executor.awaitTermination(4, TimeUnit.SECONDS);
+                    executor.awaitTermination(EXECUTOR_FORCED_SHUTDOWN_SECONDS, TimeUnit.SECONDS);
                 }
             } catch (InterruptedException ex) {
                 executor.shutdownNow();
@@ -2547,9 +2558,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private void closeSerialExecutor() {
         registration.serialExecutor().shutdown();
         try {
-            if (!registration.serialExecutor().awaitTermination(1, TimeUnit.SECONDS)) {
+            if (!registration
+                    .serialExecutor()
+                    .awaitTermination(EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
                 registration.serialExecutor().shutdownNow();
-                registration.serialExecutor().awaitTermination(4, TimeUnit.SECONDS);
+                registration
+                        .serialExecutor()
+                        .awaitTermination(EXECUTOR_FORCED_SHUTDOWN_SECONDS, TimeUnit.SECONDS);
             }
         } catch (InterruptedException ex) {
             registration.serialExecutor().shutdownNow();

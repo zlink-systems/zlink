@@ -70,22 +70,16 @@ final class ResponseBodyReader {
     }
 
     DecodedBody decompress(byte[] bytes, Map<String, String> headers) {
-        String encoding = findHeader(headers, "content-encoding");
+        ResponseCompression.Encoding encoding =
+                ResponseCompression.Encoding.decode(
+                        findHeader(headers, HttpClientText.Header.CONTENT_ENCODING.wire()));
         // An empty body (HEAD / 204 / 304) carries no payload to decode even with Content-Encoding.
         if (encoding == null || bytes.length == 0) {
             return new DecodedBody(bytes, headers);
         }
-        if (encoding.equalsIgnoreCase("gzip")) {
-            return new DecodedBody(
-                    ResponseCompression.gunzip(bytes, options.maxResponseBodySize()),
-                    stripEncodingHeaders(headers));
-        }
-        if (encoding.equalsIgnoreCase("deflate")) {
-            return new DecodedBody(
-                    ResponseCompression.inflateDeflate(bytes, options.maxResponseBodySize()),
-                    stripEncodingHeaders(headers));
-        }
-        return new DecodedBody(bytes, headers);
+        return new DecodedBody(
+                ResponseCompression.decompress(encoding, bytes, options.maxResponseBodySize()),
+                stripEncodingHeaders(headers));
     }
 
     static Map<String, String> collectHeaders(Map<String, List<String>> headers) {
@@ -107,7 +101,8 @@ final class ResponseBodyReader {
         Map<String, String> copy = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : headers.entrySet()) {
             String name = entry.getKey().toLowerCase(Locale.ROOT);
-            if (!name.equals("content-encoding") && !name.equals("content-length")) {
+            if (!name.equals(HttpClientText.Header.CONTENT_ENCODING.wire())
+                    && !name.equals(HttpClientText.Header.CONTENT_LENGTH.wire())) {
                 copy.put(entry.getKey(), entry.getValue());
             }
         }

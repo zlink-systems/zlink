@@ -53,7 +53,7 @@ final class JavaHttpClientFactory {
     }
 
     private static PasswordAuthentication decodeBasic(String authorization) {
-        String prefix = "Basic ";
+        String prefix = HttpClientText.BASIC_AUTHORIZATION_PREFIX;
         if (!authorization.startsWith(prefix)) {
             throw new IllegalArgumentException("proxy authorization must use Basic authentication");
         }

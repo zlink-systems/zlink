@@ -24,6 +24,11 @@ import java.util.function.Supplier;
 
 /** Atomic opaque Store used by the built-in in-memory configuration. */
 public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
+    private static final int MAXIMUM_SCAN_ITEMS = 1000;
+    private static final int MAXIMUM_KEY_BYTES = 1024;
+    private static final int MAXIMUM_VALUE_BYTES = 1024 * 1024;
+    private static final int MAXIMUM_BATCH_KEYS = 2048;
+    private static final long MAXIMUM_ENCODED_BATCH_BYTES = 4L * 1024 * 1024;
     private static final int MAXIMUM_ACTIVE_SCANS = 4096;
     private static final long MAXIMUM_ENCODED_PAGE_BYTES = 4L * 1024 * 1024;
     private static final Duration SCAN_RETENTION = Duration.ofMinutes(1);
@@ -80,7 +85,7 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                             rows.remove(requireKey(delete.key()));
                         } else if (mutation instanceof ZLinkStorePut put) {
                             String key = requireKey(put.key());
-                            byte[] bytes = requireBytes(put.bytes());
+                            byte[] bytes = put.bytes();
                             Instant expiresAt =
                                     put.retention() == null
                                             ? null
@@ -100,11 +105,11 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
             ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
         requireActive(cancellation);
         Objects.requireNonNull(request, "request");
-        if (request.limit() < 1 || request.limit() > 1000) {
+        if (request.limit() < 1 || request.limit() > MAXIMUM_SCAN_ITEMS) {
             throw new IllegalArgumentException("scan limit must be 1..1000");
         }
         String prefix = Objects.requireNonNull(request.prefix(), "prefix");
-        if (prefix.getBytes(StandardCharsets.UTF_8).length > 1024) {
+        if (prefix.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_KEY_BYTES) {
             throw new IllegalArgumentException("scan prefix exceeds 1024 UTF-8 bytes");
         }
         return inStateLane(
@@ -258,8 +263,9 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
             }
             encodedBytes += key.getBytes(StandardCharsets.UTF_8).length;
             if (mutation instanceof ZLinkStorePut put) {
-                encodedBytes += Objects.requireNonNull(put.bytes(), "bytes").length;
-                requireBytes(put.bytes());
+                byte[] bytes = put.bytes();
+                requireValueSize(bytes);
+                encodedBytes += bytes.length;
                 if (put.retention() != null
                         && (put.retention().isZero() || put.retention().isNegative())) {
                     throw new IllegalArgumentException("retention must be positive");
@@ -268,10 +274,10 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         }
         var all = new HashSet<>(conditionKeys);
         all.addAll(mutationKeys);
-        if (all.size() > 2048) {
+        if (all.size() > MAXIMUM_BATCH_KEYS) {
             throw new IllegalArgumentException("write exceeds 2,048 keys");
         }
-        if (encodedBytes > 4L * 1024 * 1024) {
+        if (encodedBytes > MAXIMUM_ENCODED_BATCH_BYTES) {
             throw new IllegalArgumentException("write exceeds 4 MiB");
         }
     }
@@ -280,18 +286,21 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         String value =
                 Objects.requireNonNull(Objects.requireNonNull(key, "key").value(), "key.value");
         int size = value.getBytes(StandardCharsets.UTF_8).length;
-        if (size < 1 || size > 1024) {
+        if (size < 1 || size > MAXIMUM_KEY_BYTES) {
             throw new IllegalArgumentException("key must be 1..1024 UTF-8 bytes");
         }
         return value;
     }
 
     private static byte[] requireBytes(byte[] bytes) {
-        byte[] copy = Objects.requireNonNull(bytes, "bytes").clone();
-        if (copy.length > 1024 * 1024) {
+        requireValueSize(bytes);
+        return bytes.clone();
+    }
+
+    private static void requireValueSize(byte[] bytes) {
+        if (Objects.requireNonNull(bytes, "bytes").length > MAXIMUM_VALUE_BYTES) {
             throw new IllegalArgumentException("value exceeds 1 MiB");
         }
-        return copy;
     }
 
     private static void requireActive(ZLinkStoreCancellation cancellation) {
@@ -305,12 +314,8 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
     }
 
     private record Entry(byte[] bytes, ZLinkStoreVersion version, Instant expiresAt) {
-        private Entry {
-            bytes = bytes.clone();
-        }
-
         private ZLinkStoreValue value(Instant now) {
-            return new ZLinkStoreValue(bytes.clone(), version, expiresAt, now);
+            return new ZLinkStoreValue(bytes, version, expiresAt, now);
         }
     }
 

@@ -16,6 +16,31 @@ public final class CookieJar {
 
     private static final int MAX_COOKIES_PER_HOST = 128;
 
+    private enum Attribute {
+        PATH("path"),
+        SECURE("secure"),
+        MAX_AGE("max-age");
+
+        private final String wire;
+
+        Attribute(String wire) {
+            this.wire = wire;
+        }
+
+        static Attribute decode(String wire) {
+            if (PATH.wire.equalsIgnoreCase(wire)) {
+                return PATH;
+            }
+            if (SECURE.wire.equalsIgnoreCase(wire)) {
+                return SECURE;
+            }
+            if (MAX_AGE.wire.equalsIgnoreCase(wire)) {
+                return MAX_AGE;
+            }
+            return null;
+        }
+    }
+
     private record Cookie(String host, String name, String value, String path, boolean secure) {}
 
     private final List<Cookie> cookies = new ArrayList<>();
@@ -45,16 +70,21 @@ public final class CookieJar {
             String attrName =
                     (attrEquals < 0 ? attribute : attribute.substring(0, attrEquals)).trim();
             String attrValue = attrEquals < 0 ? "" : attribute.substring(attrEquals + 1).trim();
-            if (attrName.equalsIgnoreCase("path") && !attrValue.isEmpty()) {
-                path = attrValue;
-            } else if (attrName.equalsIgnoreCase("secure")) {
-                secure = true;
-            } else if (attrName.equalsIgnoreCase("max-age")) {
-                try {
-                    expired = Long.parseLong(attrValue) <= 0;
-                } catch (NumberFormatException ignored) {
-                    // ignore malformed max-age
+            switch (Attribute.decode(attrName)) {
+                case PATH -> {
+                    if (!attrValue.isEmpty()) {
+                        path = attrValue;
+                    }
                 }
+                case SECURE -> secure = true;
+                case MAX_AGE -> {
+                    try {
+                        expired = Long.parseLong(attrValue) <= 0;
+                    } catch (NumberFormatException ignored) {
+                        // Ignore malformed max-age, as required by the narrow cookie contract.
+                    }
+                }
+                case null -> {}
             }
         }
 

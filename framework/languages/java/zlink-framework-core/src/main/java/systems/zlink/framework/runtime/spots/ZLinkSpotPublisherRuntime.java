@@ -40,6 +40,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 final class ZLinkSpotPublisherRuntime implements AutoCloseable {
+    private static final int MIN_MULTICAST_PARALLELISM = 2;
+    private static final long WORKER_IDLE_SECONDS = 30;
+    private static final Duration DEFAULT_ADMISSION_TIMEOUT = Duration.ofSeconds(1);
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkSpotPublisherRuntime.class.getName());
     private final ZLinkMessageSerializer serializer;
@@ -58,13 +61,13 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         this(
                 serializer,
                 messages,
-                Math.max(2, Runtime.getRuntime().availableProcessors()),
-                ignored -> Duration.ofSeconds(1));
+                Math.max(MIN_MULTICAST_PARALLELISM, Runtime.getRuntime().availableProcessors()),
+                ignored -> DEFAULT_ADMISSION_TIMEOUT);
     }
 
     ZLinkSpotPublisherRuntime(
             ZLinkMessageSerializer serializer, ZLinkSpotRouteMessages messages, int parallelism) {
-        this(serializer, messages, parallelism, ignored -> Duration.ofSeconds(1));
+        this(serializer, messages, parallelism, ignored -> DEFAULT_ADMISSION_TIMEOUT);
     }
 
     ZLinkSpotPublisherRuntime(
@@ -108,7 +111,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 new ThreadPoolExecutor(
                         parallelism,
                         parallelism,
-                        30L,
+                        WORKER_IDLE_SECONDS,
                         TimeUnit.SECONDS,
                         new SynchronousQueue<>(),
                         runnable -> {
@@ -122,7 +125,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 new ThreadPoolExecutor(
                         1,
                         1,
-                        30L,
+                        WORKER_IDLE_SECONDS,
                         TimeUnit.SECONDS,
                         new SynchronousQueue<>(),
                         runnable -> {

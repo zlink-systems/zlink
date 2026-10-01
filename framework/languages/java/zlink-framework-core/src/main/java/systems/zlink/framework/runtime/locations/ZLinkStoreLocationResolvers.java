@@ -32,6 +32,7 @@ import java.util.stream.IntStream;
 /** Resolves public handles from durable authority without legacy location rows. */
 public final class ZLinkStoreLocationResolvers
         implements ZLinkAutoConnectPeerResolver, AutoCloseable {
+    private static final int DESCRIPTOR_SCAN_PAGE_ITEMS = 1000;
     private final ZLinkRegisteredLocationStores stores;
     private final ZLinkLiveLocationRows liveRows;
     private final Duration routeCacheMaxAge;
@@ -213,7 +214,8 @@ public final class ZLinkStoreLocationResolvers
     private CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, String continuation, List<ZLinkMeshNodeDescriptor> values) {
         return stores.unifiedStore()
-                .listMeshNodes(meshName, new ZLinkPageRequest(1000, continuation))
+                .listMeshNodes(
+                        meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
                 .thenCompose(
                         page -> {
                             values.addAll(page.items());

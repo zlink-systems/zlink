@@ -12,6 +12,9 @@ import java.util.Objects;
 
 /** Immutable framework representation of the canonical Core application metadata frame. */
 public final class ZLinkApplicationMetadata {
+    private static final int MAX_METADATA_ENTRY_COUNT = 255;
+    private static final int MAX_METADATA_KEY_BYTES = 255;
+    private static final int MAX_METADATA_VALUE_BYTES = 65535;
     private static final int VERSION = 1;
     private static final int MAX_ENCODED_SIZE = 1024;
     private static final byte[] EMPTY_ENCODED = new byte[0];
@@ -67,7 +70,7 @@ public final class ZLinkApplicationMetadata {
             // across the frequent no-metadata send path.
             return EMPTY_ENCODED;
         }
-        if (values.size() > 255) {
+        if (values.size() > MAX_METADATA_ENTRY_COUNT) {
             throw invalid("application metadata may contain at most 255 entries");
         }
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -76,10 +79,10 @@ public final class ZLinkApplicationMetadata {
         for (Map.Entry<String, String> entry : values.entrySet()) {
             byte[] key = utf8(entry.getKey(), "key");
             byte[] value = utf8(entry.getValue(), "value");
-            if (key.length == 0 || key.length > 255) {
+            if (key.length == 0 || key.length > MAX_METADATA_KEY_BYTES) {
                 throw invalid("application metadata key must encode to 1..255 UTF-8 bytes");
             }
-            if (value.length > 65535) {
+            if (value.length > MAX_METADATA_VALUE_BYTES) {
                 throw invalid(
                         "application metadata value must encode to at most 65535 UTF-8 bytes");
             }
