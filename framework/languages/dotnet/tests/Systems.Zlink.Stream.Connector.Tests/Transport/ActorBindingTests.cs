@@ -393,107 +393,39 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task UnknownActorSlotEndsConnectionAsFrameDecodeFailed()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var codec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            using var tcp = await listener.AcceptTcpClientAsync();
-            await using var stream = tcp.GetStream();
-            await WritePacketAsync(
-                stream,
-                codec
-                    .Encode(
-                        new ZlinkStreamHeader(
-                            ZlinkStreamMessageKind.Send,
-                            ZlinkStreamCodec.Raw,
-                            ZlinkStreamHeaderFlags.None,
-                            null,
-                            "actor.unknown",
-                            ZlinkStreamMetadata.Empty,
-                            ActorSlot: 99
+        await AssertActorProtocolErrorAsync(
+            async (stream, codec) =>
+                await WritePacketAsync(
+                    stream,
+                    codec
+                        .Encode(
+                            new ZlinkStreamHeader(
+                                ZlinkStreamMessageKind.Send,
+                                ZlinkStreamCodec.Raw,
+                                ZlinkStreamHeaderFlags.None,
+                                null,
+                                "actor.unknown",
+                                ZlinkStreamMetadata.Empty,
+                                ActorSlot: 99
+                            )
                         )
-                    )
-                    .ToArray(),
-                [1]
-            );
-        });
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(
-            new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-                Heartbeat = DisabledHeartbeat(),
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            }
+                        .ToArray(),
+                    [1]
+                )
         );
-        var error = new TaskCompletionSource<ZlinkStreamError>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        connector.OnErrorReceived(
-            (received, _) =>
-            {
-                error.TrySetResult(received);
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        await connector.Connect.Async();
-        var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await server;
-
-        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
-        await WaitUntilAsync(
-            () => connector.State == ZlinkStreamConnectionState.Disconnected,
-            TimeSpan.FromSeconds(5)
-        );
-        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 
     [Fact]
     public async Task DuplicateActorBoundEndsConnectionAsFrameDecodeFailed()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var codec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            using var tcp = await listener.AcceptTcpClientAsync();
-            await using var stream = tcp.GetStream();
-            var header = ControlHeader(codec, "$zlink.actor.bound");
-            await WritePacketAsync(stream, header, BoundPayload(1, "actor-a"));
-            await WritePacketAsync(stream, header, BoundPayload(1, "actor-b"));
-        });
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(
-            new ZlinkStreamConnectorOptions
+        await AssertActorProtocolErrorAsync(
+            async (stream, codec) =>
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-                Heartbeat = DisabledHeartbeat(),
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                var header = ControlHeader(codec, "$zlink.actor.bound");
+                await WritePacketAsync(stream, header, BoundPayload(1, "actor-a"));
+                await WritePacketAsync(stream, header, BoundPayload(1, "actor-b"));
             }
         );
-        var error = new TaskCompletionSource<ZlinkStreamError>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        connector.OnErrorReceived(
-            (received, _) =>
-            {
-                error.TrySetResult(received);
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        await connector.Connect.Async();
-        var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await server;
-
-        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
-        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 
     [Fact]
@@ -817,6 +749,16 @@ public sealed partial class StreamConnectorTests
         var error = new TaskCompletionSource<ZlinkStreamError>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var disconnectSubscription = connector.OnDisconnected(
+            (closed, _) =>
+            {
+                disconnected.TrySetResult(closed);
+                return ValueTask.CompletedTask;
+            }
+        );
         connector.OnErrorReceived(
             (received, _) =>
             {
@@ -827,9 +769,12 @@ public sealed partial class StreamConnectorTests
 
         await connector.Connect.Async();
         var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server;
 
         Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
+        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, closed.CloseReason);
+        Assert.Equal(ZlinkStreamConnectionState.Disconnected, connector.State);
         Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 

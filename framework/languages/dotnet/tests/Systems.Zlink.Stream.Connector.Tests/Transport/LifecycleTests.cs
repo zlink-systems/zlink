@@ -155,6 +155,22 @@ public sealed partial class StreamConnectorTests
         {
             using var tcp = await listener.AcceptTcpClientAsync();
             await using var stream = tcp.GetStream();
+            await WritePacketAsync(
+                stream,
+                headerCodec
+                    .Encode(
+                        new ZlinkStreamHeader(
+                            ZlinkStreamMessageKind.Control,
+                            ZlinkStreamCodec.Raw,
+                            ZlinkStreamHeaderFlags.None,
+                            null,
+                            ZlinkStreamConnector.HeartbeatPongName,
+                            ZlinkStreamMetadata.Empty
+                        )
+                    )
+                    .ToArray(),
+                Array.Empty<byte>()
+            );
             var packet = await ReadPacketAsync(stream);
             var header = headerCodec.Decode(packet.Header);
             Assert.Equal(ZlinkStreamMessageKind.Control, header.Kind);
@@ -866,31 +882,8 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task CanceledClosePublishesTerminalStateWhileTerminationContinues()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var server = SendFrameAndObserveClientCloseAsync(
-            listener,
-            ZlinkStreamMessageKind.Send,
-            "block-canceled-close",
-            Array.Empty<byte>()
-        );
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(
-            new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-                DispatchMode = ZlinkStreamDispatchMode.Immediate,
-                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-            }
-        );
-        var releaseWorker = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var workerBlocked = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var connection = new HeldCloseConnection();
+        var connector = CreateConnectorOn(connection, ZlinkStreamDispatchMode.Immediate);
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -901,32 +894,32 @@ public sealed partial class StreamConnectorTests
                 return ValueTask.CompletedTask;
             }
         );
-        using var subscription = connector.On(
-            "block-canceled-close",
-            async (_, _) =>
-            {
-                workerBlocked.TrySetResult();
-                await releaseWorker.Task;
-            }
-        );
+        try
+        {
+            await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            var close = connector.Close.Async().AsTask();
+            await connection.CloseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
 
-        await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        await workerBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        using var canceled = new CancellationTokenSource();
-        canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await connector.Close.Async(canceled.Token)
+            );
+            Assert.False(close.IsCompleted);
+            Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
+            Assert.Equal(ZlinkStreamCloseReason.ClientClose, connector.CloseReason);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await connector.Close.Async(canceled.Token)
-        );
-        await server.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
-        var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(ZlinkStreamCloseReason.ClientClose, closed.CloseReason);
-        await connector.Close.Async(canceled.Token);
-
-        releaseWorker.TrySetResult();
-        await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            connection.ReleaseClose.TrySetResult();
+            await close.WaitAsync(TimeSpan.FromSeconds(5));
+            var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ZlinkStreamCloseReason.ClientClose, closed.CloseReason);
+            await connector.Close.Async(canceled.Token);
+        }
+        finally
+        {
+            connection.ReleaseClose.TrySetResult();
+            await connector.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
