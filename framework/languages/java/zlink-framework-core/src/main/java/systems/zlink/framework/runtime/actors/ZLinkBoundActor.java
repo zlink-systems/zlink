@@ -101,7 +101,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         }
         this.bindingGeneration = bindingGeneration;
         if (actorSlot <= 0 || actorSlot > MAX_ACTOR_SLOT) {
-            throw new IllegalArgumentException("bound Session Actor slot must be in 1..65535");
+            throw new IllegalArgumentException(
+                    "bound Session Actor slot must be in 1.." + MAX_ACTOR_SLOT);
         }
         this.actorSlot = actorSlot;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;

@@ -106,11 +106,12 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         requireActive(cancellation);
         Objects.requireNonNull(request, "request");
         if (request.limit() < 1 || request.limit() > MAXIMUM_SCAN_ITEMS) {
-            throw new IllegalArgumentException("scan limit must be 1..1000");
+            throw new IllegalArgumentException("scan limit must be 1.." + MAXIMUM_SCAN_ITEMS);
         }
         String prefix = Objects.requireNonNull(request.prefix(), "prefix");
         if (prefix.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_KEY_BYTES) {
-            throw new IllegalArgumentException("scan prefix exceeds 1024 UTF-8 bytes");
+            throw new IllegalArgumentException(
+                    "scan prefix exceeds " + MAXIMUM_KEY_BYTES + " UTF-8 bytes");
         }
         return inStateLane(
                 () -> {
@@ -275,10 +276,11 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         var all = new HashSet<>(conditionKeys);
         all.addAll(mutationKeys);
         if (all.size() > MAXIMUM_BATCH_KEYS) {
-            throw new IllegalArgumentException("write exceeds 2,048 keys");
+            throw new IllegalArgumentException("write exceeds " + MAXIMUM_BATCH_KEYS + " keys");
         }
         if (encodedBytes > MAXIMUM_ENCODED_BATCH_BYTES) {
-            throw new IllegalArgumentException("write exceeds 4 MiB");
+            throw new IllegalArgumentException(
+                    "write exceeds " + (MAXIMUM_ENCODED_BATCH_BYTES / (1024L * 1024L)) + " MiB");
         }
     }
 
@@ -287,7 +289,8 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                 Objects.requireNonNull(Objects.requireNonNull(key, "key").value(), "key.value");
         int size = value.getBytes(StandardCharsets.UTF_8).length;
         if (size < 1 || size > MAXIMUM_KEY_BYTES) {
-            throw new IllegalArgumentException("key must be 1..1024 UTF-8 bytes");
+            throw new IllegalArgumentException(
+                    "key must be 1.." + MAXIMUM_KEY_BYTES + " UTF-8 bytes");
         }
         return value;
     }
@@ -299,7 +302,8 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
 
     private static void requireValueSize(byte[] bytes) {
         if (Objects.requireNonNull(bytes, "bytes").length > MAXIMUM_VALUE_BYTES) {
-            throw new IllegalArgumentException("value exceeds 1 MiB");
+            throw new IllegalArgumentException(
+                    "value exceeds " + (MAXIMUM_VALUE_BYTES / (1024 * 1024)) + " MiB");
         }
     }
 

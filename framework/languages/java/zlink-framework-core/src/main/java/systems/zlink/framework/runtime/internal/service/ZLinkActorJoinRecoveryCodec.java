@@ -150,7 +150,10 @@ public final class ZLinkActorJoinRecoveryCodec {
         byte[] reply = value.reply();
         byte[] metadata = encodeMetadata(value);
         if (metadata.length > MAXIMUM_METADATA_BYTES) {
-            throw new IllegalArgumentException("Actor Join recovery metadata exceeds 256 KiB");
+            throw new IllegalArgumentException(
+                    "Actor Join recovery metadata exceeds "
+                            + (MAXIMUM_METADATA_BYTES / 1024)
+                            + " KiB");
         }
         try {
             return ServiceWirePilotCodec.encodeZljrRecordV1(

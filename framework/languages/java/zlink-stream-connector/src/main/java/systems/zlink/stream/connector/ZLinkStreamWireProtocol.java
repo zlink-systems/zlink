@@ -258,7 +258,8 @@ final class ZLinkStreamWireProtocol {
 
     private static byte[] encodeMetadata(Map<String, String> metadata) {
         if (metadata.size() > MAX_UNSIGNED_BYTE) {
-            throw new IllegalArgumentException("metadata entry count must not exceed 255");
+            throw new IllegalArgumentException(
+                    "metadata entry count must not exceed " + MAX_UNSIGNED_BYTE);
         }
         int size = Byte.BYTES;
         for (Map.Entry<String, String> entry : metadata.entrySet()) {
@@ -272,7 +273,8 @@ final class ZLinkStreamWireProtocol {
             }
             size += Byte.BYTES + key.length + Short.BYTES + value.length;
             if (size > MAX_METADATA_BYTES) {
-                throw new IllegalArgumentException("metadata must not exceed 1024 bytes");
+                throw new IllegalArgumentException(
+                        "metadata must not exceed " + MAX_METADATA_BYTES + " bytes");
             }
         }
         ByteBuffer buffer = ByteBuffer.allocate(size);

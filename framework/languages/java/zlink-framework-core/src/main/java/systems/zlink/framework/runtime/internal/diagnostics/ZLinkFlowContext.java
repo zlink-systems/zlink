@@ -58,7 +58,7 @@ public final class ZLinkFlowContext {
             throw errorFactory.apply(surface + " flow fields are malformed", null);
         }
         if (!isValidFlowId(fields[1])) {
-            throw errorFactory.apply(surface + " flow id must be UUIDv7", null);
+            throw errorFactory.apply(surface + " flow id must be UUIDv" + UUID_VERSION, null);
         }
         try {
             return new State(fields[1], ZLinkFlowOrigin.valueOf(fields[2]), null);

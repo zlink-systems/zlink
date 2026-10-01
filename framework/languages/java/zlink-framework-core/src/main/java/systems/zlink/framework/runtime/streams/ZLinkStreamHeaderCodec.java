@@ -329,7 +329,8 @@ public final class ZLinkStreamHeaderCodec {
             return new byte[0];
         }
         if (metadata.size() > MAX_METADATA_ENTRY_COUNT) {
-            throw new IllegalArgumentException("STREAM metadata entry count must not exceed 255");
+            throw new IllegalArgumentException(
+                    "STREAM metadata entry count must not exceed " + MAX_METADATA_ENTRY_COUNT);
         }
         int size = 1;
         for (Map.Entry<String, String> entry : metadata.entrySet()) {

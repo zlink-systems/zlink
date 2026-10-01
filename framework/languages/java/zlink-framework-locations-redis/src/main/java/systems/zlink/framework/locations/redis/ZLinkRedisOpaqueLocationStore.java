@@ -700,10 +700,13 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         }
         if (uniqueKeys.size() > MAXIMUM_BATCH_KEYS) {
             throw new IllegalArgumentException(
-                    "A conditional batch can reference at most 2048 keys.");
+                    "A conditional batch can reference at most " + MAXIMUM_BATCH_KEYS + " keys.");
         }
         if (encodedBytes > MAXIMUM_ENCODED_BATCH_BYTES) {
-            throw new IllegalArgumentException("The encoded Store batch exceeds 4 MiB.");
+            throw new IllegalArgumentException(
+                    "The encoded Store batch exceeds "
+                            + (MAXIMUM_ENCODED_BATCH_BYTES / (1024 * 1024))
+                            + " MiB.");
         }
 
         List<ZLinkStoreKey> orderedKeys = new ArrayList<>(uniqueKeys);
@@ -770,10 +773,12 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         Objects.requireNonNull(request, "request");
         String prefix = Objects.requireNonNull(request.prefix(), "request.prefix");
         if (utf8Length(prefix) > MAXIMUM_KEY_BYTES) {
-            throw new IllegalArgumentException("The scan prefix exceeds 1024 UTF-8 bytes.");
+            throw new IllegalArgumentException(
+                    "The scan prefix exceeds " + MAXIMUM_KEY_BYTES + " UTF-8 bytes.");
         }
         if (request.limit() < 1 || request.limit() > MAXIMUM_SCAN_ITEMS) {
-            throw new IllegalArgumentException("Scan limit must be in the range 1..1000.");
+            throw new IllegalArgumentException(
+                    "Scan limit must be in the range 1.." + MAXIMUM_SCAN_ITEMS + ".");
         }
         if (request.cursor() == null) {
             return new ValidatedScan(prefix, uuidHex(), "", request.limit(), true, false);
@@ -821,7 +826,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         int length = utf8Length(Objects.requireNonNull(key.value(), "key.value"));
         if (length < 1 || length > MAXIMUM_KEY_BYTES) {
             throw new IllegalArgumentException(
-                    "Location Store keys must contain 1..1024 UTF-8 bytes.");
+                    "Location Store keys must contain 1.." + MAXIMUM_KEY_BYTES + " UTF-8 bytes.");
         }
         return length;
     }
@@ -830,7 +835,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         Objects.requireNonNull(version, "version");
         int length = utf8Length(Objects.requireNonNull(version.value(), "version.value"));
         if (length < 1 || length > MAXIMUM_VERSION_BYTES) {
-            throw new IllegalArgumentException("Store versions must contain 1..4096 UTF-8 bytes.");
+            throw new IllegalArgumentException(
+                    "Store versions must contain 1.." + MAXIMUM_VERSION_BYTES + " UTF-8 bytes.");
         }
         return length;
     }

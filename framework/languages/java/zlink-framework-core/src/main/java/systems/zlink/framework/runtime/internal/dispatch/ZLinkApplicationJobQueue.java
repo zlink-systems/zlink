@@ -486,11 +486,12 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private static void validateThresholds(int pause, int resume) {
         if (pause < 1 || pause > PERCENT_SCALE) {
             throw new ZLinkConfigurationException(
-                    "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
+                    "ApplicationJobQueuePauseThresholdPercent must be in 1.." + PERCENT_SCALE);
         }
         if (resume < 0 || resume >= PERCENT_SCALE) {
             throw new ZLinkConfigurationException(
-                    "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
+                    "ApplicationJobQueueResumeThresholdPercent must be in 0.."
+                            + (PERCENT_SCALE - 1));
         }
         if (resume >= pause) {
             throw new ZLinkConfigurationException(

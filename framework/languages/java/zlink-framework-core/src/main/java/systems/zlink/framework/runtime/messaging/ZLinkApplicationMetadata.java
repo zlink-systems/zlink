@@ -71,7 +71,10 @@ public final class ZLinkApplicationMetadata {
             return EMPTY_ENCODED;
         }
         if (values.size() > MAX_METADATA_ENTRY_COUNT) {
-            throw invalid("application metadata may contain at most 255 entries");
+            throw invalid(
+                    "application metadata may contain at most "
+                            + MAX_METADATA_ENTRY_COUNT
+                            + " entries");
         }
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         output.write(VERSION);
@@ -80,11 +83,16 @@ public final class ZLinkApplicationMetadata {
             byte[] key = utf8(entry.getKey(), "key");
             byte[] value = utf8(entry.getValue(), "value");
             if (key.length == 0 || key.length > MAX_METADATA_KEY_BYTES) {
-                throw invalid("application metadata key must encode to 1..255 UTF-8 bytes");
+                throw invalid(
+                        "application metadata key must encode to 1.."
+                                + MAX_METADATA_KEY_BYTES
+                                + " UTF-8 bytes");
             }
             if (value.length > MAX_METADATA_VALUE_BYTES) {
                 throw invalid(
-                        "application metadata value must encode to at most 65535 UTF-8 bytes");
+                        "application metadata value must encode to at most "
+                                + MAX_METADATA_VALUE_BYTES
+                                + " UTF-8 bytes");
             }
             output.write(key.length);
             output.writeBytes(key);
@@ -92,7 +100,8 @@ public final class ZLinkApplicationMetadata {
             output.write(value.length);
             output.writeBytes(value);
             if (output.size() > MAX_ENCODED_SIZE) {
-                throw invalid("encoded application metadata exceeds 1024 bytes");
+                throw invalid(
+                        "encoded application metadata exceeds " + MAX_ENCODED_SIZE + " bytes");
             }
         }
         return output.toByteArray();
@@ -103,7 +112,7 @@ public final class ZLinkApplicationMetadata {
             return Map.of();
         }
         if (encoded.length > MAX_ENCODED_SIZE) {
-            throw invalid("encoded application metadata exceeds 1024 bytes");
+            throw invalid("encoded application metadata exceeds " + MAX_ENCODED_SIZE + " bytes");
         }
         int offset = 0;
         int version = encoded[offset++] & 0xff;

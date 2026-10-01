@@ -51,7 +51,11 @@ final class ZLinkClientServerServiceWire {
 
     static byte[] encodeReject(int reason) {
         if (reason < MIN_REJECT_REASON || reason > MAX_REJECT_REASON) {
-            throw protocol("ClientServer reject reason must be in 1..12");
+            throw protocol(
+                    "ClientServer reject reason must be in "
+                            + MIN_REJECT_REASON
+                            + ".."
+                            + MAX_REJECT_REASON);
         }
         Writer result = prefix(ServiceWireConstants.COMMAND_REJECT);
         result.u32(reason);

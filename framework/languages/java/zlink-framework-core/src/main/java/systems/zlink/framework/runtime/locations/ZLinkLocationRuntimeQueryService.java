@@ -142,7 +142,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         ZLinkPageRequest safe = normalize(page);
         int pageSize = safe.pageSize();
         if (pageSize < 1 || pageSize > MAXIMUM_QUERY_PAGE_ITEMS)
-            throw new IllegalArgumentException("pageSize must be in 1..1000");
+            throw new IllegalArgumentException(
+                    "pageSize must be in 1.." + MAXIMUM_QUERY_PAGE_ITEMS);
         String prefix =
                 filter.objectKind() == ZLinkPlacementObjectKind.ACTOR
                         ? ZLinkAuthorityKeyCodec.actorPrefix()
@@ -574,7 +575,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
     private ZLinkPageRequest boundedPage(ZLinkPageRequest page) {
         ZLinkPageRequest safe = normalize(page);
         if (safe.pageSize() > MAXIMUM_QUERY_PAGE_ITEMS) {
-            throw new IllegalArgumentException("pageSize must be in 1..1000");
+            throw new IllegalArgumentException(
+                    "pageSize must be in 1.." + MAXIMUM_QUERY_PAGE_ITEMS);
         }
         return safe;
     }

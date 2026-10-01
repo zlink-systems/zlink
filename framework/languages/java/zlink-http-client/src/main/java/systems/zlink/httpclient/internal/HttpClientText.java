@@ -101,11 +101,16 @@ public final class HttpClientText {
             }
         } catch (ArithmeticException error) {
             throw HttpClientErrors.protocol(
-                    "HTTP client timeout must fit the finite 1..2147483647 ms range", error);
+                    "HTTP client timeout must fit the finite 1.."
+                            + MAX_TIMEOUT_MILLIS
+                            + " ms range",
+                    error);
         }
         if (millis < 1L || millis > MAX_TIMEOUT_MILLIS) {
             throw HttpClientErrors.protocol(
-                    "HTTP client timeout must fit the finite 1..2147483647 ms range");
+                    "HTTP client timeout must fit the finite 1.."
+                            + MAX_TIMEOUT_MILLIS
+                            + " ms range");
         }
         return Duration.ofMillis(millis);
     }

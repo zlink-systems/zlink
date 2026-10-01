@@ -456,7 +456,8 @@ final class ZLinkProviderDescriptorRepository {
         Objects.requireNonNull(request, "request");
         int pageSize = request.pageSize() <= 0 ? defaultPageSize : request.pageSize();
         if (pageSize < 1 || pageSize > MAXIMUM_PAGE_SIZE) {
-            throw new IllegalArgumentException("pageSize must be in the range 1..1000");
+            throw new IllegalArgumentException(
+                    "pageSize must be in the range 1.." + MAXIMUM_PAGE_SIZE);
         }
         ZLinkStoreScanCursor cursor =
                 request.continuationToken() == null
