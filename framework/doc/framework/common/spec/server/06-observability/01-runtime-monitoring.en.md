@@ -329,8 +329,13 @@ await foreach (var observed in routeMeshRuntime.ObserveAsync("game-mesh", cancel
 
 Status includes a `Sequence` that monotonically increases within the
 runtime instance, and an observation time. Within the same source, a
-larger `Sequence` is a later state. Values from different sources aren't
-compared. `Sequence` can restart from 0 when the process restarts.
+larger `Sequence` is a later state. For each source defined in §7.1,
+`Sequence` increases by 1 only when the source publishes a status whose public
+field values, excluding `Sequence` and the observation time, differ from the
+last published status. If those values are unchanged, the last published status
+is reused. Queries and observations use the same published status, so
+`Sequence` does not depend on whether an observer exists. Values from different
+sources aren't compared. `Sequence` can restart from 1 when the process restarts.
 
 **Each item in the change stream is a complete status, not an event
 carrying only some fields.** A general-purpose event DTO combining
