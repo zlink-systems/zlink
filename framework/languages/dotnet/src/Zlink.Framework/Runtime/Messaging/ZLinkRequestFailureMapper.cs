@@ -218,8 +218,8 @@ internal static class ZLinkRequestFailureMapper
         bool completionFailure = true
     )
     {
-        // Async 호출의 동기 거절에는 대기 토큰이 없으며,
-        // completion task의 실패는 실제 WRITABLE timeout일 수 있다.
+        // A synchronous refusal of an async call has no wait token, while a
+        // completion task failure can be a real WRITABLE timeout.
         return error.Result switch
         {
             ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkFrameworkException(
