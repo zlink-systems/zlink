@@ -591,8 +591,11 @@ final class ZLinkCanonicalRelocationStateMachine
                         ? CompletableFuture.completedFuture(encodeReady(prepare))
                         : CompletableFuture.completedFuture(null);
             }
-            return failed(
-                    new IllegalArgumentException("terminal canonical relocation prepare differs"));
+            return CompletableFuture.completedFuture(
+                    prepareMismatchReply(
+                            ZLinkCanonicalRelocationProtocol.decodePrepare(
+                                    terminal.encodedPrepare()),
+                            prepare));
         }
         TargetAttempt created = new TargetAttempt(prepare);
         TargetAttempt current =
@@ -625,8 +628,8 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!java.util.Arrays.equals(
                 ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
                 ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
-            return failed(
-                    new IllegalArgumentException("duplicate canonical relocation prepare differs"));
+            return CompletableFuture.completedFuture(
+                    prepareMismatchReply(attempt.prepare(), prepare));
         }
         if (current != null) {
             if (request) {
@@ -801,21 +804,41 @@ final class ZLinkCanonicalRelocationStateMachine
                 .handle(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                return ZLinkCanonicalRelocationProtocol.encodeFailed(
-                                        new ZLinkCanonicalRelocationProtocol.Failed(
-                                                attempt.prepare().id(),
-                                                attempt.prepare().targetAttemptGeneration(),
-                                                attempt.prepare().coordinator(),
-                                                attempt.prepare().target(),
-                                                attempt.prepare().object(),
-                                                ZLinkCanonicalRelocationProtocol.TARGET,
-                                                wireFailureCode(
-                                                        unwrap(failure),
-                                                        attempt.prepare().object().kind())));
+                                return encodeFailed(attempt.prepare(), failure);
                             }
                             acceptRelayReady(fence, attempt);
                             return encodeReady(attempt.prepare());
                         });
+    }
+
+    private static byte[] prepareMismatchReply(
+            ZLinkCanonicalRelocationProtocol.Prepare accepted,
+            ZLinkCanonicalRelocationProtocol.Prepare incoming) {
+        if (!accepted.sourceNodeRid().equals(incoming.sourceNodeRid())
+                || accepted.sourceNodeGeneration() != incoming.sourceNodeGeneration()
+                || !accepted.coordinator().equals(incoming.coordinator())
+                || !accepted.target().equals(incoming.target())
+                || !accepted.object().equals(incoming.object())) {
+            return null;
+        }
+        return encodeFailed(
+                incoming,
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DATA_LOST,
+                        "canonical relocation prepare manifest differs"));
+    }
+
+    private static byte[] encodeFailed(
+            ZLinkCanonicalRelocationProtocol.Prepare prepare, Throwable failure) {
+        return ZLinkCanonicalRelocationProtocol.encodeFailed(
+                new ZLinkCanonicalRelocationProtocol.Failed(
+                        prepare.id(),
+                        prepare.targetAttemptGeneration(),
+                        prepare.coordinator(),
+                        prepare.target(),
+                        prepare.object(),
+                        ZLinkCanonicalRelocationProtocol.TARGET,
+                        wireFailureCode(unwrap(failure), prepare.object().kind())));
     }
 
     private void acceptRelayReady(Fence fence, TargetAttempt attempt) {
@@ -840,7 +863,6 @@ final class ZLinkCanonicalRelocationStateMachine
             cleanup = CompletableFuture.failedFuture(cleanupFailure);
         }
         AtomicReference<Throwable> discardFailure = new AtomicReference<>();
-        long wireFailureCode = wireFailureCode(unwrap(failure), attempt.prepare().object().kind());
         return cleanup.handle(
                         (ignored, cleanupFailure) -> {
                             if (cleanupFailure != null) {
@@ -857,19 +879,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenCompose(
                         ignored ->
                                 sendFailure
-                                        ? send(
-                                                source,
-                                                ZLinkCanonicalRelocationProtocol.encodeFailed(
-                                                        new ZLinkCanonicalRelocationProtocol.Failed(
-                                                                attempt.prepare().id(),
-                                                                attempt.prepare()
-                                                                        .targetAttemptGeneration(),
-                                                                attempt.prepare().coordinator(),
-                                                                attempt.prepare().target(),
-                                                                attempt.prepare().object(),
-                                                                ZLinkCanonicalRelocationProtocol
-                                                                        .TARGET,
-                                                                wireFailureCode)))
+                                        ? send(source, encodeFailed(attempt.prepare(), failure))
                                         : CompletableFuture.completedFuture(null))
                 .thenCompose(
                         ignored ->
