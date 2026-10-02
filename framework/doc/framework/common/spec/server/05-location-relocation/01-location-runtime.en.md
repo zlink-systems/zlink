@@ -977,7 +977,7 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Commit` | That reservation's `Reserved → Active`. |
 | `Abort` | That reservation's `Reserved → Missing`. |
 | `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
-| `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
+| `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. In the same request, it decreases the source's in-use capacity and increases the target's (the capacity counter of [§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)). |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
 | `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 
@@ -987,7 +987,7 @@ a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
 one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
-verifies the target lease and the capacity that relocation pre-secured. If the record
+verifies the target lease and the capacity left on the target. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.

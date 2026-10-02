@@ -232,10 +232,8 @@ Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `Rout
 
 Object Server의 Entry Spot ID는 같은 prefix의
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식이며 MeshNode와 별도로 생성한 UUID v4를 사용한다.
-Java `ZLinkMeshNodeDescriptor.entrySpotId()`가 같은 lifecycle의 mapping을 제공한다. Global Spot
-ID가 active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `SpotIdConflict`로 startup을
-실패시킨다. Caller가 지정한 User·Instance Spot ID가 예약 형식과 일치하면 Store와 factory 전에
-startup configuration error로 거부한다.
+Java `ZLinkMeshNodeDescriptor.entrySpotId()`가 같은 lifecycle의 mapping을 제공한다. Caller가 지정한 User·Instance Spot ID가 예약 형식과
+일치하면 Store와 factory 전에 `InvalidOperation`으로 거부한다.
 
 모든 factory는 Java builder를 Kotlin receiver callback으로 구성한다. Callback은
 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를 호출한다. 누락하거나

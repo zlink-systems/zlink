@@ -86,9 +86,7 @@ generated separately from the MeshNode RID.
 
 **If a caller-specified User/Instance Spot ID matches this reserved format,
 it's rejected with `InvalidOperation` before starting a Location Store
-reservation or factory.** A User/Instance Spot's generic `Reserve` also
-checks the same global namespace, so an active Entry Spot ID can't be used
-as caller-created Spot authority. The framework doesn't compute a MeshNode
+reservation or factory.** The framework doesn't compute a MeshNode
 relationship from the Spot ID string — it uses the Entry Spot ID
 mapping the MeshNode descriptor published.
 
@@ -97,20 +95,11 @@ replacement lifecycle at the same endpoint, a new Entry Spot ID is issued, and w
 RID a new MeshNode RID is issued as well. The framework doesn't build the Entry Spot
 ID by concatenating the full MeshNode RID.
 
-The Object Server descriptor's `NewClaim` creates, in one Location Store
-transaction, the `(MeshName, NodeRid)` descriptor identity and the
-`EntrySpotId`'s global Spot identity claim, linked to the owner lease
-and lifecycle. If either conflicts with an active claim, it changes neither
-descriptor, Entry claim, nor index at all, and returns a startup
-configuration error at the first claim. It doesn't create a second Entry
-UUID or claim.
-
 [Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove and owner cleanup — a
 descriptor being the registration record a remote runtime publishes so its endpoint, identity,
-and status can be discovered — release the linked Entry claim in the
-same transaction only if the stored descriptor's owner lease and
-lifecycle match the request. Stale cleanup from a previous lifecycle can't
-delete a replacement lifecycle's descriptor or Entry claim. `EntrySpotId` is
+and status can be discovered — delete the descriptor only if the stored
+descriptor's owner lease and lifecycle match the request. Stale cleanup from a
+previous lifecycle can't delete a replacement lifecycle's descriptor. `EntrySpotId` is
 included in the descriptor's immutable fields and immutable digest, and
 can't be changed by `Renew` or a mutable descriptor update.
 

@@ -348,9 +348,9 @@ group, and a public allocation provider aren't provided.
 The Object Server's Entry Spot ID also uses the same prefix, but with a
 UUID v4 generated separately from the MeshNode RID attached. The format
 is `<prefix>-entry-<lowercase-canonical-uuid-v4>`, and the caller doesn't
-specify a fixed Entry Spot ID. This ID's global conflict and the reserved
-format validation for a caller-specified Spot ID are defined by the
-[Spot Model](../../../03-spot-actor/01-spot-model.en.md). The prefix and the
+specify a fixed Entry Spot ID. The reserved format validation for a caller-specified
+Spot ID is defined by
+[Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id). The prefix and the
 generated RID/Spot ID aren't interpreted as placement, shard, or stable
 application identity.
 

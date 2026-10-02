@@ -267,11 +267,9 @@ The Object Server's Entry Spot ID has the same-prefix format
 `<prefix>-entry-<lowercase-canonical-uuid-v4>`, using a UUID v4
 generated separately from the MeshNode. Java's
 `ZLinkMeshNodeDescriptor.entrySpotId()` provides the mapping for
-the same lifecycle. If the global Spot ID conflicts with an active
-owner, startup fails immediately with `SpotIdConflict` instead of
-retrying with a new UUID. If a caller-specified User/Instance Spot ID
-matches the reserved format, it's rejected as a startup configuration
-error before the Store and factory.
+the same lifecycle. If a caller-specified User/Instance Spot ID
+matches the reserved format, it's rejected with `InvalidOperation`
+before the Store and factory.
 
 Every factory configures the Java builder with a Kotlin receiver
 callback. The callback calls exactly one of `disableRelocation()`,

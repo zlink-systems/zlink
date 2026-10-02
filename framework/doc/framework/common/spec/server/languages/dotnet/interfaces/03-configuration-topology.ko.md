@@ -328,8 +328,8 @@ lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 
 
 Object Server의 Entry Spot ID에도 같은 prefix를 사용하지만 MeshNode RID와 별도로 생성한 UUID v4를
 붙인다. 형식은 `<prefix>-entry-<lowercase-canonical-uuid-v4>`이며 caller가 fixed Entry Spot ID를 지정하지
-않는다. 이 ID의 전역 충돌과 caller가 지정한 Spot ID의 예약 형식 검증은
-[Spot model](../../../03-spot-actor/01-spot-model.ko.md)이 정의한다. Prefix와 생성된 RID·Spot ID를 placement, shard 또는
+않는다. 예약 형식 검증은
+[Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정의한다. Prefix와 생성된 RID·Spot ID를 placement, shard 또는
 stable application identity로 해석하지 않는다.
 
 등록한 MeshNode descriptor는 1 MiB 이하여야 한다. [Spot](../../../00-foundation/02-glossary.ko.md#spot) type과 stateful object capability collection은 각각

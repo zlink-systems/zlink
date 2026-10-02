@@ -732,10 +732,7 @@ Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID�
 Spot ID와 lifecycle generation의 관계를 게시하며 Actor placement와 Entry Spot join은 이 mapping을
 사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다.
 
-Entry Spot ID가 global Spot ID authority와 충돌하면 새 UUID나 reservation을 만들지 않고 startup을 즉시
-`AlreadyExists`로 끝낸다. Caller가 User·Instance Spot ID로
-`<prefix>-entry-<lowercase-canonical-uuid-v4>` 예약 형식을 지정하면 Store operation이나 factory를 시작하기
-전에 startup configuration error로 거부한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
+Entry Spot ID의 발급·형식과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
 Actor membership과 Logical Multicast subscription을 등록할 수 없다.
 
 Actor manager와 User Spot manager는 global ID를 받는 `Create`, `GetOrCreate`, `Find` family를 제공한다. Actor

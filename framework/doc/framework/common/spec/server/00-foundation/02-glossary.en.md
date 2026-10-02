@@ -145,10 +145,6 @@ doesn't infer node relationships by parsing the Spot ID string.
 The Entry Spot ID stays the same
 within the same lifecycle and a new Entry Spot ID is issued on a replacement lifecycle.
 
-If a
-global Spot ID authority conflict occurs, startup ends immediately as a configuration
-error instead of generating a new UUID or reservation.
-
 This format is reserved for
 framework issuance, so if a caller specifies a User/Instance Spot ID in the same
 format, it's rejected with `InvalidOperation` before the Store and factory run.
@@ -2367,16 +2363,16 @@ condition, so a new UUID isn't generated and retried.
 <a id="spot-id-conflict"></a>
 ### SpotIdConflict
 
-The result of confirming that an Entry/User/Instance Spot identity claim is already
+The result of confirming that a User/Instance Spot identity claim is already
 in use within the global Spot ID namespace. The framework doesn't overwrite the
-existing claim or retry the same operation with a new UUID.
+existing claim.
 
 | Item | Content |
 |---|---|
-| Shape | Startup or create failure |
-| .NET notation | Startup uses `ZLinkConfigurationException`; exclusive create uses `ZLinkFrameworkErrorKind.AlreadyExists` |
+| Shape | Create failure |
+| .NET notation | Exclusive create uses `ZLinkFrameworkErrorKind.AlreadyExists` |
 | Public composition | Describes that a global Spot ID claim conflicted. Doesn't include the conflicting owner token. |
-| Lifetime | Ends that startup or create operation with a terminal failure. |
+| Lifetime | Ends that create operation with a terminal failure. |
 
 ## 10. STREAM Session and Actor Binding
 
