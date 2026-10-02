@@ -2699,20 +2699,9 @@ final class ZLinkJavaRawMeshNode
         } catch (RuntimeException | Error failure) {
             submitted = CompletableFuture.failedFuture(failure);
         }
-<<<<<<< HEAD
-        frames.add(wire.encodeFrameworkMultipartFrame(parts));
-        ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-        requestApplication(route.targetNodeRid(), frames, remainingTimeout)
-                .whenComplete(
-                        (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure, false);
-                            List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
-                            if (!terminal.tryWin(requestTerminalCause(result))) {
-                                return;
-=======
         submitted.whenComplete(
                 (replyFrames, failure) -> {
-                    RequestResult result = requestResult(failure);
+                    RequestResult result = requestResult(failure, false);
                     List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
                     if (result != RequestResult.OK || replies.isEmpty()) {
                         operations.completeExceptionally(
@@ -2740,7 +2729,6 @@ final class ZLinkJavaRawMeshNode
                                 throw new ZLinkFrameworkException(
                                         ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                                         "invalid Instance Spot failed reply frame count");
->>>>>>> framework-java/1083-close
                             }
                             //  Classify the carried terminal + fine failure code
                             //  via the authoritative ownership-aware translator
