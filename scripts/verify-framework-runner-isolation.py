@@ -64,12 +64,12 @@ RANGES = (
     RangeSource("kotlin", "sample", "application", "framework/languages/java/samples/runner-common.sh",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MIN=(26100)$",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MAX=(27999)$"),
-    RangeSource("node", "sample", "redis", "framework/languages/node/samples/run-sample.mjs",
-                r"^const redisPortRange = \{ min: (\d+), max: \d+ \};$",
-                r"^const redisPortRange = \{ min: \d+, max: (\d+) \};$"),
-    RangeSource("node", "sample", "application", "framework/languages/node/samples/run-sample.mjs",
-                r"^const applicationPortRange = \{ min: (\d+), max: \d+ \};$",
-                r"^const applicationPortRange = \{ min: \d+, max: (\d+) \};$"),
+    RangeSource("node", "sample", "redis", "framework/languages/node/samples/port-lease.mjs",
+                r"^export const redisPortRange = \{ min: (\d+), max: \d+ \};$",
+                r"^export const redisPortRange = \{ min: \d+, max: (\d+) \};$"),
+    RangeSource("node", "sample", "application", "framework/languages/node/samples/port-lease.mjs",
+                r"^export const applicationPortRange = \{ min: (\d+), max: \d+ \};$",
+                r"^export const applicationPortRange = \{ min: \d+, max: (\d+) \};$"),
 )
 
 SAMPLE_NAMES = (
@@ -235,6 +235,12 @@ def verify_mirrored_ranges(
             r"^\s*local redis_min_port=(\d+)$",
             r"^\s*local redis_max_port=(\d+)$",
         ),
+        RangeSource(
+            "dotnet", "sample", "application",
+            "framework/languages/dotnet/samples/redis-common.sh",
+            r"^\s*local min_port=(\d+)$",
+            r"^\s*local max_port=(\d+)$",
+        ),
     )
     for mirror in mirrors:
         actual = (
@@ -249,7 +255,8 @@ def verify_mirrored_ranges(
                 f"{expected[0]}-{expected[1]}"
             )
 
-    dotnet_app_range = resolved_ranges[("dotnet", "sample", "application")]
+    # #673 moved application port selection into redis-common.sh (mirrored above);
+    # each runner must take its ports from that helper rather than its own range.
     dotnet_sample_root = ROOT / "framework/languages/dotnet/samples"
     dotnet_shell_runners = sorted(dotnet_sample_root.glob("*/run_sample.sh"))
     if len(dotnet_shell_runners) != 7:
@@ -258,15 +265,11 @@ def verify_mirrored_ranges(
             f"runners, found {len(dotnet_shell_runners)}"
         )
     for runner in dotnet_shell_runners:
-        pairs = re.findall(
-            r"random\.randint\((\d+),\s*(\d+)\)",
-            runner.read_text(encoding="utf-8"),
-        )
-        if pairs != [(str(dotnet_app_range[0]), str(dotnet_app_range[1]))]:
+        text = runner.read_text(encoding="utf-8")
+        if "zlink_sample_pick_ports" not in text or re.search(r"random\.randint\(", text):
             raise ValueError(
-                f"{runner.relative_to(ROOT)}: expected one application port "
-                f"mirror for {dotnet_app_range[0]}-{dotnet_app_range[1]}, "
-                f"found {pairs}"
+                f"{runner.relative_to(ROOT)}: expected application ports from "
+                "zlink_sample_pick_ports and no runner-local port range"
             )
 
     jvm_powershell = ROOT / "framework/languages/java/samples/redis-common.ps1"
