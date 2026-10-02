@@ -1267,6 +1267,12 @@ checked via
 (§4). Object location lookup is separate from this enumeration and answers only by
 ActorId/SpotId.
 
+A per-MeshName service summary counts the descriptors of the same enumeration. A descriptor that passes the
+owner lease validation of [§4.1](#41-validating-a-target-descriptors-owner-lease) counts as ready, one that
+doesn't counts as stopped, and the total is their sum. This enumeration doesn't use the error count, so it is 0. If an owner lease read fails or returns a lease
+that §4.1 judges corrupted, no summary is returned and the whole query ends with an error: `Unavailable`
+for a failed read and `InternalFailure` for a corrupted lease.
+
 ## 8. What This Store Does When Moving an Actor or Spot to Another Node
 
 The single source of truth for the source/target handoff and queue order that Actors and Spots
