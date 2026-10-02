@@ -315,7 +315,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -3617,9 +3617,8 @@ final class ZLinkJavaRawMeshNode
         if (current instanceof ZlinkRequestException requestFailure) {
             return requestFailure.getResult();
         }
-        if (current instanceof ZlinkSubmitException submitFailure
-                && submitFailure.getResult() == SubmitResult.BACKPRESSURED) {
-            return initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT;
+        if (current instanceof ZlinkSubmitException submitFailure) {
+            return ZLinkOneWayCalls.toRequestResult(submitFailure.getResult(), initialSubmission);
         }
         if (current instanceof TimeoutException) {
             return RequestResult.TIMED_OUT;

@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
@@ -109,6 +111,11 @@ final class ZLinkJavaSocketSupport {
                                             ZLinkJavaRawMeshNode.requestResult(failure, false);
                                     throw new CompletionException(
                                             terminal == RequestResult.INTERNAL_ERROR
+                                                            && !(failure
+                                                                    instanceof ZlinkSubmitException)
+                                                            && !(failure
+                                                                    instanceof
+                                                                    ZlinkRequestException)
                                                     ? failure
                                                     : new ZLinkFrameworkException(
                                                             ZLinkJavaRawMeshNode.backendResult(
@@ -132,6 +139,8 @@ final class ZLinkJavaSocketSupport {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(
                     terminal == RequestResult.INTERNAL_ERROR
+                                    && !(failure instanceof ZlinkSubmitException)
+                                    && !(failure instanceof ZlinkRequestException)
                             ? failure
                             : new ZLinkFrameworkException(
                                     ZLinkJavaRawMeshNode.backendResult(terminal)
