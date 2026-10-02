@@ -284,10 +284,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
 
     void wait_until_suspended () { _entered_future.wait (); }
 
-    void resume ()
-    {
-        _resume.complete (zlink::framework::result_t<void>::success ());
-    }
+    void resume () { _resume.complete (zlink::framework::result_t<void>::success ()); }
 
     std::optional<zlink::framework::result_t<void>> reply_result;
 
@@ -300,15 +297,9 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
 class shutdown_session_control_t final
 {
   public:
-    zlink::framework::task_t<void> wait_for_release ()
-    {
-        return _resume.task ();
-    }
+    zlink::framework::task_t<void> wait_for_release () { return _resume.task (); }
 
-    void release ()
-    {
-        _resume.complete (zlink::framework::result_t<void>::success ());
-    }
+    void release () { _resume.complete (zlink::framework::result_t<void>::success ()); }
 
     void record_connected () { record (_connected, "connected"); }
     void record_packet_entered () { record (_packet_entered, "packet-entered"); }

@@ -100,9 +100,10 @@ class raw_client_server_server_t
     next_liveness_activity_task () const;
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const protocol::application_payload_t &payload);
-    task_t<bool> reply (const mesh::service_mailbox_record_t &request,
-                        const framework_exception_t &error,
-                        const std::optional<messaging::envelope_header_t> *decoded_context = nullptr);
+    task_t<bool>
+    reply (const mesh::service_mailbox_record_t &request,
+           const framework_exception_t &error,
+           const std::optional<messaging::envelope_header_t> *decoded_context = nullptr);
 
   private:
     task_t<client_server_pump_result_t> enqueue_application_record (

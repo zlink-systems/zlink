@@ -622,7 +622,7 @@ raw_client_server_server_t::next_liveness_activity_task () const
 }
 
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
-                                                 const protocol::application_payload_t &payload)
+                                                const protocol::application_payload_t &payload)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
         co_return false;
