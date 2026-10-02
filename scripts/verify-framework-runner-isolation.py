@@ -109,8 +109,9 @@ SAMPLE_RUNNER_INVENTORIES = (
         "kotlin",
         "framework/languages/java/samples/kotlin",
         "",
+        # Kotlin ZoneWorld gained run_sample.ps1 in cbe9bcd094 (Windows sample pass).
         ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
-         "SupportChat", "TicTacToe"),
+         "SupportChat", "TicTacToe", "ZoneWorld"),
     ),
     SampleRunnerInventory(
         "node",
