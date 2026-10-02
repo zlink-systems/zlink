@@ -469,7 +469,7 @@ The caller doesn't select the target node or endpoint.
 
 ### 6.4 Creation Request and Factory Execution
 
-An encoded creation request is at most 1 MiB. The whole procedure that
+The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). The whole procedure that
 confirms the authority to create only one object — the reservation, why
 factory execution must be safe, the Entry Spot `OnCreateActor`'s
 approve/reject/exception handling, and the authority exposed as its result —
