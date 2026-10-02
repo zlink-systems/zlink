@@ -634,7 +634,7 @@ test('release replay preserves typed request failures and observes one-way failu
     error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
   requestParts.forEach(part => part.close());
-  // 원래 deadline 전에 capture가 backlog를 소유했음을 확인한다.
+  // Capture owns the backlog before the original deadline.
   assert.equal(markers.filter(entry => entry.marker === 'handoff_backlog').length, 1);
   assert.equal(coordinator.isActive('actor-1'), true);
   now += 20;
@@ -781,7 +781,7 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
     true
   );
 
-  // 같은 commit route가 원래 수명 경계에서 ingress를 거부하는지 확인한다.
+  // The same committed route rejects ingress at its original lifetime boundary.
   now += messageFollowDurationMs;
   const expiredParts = frame('expired-route');
   await assert.rejects(
