@@ -2,6 +2,7 @@
 
 package systems.zlink.contract;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -70,10 +71,7 @@ class ReceiveBusyResultContractTest {
 
         try (ExecutorService workers =
                  Executors.newFixedThreadPool(CONCURRENT_RECEIVERS)) {
-            boolean sawBusyException = false;
-            boolean sawRefusalAsNoData = false;
-            for (int round = 0; round < REPRO_ROUNDS && !sawBusyException
-                && !sawRefusalAsNoData; round++) {
+            for (int round = 0; round < REPRO_ROUNDS; round++) {
                 for (int record = 0; record < CONCURRENT_RECEIVERS; record++) {
                     sendMultipart(sender, PARTS_PER_RECORD,
                         round + "-" + record);
@@ -102,36 +100,31 @@ class ReceiveBusyResultContractTest {
 
                 start.await();
                 int successfulReads = 0;
-                int hiddenRefusals = 0;
                 for (Future<ReceiveAttempt> future : futures) {
                     ReceiveAttempt attempt = future.get(10,
                         TimeUnit.SECONDS);
-                    sawBusyException |= attempt.error() == RecvResult.BUSY;
-                    successfulReads += Boolean.TRUE.equals(attempt.received())
-                        ? 1 : 0;
-                    hiddenRefusals += Boolean.FALSE.equals(attempt.received())
-                        ? 1 : 0;
+                    if (attempt.error() != null) {
+                        assertEquals(RecvResult.BUSY, attempt.error());
+                    } else {
+                        assertTrue(attempt.received(),
+                            "A queued record must be received or rejected as typed BUSY.");
+                        successfulReads++;
+                    }
                 }
-                sawRefusalAsNoData = hiddenRefusals > 0
-                    && successfulReads + hiddenRefusals
-                        == CONCURRENT_RECEIVERS
-                    && successfulReads < CONCURRENT_RECEIVERS;
 
+                int remainingReads = 0;
                 while (true) {
                     try (Received remaining = new Received()) {
                         if (!receiver.recv(remaining, RecvFlags.DONT_WAIT)) {
                             break;
                         }
+                        remainingReads++;
                     }
                 }
+                assertEquals(CONCURRENT_RECEIVERS,
+                    successfulReads + remainingReads,
+                    "Every queued record must be consumed exactly once.");
             }
-
-            assertTrue(sawBusyException,
-                sawRefusalAsNoData
-                    ? "Core returned BUSY during multipart receive, but recv returned false."
-                    : "Core BUSY was not observed across " + REPRO_ROUNDS
-                        + " concurrent rounds with " + PARTS_PER_RECORD
-                        + " parts per record.");
 
             try (Received empty = new Received()) {
                 assertFalse(receiver.recv(empty, RecvFlags.DONT_WAIT));

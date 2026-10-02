@@ -33,7 +33,7 @@ async function role(t, behavior) {
     const timer = setInterval(() => {}, 1000);
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { ${behavior} });
     console.log('ready');
-  `], { stdio: ['ignore', 'pipe', 'pipe'] });
+  `], { stdio: ['pipe', 'pipe', 'pipe'] });
   const state = { child, name: 'role', logPath: 'role.log', closed: false };
   state.exited = new Promise(resolve => child.once('close', () => { state.closed = true; resolve(state.status); }));
   child.once('exit', (code, signal) => {
@@ -64,9 +64,28 @@ test('scenario reaps an intentional owner SIGKILL before clean teardown', async 
   assert.equal(survivor.exitCode, 0);
 });
 
-test('cleanup reports a role that ignores SIGINT and needs SIGKILL', async t => {
-  const state = await role(t, '');
-  await assert.rejects(runner([state]).cleanup(), /role.*cleanup.*SIGKILL/);
+test('cleanup waits for the role termination boundary', async t => {
+  const state = await role(t, `
+    console.log('stopping');
+    process.stdin.once('data', () => { clearInterval(timer); process.stdin.destroy(); });
+  `);
+  const stopping = once(state.child.stdout, 'data');
+  let completed = false;
+  const cleanup = runner([state]).cleanup().then(() => { completed = true; });
+  await stopping;
+  assert.equal(completed, false);
+  state.child.stdin.end('finish');
+  await cleanup;
+  assert.equal(state.exitCode, 0);
+});
+
+test('cleanup reports an externally killed role that does not terminate', async t => {
+  const state = await role(t, "console.log('stopping');");
+  const stopping = once(state.child.stdout, 'data');
+  const rejected = assert.rejects(runner([state]).cleanup(), /role.*cleanup.*SIGKILL/);
+  await stopping;
+  state.child.kill('SIGKILL');
+  await rejected;
 });
 
 test('cleanup still reports a role killed after cleanup starts', async t => {

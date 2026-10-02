@@ -6,18 +6,11 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include "sockets/common/socket_runtime.hpp"
 #include "api/socket/inline_msg_buffer_internal.hpp"
 #include "api/message/submit_result_internal.hpp"
 #include <zlink.h>
-
-enum zlink_part_flag_t
-{
-    ZLINK_PART_FINAL = 0,
-    ZLINK_PART_MORE = 1
-};
 
 namespace zlink
 {
@@ -26,15 +19,6 @@ class pipe_t;
 
 namespace part_helper_internal
 {
-enum recv_family_t
-{
-    recv_family_none = 0,
-    recv_family_basic,
-    recv_family_subscribe,
-    recv_family_xpub,
-    recv_family_router
-};
-
 // Keep common short send records inline. Larger multipart records retain the
 // same ownership model and spill through inline_msg_buffer_t's dynamic path.
 const size_t inline_send_part_capacity = 4;
@@ -53,9 +37,7 @@ struct recv_sequence_state_t
     recv_sequence_state_t ();
 
     bool active;
-    recv_family_t family;
     zlink::socket_base_t *source_socket;
-    std::thread::id owner_thread;
     bool return_source_rid_as_null;
     zlink_routing_id_t source_node_rid;
     uint64_t request_seq;
@@ -66,7 +48,6 @@ struct recv_sequence_state_t
     int subscribed;
     std::string topic_id;
     recv_part_buffer_t buffered_parts;
-    size_t next_part_index;
     bool public_delivery_hold;
 };
 
@@ -106,57 +87,33 @@ void copy_routing_id (const zlink_routing_id_t *src_, zlink_routing_id_t *dest_)
 void consume_send_part (zlink_msg_t *part_);
 std::shared_ptr<handle_state_t> find_or_create_socket_state (zlink::socket_base_t *socket_);
 std::shared_ptr<handle_state_t> find_socket_state (zlink::socket_base_t *socket_);
-staged_recv_record_result_t try_take_staged_recv_record (
-  const std::shared_ptr<handle_state_t> &state_,
-  recv_family_t family_,
-  zlink_msg_t *parts_out_,
-  size_t parts_capacity_,
-  size_t *part_count_out_,
-  recv_record_metadata_t *metadata_out_);
+staged_recv_record_result_t
+try_take_staged_recv_record (const std::shared_ptr<handle_state_t> &state_,
+                             zlink_msg_t *parts_out_,
+                             size_t parts_capacity_,
+                             size_t *part_count_out_,
+                             recv_record_metadata_t *metadata_out_,
+                             char *topic_id_out_ = NULL,
+                             size_t topic_id_capacity_ = 0,
+                             size_t *topic_id_len_out_ = NULL,
+                             int *subscribed_out_ = NULL);
 int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
-                         recv_family_t family_,
                          zlink::socket_base_t *source_socket_,
                          const zlink_routing_id_t *source_node_rid_,
                          uint64_t request_seq_,
                          zlink_msg_t *parts_,
                          size_t part_count_,
-                         std::thread::id owner_thread_,
                          uint64_t transport_pair_id_ = 0,
                          uint64_t transport_pair_generation_ = 0,
                          uint64_t route_generation_ = 0,
-                         zlink::pipe_t *route_source_pipe_ = NULL);
+                         zlink::pipe_t *route_source_pipe_ = NULL,
+                         std::string *topic_id_ = NULL,
+                         int subscribed_ = 0);
 int adopt_recv_public_delivery_hold (
   const std::shared_ptr<handle_state_t> &state_);
-void set_recv_metadata (recv_sequence_state_t *recv_,
-                        const zlink_routing_id_t *source_node_rid_,
-                        uint64_t request_seq_);
-int buffer_recv_parts (recv_sequence_state_t *recv_,
-                       zlink_msg_t *parts_,
-                       size_t part_count_);
-int take_recv_part (recv_sequence_state_t *recv_,
-                    zlink_msg_t *part_out_,
-                    zlink_part_flag_t *has_more_out_);
-int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
-                    zlink_msg_t *part_out_,
-                    zlink_part_flag_t *has_more_out_);
-int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
-                    zlink_msg_t *part_out_,
-                    zlink_part_flag_t *has_more_out_,
-                    const zlink_routing_id_t **source_node_rid_out_,
-                    uint64_t *request_seq_out_,
-                    uint64_t *transport_pair_id_out_,
-                    uint64_t *transport_pair_generation_out_);
 zlink::socket_base_t *reset_recv_sequence (
   recv_sequence_state_t *state_, recv_reset_cleanup_t *cleanup_ = NULL);
 void finish_recv_reset_cleanup (recv_reset_cleanup_t *cleanup_);
-int prepare_recv_step (recv_family_t family_,
-                       zlink::socket_base_t *source_socket_,
-                       const std::shared_ptr<handle_state_t> &state_,
-                       bool *first_part_out_,
-                       zlink::socket_base_t **active_source_socket_out_);
-void complete_recv_step (const std::shared_ptr<handle_state_t> &state_,
-                         zlink_part_flag_t has_more_);
-void abort_recv_step (const std::shared_ptr<handle_state_t> &state_);
 void cleanup_socket (zlink::socket_base_t *socket_);
 
 int validate_whole_send (zlink::socket_base_t *socket_, zlink_msg_t *parts_,
