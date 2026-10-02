@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Execution;
 
@@ -10,9 +9,6 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 // session bindings table so the framework seam can keep its actor-id-keyed shape.
 internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocket
 {
-    private static readonly TimeSpan DefaultBindTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan BindRetryInterval = TimeSpan.FromMilliseconds(10);
-
     private readonly IStreamSocket _socket;
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -161,27 +157,12 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        // Core marks a session live from its connected observer event, which is
-        // asynchronous to packet delivery — a bind triggered by the session's
-        // first packet can outrun it and see NotConnected. Retry within the
-        // bind timeout; the liveness event is milliseconds behind the packet.
-        var deadline =
-            Stopwatch.GetElapsedTime(0) + (timeout > TimeSpan.Zero ? timeout : DefaultBindTimeout);
-        while (true)
-        {
-            var submit = await SubmitAndAwaitOperationAsync(
-                    id => Session().BindActor(sessionRid, ToNativeActor(actor), id, timeout),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (submit != SubmitResult.NotConnected || Stopwatch.GetElapsedTime(0) >= deadline)
-            {
-                ThrowIfSubmitFailed(submit);
-                return;
-            }
-
-            await Task.Delay(BindRetryInterval, cancellationToken).ConfigureAwait(false);
-        }
+        var submit = await SubmitAndAwaitOperationAsync(
+                id => Session().BindActor(sessionRid, ToNativeActor(actor), id, timeout),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        ThrowIfSubmitFailed(submit);
     }
 
     private ActorRef ToNativeActor(ZLinkBackendActorRef actor)
@@ -303,9 +284,12 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
             if (string.Equals(binding.Actor.ActorId, actorId, StringComparison.Ordinal))
                 return AwaitStateLane(
                     _lane.RunAsync(() =>
-                        session.SendToActor(sessionRid, binding.Actor, parts, flags)
-                        == SubmitResult.Ok
-                    )
+                    {
+                        ThrowIfSubmitFailed(
+                            session.SendToActor(sessionRid, binding.Actor, parts, flags)
+                        );
+                        return true;
+                    })
                 );
 
         return false;

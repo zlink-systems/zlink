@@ -232,32 +232,37 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
 
         foreach (var stream in resources.StreamNodes)
-            await CaptureAsync(() => DisposeSafelyAsync(stream)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(() => stream.DisposeAsync(forceStopToken)))
+                .ConfigureAwait(false);
 
         foreach (var bundle in resources.ClientServerClientBundles)
-            await CaptureAsync(() => DisposeSafelyAsync(bundle)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         foreach (var runtime in resources.ClientServerClientRuntimes)
-            await CaptureAsync(() => DisposeSafelyAsync(runtime)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(runtime.DisposeAsync))
+                .ConfigureAwait(false);
 
         foreach (var bundle in resources.ClientServerServerBundles)
-            await CaptureAsync(() => DisposeSafelyAsync(bundle)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         // A STREAM node's native session service is created from the shared
         // MeshNode. Destroy the dependent session service and socket before
         // destroying the MeshNode that owns their routing plane.
         foreach (var node in resources.SpotNodes)
-            await CaptureAsync(() => DisposeSpotNodeSafelyAsync(node, forceStopToken))
+            await CaptureAsync(() =>
+                    DisposeSafelyAsync(() => DisposeSpotNodeAsync(node, forceStopToken))
+                )
                 .ConfigureAwait(false);
 
         foreach (var bundle in resources.PublisherBundles)
-            await CaptureAsync(() => DisposeSafelyAsync(bundle)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         foreach (var runtime in resources.AutomaticFanoutSubscriberRuntimes)
-            await CaptureAsync(() => DisposeSafelyAsync(runtime)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(runtime.DisposeAsync))
+                .ConfigureAwait(false);
 
         foreach (var bundle in resources.SubscriberBundles)
-            await CaptureAsync(() => DisposeSafelyAsync(bundle)).ConfigureAwait(false);
+            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks))
             .ConfigureAwait(false);
@@ -267,7 +272,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         Capture(ErrorSink.Dispose);
         Capture(ForceStopTokenSource.Dispose);
         Capture(StopTokenSource.Dispose);
-        await CaptureAsync(() => DisposeSafelyAsync(Context)).ConfigureAwait(false);
+        await CaptureAsync(() => DisposeSafelyAsync(Context.DisposeAsync)).ConfigureAwait(false);
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
@@ -326,29 +331,18 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         Task[] ListenerTasks
     );
 
-    private static async ValueTask DisposeSafelyAsync(IAsyncDisposable disposable)
+    private static async ValueTask DisposeSafelyAsync(Func<ValueTask> dispose)
     {
         try
         {
-            await disposable.DisposeAsync();
+            await dispose().ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
         catch (ZlinkCloseException) { }
     }
 
-    private static async ValueTask DisposeSpotNodeSafelyAsync(
+    private static ValueTask DisposeSpotNodeAsync(
         ZLinkSpotNodeRuntime node,
         CancellationToken forceStopToken
-    )
-    {
-        try
-        {
-            if (forceStopToken.CanBeCanceled)
-                await node.ForceStopAsync(forceStopToken).ConfigureAwait(false);
-            else
-                await node.DisposeAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException) { }
-        catch (ZlinkCloseException) { }
-    }
+    ) => forceStopToken.CanBeCanceled ? node.ForceStopAsync(forceStopToken) : node.DisposeAsync();
 }

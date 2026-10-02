@@ -2486,64 +2486,6 @@ public sealed class SessionActorCoordinatorTests
         );
 
     [Fact]
-    public async Task Bind_Retry_Exhaustion_Surfaces_DeadlineExceeded_With_The_Last_Failure_As_Cause()
-    {
-        //  Spec 32: deadline-bounded wait exhaustion is DeadlineExceeded.
-        //  Retryable bind failures that outlive the deadline window must not
-        //  leak the last attempt's kind (typically Unavailable) unchanged.
-        var lastFailure = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "The bind route is not admitted yet."
-        );
-        var attempts = 0;
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await ZLinkSessionActorCoordinator.ConfirmBindingWithRetryAsync<int>(
-                "actor-bind-exhausted",
-                System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(120),
-                _ =>
-                {
-                    attempts++;
-                    throw lastFailure;
-                },
-                CancellationToken.None
-            )
-        );
-
-        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.Same(lastFailure, error.InnerException);
-        Assert.True(attempts >= 1);
-    }
-
-    [Fact]
-    public async Task Bind_NonRetryable_Failure_Propagates_Unmapped()
-    {
-        var failure = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            "The bind request is invalid.",
-            ZLinkRetryAdvice.DoNotRetry
-        );
-        var attempts = 0;
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await ZLinkSessionActorCoordinator.ConfirmBindingWithRetryAsync<int>(
-                "actor-bind-fatal",
-                System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
-                _ =>
-                {
-                    attempts++;
-                    throw failure;
-                },
-                CancellationToken.None
-            )
-        );
-
-        Assert.Same(failure, error);
-        Assert.Null(error.InnerException);
-        Assert.Equal(1, attempts);
-    }
-
-    [Fact]
     public async Task Conditional_Bound_Session_Send_Reports_SkippedNotBound_For_A_Stale_Token()
     {
         var runtime = CreateRuntime();

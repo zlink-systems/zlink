@@ -188,27 +188,37 @@ internal sealed partial class ZLinkFrameworkRuntime
                 request.TargetAttemptGeneration
             );
         }
-        catch
+        catch (Exception primaryFailure)
         {
+            var failures = new ZLinkFailureCollector(primaryFailure);
             if (targetAdmissionSeal is not null)
-                _ = await preparedSpot
-                    .Activation.AbortRelocationAsync(targetAdmissionSeal)
+                await failures
+                    .CaptureAsync(async () =>
+                        _ = await preparedSpot
+                            .Activation.AbortRelocationAsync(targetAdmissionSeal)
+                            .ConfigureAwait(false)
+                    )
                     .ConfigureAwait(false);
             foreach (var actorId in boundActorIds.Keys)
             {
-                try
+                failures.Capture(() =>
                 {
                     if (stagedActorStates.TryGetValue(actorId, out var actorState))
-                    {
                         actorState.Handoff.AbortImport(envelope.AggregateId.ToString("N"));
-                    }
-                    await _actorSessionManager
-                        .RollbackTransferredActorAsync(actorId.Value, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch { }
+                });
+                await failures
+                    .CaptureAsync(() =>
+                        _actorSessionManager.RollbackTransferredActorAsync(
+                            actorId.Value,
+                            CancellationToken.None
+                        )
+                    )
+                    .ConfigureAwait(false);
             }
-            await node.Catalog.DiscardReservedAsync(preparedSpot).ConfigureAwait(false);
+            await failures
+                .CaptureAsync(() => node.Catalog.DiscardReservedAsync(preparedSpot))
+                .ConfigureAwait(false);
+            failures.ThrowIfAny();
             throw;
         }
     }
@@ -789,7 +799,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         var targetOwner =
             LocationLifecycle?.OwnerToken
             ?? throw new ZLinkConfigurationException("Location runtime is not registered.");
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore, relocationStore);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            ErrorSink,
+            authorityStore,
+            relocationStore
+        );
         var current = stage.Envelope.CanonicalLogicalStream.IsEmpty
             ? stage.Envelope
             : await coordinator

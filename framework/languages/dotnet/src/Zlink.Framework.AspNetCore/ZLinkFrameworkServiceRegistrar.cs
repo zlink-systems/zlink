@@ -160,6 +160,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         );
         services.TryAddSingleton<ZLinkFrameworkMaintenanceRuntime>(
             provider => new ZLinkFrameworkMaintenanceRuntime(
+                provider.GetRequiredService<ZLinkFrameworkRuntime>().ErrorSink,
                 provider.GetRequiredService<ZLinkDrainCoordinator>(),
                 provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>(),
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PreflightRetireAsync,
@@ -452,7 +453,8 @@ internal static class ZLinkFrameworkServiceRegistrar
             provider.GetService<IZLinkLocationWatchStore>(),
             provider.GetRequiredService<ZLinkStoreLocationResolvers>(),
             handles: null,
-            options: provider.GetRequiredService<ZLinkLocationOptions>()
+            options: provider.GetRequiredService<ZLinkLocationOptions>(),
+            errorSink: provider.GetRequiredService<ZLinkFrameworkRuntime>().ErrorSink
         ));
         services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ZLinkSpotHandleWatchHost>()

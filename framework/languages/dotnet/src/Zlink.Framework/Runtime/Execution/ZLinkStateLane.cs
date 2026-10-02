@@ -137,18 +137,32 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     }
 
     /// <summary>
-    /// Queues <paramref name="work"/> without waiting for it. Ordering against other posts on this
-    /// lane still holds.
+    /// Queues asynchronous work and returns its completion. Submission from this lane is deferred;
+    /// callers on the lane must observe the completion without awaiting another turn.
     /// </summary>
-    internal bool TryPost(Func<ValueTask> work)
+    internal ValueTask RunAsync(Func<ValueTask> work)
     {
         ArgumentNullException.ThrowIfNull(work);
         if (Volatile.Read(ref _closed) != 0)
-            return false;
+            return ValueTask.FromException(new ObjectDisposedException(nameof(ZLinkStateLane)));
 
-        _mailbox.Enqueue(work);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        _mailbox.Enqueue(async () =>
+        {
+            try
+            {
+                await work().ConfigureAwait(false);
+                completion.TrySetResult();
+            }
+            catch (Exception failure)
+            {
+                completion.TrySetException(failure);
+            }
+        });
         ScheduleDrain();
-        return true;
+        return new ValueTask(completion.Task);
     }
 
     /// <summary>
@@ -190,16 +204,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             var processed = 0;
             while (processed < DrainBatchLimit && _mailbox.TryDequeue(out var work))
             {
-                try
-                {
-                    await work().ConfigureAwait(false);
-                }
-                catch
-                {
-                    //  RunAsync already routed the failure to its caller's completion. A TryPost
-                    //  callback owns its own errors; letting one escape here would tear down the
-                    //  lane and strand every item behind it.
-                }
+                await work().ConfigureAwait(false);
 
                 processed++;
             }

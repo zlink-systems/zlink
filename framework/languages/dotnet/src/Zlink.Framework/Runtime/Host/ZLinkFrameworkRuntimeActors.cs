@@ -541,6 +541,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         try
         {
             durableEnvelope = await new ZLinkRelocationPublicationCoordinator(
+                ErrorSink,
                 resolvedAuthorityStore,
                 relocationStore
             )
@@ -1493,6 +1494,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             if (!canonicalMaintenance)
                 actorState.Handoff.PrepareImportedReplay(request.Frames);
             var released = await new ZLinkRelocationPublicationCoordinator(
+                ErrorSink,
                 authorityStore,
                 relocationStore
             )
@@ -1806,6 +1808,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                             "Actor relocation recovery requires a Relocation Store."
                                         );
                                     var candidate = await new ZLinkRelocationStartupRecovery(
+                                        ErrorSink,
                                         locationStore,
                                         relocationStore
                                     )
@@ -4399,56 +4402,6 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     private readonly Dictionary<ZLinkActorId, Task> _remoteFrameChains = new();
 
-    /// <summary>Session-node relay for a frame whose bound actor lives on
-    /// another node: wraps the stream frame in the internal node-addressed
-    /// actor-frame packet.</summary>
-    private bool RelayRemoteActorFrame(
-        string? meshName,
-        ZLinkBackendActorRef actor,
-        ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        ZLinkBackendActorRouteContext routeContext,
-        ulong sourceNodeGeneration,
-        ZLinkServiceWireCodec.RequestSourceFence? requestSource,
-        ReadOnlyMemory<byte> applicationMetadata,
-        byte[] header,
-        byte[] body
-    )
-    {
-        var relay = PrepareRemoteActorFrame(
-            meshName,
-            actor,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            sourceNodeRid,
-            sourceSessionRid,
-            routeContext,
-            sourceNodeGeneration,
-            requestSource,
-            applicationMetadata,
-            header,
-            body
-        );
-        if (relay is null)
-            return false;
-        try
-        {
-            return relay.Value.NodeRuntime.Node.SendToNode(
-                    relay.Value.TargetNodeRid,
-                    relay.Value.Parts,
-                    SendFlags.DontWait
-                ) == SubmitResult.Ok;
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(relay.Value.Parts);
-        }
-    }
-
     internal async ValueTask RelayRemoteActorFrameAsync(
         string? meshName,
         ZLinkBackendActorRef actor,
@@ -5284,7 +5237,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal bool ForwardActorBoundSessionPart(
+    internal ValueTask<bool> ForwardActorBoundSessionPartAsync(
         string meshName,
         ZLinkBackendActorRef actorRef,
         ulong targetNodeGeneration,
@@ -5297,10 +5250,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkBackendActorRouteContext routeContext = default,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        ReadOnlyMemory<byte> applicationMetadata = default
+        ReadOnlyMemory<byte> applicationMetadata = default,
+        CancellationToken cancellationToken = default
     )
     {
-        return _actorBoundSessionCoordinator.ForwardPart(
+        return _actorBoundSessionCoordinator.ForwardPartAsync(
             actorRef,
             sourceNodeRid,
             sourceSessionRid,
@@ -5314,7 +5268,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             routeContext,
             sourceNodeGeneration,
             requestSource,
-            applicationMetadata
+            applicationMetadata,
+            cancellationToken
         );
     }
 

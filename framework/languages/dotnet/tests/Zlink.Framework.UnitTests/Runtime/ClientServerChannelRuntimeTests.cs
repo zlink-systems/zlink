@@ -192,6 +192,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             TimeSpan.FromSeconds(sendTimeoutSeconds),
             CancellationToken.None,
             null!,
+            new ZLinkRuntimeErrorSink(),
             timeProvider: time
         );
 
@@ -769,7 +770,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
-    public async Task CancellationIgnoringRequestHandler_DoesNotBlockRuntimeStopOrReplyLate()
+    public async Task CancellationIgnoringRequestHandler_DoesNotBlockHostDeadlineStopOrReplyLate()
     {
         await using var server = CreateBlockingServer(0);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -802,10 +803,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .AsTask();
             await blocking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await serverRuntime
-                .StopAsync(CancellationToken.None)
-                .AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(3));
+            using var deadline = new CancellationTokenSource();
+            var stop = serverRuntime.ForceStopAsync(deadline.Token).AsTask();
+            await Task.Delay(200);
+            deadline.Cancel();
+            await stop.WaitAsync(TimeSpan.FromSeconds(3));
             blocking.Release.TrySetResult();
             await blocking.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
             await Assert.ThrowsAnyAsync<Exception>(async () => await request);

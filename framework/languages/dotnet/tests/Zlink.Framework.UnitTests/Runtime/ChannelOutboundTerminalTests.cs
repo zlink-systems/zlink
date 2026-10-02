@@ -296,6 +296,33 @@ public sealed class ChannelOutboundTerminalTests
     }
 
     [Fact]
+    public void RelocationRejectionReplyFailureReachesRuntimeReporter()
+    {
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(static _ => { });
+        using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var expected = new IOException("reply submission failed");
+        Exception? observed = null;
+        runtime.ErrorSink.UnhandledCallbackException += error => observed = error;
+        var received = new ZLinkBackendRouteReceived(
+            EncodeRoutedRequestParts(ValidFlowId),
+            sourceNodeRid: RoutingId.From("reject-source"),
+            spotId: "reject-spot",
+            requestSeq: 1UL,
+            reply: _ => throw expected
+        );
+
+        ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
+            received,
+            "reject-route",
+            runtime
+        );
+
+        Assert.Same(expected, observed);
+    }
+
+    [Fact]
     public void RejectionRepliesClassifyMalformedFlowByLiveGate()
     {
         //  Gate off (tracing Off): flow fields are framing only, so the drain
@@ -319,6 +346,13 @@ public sealed class ChannelOutboundTerminalTests
 
     private static ZLinkEnvelopeHeader RejectRelocationReply(string flowId, bool validateFlow)
     {
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(static _ => { });
+        using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
+            validateFlow ? ZLinkDiagnosticsLevel.Normal : ZLinkDiagnosticsLevel.Off
+        );
         var parts = EncodeRoutedRequestParts(flowId);
         var replies = new List<Message[]>();
         var received = new ZLinkBackendRouteReceived(
@@ -338,7 +372,7 @@ public sealed class ChannelOutboundTerminalTests
         ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
             received,
             "reject-route",
-            validateFlow
+            runtime
         );
 
         var reply = Assert.Single(replies);

@@ -58,4 +58,10 @@ internal sealed class ZLinkDispatchErrorReporter(
     {
         Flow.TraceDispatchError(error);
     }
+
+    public void ReportRuntimeTaskException(string taskName, Exception exception) =>
+        (
+            runtime
+            ?? throw new InvalidOperationException("Runtime failure reporting requires a runtime.")
+        ).ErrorSink.ReportRuntimeTaskException(taskName, exception);
 }

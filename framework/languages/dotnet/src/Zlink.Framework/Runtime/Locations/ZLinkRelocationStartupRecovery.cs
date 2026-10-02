@@ -15,6 +15,7 @@ internal sealed record ZLinkRelocationRecoveryCandidate(
 /// it must be idempotent for the aggregate identity.
 /// </summary>
 internal sealed class ZLinkRelocationStartupRecovery(
+    IZLinkRuntimeFailureReporter failureReporter,
     IZLinkLocationRepository authorityStore,
     IZLinkRelocationRepository relocationStore
 )
@@ -57,7 +58,11 @@ internal sealed class ZLinkRelocationStartupRecovery(
                 await recoverPreparing(entry, cancellationToken).ConfigureAwait(false);
             }
 
-        var reader = new ZLinkRelocationPublicationCoordinator(authorityStore, relocationStore);
+        var reader = new ZLinkRelocationPublicationCoordinator(
+            failureReporter,
+            authorityStore,
+            relocationStore
+        );
         foreach (
             var group in linked.Values.OrderBy(
                 static value => value.Reference.Reference,
@@ -139,6 +144,7 @@ internal sealed class ZLinkRelocationStartupRecovery(
         try
         {
             envelope = await new ZLinkRelocationPublicationCoordinator(
+                failureReporter,
                 authorityStore,
                 relocationStore
             )

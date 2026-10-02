@@ -11,7 +11,8 @@ internal sealed class ZLinkStreamSessionTable(
     ZLinkDrainAdmissionGate drainAdmission,
     string transport,
     TimeProvider timeProvider,
-    bool actorDispatchEnabled
+    bool actorDispatchEnabled,
+    IZLinkRuntimeFailureReporter errorSink
 )
 {
     private readonly ZLinkStateLane _lane = new();
@@ -275,7 +276,10 @@ internal sealed class ZLinkStreamSessionTable(
                 )
                 .ConfigureAwait(false);
         }
-        catch { }
+        catch (Exception failure)
+        {
+            errorSink.ReportRuntimeTaskException(nameof(RejectNewSessionAsync), failure);
+        }
         finally
         {
             socket.DisconnectPeer(routingId);

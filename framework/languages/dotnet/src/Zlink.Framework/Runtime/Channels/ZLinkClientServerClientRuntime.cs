@@ -31,6 +31,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private IDisposable? _manualConnectionAttachment;
     private Task? _disposeTask;
     private readonly ZLinkMessageFlowTracer? _flow;
+    private readonly IZLinkRuntimeFailureReporter _errorSink;
 
     // Monitoring subscribers use this edge notification to request a fresh
     // snapshot. The callback only signals a bounded channel; it never reads
@@ -45,6 +46,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         TimeSpan sendTimeout,
         CancellationToken stopToken,
         ZLinkApplicationJobQueue applicationJobQueue,
+        IZLinkRuntimeFailureReporter errorSink,
         ZLinkMessageFlowTracer? flow = null,
         TimeProvider? timeProvider = null
     )
@@ -56,6 +58,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _sendTimeout = sendTimeout;
         _stopToken = stopToken;
         _applicationJobQueue = applicationJobQueue;
+        _errorSink = errorSink;
         _flow = flow;
         _time = timeProvider ?? TimeProvider.System;
     }
@@ -485,7 +488,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _stopToken,
                 OnAdmitted,
                 ScheduleStateChanged,
-                _time
+                _time,
+                _errorSink
             );
             inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _retired.RemoveAll(static candidate => candidate.IsCompleted);
@@ -621,13 +625,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     private void ScheduleStateChanged(bool selectionChanged)
     {
-        _lane.TryPost(() =>
-        {
-            if (!_disposed && selectionChanged)
-                RebuildReadySelectionPlanUnderLock();
-            SignalStateChanged();
-            return ValueTask.CompletedTask;
-        });
+        ZLinkUnawaitedSubmit.Observe(
+            _lane.RunAsync(() =>
+            {
+                if (!_disposed && selectionChanged)
+                    RebuildReadySelectionPlanUnderLock();
+                SignalStateChanged();
+                return ValueTask.CompletedTask;
+            }),
+            nameof(ScheduleStateChanged),
+            _errorSink
+        );
     }
 
     private void RebuildReadySelectionPlanUnderLock()
@@ -794,6 +802,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private ulong? _outstandingProbeId;
         private long _lastPeerActivity;
         private readonly TimeProvider _time;
+        private readonly IZLinkRuntimeFailureReporter _errorSink;
         private long _livenessAckCount;
         private long _receivedLivenessProbeCount;
         private long _sentLivenessProbeCount;
@@ -809,7 +818,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             CancellationToken stopToken,
             Action<Connection, string> onAdmitted,
             Action<bool> onStateChanged,
-            TimeProvider timeProvider
+            TimeProvider timeProvider,
+            IZLinkRuntimeFailureReporter errorSink
         )
         {
             _channelName = channelName;
@@ -819,6 +829,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _onAdmitted = onAdmitted;
             _onStateChanged = onStateChanged;
             _time = timeProvider;
+            _errorSink = errorSink;
             Socket = socket;
         }
 
@@ -1094,11 +1105,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 .ConfigureAwait(false);
             lock (_socketLifecycleGate)
             {
-                try
-                {
-                    Socket.Disconnect(_endpoint);
-                }
-                catch { }
+                failures.Capture(() => Socket.Disconnect(_endpoint));
             }
             if (_monitor is not null)
                 await failures.CaptureAsync(_monitor.DisposeAsync).ConfigureAwait(false);
@@ -1405,8 +1412,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 if (!accepted)
                     return false;
             }
-            catch
+            catch (Exception exception)
             {
+                _errorSink.ReportRuntimeTaskException(nameof(RunAdmissionAsync), exception);
                 return RunState(() =>
                 {
                     if (!IsCurrentAttempt(physicalGeneration, attempt))
@@ -1414,7 +1422,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     _ready = false;
                     _rejected = true;
                     _admissionCompleted = true;
-                    _diagnostics = "invalid:exception";
+                    _diagnostics = $"invalid:{exception.GetType().Name}:{exception.Message}";
                     PublishReadyTargetUnderLock();
                     return false;
                 });
@@ -1450,11 +1458,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     )
                         continue;
                     if (!Socket.Recv(received, RecvFlags.DontWait))
-                    {
-                        await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
-                            .ConfigureAwait(false);
                         continue;
-                    }
                     if (
                         ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
                             received.Parts,
@@ -1734,10 +1738,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             });
         }
 
-        private async ValueTask<bool> SendOwnedAsync(
-            Message message,
-            CancellationToken cancellationToken
-        )
+        private async ValueTask SendOwnedAsync(Message message, CancellationToken cancellationToken)
         {
             try
             {
@@ -1747,11 +1748,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     .Async(cancellationToken)
                     .EnsureAcceptedAsync()
                     .ConfigureAwait(false);
-                return true;
-            }
-            catch
-            {
-                return false;
             }
             finally
             {
@@ -1764,8 +1760,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             try
             {
                 // A request envelope needs the correlated raw reply terminal.
-                // Raw replies are HWM-free, so Submit is canonical and cannot
-                // suspend the sole control receive loop behind send admission.
+                // Binding admission owns DEALER reply backpressure. This loop
+                // observes a refused submission through its failure path.
                 received.Reply().Message(message).Submit();
             }
             finally

@@ -11,13 +11,19 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotPeerConnectorTests
 {
     [Fact]
-    public void Auto_Router_Connect_Retries_After_Busy()
+    public void Auto_Router_Connect_Preserves_Busy_And_Rolls_Back_Claim()
     {
         var node = DispatchProxy.Create<IZLinkBackendSpotNode, BusyOnceSpotNode>();
         var proxy = (BusyOnceSpotNode)(object)node;
         var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
 
-        Assert.False(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
+        var failure = Assert.Throws<ZlinkConnectException>(() =>
+            connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none")
+        );
+        Assert.Same(proxy.ConnectFailure, failure);
+        Assert.Equal(1, proxy.ConnectAttempts);
+
+        // A separate explicit request must reach the backend after claim rollback.
         Assert.True(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
         Assert.Equal(2, proxy.ConnectAttempts);
     }
@@ -73,9 +79,16 @@ public sealed class SpotPeerConnectorTests
             {
                 Console.SetError(capturedError);
                 var node = DispatchProxy.Create<IZLinkBackendSpotNode, BusyOnceSpotNode>();
+                var proxy = (BusyOnceSpotNode)(object)node;
                 var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
 
-                Assert.False(connector.ConnectPeerAuto(null, "tcp://peer:1", "none"));
+                var failure = Assert.Throws<ZlinkConnectException>(() =>
+                    connector.ConnectPeerAuto(null, "tcp://peer:1", "none")
+                );
+                Assert.Same(proxy.ConnectFailure, failure);
+                Assert.Equal(1, proxy.ConnectAttempts);
+                Assert.True(connector.ConnectPeerAuto(null, "tcp://peer:1", "none"));
+                Assert.Equal(2, proxy.ConnectAttempts);
             }
             finally
             {
@@ -163,6 +176,9 @@ public sealed class SpotPeerConnectorTests
     {
         internal int ConnectAttempts { get; private set; }
 
+        internal ZlinkConnectException ConnectFailure { get; } =
+            new(ZlinkConnectException.ErrorCode.Busy);
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
@@ -171,7 +187,7 @@ public sealed class SpotPeerConnectorTests
 
             ConnectAttempts++;
             if (ConnectAttempts == 1)
-                throw new ZlinkConnectException(ZlinkConnectException.ErrorCode.Busy);
+                throw ConnectFailure;
 
             return null;
         }

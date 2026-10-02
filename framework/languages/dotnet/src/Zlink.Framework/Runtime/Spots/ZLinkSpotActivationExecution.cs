@@ -522,14 +522,14 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return;
             case ZLinkSpotMessageFollowResult.NotApplicable:
@@ -1444,8 +1444,7 @@ internal abstract partial class ZLinkSpotActivation
                         received,
                         ChannelName,
                         admission,
-                        received.SourceNodeRid == NodeRid,
-                        _runtime.Flow.CaptureEnabled
+                        _runtime
                     ),
                 state.ReleaseForRelocation,
                 state.ReleaseForRelocation
@@ -1465,8 +1464,7 @@ internal abstract partial class ZLinkSpotActivation
                     received,
                     ChannelName,
                     admission,
-                    received.SourceNodeRid is null || received.SourceNodeRid == NodeRid,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
             },
             () =>
@@ -1475,7 +1473,7 @@ internal abstract partial class ZLinkSpotActivation
                     ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                         received,
                         ChannelName,
-                        _runtime.Flow.CaptureEnabled
+                        _runtime
                     );
             },
             received.Dispose
@@ -1516,7 +1514,7 @@ internal abstract partial class ZLinkSpotActivation
             ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                 received,
                 ChannelName,
-                _runtime.Flow.CaptureEnabled
+                _runtime
             );
             return;
         }
@@ -1531,14 +1529,14 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return;
             case ZLinkSpotMessageFollowResult.NotApplicable:
@@ -1559,8 +1557,7 @@ internal abstract partial class ZLinkSpotActivation
             received,
             ChannelName,
             ZLinkAcceptedWorkAdmission.Closing,
-            received.SourceNodeRid == NodeRid,
-            _runtime.Flow.CaptureEnabled
+            _runtime
         );
         return true;
     }
@@ -2180,14 +2177,14 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return true;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
                 return true;
             case ZLinkSpotMessageFollowResult.NotApplicable:
@@ -2206,7 +2203,7 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     route.Received,
                     ChannelName,
-                    _runtime.Flow.CaptureEnabled
+                    _runtime
                 );
     }
 
@@ -2226,7 +2223,7 @@ internal abstract partial class ZLinkSpotActivation
             ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                 route.Received,
                 ChannelName,
-                _runtime.Flow.CaptureEnabled
+                _runtime
             );
     }
 

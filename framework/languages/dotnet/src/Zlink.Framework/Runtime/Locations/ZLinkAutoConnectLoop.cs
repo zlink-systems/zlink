@@ -14,6 +14,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
 {
     private readonly ZLinkAutoConnectReconciler _reconciler;
+    private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly ZLinkLocationOptions _options;
     private readonly ZLinkMeshName _meshName;
     private readonly IZLinkLocationRepository _store;
@@ -29,6 +30,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     private bool _lastTickFailed;
 
     internal ZLinkAutoConnectLoop(
+        IZLinkRuntimeFailureReporter errorSink,
         ZLinkAutoConnectReconciler reconciler,
         ZLinkAutoConnectLocal local,
         ZLinkLocationOptions options,
@@ -39,6 +41,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     )
     {
         _reconciler = reconciler;
+        _errorSink = errorSink;
         _options = options;
         _meshName = local.MeshName;
         _store = store;
@@ -175,8 +178,9 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             {
                 throw;
             }
-            catch (Exception)
+            catch (Exception failure)
             {
+                _errorSink.ReportRuntimeTaskException(nameof(TickAsync), failure);
                 // The stamp is only an optimization, so still perform the
                 // full correctness read. Record the failed preflight first
                 // even if that full read succeeds during the same tick.
@@ -231,7 +235,19 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
                 return;
             }
 
-            await TickAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await TickAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception failure)
+            {
+                _errorSink.ReportRuntimeTaskException(nameof(LoopAsync), failure);
+                throw;
+            }
         }
     }
 
@@ -265,8 +281,9 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             {
                 return;
             }
-            catch (Exception)
+            catch (Exception failure)
             {
+                _errorSink.ReportRuntimeTaskException(nameof(WatchAsync), failure);
                 // A broken watch stream degrades to pure polling until the
                 // next successful subscription.
                 try

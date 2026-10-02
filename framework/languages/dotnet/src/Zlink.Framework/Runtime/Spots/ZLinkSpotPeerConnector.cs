@@ -92,7 +92,7 @@ internal sealed class ZLinkSpotPeerConnector(
                     // the old target can safely reuse. Remove the claim so the
                     // reconciler retries the currently desired target.
                     connections.RollbackPeerAuto(endpoint);
-                    return false;
+                    throw;
                 }
             })
         );
@@ -128,18 +128,7 @@ internal sealed class ZLinkSpotPeerConnector(
         return AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                try
-                {
-                    return node.DisconnectPeerBeforeAdmission(
-                        peerRid,
-                        endpoint,
-                        lifecycleGeneration
-                    );
-                }
-                catch
-                {
-                    return false;
-                }
+                return node.DisconnectPeerBeforeAdmission(peerRid, endpoint, lifecycleGeneration);
             })
         );
     }
@@ -220,7 +209,7 @@ internal sealed class ZLinkSpotPeerConnector(
         {
             if (released)
                 restore();
-            return false;
+            throw;
         }
     }
 

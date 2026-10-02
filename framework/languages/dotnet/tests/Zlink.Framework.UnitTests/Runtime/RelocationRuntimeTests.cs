@@ -2580,6 +2580,8 @@ public sealed class RelocationRuntimeTests
     [Fact]
     public void StaleSpotMessageFollowReturnsTypedGenerationError()
     {
+        using var services = CreateRuntimeServices();
+        var runtime = CreateBareRuntime(services);
         var header = ZLinkClientCallCodec.CreateEnvelope(ZLinkMessageKind.Request, "mesh", "Ping");
         var request = ZLinkEnvelopeCodec.EncodeParts(
             header,
@@ -2603,7 +2605,7 @@ public sealed class RelocationRuntimeTests
         ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
             received,
             "mesh",
-            validateFlow: true
+            runtime
         );
 
         Assert.NotNull(replyHeader);
@@ -3758,7 +3760,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkRelocationPublicationCoordinator(authority, relocation);
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var request = CreateRequest(CreateEnvelope());
 
         var published = await coordinator.PublishAsync(request);
@@ -3792,7 +3798,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { Conflict = true };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(authority, relocation);
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
 
         await Assert.ThrowsAsync<ZLinkRelocationPublicationConflictException>(async () =>
             await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
@@ -3806,11 +3816,37 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task UnpublishedOrphanCleanupFailurePreservesConflictAndReportsCause()
+    {
+        var expected = new IOException("orphan cleanup failed");
+        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
+        var relocation = new RecordingRelocationStore { DeleteFailure = expected };
+        var authority = new RecordingAuthorityStore { Conflict = true };
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            failures,
+            authority,
+            relocation
+        );
+
+        await Assert.ThrowsAsync<ZLinkRelocationPublicationConflictException>(async () =>
+            await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
+        );
+
+        Assert.Contains(expected, failures.Failures);
+        Assert.Contains(relocation.Events, static item => item.Name == "delete");
+        Assert.NotEmpty(relocation.Payloads);
+    }
+
+    [Fact]
     public async Task ExceptionAfterCommittedCasReconcilesWithoutDeletingPublishedRoot()
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { ThrowAfterCommit = true };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(authority, relocation);
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
 
         var published = await coordinator.PublishAsync(CreateRequest(CreateEnvelope()));
 
@@ -3820,11 +3856,43 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task IndeterminateAuthorityReadAfterCommittedCasPreservesPublishedRootAndFailures()
+    {
+        var relocation = new RecordingRelocationStore();
+        var authority = new RecordingAuthorityStore
+        {
+            ThrowAfterCommit = true,
+            ReadFailuresRemaining = 1,
+        };
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(async () =>
+            await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
+        );
+
+        Assert.Collection(
+            failure.InnerExceptions,
+            error => Assert.Equal("commit outcome unknown", error.Message),
+            error => Assert.Equal("The authority read result is indeterminate.", error.Message)
+        );
+        Assert.NotEmpty(relocation.Payloads);
+        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
+    }
+
+    [Fact]
     public async Task MissingPublishedRootIsNonRetriableDataLoss()
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkRelocationPublicationCoordinator(authority, relocation);
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var request = CreateRequest(CreateEnvelope());
         var published = await coordinator.PublishAsync(request);
         relocation.Payloads.Remove(published.Relocation.Reference);
@@ -3839,7 +3907,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -3891,7 +3963,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateLargeEnvelope(10_000);
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -3931,7 +4007,11 @@ public sealed class RelocationRuntimeTests
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
             ReadDelay = TimeSpan.FromMilliseconds(1),
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateLargeEnvelope(10_000);
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -3966,7 +4046,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { ThrowAfterPublishingAggregatePrepare = true };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var request = CreateAggregateRelocationRequest(CreateEnvelope());
 
         var published = await coordinator.PublishAsync(request);
@@ -3980,7 +4064,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore { ThrowBeforeConcurrentAggregateCommit = true };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var request = CreateAggregateRelocationRequest(CreateEnvelope());
 
         var published = await coordinator.PublishAsync(request);
@@ -3990,7 +4078,7 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task AggregatePublicationProbeTimeoutPreservesUnknownRoot()
+    public async Task AggregatePublicationProbeUsesTargetLifetimeCancellationAndPreservesUnknownRoot()
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
@@ -3998,7 +4086,8 @@ public sealed class RelocationRuntimeTests
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
             ReadDelay = TimeSpan.FromSeconds(30),
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(failures, authority, relocation);
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -4023,13 +4112,18 @@ public sealed class RelocationRuntimeTests
             new ZLinkLocationOwnerToken("aggregate-target", 17)
         );
 
+        using var lifetime = new CancellationTokenSource();
+        var publication = coordinator.PublishAsync(request, lifetime.Token).AsTask();
+        await authority.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        lifetime.Cancel();
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
-            await coordinator.PublishAsync(request)
+            await publication.WaitAsync(TimeSpan.FromSeconds(1))
         );
 
         Assert.DoesNotContain(authority.Events, static item => item.Name == "abort");
         Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
         Assert.NotEmpty(relocation.Payloads);
+        Assert.Contains(failures.Failures, static error => error is OperationCanceledException);
     }
 
     [Fact]
@@ -4041,7 +4135,11 @@ public sealed class RelocationRuntimeTests
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
             PublishFirstParticipantBeforePrepareConflict = true,
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -4081,7 +4179,11 @@ public sealed class RelocationRuntimeTests
     {
         var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateEnvelope();
         var participants = envelope
             .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
@@ -4142,7 +4244,11 @@ public sealed class RelocationRuntimeTests
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
@@ -4185,7 +4291,11 @@ public sealed class RelocationRuntimeTests
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.GenerationExhausted(),
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
 
         await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
             coordinator.PublishAsync(CreateAggregateRelocationRequest(CreateEnvelope())).AsTask()
@@ -4204,7 +4314,11 @@ public sealed class RelocationRuntimeTests
         {
             AggregateCommitResult = ZLinkAggregateCommitResult.GenerationExhausted,
         };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authority, relocation);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
             coordinator.PublishAsync(CreateAggregateRelocationRequest(CreateEnvelope())).AsTask()
         );
@@ -4568,6 +4682,7 @@ public sealed class RelocationRuntimeTests
         : IZLinkRelocationRepository,
             IZLinkRelocationStore
     {
+        internal Exception? DeleteFailure { get; init; }
         internal Dictionary<string, byte[]> Payloads { get; } = new(StringComparer.Ordinal);
 
         internal List<(long Sequence, string Name)> Events { get; } = [];
@@ -4629,15 +4744,13 @@ public sealed class RelocationRuntimeTests
             );
         }
 
-        public ValueTask DeleteAsync(
+        public async ValueTask DeleteAsync(
             ZLinkBlobReference reference,
             CancellationToken cancellationToken = default
         )
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            Events.Add((EventClock.Next(), "delete"));
-            Payloads.Remove(reference.Value);
-            return ValueTask.CompletedTask;
+            _ = await DeleteRelocationAsync(reference.Value, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
@@ -4724,7 +4837,10 @@ public sealed class RelocationRuntimeTests
             CancellationToken cancellationToken = default
         )
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Events.Add((EventClock.Next(), "delete"));
+            if (DeleteFailure is { } failure)
+                return ValueTask.FromException<ZLinkRelocationDeleteResult>(failure);
             return ValueTask.FromResult(
                 Payloads.Remove(reference)
                     ? ZLinkRelocationDeleteResult.Deleted
@@ -4864,6 +4980,8 @@ public sealed class RelocationRuntimeTests
 
         internal int PublishedCount => _snapshots.Count;
         internal TimeSpan ReadDelay { get; init; }
+        internal TaskCompletionSource ReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int ReadFailuresRemaining { get; set; }
         private int _activeReads;
         private int _maximumConcurrentReads;
@@ -4912,7 +5030,10 @@ public sealed class RelocationRuntimeTests
                     throw new IOException("The authority read result is indeterminate.");
                 }
                 if (ReadDelay > TimeSpan.Zero)
+                {
+                    ReadStarted.TrySetResult();
                     await Task.Delay(ReadDelay, cancellationToken);
+                }
                 return !_snapshots.TryGetValue(key.Value, out var snapshot)
                     ? new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)
                     : new ZLinkAuthorityReadResult.Found(snapshot);

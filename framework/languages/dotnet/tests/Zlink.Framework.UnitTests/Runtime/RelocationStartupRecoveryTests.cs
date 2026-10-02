@@ -35,7 +35,11 @@ public sealed class RelocationStartupRecoveryTests
         ]);
         ZLinkRelocationRecoveryCandidate? recovered = null;
 
-        await new ZLinkRelocationStartupRecovery(authority, relocation).RecoverAsync(
+        await new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        ).RecoverAsync(
             (candidate, _) =>
             {
                 recovered = candidate;
@@ -72,7 +76,11 @@ public sealed class RelocationStartupRecoveryTests
         var authority = new RecoveryAuthorityStore([
             CanonicalEntry(canonical.Participant, payload),
         ]);
-        var recovery = new ZLinkRelocationStartupRecovery(authority, new InMemoryRelocationStore());
+        var recovery = new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            new InMemoryRelocationStore()
+        );
         var offered = 0;
         ZLinkAuthorityEntry? preparing = null;
 
@@ -110,7 +118,11 @@ public sealed class RelocationStartupRecoveryTests
         var fixture = await RecoveryFixture.CreateAsync();
         var offered = 0;
         var applied = new HashSet<Guid>();
-        var recovery = new ZLinkRelocationStartupRecovery(fixture.Authority, fixture.Relocation);
+        var recovery = new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            fixture.Authority,
+            fixture.Relocation
+        );
 
         async ValueTask Resume(
             ZLinkRelocationRecoveryCandidate candidate,
@@ -139,6 +151,7 @@ public sealed class RelocationStartupRecoveryTests
         ZLinkRelocationRecoveryCandidate? recovered = null;
 
         await new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             fixture.Authority,
             fixture.Relocation
         ).RecoverAsync(
@@ -208,6 +221,7 @@ public sealed class RelocationStartupRecoveryTests
         );
 
         await new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             authority,
             new InMemoryRelocationStore()
         ).RecoverAsync(static (_, _) => ValueTask.CompletedTask);
@@ -229,7 +243,11 @@ public sealed class RelocationStartupRecoveryTests
     public async Task ExactReconciliationReadsOnlyStagedParticipantAuthorities()
     {
         var fixture = await RecoveryFixture.CreateAsync();
-        var recovery = new ZLinkRelocationStartupRecovery(fixture.Authority, fixture.Relocation);
+        var recovery = new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            fixture.Authority,
+            fixture.Relocation
+        );
 
         var attempts = await Task.WhenAll(
             recovery.TryReadExactPublishedAsync(fixture.Envelope).AsTask(),
@@ -257,6 +275,7 @@ public sealed class RelocationStartupRecoveryTests
             )
             .ToArray();
         var recovery = new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             new RecoveryAuthorityStore(entries),
             fixture.Relocation
         );
@@ -274,7 +293,11 @@ public sealed class RelocationStartupRecoveryTests
     {
         var fixture = await RecoveryFixture.CreateAsync();
         fixture.Relocation.Remove(fixture.Reference);
-        var recovery = new ZLinkRelocationStartupRecovery(fixture.Authority, fixture.Relocation);
+        var recovery = new ZLinkRelocationStartupRecovery(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            fixture.Authority,
+            fixture.Relocation
+        );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await recovery.RecoverAsync(static (_, _) => ValueTask.CompletedTask)
@@ -289,7 +312,11 @@ public sealed class RelocationStartupRecoveryTests
     {
         var authority = new RecoveryAuthorityStore([]);
         var relocation = new InMemoryRelocationStore();
-        var coordinator = new ZLinkRelocationPublicationCoordinator(authority, relocation);
+        var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            authority,
+            relocation
+        );
         var envelope = RecoveryFixture.CreateEnvelope();
 
         var prepared = await coordinator.PrepareAsync(envelope);
@@ -309,6 +336,7 @@ public sealed class RelocationStartupRecoveryTests
         var fixture = await RecoveryFixture.CreateAsync();
         var envelope = RecoveryFixture.CreateEnvelope();
         var coordinator = new ZLinkRelocationPublicationCoordinator(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             fixture.Authority,
             fixture.Relocation
         );
@@ -346,6 +374,7 @@ public sealed class RelocationStartupRecoveryTests
             var relocation = new InMemoryRelocationStore();
             var envelope = CreateEnvelope(spotKind);
             var coordinator = new ZLinkRelocationPublicationCoordinator(
+                new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
                 new RecoveryAuthorityStore([]),
                 relocation
             );

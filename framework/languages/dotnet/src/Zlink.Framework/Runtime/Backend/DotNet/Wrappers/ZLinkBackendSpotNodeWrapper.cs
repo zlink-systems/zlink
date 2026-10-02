@@ -1326,7 +1326,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     ) =>
         _node.RequestToNodeDirectAsync(
             targetNodeRid,
@@ -1334,7 +1335,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             flags,
             metadata,
             timeout,
-            cancellationToken
+            cancellationToken,
+            durable
         );
 
     public SubmitResult SendToActor(
@@ -1432,8 +1434,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     // Core, not an arbitrary source session. Parts marked hasMore are buffered per
     // actor and flushed as one multipart SendBoundSession when the terminal part
     // (hasMore == false) arrives, so header+body framing is preserved. On a failed
-    // flush the buffered prefix is retained so the caller's retry re-submits the
-    // same multipart message without duplicating parts. Forwarding for a given
+    // flush the binding result is preserved and every owned part is released.
+    // Forwarding for a given
     // actor is serial (the Message Follow worker submits header then body in order).
     public bool ForwardActorBoundSessionPart(
         ZLinkBackendActorRef actor,
@@ -1476,19 +1478,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             parts.AddRange(buffered);
         parts.Add(terminal);
 
-        // SendBoundSession clones the parts (the caller keeps ownership), so this
-        // wrapper disposes every clone it owns on success.
-        if (_node.SendBoundSession(ToNativeActor(actor), parts) == SubmitResult.Ok)
+        try
         {
-            foreach (var part in parts)
-                part.Dispose();
+            var submit = _node.SendBoundSession(ToNativeActor(actor), parts);
+            if (submit != SubmitResult.Ok)
+                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
             return true;
         }
-
-        terminal.Dispose();
-        if (buffered is not null)
-            AwaitStateLane(_lane.RunAsync(() => _forwardBuffers[actor] = buffered));
-        return false;
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     public void CloseActorBoundSession(
