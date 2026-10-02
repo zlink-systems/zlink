@@ -3,10 +3,13 @@ using Zlink.Framework.Runtime.Actors;
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkBoundedRemoteRequestAdmission(
-    int maxTotal = 65_536,
-    int maxPerBinding = 1_024
+    int maxTotal = ZLinkBoundedRemoteRequestAdmission.DefaultMaxTotal,
+    int maxPerBinding = ZLinkBoundedRemoteRequestAdmission.DefaultMaxPerBinding
 )
 {
+    private const int DefaultMaxTotal = 65_536;
+    private const int DefaultMaxPerBinding = 1_024;
+
     private readonly Dictionary<ZLinkSessionBindingKey, int> _counts = [];
     private int _total;
 

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Zlink.Framework.Internal;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -47,7 +48,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     private static string EncodeContinuationToken(string prefix, ZLinkStoreScanCursor cursor)
     {
         var cursorBytes = Encoding.UTF8.GetBytes(cursor.Value ?? string.Empty);
-        if (cursorBytes.Length is < 1 or > 4096)
+        if (cursorBytes.Length is < 1 or > ZLinkLocationStoreLimits.MaximumCursorBytes)
         {
             throw new InvalidDataException(
                 "The Location Store returned an invalid snapshot cursor."
@@ -66,7 +67,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var parts = token.Split('.', 3);
         if (
             parts.Length != 3
-            || parts[1].Length != 43
+            || parts[1].Length != (SHA256.HashSizeInBytes * 8 + 5) / 6
             || !string.Equals(parts[0], ContinuationTokenVersion, StringComparison.Ordinal)
         )
         {
@@ -89,7 +90,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (
             prefixDigest.Length != expectedDigest.Length
             || !CryptographicOperations.FixedTimeEquals(prefixDigest, expectedDigest)
-            || cursorBytes.Length is < 1 or > 4096
+            || cursorBytes.Length is < 1 or > ZLinkLocationStoreLimits.MaximumCursorBytes
         )
         {
             throw InvalidContinuationToken();

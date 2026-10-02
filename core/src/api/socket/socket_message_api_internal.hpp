@@ -17,13 +17,6 @@ int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
 extern "C" {
 #endif
 
-int zlink_socket_xpub_recv_internal (void *socket_,
-                                     zlink_routing_id_t *source_rid_out_,
-                                     int *subscribed_out_,
-                                     char *topic_id_out_,
-                                     size_t *topic_id_len_,
-                                     zlink_send_flags_t flags_);
-
 int zlink_socket_send_internal (void *socket_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
@@ -40,20 +33,6 @@ int zlink_socket_publish_internal (void *socket_,
                                    zlink_msg_t *parts_,
                                    size_t part_count_,
                                    zlink_send_flags_t flags_);
-
-int zlink_socket_recv_internal (void *socket_,
-                                zlink_routing_id_t *source_rid_out_,
-                                zlink_msg_t **parts_out_,
-                                size_t *part_count_out_,
-                                zlink_send_flags_t flags_);
-
-int zlink_socket_subscribe_recv_internal (void *socket_,
-                                          zlink_routing_id_t *source_rid_out_,
-                                          zlink_msg_t **parts_out_,
-                                          size_t *part_count_out_,
-                                          char *topic_id_out_,
-                                          size_t *topic_id_len_out_,
-                                          zlink_send_flags_t flags_);
 
 #if defined(__cplusplus)
 }

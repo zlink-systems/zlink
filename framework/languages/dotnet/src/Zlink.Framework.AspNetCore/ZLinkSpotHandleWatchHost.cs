@@ -100,21 +100,14 @@ internal sealed class ZLinkSpotHandleWatchHost(
             }
             catch
             {
-                var retryDelay =
-                    options.PollingInterval > TimeSpan.Zero
-                        ? options.PollingInterval
-                        : TimeSpan.FromMilliseconds(100);
-                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(options.PollingInterval, cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)
     {
-        var interval =
-            options.PollingInterval > TimeSpan.Zero
-                ? options.PollingInterval
-                : TimeSpan.FromMilliseconds(100);
+        var interval = options.PollingInterval;
         while (!cancellationToken.IsCancellationRequested)
         {
             try

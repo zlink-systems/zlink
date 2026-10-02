@@ -391,14 +391,14 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 catch (Exception error)
                 {
                     TryScheduleTerminal(
-                        "transport_error",
+                        ZlinkStreamCloseReason.TransportError,
                         () => CloseForTransportErrorAsync(error)
                     );
                 }
                 return;
             case ZLinkStreamLivenessDecision.IdleTimeout:
                 TryScheduleTerminal(
-                    "idle_timeout",
+                    ZlinkStreamCloseReason.IdleTimeout,
                     () =>
                         CloseForLivenessTimeoutAsync(
                             ZlinkStreamSessionClosingCodec.EncodeIdleTimeout()
@@ -407,7 +407,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 return;
             case ZLinkStreamLivenessDecision.HeartbeatTimeout:
                 TryScheduleTerminal(
-                    "heartbeat_timeout",
+                    ZlinkStreamCloseReason.HeartbeatTimeout,
                     () =>
                         CloseForLivenessTimeoutAsync(
                             ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()
@@ -422,7 +422,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     public void EnqueueDisconnected(ZLinkStreamError error)
     {
         TryScheduleTerminal(
-            "transport_error",
+            ZlinkStreamCloseReason.TransportError,
             () => MarkDisconnectedAsync(error),
             recordTransportClosedOnTerminalCollision: true
         );
@@ -432,7 +432,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     {
         if (
             !TryScheduleTerminal(
-                "client_close",
+                ZlinkStreamCloseReason.ClientClose,
                 () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
             )
         )
@@ -446,7 +446,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (
             !TryScheduleTerminal(
-                "client_close",
+                ZlinkStreamCloseReason.ClientClose,
                 () => CompleteAfterTransportClosedAsync(notifyDisconnected: false)
             )
         )
@@ -458,7 +458,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     internal async ValueTask<bool> CloseForDrainAsync(CancellationToken cancellationToken)
     {
         var scheduled = TryScheduleTerminal(
-            "server_drain",
+            ZlinkStreamCloseReason.ServerDrain,
             () => CloseForDrainCoreAsync(cancellationToken)
         );
         if (!scheduled && !IsClosing)
@@ -713,7 +713,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private async ValueTask CloseForProtocolErrorAsync(Exception error)
     {
-        TryScheduleTerminal("protocol_error", () => CloseForProtocolErrorCoreAsync(error));
+        TryScheduleTerminal(
+            ZlinkStreamCloseReason.ProtocolError,
+            () => CloseForProtocolErrorCoreAsync(error)
+        );
         await ValueTask.CompletedTask;
     }
 
@@ -784,7 +787,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     internal void ConfirmNodeTransportDisposed()
     {
-        RecordStreamClosedMetric(Volatile.Read(ref _terminalClose)?.Reason ?? "transport_error");
+        RecordStreamClosedMetric(
+            Volatile.Read(ref _terminalClose)?.Reason ?? ZlinkStreamCloseReason.TransportError
+        );
     }
 
     private async ValueTask CompleteSessionAsync(ZLinkStreamError? error, bool notifyDisconnected)
@@ -949,7 +954,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
         if (
             !TryScheduleTerminal(
-                "actor_binding_replaced",
+                ZlinkStreamCloseReason.TransportError,
                 () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
             )
         )
@@ -977,7 +982,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     }
 
     private bool TryScheduleTerminal(
-        string reason,
+        ZlinkStreamCloseReason reason,
         Func<ValueTask> finalWork,
         bool recordTransportClosedOnTerminalCollision = false
     )
@@ -1036,7 +1041,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             {
                 if (_terminalClose is { } terminalClose)
                     return terminalClose.DisposeOwnsClose;
-                _terminalClose = new TerminalClose("transport_error", DisposeOwnsClose: true);
+                _terminalClose = new TerminalClose(
+                    ZlinkStreamCloseReason.TransportError,
+                    DisposeOwnsClose: true
+                );
                 return true;
             })
         );
@@ -1105,7 +1113,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             catch (TimeoutException timeout)
             {
                 TryScheduleTerminal(
-                    "connection_metadata_timeout",
+                    ZlinkStreamCloseReason.TransportError,
                     () => CloseForTransportErrorAsync(timeout)
                 );
                 return false;
@@ -1310,7 +1318,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             ZLinkRuntimeMetrics.RecordStreamOpened(_transport);
     }
 
-    private void RecordStreamClosedMetric(string reason)
+    private void RecordStreamClosedMetric(ZlinkStreamCloseReason reason)
     {
         if (Interlocked.Exchange(ref _streamMetricActive, 0) != 0)
             ZLinkRuntimeMetrics.RecordStreamClosed(_transport, reason);
@@ -1328,7 +1336,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 };
     }
 
-    private sealed record TerminalClose(string Reason, bool DisposeOwnsClose);
+    private sealed record TerminalClose(ZlinkStreamCloseReason Reason, bool DisposeOwnsClose);
 
     private readonly record struct ActorBindingReplacementIdentity(
         string ActorId,

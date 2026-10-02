@@ -5,6 +5,14 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkInstanceSpotMonitoring
 {
+    private const string ReadyOutcome = "ready";
+    private const string RejectedOutcome = "rejected";
+    private const string TimedOutOutcome = "timed_out";
+    private const string ShutdownOutcome = "shutdown";
+    private const string FencedOutcome = "fenced";
+    private const string ConflictOutcome = "conflict";
+    private const string StoreFailureOutcome = "store_failure";
+
     private readonly ConcurrentDictionary<string, Operation> _operations = new(
         StringComparer.Ordinal
     );
@@ -40,7 +48,7 @@ internal sealed class ZLinkInstanceSpotMonitoring
             var terminal = await operation().ConfigureAwait(false);
             if (_operations.TryRemove(new KeyValuePair<string, Operation>(operationKey, selected)))
             {
-                var outcome = terminal.Result == RequestResult.Ok ? "ready" : "rejected";
+                var outcome = terminal.Result == RequestResult.Ok ? ReadyOutcome : RejectedOutcome;
                 aggregate.Complete(pendingBytes, outcome);
                 selected.Metrics.Complete(outcome);
             }
@@ -64,18 +72,21 @@ internal sealed class ZLinkInstanceSpotMonitoring
     private static string Outcome(Exception exception) =>
         exception switch
         {
-            TimeoutException => "timed_out",
-            OperationCanceledException => "shutdown",
+            TimeoutException => TimedOutOutcome,
+            OperationCanceledException => ShutdownOutcome,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
-                "timed_out",
-            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } => "shutdown",
-            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.InvalidOperation } => "fenced",
-            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.AlreadyExists } => "conflict",
+                TimedOutOutcome,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
+                ShutdownOutcome,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.InvalidOperation } =>
+                FencedOutcome,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.AlreadyExists } =>
+                ConflictOutcome,
             ZLinkFrameworkException
             {
                 Kind: ZLinkFrameworkErrorKind.InternalFailure or ZLinkFrameworkErrorKind.NotFound
-            } => "store_failure",
-            _ => "rejected",
+            } => StoreFailureOutcome,
+            _ => RejectedOutcome,
         };
 
     private sealed class Operation(

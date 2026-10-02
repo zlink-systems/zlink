@@ -2508,9 +2508,12 @@ internal abstract partial class ZLinkSpotActivation
             stableType,
             registration.PolicyKind switch
             {
-                0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-                1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-                2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
+                ZLinkObjectRelocationRegistration.DisabledPolicy =>
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                ZLinkObjectRelocationRegistration.RecreatePolicy =>
+                    ZLinkObjectMaintenancePolicyKind.Recreate,
+                ZLinkObjectRelocationRegistration.SnapshotPolicy =>
+                    ZLinkObjectMaintenancePolicyKind.Snapshot,
                 _ => throw new ZLinkConfigurationException(
                     $"Unknown relocation policy kind '{registration.PolicyKind}'."
                 ),
@@ -2569,12 +2572,13 @@ internal abstract partial class ZLinkSpotActivation
     {
         return registration.PolicyKind switch
         {
-            0 => throw new ZLinkFrameworkException(
+            ZLinkObjectRelocationRegistration.DisabledPolicy => throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 $"Relocation is disabled for '{registration.InstanceType}'."
             ),
-            1 => [],
-            2 when registration.AdapterInvoker is { } invoker => await invoker
+            ZLinkObjectRelocationRegistration.RecreatePolicy => [],
+            ZLinkObjectRelocationRegistration.SnapshotPolicy
+                when registration.AdapterInvoker is { } invoker => await invoker
                 .CaptureAsync(_scope.ServiceProvider, instance, cancellationToken)
                 .ConfigureAwait(false),
             _ => throw new ZLinkConfigurationException(
@@ -2592,18 +2596,19 @@ internal abstract partial class ZLinkSpotActivation
     {
         switch (registration.PolicyKind)
         {
-            case 1:
+            case ZLinkObjectRelocationRegistration.RecreatePolicy:
                 if (!payload.IsEmpty)
                     throw new InvalidDataException(
                         $"Recreate relocation state for '{registration.InstanceType}' must be empty."
                     );
                 return;
-            case 2 when registration.AdapterInvoker is { } invoker:
+            case ZLinkObjectRelocationRegistration.SnapshotPolicy
+                when registration.AdapterInvoker is { } invoker:
                 await invoker
                     .RestoreAsync(_scope.ServiceProvider, instance, payload, cancellationToken)
                     .ConfigureAwait(false);
                 return;
-            case 0:
+            case ZLinkObjectRelocationRegistration.DisabledPolicy:
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
                     $"Relocation is disabled for '{registration.InstanceType}'."

@@ -17,7 +17,16 @@ internal enum ZLinkServiceConnectionDirection
 
 internal static class ZLinkServiceAdmissionGuard
 {
-    private static readonly HashSet<byte> MutableExtensionFields = [1, 5, 8, 9, 10, 11, 12];
+    private static readonly HashSet<byte> MutableExtensionFields =
+    [
+        (byte)ServiceWireConstants.DescriptorExtensionField.RuntimeState,
+        (byte)ServiceWireConstants.DescriptorExtensionField.MaintenanceWave,
+        (byte)ServiceWireConstants.DescriptorExtensionField.PlacementWeight,
+        (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityLimit,
+        (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityLimit,
+        (byte)ServiceWireConstants.DescriptorExtensionField.ActiveCapacityUsed,
+        (byte)ServiceWireConstants.DescriptorExtensionField.PendingCapacityUsed,
+    ];
 
     internal static ZLinkServiceAdmissionDecision Evaluate(
         ZLinkServiceWireCodec.AdmissionRecord? current,
@@ -57,7 +66,11 @@ internal static class ZLinkServiceAdmissionGuard
         ZLinkServiceWireCodec.AdmissionRecord incoming
     ) =>
         string.Equals(expectedEndpoint, incoming.AdvertisedEndpoint, StringComparison.Ordinal)
-        && SecurityIdentityMatches(expectedSecurityIdentity, incoming.SecurityIdentity)
+        && string.Equals(
+            expectedSecurityIdentity,
+            incoming.SecurityIdentity,
+            StringComparison.Ordinal
+        )
         && (
             expectedLifecycleGeneration == 0
             || expectedLifecycleGeneration == incoming.LifecycleGeneration
@@ -80,20 +93,6 @@ internal static class ZLinkServiceAdmissionGuard
             expectedSecurityIdentity,
             authenticatedSecurityIdentity,
             StringComparison.Ordinal
-        );
-
-    // C++ RouteMesh descriptors retain their historical unauthenticated
-    // identity spelling ("default"). The actual ROUTER transport is still
-    // plaintext, so accept that wire spelling only for the plaintext
-    // expectation; authenticated identities remain exact-match only.
-    private static bool SecurityIdentityMatches(string expected, string actual) =>
-        string.Equals(expected, actual, StringComparison.Ordinal)
-        || (
-            string.Equals(
-                expected,
-                ZLinkServiceSecurityIdentity.Plaintext,
-                StringComparison.Ordinal
-            ) && string.Equals(actual, "default", StringComparison.Ordinal)
         );
 
     private static bool ImmutableFieldsMatch(

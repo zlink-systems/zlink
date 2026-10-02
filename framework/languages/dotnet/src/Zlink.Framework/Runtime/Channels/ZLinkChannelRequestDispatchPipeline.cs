@@ -63,7 +63,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 codecs,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.ReplyError,
-                "request",
+                Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                    ZLinkDispatchMessageKind.Request
+                ),
                 out var message,
                 out var decodeError
             )
@@ -204,7 +206,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 codecs,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.ReplyError,
-                "request",
+                Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                    ZLinkDispatchMessageKind.Request
+                ),
                 out var message,
                 out var decodeError
             )

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -42,6 +43,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -701,16 +703,44 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
+    void conflictingPrepareRepliesFailedWithoutReplacingTheOriginalStage() {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1});
+        var prepare = prepare(fixture, request);
+        fixture.source
+                .stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+
+        assertPrepareConflictReply(fixture, prepare);
+        byte[] exactReply =
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                3L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(prepare.id(), ZLinkCanonicalRelocationProtocol.decodeReady(exactReply).id());
+        assertEquals(1, fixture.endpoint.staged.get());
+        fixture.source
+                .publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, fixture.endpoint.published.get());
+    }
+
+    @Test
     void exactPrepareRequestAfterTargetCutoverRepliesReady() throws Exception {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});
+        var prepare = prepare(fixture, request);
 
         fixture.source
                 .stage(fixture.targetRid, request, Duration.ofSeconds(2))
                 .toCompletableFuture()
                 .join();
-        Object attempt = targetAttempt(fixture.target, request.fence());
-        var prepare = (ZLinkCanonicalRelocationProtocol.Prepare) attemptMember(attempt, "prepare");
         byte[] encodedPrepare = ZLinkCanonicalRelocationProtocol.encodePrepare(prepare);
         fixture.source
                 .publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2))
@@ -734,6 +764,127 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 1,
                 fixture.endpoint.staged.get(),
                 "an exact terminal PREPARE must not stage the target again");
+        assertPrepareConflictReply(fixture, prepare);
+        assertEquals(1, fixture.endpoint.staged.get());
+    }
+
+    private static void assertPrepareConflictReply(
+            Fixture fixture, ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        var conflicting =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        prepare.id(),
+                        prepare.targetAttemptGeneration(),
+                        prepare.coordinator(),
+                        prepare.target(),
+                        prepare.initiatorRole(),
+                        prepare.object(),
+                        prepare.sourceNodeRid(),
+                        prepare.sourceNodeGeneration(),
+                        new ZLinkCanonicalRelocationProtocol.Manifest(
+                                prepare.manifest().totalLength(),
+                                prepare.manifest().chunkCount(),
+                                prepare.manifest().checksumCrc32c() ^ 1),
+                        prepare.applicationVersion());
+        byte[] reply =
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                2L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(conflicting))
+                        .toCompletableFuture()
+                        .join();
+        var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
+        assertEquals(prepare.id(), failed.id());
+        assertEquals(prepare.targetAttemptGeneration(), failed.targetAttemptGeneration());
+        assertEquals(prepare.coordinator(), failed.coordinator());
+        assertEquals(prepare.target(), failed.target());
+        assertEquals(prepare.object(), failed.object());
+        assertEquals(
+                ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST, failed.failureCode());
+        var differentIdentity =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        conflicting.id(),
+                        conflicting.targetAttemptGeneration(),
+                        new ZLinkCanonicalRelocationProtocol.Coordinator(
+                                prepare.coordinator().ownerId(),
+                                prepare.coordinator().ownerLeaseGeneration(),
+                                prepare.coordinator().nodeRid(),
+                                prepare.coordinator().nodeGeneration(),
+                                prepare.coordinator().expectedAuthorityStoreVersion()
+                                        + "-different"),
+                        conflicting.target(),
+                        conflicting.initiatorRole(),
+                        conflicting.object(),
+                        conflicting.sourceNodeRid(),
+                        conflicting.sourceNodeGeneration(),
+                        conflicting.manifest(),
+                        conflicting.applicationVersion());
+        assertNull(
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                4L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(differentIdentity))
+                        .toCompletableFuture()
+                        .join());
+        var differentTarget =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        conflicting.id(),
+                        conflicting.targetAttemptGeneration(),
+                        conflicting.coordinator(),
+                        new ZLinkCanonicalRelocationProtocol.Target(
+                                prepare.target().nodeRid(),
+                                prepare.target().nodeGeneration(),
+                                prepare.target().ownerId() + "-different",
+                                prepare.target().ownerLeaseGeneration()),
+                        conflicting.initiatorRole(),
+                        conflicting.object(),
+                        conflicting.sourceNodeRid(),
+                        conflicting.sourceNodeGeneration(),
+                        conflicting.manifest(),
+                        conflicting.applicationVersion());
+        assertNull(
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                5L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(differentTarget))
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    private static ZLinkCanonicalRelocationProtocol.Prepare prepare(
+            Fixture fixture, ZLinkSpotRetireControl.StageRequest request) {
+        var participant = request.participants().getFirst();
+        byte[] payload = request.relocationPayload();
+        return new ZLinkCanonicalRelocationProtocol.Prepare(
+                request.fence().aggregateId(),
+                request.fence().aggregateGeneration(),
+                new ZLinkCanonicalRelocationProtocol.Coordinator(
+                        request.sourceOwnerId(),
+                        request.sourceOwnerLeaseGeneration(),
+                        request.sourceNodeRid(),
+                        request.sourceNodeGeneration(),
+                        fixture.sourceSnapshot.storeVersion()),
+                new ZLinkCanonicalRelocationProtocol.Target(
+                        request.targetNodeRid(),
+                        request.targetNodeGeneration(),
+                        request.targetOwnerId(),
+                        request.targetOwnerLeaseGeneration()),
+                ZLinkCanonicalRelocationProtocol.SOURCE,
+                new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                        participant.objectKind(),
+                        participant.objectId(),
+                        "",
+                        participant.objectGeneration(),
+                        participant.sourceAuthorityOwnerGeneration()),
+                request.sourceNodeRid(),
+                request.sourceNodeGeneration(),
+                ZLinkRelocationPayloadTransfer.manifest(payload, payload.length),
+                ZLinkServiceRelocationEnvelopeCodec.decode(payload).applicationVersion());
     }
 
     private Fixture fixture() {

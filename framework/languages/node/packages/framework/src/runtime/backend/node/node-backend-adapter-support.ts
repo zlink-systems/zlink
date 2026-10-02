@@ -250,9 +250,15 @@ function toNativeMessageLike(message: unknown): unknown {
   return message;
 }
 
-export function translateBindingResultError(error: unknown): unknown {
+export function translateBindingResultError(
+  error: unknown,
+  phase: 'submit' | 'completion' = 'completion'
+): unknown {
   if (error instanceof zlink.SubmitError) {
-    return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, { cause: error });
+    return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, {
+      cause: error,
+      phase
+    });
   }
   if (error instanceof zlink.RequestError) {
     return new ZLinkBackendResultError('request', error.result, error.nativeErrno, {

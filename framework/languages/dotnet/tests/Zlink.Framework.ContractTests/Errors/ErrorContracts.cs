@@ -1,9 +1,74 @@
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.ContractTests.Errors;
 
 public sealed class ErrorContracts
 {
+    [Theory]
+    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(true, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    public async Task Tokenless_submit_rejection_and_writable_timeout_keep_distinct_terminals(
+        bool completionFailure,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        var failure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured);
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ZLinkRawRequestSubmitter.SubmitAsync(
+                Array.Empty<Message>(),
+                (_, _, _) =>
+                    completionFailure
+                        ? Task.FromException<IReadOnlyList<Message>>(failure)
+                        : throw failure,
+                TimeSpan.FromSeconds(1),
+                "request failed: {0}",
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(expected, error.Kind);
+        Assert.IsType<ZlinkSubmitException>(error.InnerException);
+        Assert.DoesNotContain("Backpressured", Enum.GetNames<ZLinkFrameworkErrorKind>());
+    }
+
+    [Theory]
+    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(true, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    public async Task Durable_request_preserves_admission_terminal_without_replaying(
+        bool completionFailure,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        var failure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured);
+        var attempts = 0;
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ZLinkDurableRequest.RequestAsync(
+                [],
+                System.Diagnostics.Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(1),
+                async (_, remaining, token) =>
+                {
+                    attempts++;
+                    return await ZLinkRawRequestSubmitter.SubmitAsync(
+                        Array.Empty<Message>(),
+                        (_, _, _) =>
+                            completionFailure
+                                ? Task.FromException<IReadOnlyList<Message>>(failure)
+                                : throw failure,
+                        remaining,
+                        "request failed: {0}",
+                        token
+                    );
+                },
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(expected, error.Kind);
+        Assert.Equal(1, attempts);
+    }
+
     [Fact]
     public void Framework_exception_contract_matches_the_frozen_surface()
     {

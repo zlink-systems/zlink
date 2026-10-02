@@ -9,7 +9,7 @@ internal readonly record struct ZlinkStreamFrame(
 
 internal static class ZlinkStreamFrameCodec
 {
-    internal const int PrefixSize = 6;
+    internal const int PrefixSize = sizeof(ushort) + sizeof(uint);
 
     public static byte[] Encode(ReadOnlySpan<byte> header, ReadOnlySpan<byte> payload)
     {
@@ -32,8 +32,10 @@ internal static class ZlinkStreamFrameCodec
         if (frame.Length < PrefixSize)
             return false;
 
-        var headerSize = BinaryPrimitives.ReadUInt16BigEndian(frame[..2]);
-        var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(2, 4));
+        var headerSize = BinaryPrimitives.ReadUInt16BigEndian(frame[..sizeof(ushort)]);
+        var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(
+            frame.Slice(sizeof(ushort), sizeof(uint))
+        );
         if (payloadSize > int.MaxValue)
             return false;
 
@@ -61,13 +63,16 @@ internal static class ZlinkStreamFrameCodec
     {
         if (destination.Length < PrefixSize)
             throw new ArgumentException(
-                "Frame prefix destination must be at least 6 bytes.",
+                $"Frame prefix destination must be at least {PrefixSize} bytes.",
                 nameof(destination)
             );
 
         ValidateSendFrame(headerLength, payloadLength);
-        BinaryPrimitives.WriteUInt16BigEndian(destination[..2], (ushort)headerLength);
-        BinaryPrimitives.WriteUInt32BigEndian(destination.Slice(2, 4), (uint)payloadLength);
+        BinaryPrimitives.WriteUInt16BigEndian(destination[..sizeof(ushort)], (ushort)headerLength);
+        BinaryPrimitives.WriteUInt32BigEndian(
+            destination.Slice(sizeof(ushort), sizeof(uint)),
+            (uint)payloadLength
+        );
     }
 
     public static int GetFrameSize(int headerLength, int payloadLength)
@@ -111,8 +116,10 @@ internal static class ZlinkStreamFrameCodec
     {
         var prefix = new byte[PrefixSize];
         await ReadExactAsync(connection, prefix, cancellationToken).ConfigureAwait(false);
-        var headerSize = BinaryPrimitives.ReadUInt16BigEndian(prefix.AsSpan(0, 2));
-        var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(prefix.AsSpan(2, 4));
+        var headerSize = BinaryPrimitives.ReadUInt16BigEndian(prefix.AsSpan(0, sizeof(ushort)));
+        var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(
+            prefix.AsSpan(sizeof(ushort), sizeof(uint))
+        );
         ValidateReceivePayload(payloadSize, maxPayloadSize);
         var bodySize = checked((long)headerSize + payloadSize);
         if (bodySize > int.MaxValue)

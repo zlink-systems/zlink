@@ -11,8 +11,19 @@ internal enum ZLinkAuthorityKeyKind
 internal static class ZLinkAuthorityKeyCodec
 {
     private const int MaximumIdentityBytes = byte.MaxValue;
-    private const int MaximumEncodedKeyBytes = 776;
+    private const string ActorPrefix = "zla1:a:";
+    private const string SpotPrefix = "zla1:s:";
+    private const int MaximumIdentityLengthDigits = 3;
+    private const int PercentEncodedByteCharacters = 3;
+    private static readonly int MaximumEncodedKeyBytes =
+        ActorPrefix.Length
+        + MaximumIdentityLengthDigits
+        + 1
+        + MaximumIdentityBytes * PercentEncodedByteCharacters;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    internal static string Prefix(ZLinkAuthorityKeyKind kind) =>
+        kind == ZLinkAuthorityKeyKind.Actor ? ActorPrefix : SpotPrefix;
 
     internal static ZLinkAuthorityKey EncodeActor(string actorId) =>
         Encode(ZLinkAuthorityKeyKind.Actor, actorId, nameof(actorId));
@@ -56,8 +67,7 @@ internal static class ZLinkAuthorityKeyCodec
         if (bytes.Length is 0 or > MaximumIdentityBytes || identity.Contains('\0'))
             throw new ArgumentOutOfRangeException(parameterName);
 
-        var discriminator = kind == ZLinkAuthorityKeyKind.Actor ? 'a' : 's';
-        var builder = new StringBuilder($"zla1:{discriminator}:{bytes.Length}:");
+        var builder = new StringBuilder($"{Prefix(kind)}{bytes.Length}:");
         foreach (var value in bytes)
         {
             if (IsUnreserved(value))
@@ -80,8 +90,7 @@ internal static class ZLinkAuthorityKeyCodec
         if (string.IsNullOrEmpty(encodedKey) || encodedKey.Length > MaximumEncodedKeyBytes)
             return false;
 
-        var discriminator = expectedKind == ZLinkAuthorityKeyKind.Actor ? 'a' : 's';
-        var prefix = $"zla1:{discriminator}:";
+        var prefix = Prefix(expectedKind);
         if (!encodedKey.StartsWith(prefix, StringComparison.Ordinal))
             return false;
 
@@ -96,7 +105,10 @@ internal static class ZLinkAuthorityKeyCodec
             return false;
 
         var encodedIdentity = encodedKey.AsSpan(lengthEnd + 1);
-        if (encodedIdentity.Length < expectedLength || encodedIdentity.Length > expectedLength * 3)
+        if (
+            encodedIdentity.Length < expectedLength
+            || encodedIdentity.Length > expectedLength * PercentEncodedByteCharacters
+        )
             return false;
 
         Span<byte> bytes = stackalloc byte[MaximumIdentityBytes];
@@ -161,7 +173,7 @@ internal static class ZLinkAuthorityKeyCodec
     private static bool TryParseCanonicalLength(ReadOnlySpan<char> text, out int length)
     {
         length = 0;
-        if (text.Length is 0 or > 3 || text[0] is < '1' or > '9')
+        if (text.Length is 0 or > MaximumIdentityLengthDigits || text[0] is < '1' or > '9')
             return false;
         foreach (var value in text)
         {

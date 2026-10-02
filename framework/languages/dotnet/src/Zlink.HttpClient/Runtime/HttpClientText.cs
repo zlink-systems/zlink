@@ -7,6 +7,12 @@ namespace Zlink.HttpClient.Runtime;
 /// <summary>Shared text helpers mirroring the C++ <c>client.cpp</c> anonymous-namespace utilities.</summary>
 internal static class HttpClientText
 {
+    private const string PercentEncodedByteFormat = "X2";
+    private const string BasicAuthenticationPrefix = "Basic ";
+    internal const string BearerAuthenticationPrefix = "Bearer ";
+    private const string MultipartBoundaryPrefix = "zlink-boundary-";
+    private const string BoundaryIdFormat = "N";
+
     public static bool IsBlank(string value)
     {
         return string.IsNullOrEmpty(value) || value.All(ch => ch is ' ' or '\t' or '\r' or '\n');
@@ -47,7 +53,7 @@ internal static class HttpClientText
             if (unreserved)
                 encoded.Append((char)by);
             else
-                encoded.Append('%').Append(by.ToString("X2"));
+                encoded.Append('%').Append(by.ToString(PercentEncodedByteFormat));
         }
 
         return encoded.ToString();
@@ -55,11 +61,12 @@ internal static class HttpClientText
 
     public static string BasicAuthorization(string user, string password)
     {
-        return "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password}"));
+        return BasicAuthenticationPrefix
+            + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password}"));
     }
 
     public static string MakeMultipartBoundary()
     {
-        return "zlink-boundary-" + Guid.NewGuid().ToString("N");
+        return MultipartBoundaryPrefix + Guid.NewGuid().ToString(BoundaryIdFormat);
     }
 }

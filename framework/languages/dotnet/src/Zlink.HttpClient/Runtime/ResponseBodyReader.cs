@@ -12,6 +12,8 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal sealed class ResponseBodyReader(HttpClientOptions options)
 {
+    internal const int ReadBufferSize = 16384;
+
     public async ValueTask StreamToSinkAsync(
         HttpResponseMessage response,
         Action<ReadOnlyMemory<byte>> sink,
@@ -21,7 +23,7 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         await using var stream = await response
             .Content.ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
-        var buffer = new byte[16384];
+        var buffer = new byte[ReadBufferSize];
         long total = 0;
         int read;
         while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
@@ -43,7 +45,7 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
             .Content.ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
         using var output = new MemoryStream();
-        var buffer = new byte[16384];
+        var buffer = new byte[ReadBufferSize];
         int read;
         while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
@@ -61,18 +63,20 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         IReadOnlyDictionary<string, string> headers
     )
     {
-        var encoding = HttpHeaderLookup.Find(headers, "content-encoding");
+        var encoding = HttpHeaderLookup.Find(headers, HttpHeaderLookup.ContentEncoding);
         // An empty body (HEAD / 204 / 304) carries no payload to decode even with Content-Encoding.
         if (encoding is null || bytes.Length == 0)
             return (bytes, headers);
 
-        if (encoding.Equals("gzip", StringComparison.OrdinalIgnoreCase))
+        if (encoding.Equals(ResponseCompression.GzipEncoding, StringComparison.OrdinalIgnoreCase))
             return (
                 ResponseCompression.Gunzip(bytes, options.MaxResponseBodySize),
                 StripEncodingHeaders(headers)
             );
 
-        if (encoding.Equals("deflate", StringComparison.OrdinalIgnoreCase))
+        if (
+            encoding.Equals(ResponseCompression.DeflateEncoding, StringComparison.OrdinalIgnoreCase)
+        )
             return (
                 ResponseCompression.InflateDeflate(bytes, options.MaxResponseBodySize),
                 StripEncodingHeaders(headers)
@@ -85,10 +89,10 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, values) in EnumerateHeaders(response.Headers))
-            headers.TryAdd(name, string.Join(", ", values));
+            headers.TryAdd(name, string.Join(HttpHeaderLookup.ValueSeparator, values));
 
         foreach (var (name, values) in EnumerateHeaders(response.Content.Headers))
-            headers.TryAdd(name, string.Join(", ", values));
+            headers.TryAdd(name, string.Join(HttpHeaderLookup.ValueSeparator, values));
 
         return headers;
     }
@@ -107,7 +111,11 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         IReadOnlyDictionary<string, string> headers
     )
     {
-        return HttpHeaderLookup.Without(headers, "content-encoding", "content-length");
+        return HttpHeaderLookup.Without(
+            headers,
+            HttpHeaderLookup.ContentEncoding,
+            HttpHeaderLookup.ContentLength
+        );
     }
 
     private static ZLinkFrameworkException RequestError(string message)

@@ -7,6 +7,9 @@ namespace Zlink.Framework.Contracts.Locations;
 /// </summary>
 public sealed class ZLinkLocationOptions
 {
+    internal const long DefaultRelocationPayloadChunkLimit = 256 * 1024;
+    internal const long DefaultRelocationInFlightPayloadBudget = 16 * 1024 * 1024;
+
     /// <summary>Owner lease renewal period. One write per runtime instance
     /// per interval; location rows are never written by heartbeat.</summary>
     public TimeSpan OwnerLeaseRenewInterval { get; set; } = TimeSpan.FromSeconds(5);
@@ -58,13 +61,14 @@ public sealed class ZLinkLocationOptions
     /// a relocationState command. Must be positive and must not exceed the
     /// transport frame limit.
     /// </summary>
-    public long RelocationPayloadChunkLimit { get; set; } = 256 * 1024;
+    public long RelocationPayloadChunkLimit { get; set; } = DefaultRelocationPayloadChunkLimit;
 
     /// <summary>
     /// Upper bound on the sum of relocation chunk bytes in flight on one peer
     /// connection. Zero disables the budget.
     /// </summary>
-    public long RelocationInFlightPayloadBudget { get; set; } = 16 * 1024 * 1024;
+    public long RelocationInFlightPayloadBudget { get; set; } =
+        DefaultRelocationInFlightPayloadBudget;
 
     /// <summary>
     /// Upper bound on the sum of relocation chunk bytes in flight across the

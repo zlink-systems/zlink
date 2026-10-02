@@ -2200,7 +2200,8 @@ test('node shared sample runner fails before completion output when a role requi
   assert.match(cleanup, /state\.exitCode === 137/);
   assert.match(cleanup, /state\.exitCode === -9/);
   assert.match(cleanup, /state\.signalCode === 'SIGKILL'/);
-  assert.match(cleanup, /teardownFailures\.set\(state, 'SIGKILL'\)/);
+  assert.match(cleanup, /await Promise\.all\(exited\)/);
+  assert.doesNotMatch(cleanup, /setTimeout|Promise\.race/);
   assert.match(cleanup, /Sample role \$\{state\.name\} exited during cleanup with status \$\{status\}/);
   assert.ok(main.indexOf('await cleanup()') < main.indexOf('console.log(`PASS ${sampleName}`)'),
     'the success marker must be emitted only after cleanup passes');

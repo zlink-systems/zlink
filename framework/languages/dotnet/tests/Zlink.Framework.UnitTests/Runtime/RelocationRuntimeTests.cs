@@ -1285,6 +1285,25 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task RepeatedReadyAcceptance_StartsOneCutoverWarning()
+    {
+        var stage = CreateTargetStageForHeldJournal();
+        var warnings = 0;
+        Task Warn()
+        {
+            Interlocked.Increment(ref warnings);
+            return Task.CompletedTask;
+        }
+
+        await Task.WhenAll(
+            Task.Run(() => stage.RunCanonicalCutoverWarningAsync(Warn)),
+            Task.Run(() => stage.RunCanonicalCutoverWarningAsync(Warn))
+        );
+        await stage.RunCanonicalCutoverWarningAsync(Warn);
+        Assert.Equal(1, warnings);
+    }
+
+    [Fact]
     public async Task ReconcilerAndLateRelayMergeOnlyOneHeldJournal()
     {
         var stage = CreateTargetStageForHeldJournal();

@@ -26,6 +26,7 @@ set(unittests
     unittest_router_pipe_contract
     unittest_xsub_pipe_termination
     unittest_router_peer_weight
+    unittest_recv_admission
     unittest_receive_metadata
     unittest_publish_rollback
     unittest_monitor_ready_drain
