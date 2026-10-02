@@ -467,6 +467,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     void set_continuation (std::coroutine_handle<> continuation,
                            task_scheduler_t explicit_scheduler = {})
     {
+        auto self = this->shared_from_this ();
         std::shared_ptr<task_shared_state_t<T>> lifetime;
         auto registration =
           std::make_shared<task_wait_registration_t> (continuation, std::move (explicit_scheduler));
@@ -476,7 +477,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         {
             std::lock_guard lock (_mutex);
             if (_result) {
-                lifetime = this->shared_from_this ();
+                lifetime = std::move (self);
             } else {
                 _continuations.push_back (registration);
             }
@@ -516,6 +517,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     void on_completed (std::function<void (const result_t<T> &)> callback,
                        task_scheduler_t scheduler = {})
     {
+        const auto self = this->shared_from_this ();
         std::shared_ptr<task_wait_registration_t> registration;
         std::weak_ptr<task_shared_state_t<T>> owner_state;
         auto owner = capture_current_serial_turn ();
@@ -552,7 +554,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             bind_wait_owner (registration, owner_state);
             return;
         }
-        auto self = this->shared_from_this ();
         auto invoke = [self, callback = std::move (callback),
                        ambient = capture_ambient_context ()] () noexcept {
             const auto ambient_guard = enter_ambient_context (ambient);

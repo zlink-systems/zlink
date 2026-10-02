@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#endif
+
 #include <opentelemetry/metrics/provider.h>
 #include <opentelemetry/sdk/metrics/meter_provider.h>
 #include <opentelemetry/sdk/metrics/metric_reader.h>

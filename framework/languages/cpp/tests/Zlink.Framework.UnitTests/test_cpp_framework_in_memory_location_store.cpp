@@ -538,6 +538,29 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (tree->root, tree_root (tree->pages, 2049));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventorySplitsOnEncodedByteLimit)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime::aggregate_inventory;
+
+    aggregate_participant_t participant;
+    participant.key.value = "inventory-\"escaped\\key";
+    participant.expected_store_version = "1";
+    participant.authority_payload.resize (page_byte_limit / 3, std::byte{0x01});
+    const auto tree = build_tree ({participant, participant});
+    ASSERT_TRUE (tree);
+    ASSERT_EQ (tree->pages.size (), 2u);
+    for (const auto &page : tree->pages) {
+        EXPECT_LE (page.encoded.size (), page_byte_limit);
+        const auto decoded = decode_page (page.encoded);
+        ASSERT_TRUE (decoded);
+        EXPECT_EQ (decoded->at (0).authority_payload, participant.authority_payload);
+    }
+
+    participant.authority_payload.resize (page_byte_limit);
+    EXPECT_FALSE (build_tree ({participant}));
+}
+
 
 TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryPreservesPageBytesAtByteBoundary)
 {

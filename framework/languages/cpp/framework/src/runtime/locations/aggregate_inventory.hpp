@@ -314,36 +314,35 @@ inline std::optional<tree_t> build_tree (const std::vector<aggregate_participant
     if (participants.empty ())
         return std::nullopt;
     tree_t tree;
-    for (std::size_t offset = 0; offset < participants.size ();) {
-        const auto first = participants.begin () + static_cast<std::ptrdiff_t> (offset);
-        std::vector<aggregate_participant_t> current;
-        std::vector<std::byte> encoded;
-        const auto count = bounded_page_prefix (
-          std::span<const aggregate_participant_t> (participants).subspan (offset), page_item_limit,
-          page_byte_limit,
-          [] (const aggregate_participant_t &participant) {
-              return std::array{
-                participant.key.value.size (), participant.expected_store_version.size (),
-                participant.authority_payload.size (), participant.membership_mutation.size ()};
-          },
-          [&] (std::size_t candidate_count) {
-              current.assign (first, first + static_cast<std::ptrdiff_t> (candidate_count));
-              auto candidate = encode_page (tree.pages.size (), current);
-              if (candidate.size () > page_byte_limit)
-                  return false;
-              encoded = std::move (candidate);
-              return true;
-          });
-        if (!count)
-            return std::nullopt;
-        current.resize (*count);
-        offset += *count;
+    std::vector<aggregate_participant_t> current;
+    current.reserve (page_item_limit);
+    std::size_t current_bytes = encode_page (0, {}).size ();
+    const auto finish_page = [&tree, &current, &current_bytes] (std::size_t index) {
         page_t page;
         page.participants = std::move (current);
-        page.encoded = std::move (encoded);
+        page.encoded = encode_page (index, page.participants);
         page.digest = sha256 (page.encoded);
         tree.pages.push_back (std::move (page));
+        current.clear ();
+        current.reserve (page_item_limit);
+        current_bytes = encode_page (tree.pages.size (), {}).size ();
+    };
+    for (const auto &participant : participants) {
+        if (current.size () == page_item_limit)
+            finish_page (tree.pages.size ());
+        const auto entry_bytes = encode_participant (participant).dump ().size ();
+        auto next_bytes = current_bytes + entry_bytes + (current.empty () ? 0 : 1);
+        if (next_bytes > page_byte_limit && !current.empty ()) {
+            finish_page (tree.pages.size ());
+            next_bytes = current_bytes + entry_bytes;
+        }
+        if (next_bytes > page_byte_limit)
+            return std::nullopt;
+        current.push_back (participant);
+        current_bytes = next_bytes;
     }
+    if (!current.empty ())
+        finish_page (tree.pages.size ());
     tree.participant_count = participants.size ();
     tree.root = tree_root (tree.pages, tree.participant_count);
     if (tree.pages.size () > index_item_limit) {
