@@ -97,8 +97,7 @@ final class ZLinkFanoutNoDropTest {
             assertNull(
                     receiveNow(scenario.fast),
                     "the blocked record was partially delivered to the ready subscriber");
-            assertArrayEquals(
-                    expected, receiveMatching(scenario.slow, expected, RECEIVE_TIMEOUT));
+            assertArrayEquals(expected, receiveMatching(scenario.slow, expected, RECEIVE_TIMEOUT));
             completion.get(5, TimeUnit.SECONDS);
             assertArrayEquals(expected, receive(scenario.fast, RECEIVE_TIMEOUT));
         }
