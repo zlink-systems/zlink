@@ -2622,6 +2622,18 @@ class stream_host_service_t::listener_t
             socket (transport_io), write_queue (std::make_shared<stream_write_queue_t> ())
         {
         }
+
+        void wake_reader ()
+        {
+            asio::post (io, [] {});
+        }
+
+        void request_close ()
+        {
+            closing.store (true, std::memory_order_release);
+            // Socket close completion이 없어도 permit 대기 reader를 깨웁니다.
+            wake_reader ();
+        }
     };
 
     void finish_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
@@ -2855,7 +2867,7 @@ class stream_host_service_t::listener_t
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
         _sockets[&owner->socket] = [this, weak_owner] {
             if (const auto owner = weak_owner.lock ()) {
-                owner->closing.store (true, std::memory_order_release);
+                owner->request_close ();
                 asio::post (_io, [weak_owner] {
                     if (const auto owner = weak_owner.lock ())
                         close_stream (owner->socket);
@@ -2873,7 +2885,7 @@ class stream_host_service_t::listener_t
         const auto weak_stream = std::weak_ptr<TStream> (stream);
         _sockets[&stream->next_layer ()] = [this, weak_owner, weak_stream] {
             if (const auto owner = weak_owner.lock ()) {
-                owner->closing.store (true, std::memory_order_release);
+                owner->request_close ();
                 asio::post (_io, [weak_stream] {
                     if (const auto stream = weak_stream.lock ())
                         close_stream (*stream);
@@ -3260,22 +3272,21 @@ class stream_host_service_t::listener_t
                     std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                     if (received_frame.header.kind () == stream_message_kind_t::send
                         || received_frame.header.kind () == stream_message_kind_t::request) {
-                        /* Permit before dispatch (Application job queue §3). While the
-                         * supply is pending this reader keeps running the connection
-                         * io, so queued writes such as heartbeat replies complete
-                         * (messaging hot path I1). The supply wakes the io. */
+                        /* Application job queue §3의 dispatch 전 permit 공급을
+                         * 기다립니다. 공급·종료 알림이 reader io를 깨우며, listener
+                         * io는 송신 completion을 계속 처리합니다(hot path I1). */
                         application_job_queue_t::supply_request_t supply;
                         std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
                         const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
                             if (const auto connection_owner = weak_owner.lock ())
-                                asio::post (connection_owner->io, [] {});
+                                connection_owner->wake_reader ();
                         };
                         while (!(reserved = supply.take (*_application_jobs,
                                                          std::chrono::milliseconds::zero (), wake))
                                && !stream_stop_requested (*_stop, &owner->closing)) {
                             io.restart ();
                             const auto running = asio::make_work_guard (io);
-                            io.run_one_for (std::chrono::milliseconds (50));
+                            io.run_one ();
                         }
                         if (!reserved || !*reserved)
                             break;
@@ -3374,7 +3385,7 @@ class stream_host_service_t::listener_t
             }
         }
         if (connected_session) {
-            owner->closing.store (true, std::memory_order_release);
+            owner->request_close ();
             asio::post (_io, [connection] { close_stream (*connection); });
             if (connection_state->replacement) {
                 connection_state->replacement->deactivate ();

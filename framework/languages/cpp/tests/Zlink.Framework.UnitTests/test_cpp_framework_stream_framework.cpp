@@ -624,6 +624,42 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
       zlink::framework::stream_session_error_t::internal;
 };
 
+class permit_wait_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
+    {
+        connected.set_value ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        disconnected.set_value ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        ++errors;
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        ++packets;
+        co_return;
+    }
+
+    std::promise<void> connected;
+    std::promise<void> disconnected;
+    std::atomic_int packets{0};
+    std::atomic_int errors{0};
+};
+
 class rejected_connected_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
@@ -2236,6 +2272,73 @@ int main ()
     }
 
     transport_host.stop ();
+
+    // Permit 대기를 확정한 뒤 종료합니다. 시간 임계값 대신 completion을
+    // 관찰하며, io가 깨지 않는 결함은 CTest의 deadlock 제한이 검출합니다.
+    enum class permit_wait_end_t
+    {
+        host_stop,
+        source_close
+    };
+    constexpr auto permit_stream_name = "permit-wait-stream";
+    constexpr auto permit_session_name = "permit-wait-session";
+    for (const auto end : {permit_wait_end_t::host_stop, permit_wait_end_t::source_close}) {
+        zlink::framework::zlink_builder_t permit_zlink;
+        zlink::framework::zlink_framework_options_t permit_options (
+          transport_services, transport_handlers, transport_serializers, permit_zlink);
+        permit_options.add_stream_node (permit_stream_name)
+          .bind (loopback_tcp_any_port)
+          .register_session (permit_session_name);
+        permit_options.apply ();
+        zlink::framework::detail::apply_dispatch_options (permit_zlink, transport_dispatch_options);
+        auto permit_runtime = zlink::framework::detail::stream_runtime_t::from (permit_zlink);
+        auto application_jobs =
+          std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+            zlink::framework::runtime::application_job_queue_configuration_t{});
+        auto held_permit = application_jobs->try_reserve_supply ();
+        if (!held_permit)
+            return 333;
+        permit_wait_session_t permit_session;
+        auto connected = permit_session.connected.get_future ();
+        auto disconnected = permit_session.disconnected.get_future ();
+        auto permit_listeners =
+          std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
+        zlink::framework::runtime::stream_host_service_t permit_host (
+          permit_runtime, permit_runtime.snapshots (),
+          {{permit_session_name,
+            [&permit_session] (zlink::framework::service_provider_t &)
+              -> zlink::framework::packet_stream_session_t & { return permit_session; }}},
+          permit_options.session_replacement_callback_timeout (), nullptr, {}, permit_listeners,
+          application_jobs);
+        permit_host.start (transport_provider);
+        const auto permit_port = endpoint_port (listener_endpoint (
+          *permit_listeners, zlink::framework::listener_kind_t::stream, permit_stream_name));
+        auto permit_client = connect_loopback (permit_port);
+        if (!permit_client) {
+            permit_host.stop ();
+            return 334;
+        }
+        connected.wait ();
+        const zlink::framework::detail::stream_header_t permit_header (
+          stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none,
+          std::nullopt, "permit-wait", {});
+        send_native_bytes (permit_client,
+                           make_native_stream_frame (permit_runtime, permit_header,
+                                                     zlink::message_t::from ("pending")));
+        while (application_jobs->snapshot ().capacity_waiters != 1)
+            std::this_thread::yield ();
+        if (end == permit_wait_end_t::source_close) {
+            permit_host.force_close_sessions (zlink::framework::stream_close_reason_t::server_drain,
+                                              "permit wait close");
+            disconnected.wait ();
+        }
+        permit_host.stop ();
+        disconnected.wait ();
+        close_native_client (permit_client);
+        if (permit_session.packets.load () != 0 || permit_session.errors.load () != 0
+            || application_jobs->snapshot ().capacity_waiters != 0)
+            return 335;
+    }
 
     zlink::framework::zlink_builder_t limited_zlink;
     zlink::framework::zlink_framework_options_t limited_options (
