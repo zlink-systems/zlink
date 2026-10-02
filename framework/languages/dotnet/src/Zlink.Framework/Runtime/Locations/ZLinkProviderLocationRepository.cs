@@ -513,7 +513,14 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
             do
             {
                 var result = await provider
-                    .ScanAsync(new ZLinkStoreScanRequest(prefix, cursor, 1000), cancellationToken)
+                    .ScanAsync(
+                        new ZLinkStoreScanRequest(
+                            prefix,
+                            cursor,
+                            ZLinkPageRequestPolicy.MaximumPageSize
+                        ),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 if (result is ZLinkStoreScanResult.Expired)
                 {
@@ -916,15 +923,15 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
     // table ("integer fields are written as JSON strings rather than JSON
     // numbers... because 64-bit values can exceed JSON number precision").
     private sealed record OwnerRecord(
-        [property: JsonPropertyName("ownerId")] string OwnerId,
-        [property: JsonPropertyName("leaseGeneration")]
+        [property: JsonPropertyName(ZLinkLocationRecordJsonFields.OwnerId)] string OwnerId,
+        [property: JsonPropertyName(ZLinkLocationRecordJsonFields.LeaseGeneration)]
         [property: JsonConverter(
             typeof(Messaging.ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter)
         )]
             long LeaseGeneration
     )
     {
-        [JsonPropertyName("recordVersion")]
+        [JsonPropertyName(ZLinkLocationRecordJsonFields.RecordVersion)]
         [JsonPropertyOrder(-1)]
         public int RecordVersion { get; init; } = 1;
     }
@@ -951,7 +958,7 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         T Descriptor
     )
     {
-        [JsonPropertyName("recordVersion")]
+        [JsonPropertyName(ZLinkLocationRecordJsonFields.RecordVersion)]
         [JsonPropertyOrder(-1)]
         public int RecordVersion { get; init; } = 1;
     }

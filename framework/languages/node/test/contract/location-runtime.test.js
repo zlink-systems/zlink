@@ -258,12 +258,16 @@ test('location runtime claims on the next heartbeat after startup Store recovery
   await runtime.stop();
 });
 
-test('location runtime installs the same late-committed lease after heartbeat Conflict', async () => {
+test('location runtime installs the same late-committed lease after heartbeat Conflict', async t => {
+  let now = performance.now();
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   let claimCalls = 0;
   let commitFirstClaim;
   let releaseCalls = 0;
+  let confirmationReads = 0;
   const leaseStore = {
     async claimOwnerLease(ownerId, leaseTtlMs, signal) {
       claimCalls += 1;
@@ -276,7 +280,10 @@ test('location runtime installs the same late-committed lease after heartbeat Co
       }
       return await store.claimOwnerLease(ownerId, leaseTtlMs, signal);
     },
-    readOwnerLease: store.readOwnerLease.bind(store),
+    async readOwnerLease(ownerId, signal) {
+      confirmationReads += 1;
+      return await store.readOwnerLease(ownerId, signal);
+    },
     renewOwnerLease: store.renewOwnerLease.bind(store),
     async releaseOwnerLease(token, signal) {
       releaseCalls += 1;
@@ -292,20 +299,24 @@ test('location runtime installs the same late-committed lease after heartbeat Co
       ownerLeaseRenewTimeoutMs: 5
     }
   });
-  const keepAlive = setTimeout(() => {}, 100);
-
-  await runtime.start(rid('node-late-conflict'));
+  const startup = runtime.start(rid('node-late-conflict'));
+  assert.equal(typeof commitFirstClaim, 'function');
+  now += 5;
+  t.mock.timers.tick(5);
+  await startup;
   assert.equal(runtime.currentOwnerToken, undefined);
   await commitFirstClaim();
+  const renewed = new Promise(resolve => runtime.addOwnerLeaseRenewedHandler(resolve));
   timers.shift().callback();
-  await waitForCondition(() => runtime.ownerLeaseUsable);
+  await renewed;
+  assert.equal(runtime.ownerLeaseUsable, true);
 
   assert.equal(claimCalls, 2);
+  assert.equal(confirmationReads, 1);
   assert.equal(runtime.currentOwnerToken?.ownerId, 'owner-late-conflict');
   assert.equal(runtime.currentOwnerToken?.leaseGeneration, 1n);
   assert.equal(releaseCalls, 0);
   await runtime.stop();
-  clearTimeout(keepAlive);
 });
 
 test('location runtime does not start confirmation read after claim consumes renew deadline', async () => {

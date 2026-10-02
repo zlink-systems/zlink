@@ -10,6 +10,9 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 // session bindings table so the framework seam can keep its actor-id-keyed shape.
 internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocket
 {
+    private static readonly TimeSpan DefaultBindTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan BindRetryInterval = TimeSpan.FromMilliseconds(10);
+
     private readonly IStreamSocket _socket;
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -163,8 +166,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         // first packet can outrun it and see NotConnected. Retry within the
         // bind timeout; the liveness event is milliseconds behind the packet.
         var deadline =
-            Stopwatch.GetElapsedTime(0)
-            + (timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(5));
+            Stopwatch.GetElapsedTime(0) + (timeout > TimeSpan.Zero ? timeout : DefaultBindTimeout);
         while (true)
         {
             var submit = await SubmitAndAwaitOperationAsync(
@@ -178,8 +180,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                 return;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
-                .ConfigureAwait(false);
+            await Task.Delay(BindRetryInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 

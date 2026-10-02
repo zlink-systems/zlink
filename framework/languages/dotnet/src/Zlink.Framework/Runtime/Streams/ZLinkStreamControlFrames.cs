@@ -1,14 +1,12 @@
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+
 namespace Zlink.Framework.Runtime.Streams;
 
 internal static class ZLinkStreamControlFrames
 {
-    private const string ActorBoundName = "$zlink.actor.bound";
-    private const string ActorUnboundName = "$zlink.actor.unbound";
-    private const string HeartbeatPingName = "$zlink.heartbeat.ping";
-    private const string HeartbeatPongName = "$zlink.heartbeat.pong";
-
     public static bool IsHeartbeatPong(ZlinkStreamHeader header) =>
-        header.Kind == ZlinkStreamMessageKind.Control && header.Name == HeartbeatPongName;
+        header.Kind == ZlinkStreamMessageKind.Control
+        && header.Name == ZlinkStreamControlProtocol.HeartbeatPongName;
 
     public static void SendHeartbeatPing(ZLinkManagedStream stream)
     {
@@ -17,7 +15,7 @@ internal static class ZLinkStreamControlFrames
             ZlinkStreamCodec.Raw,
             ZlinkStreamHeaderFlags.None,
             null,
-            HeartbeatPingName,
+            ZlinkStreamControlProtocol.HeartbeatPingName,
             ZlinkStreamMetadata.Empty
         );
         ZLinkStreamFrameWriter.Write(
@@ -33,22 +31,38 @@ internal static class ZLinkStreamControlFrames
         var actorIdBytes = System.Text.Encoding.UTF8.GetBytes(actorId);
         if (slot == 0 || actorIdBytes.Length is 0 or > byte.MaxValue)
             throw new InvalidOperationException("Actor binding control values are invalid.");
-        var payload = new byte[4 + actorIdBytes.Length];
-        payload[0] = 1;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), slot);
-        payload[3] = checked((byte)actorIdBytes.Length);
-        actorIdBytes.CopyTo(payload.AsSpan(4));
-        SendControl(stream, ActorBoundName, payload);
+        var payload = new byte[
+            ZlinkStreamControlProtocol.ActorBoundPrefixSize + actorIdBytes.Length
+        ];
+        payload[0] = ZlinkStreamControlProtocol.ActorControlVersion;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
+            payload.AsSpan(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            ),
+            slot
+        );
+        payload[ZlinkStreamControlProtocol.ActorIdLengthOffset] = checked(
+            (byte)actorIdBytes.Length
+        );
+        actorIdBytes.CopyTo(payload.AsSpan(ZlinkStreamControlProtocol.ActorBoundPrefixSize));
+        SendControl(stream, ZlinkStreamControlProtocol.BoundControlName, payload);
     }
 
     public static void SendActorUnbound(IZLinkStream stream, ushort slot)
     {
         if (slot == 0)
             throw new InvalidOperationException("Actor slot must not be zero.");
-        Span<byte> payload = stackalloc byte[3];
-        payload[0] = 1;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.Slice(1, 2), slot);
-        SendControl(stream, ActorUnboundName, payload);
+        Span<byte> payload = stackalloc byte[ZlinkStreamControlProtocol.ActorUnboundPayloadSize];
+        payload[0] = ZlinkStreamControlProtocol.ActorControlVersion;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
+            payload.Slice(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            ),
+            slot
+        );
+        SendControl(stream, ZlinkStreamControlProtocol.UnboundControlName, payload);
     }
 
     public static async ValueTask SendActorUnboundAsync(
@@ -59,15 +73,21 @@ internal static class ZLinkStreamControlFrames
     {
         if (slot == 0)
             throw new InvalidOperationException("Actor slot must not be zero.");
-        var payload = new byte[3];
-        payload[0] = 1;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), slot);
+        var payload = new byte[ZlinkStreamControlProtocol.ActorUnboundPayloadSize];
+        payload[0] = ZlinkStreamControlProtocol.ActorControlVersion;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
+            payload.AsSpan(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            ),
+            slot
+        );
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Control,
             ZlinkStreamCodec.Raw,
             ZlinkStreamHeaderFlags.None,
             null,
-            ActorUnboundName,
+            ZlinkStreamControlProtocol.UnboundControlName,
             ZlinkStreamMetadata.Empty
         );
         await ZLinkStreamFrameWriter
@@ -84,13 +104,13 @@ internal static class ZLinkStreamControlFrames
         if (payload.Length != 0)
             throw new InvalidOperationException("Stream control packet payload must be empty.");
 
-        if (header.Name == HeartbeatPingName)
+        if (header.Name == ZlinkStreamControlProtocol.HeartbeatPingName)
         {
             SendHeartbeatPong(stream);
             return;
         }
 
-        if (header.Name == HeartbeatPongName)
+        if (header.Name == ZlinkStreamControlProtocol.HeartbeatPongName)
             return;
 
         throw new InvalidOperationException("Unknown stream control packet.");
@@ -103,7 +123,7 @@ internal static class ZLinkStreamControlFrames
             ZlinkStreamCodec.Raw,
             ZlinkStreamHeaderFlags.None,
             null,
-            HeartbeatPongName,
+            ZlinkStreamControlProtocol.HeartbeatPongName,
             ZlinkStreamMetadata.Empty
         );
         ZLinkStreamFrameWriter.Write(

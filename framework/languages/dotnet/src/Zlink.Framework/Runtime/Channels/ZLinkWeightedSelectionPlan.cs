@@ -11,8 +11,12 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
     where T : class
     where TKey : notnull
 {
+    private const int PrecomputeBudgetsPerSecond = 100;
     private const int MaximumPrecomputedSteps = 4096;
-    private static readonly long MaximumPrecomputeTicks = Math.Max(1, Stopwatch.Frequency / 100);
+    private static readonly long MaximumPrecomputeTicks = Math.Max(
+        1,
+        Stopwatch.Frequency / PrecomputeBudgetsPerSecond
+    );
 
     private readonly T[] _candidates;
     private readonly TKey[] _keys;

@@ -342,7 +342,10 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                 var page = await store
                     .ListFanoutPublishersAsync(
                         channelName,
-                        new ZLinkPageRequest(256, continuation),
+                        new ZLinkPageRequest(
+                            ZLinkPageRequestPolicy.DiscoveryPageSize,
+                            continuation
+                        ),
                         cancellationToken
                     )
                     .ConfigureAwait(false);

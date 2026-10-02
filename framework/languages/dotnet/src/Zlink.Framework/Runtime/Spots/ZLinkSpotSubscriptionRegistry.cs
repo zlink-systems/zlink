@@ -80,6 +80,8 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         }
     }
 
+    private static readonly TimeSpan SubscriptionRetryInterval = TimeSpan.FromMilliseconds(25);
+
     private static async ValueTask SetSubscriptionAsync(
         IZLinkBackendSpot nativeSpot,
         string channelName,
@@ -104,9 +106,9 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             {
                 var remaining = timeout - Stopwatch.GetElapsedTime(started);
                 await Task.Delay(
-                        remaining < TimeSpan.FromMilliseconds(25)
+                        remaining < SubscriptionRetryInterval
                             ? remaining
-                            : TimeSpan.FromMilliseconds(25),
+                            : SubscriptionRetryInterval,
                         cancellationToken
                     )
                     .ConfigureAwait(false);

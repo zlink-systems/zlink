@@ -61,7 +61,11 @@ internal sealed class ZLinkLocationObjectQuery(
         ZLinkAuthorityScanCursor? cursor = normalized.ContinuationToken is { } token
             ? new ZLinkAuthorityScanCursor(token)
             : null;
-        var prefix = filter.ObjectKind == ZLinkLocationObjectKind.Actor ? "zla1:a:" : "zla1:s:";
+        var prefix = ZLinkAuthorityKeyCodec.Prefix(
+            filter.ObjectKind == ZLinkLocationObjectKind.Actor
+                ? ZLinkAuthorityKeyKind.Actor
+                : ZLinkAuthorityKeyKind.Spot
+        );
         var scan = await ReadAsync(
                 "object-location-query-list",
                 cancellationToken,
@@ -94,7 +98,9 @@ internal sealed class ZLinkLocationObjectQuery(
             result.Value.NextCursor?.Encoded
         );
         if (EncodedSizeUpperBound(pageResult) > MaximumEncodedPageBytes)
-            throw Unavailable("The encoded object location page exceeds 4 MiB.");
+            throw Unavailable(
+                $"The encoded object location page exceeds {MaximumEncodedPageBytes} bytes."
+            );
         return pageResult;
     }
 

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -83,7 +84,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         var projection = RequirePhase(preparing, root.AggregateId, 1);
         var state = projection.State with
         {
-            Phase = 2,
+            Phase = (byte)ServiceWireCodec.RelocationPhase.Captured,
             AggregateGeneration = root.AggregateGeneration,
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
@@ -104,7 +105,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     Matches(
                         current,
                         root.AggregateId,
-                        phase: 2,
+                        phase: (byte)ServiceWireCodec.RelocationPhase.Captured,
                         preparing,
                         target: null,
                         attempt: 0
@@ -357,7 +358,12 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 return found.Snapshot;
             if (
                 !SameRelocation(projection, relocationId)
-                || projection.Phase is not (1 or 2 or 9)
+                || projection.Phase
+                    is not (
+                        (byte)ServiceWireCodec.RelocationPhase.Preparing
+                        or (byte)ServiceWireCodec.RelocationPhase.Captured
+                        or (byte)ServiceWireCodec.RelocationPhase.Aborted
+                    )
                 || !StringComparer.Ordinal.Equals(
                     found.Snapshot.OwnerId,
                     projection.State.SourceOwnerId
@@ -442,7 +448,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     out var projection
                 )
                 || !SameRelocation(projection, relocationId)
-                || projection.Phase != 1
+                || projection.Phase != (byte)ServiceWireCodec.RelocationPhase.Preparing
             )
                 return found.Snapshot;
             if (
@@ -500,7 +506,12 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 out var projection
             )
             || !SameRelocation(projection, relocationId)
-            || projection.Phase is not (1 or 2 or 9)
+            || projection.Phase
+                is not (
+                    (byte)ServiceWireCodec.RelocationPhase.Preparing
+                    or (byte)ServiceWireCodec.RelocationPhase.Captured
+                    or (byte)ServiceWireCodec.RelocationPhase.Aborted
+                )
         )
             return false;
         return StringComparer.Ordinal.Equals(snapshot.OwnerId, projection.State.SourceOwnerId)
@@ -608,7 +619,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     ) =>
         ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current.Payload.Span, out var canonical)
-            ? SameRelocation(canonical, root.AggregateId) && canonical.Phase == 2
+            ? SameRelocation(canonical, root.AggregateId)
+                && canonical.Phase == (byte)ServiceWireCodec.RelocationPhase.Captured
             : StringComparer.Ordinal.Equals(
                 current.StoreVersion,
                 prepare.Coordinator.ExpectedAuthorityStoreVersion
@@ -674,7 +686,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             prepare.Coordinator.LeaseGeneration,
             prepare.Coordinator.NodeRid.ToHex(),
             prepare.Coordinator.NodeGeneration,
-            2,
+            (byte)ServiceWireCodec.RelocationPhase.Captured,
             checked((long)prepare.ApplicationVersion)
         )
         {
@@ -690,7 +702,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             0,
             string.Empty,
             0,
-            2,
+            (byte)ServiceWireCodec.RelocationPhase.Captured,
             string.Empty,
             0,
             checked((long)prepare.ApplicationVersion),

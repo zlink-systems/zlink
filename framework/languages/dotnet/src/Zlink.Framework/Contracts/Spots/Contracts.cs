@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Contracts.Spots;
 
@@ -82,7 +83,7 @@ public readonly record struct SpotRef(
     {
         if (string.IsNullOrEmpty(value) || value.Contains('\0'))
             throw new ArgumentException(
-                "Spot ID must be valid UTF-8 with an encoded size of 1..255 bytes.",
+                $"Spot ID must be valid UTF-8 with a non-empty encoded size of at most {byte.MaxValue} bytes.",
                 nameof(value)
             );
 
@@ -103,7 +104,7 @@ public readonly record struct SpotRef(
         if (byteCount is < 1 or > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Spot ID must be 1..255 UTF-8 bytes."
+                $"Spot ID must be non-empty UTF-8 text of at most {byte.MaxValue} bytes."
             );
         return value!;
     }
@@ -161,16 +162,16 @@ public readonly record struct SpotRef(
 
                 switch (property)
                 {
-                    case "spotId":
+                    case ZLinkObjectReferenceJsonFields.SpotId:
                         spotId = ReadString(ref reader, property);
                         break;
-                    case "objectGeneration":
+                    case ZLinkObjectReferenceJsonFields.ObjectGeneration:
                         objectGeneration = ReadString(ref reader, property);
                         break;
-                    case "meshName":
+                    case ZLinkObjectReferenceJsonFields.MeshName:
                         meshName = ReadString(ref reader, property);
                         break;
-                    case "nodeRid":
+                    case ZLinkObjectReferenceJsonFields.NodeRid:
                         nodeRid = ReadString(ref reader, property);
                         break;
                     default:
@@ -240,13 +241,13 @@ public readonly record struct SpotRef(
             var nodeRid = ValidateNodeRid(value.NodeRid);
 
             writer.WriteStartObject();
-            writer.WriteString("spotId", spotId);
+            writer.WriteString(ZLinkObjectReferenceJsonFields.SpotId, spotId);
             writer.WriteString(
-                "objectGeneration",
+                ZLinkObjectReferenceJsonFields.ObjectGeneration,
                 objectGeneration.ToString(CultureInfo.InvariantCulture)
             );
-            writer.WriteString("meshName", meshName);
-            writer.WriteString("nodeRid", nodeRid.ToHex());
+            writer.WriteString(ZLinkObjectReferenceJsonFields.MeshName, meshName);
+            writer.WriteString(ZLinkObjectReferenceJsonFields.NodeRid, nodeRid.ToHex());
             writer.WriteEndObject();
         }
 

@@ -13,17 +13,16 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal sealed class RetryPolicy(HttpClientOptions options)
 {
-    // Exponential backoff with full jitter: base 50ms, doubling per attempt, capped at 1s.
-    // Fixed delays synchronize retries from many clients against an ailing server.
-    private const int MaximumBackoffMilliseconds = 1000;
-    private const int InitialBackoffMilliseconds = 50;
-    private const int MaximumBackoffShift = 5;
+    private const int BaseDelayMilliseconds = 50;
+    private const int MaximumDelayMilliseconds = 1000;
+    private static readonly int SaturationShift = (int)
+        Math.Ceiling(Math.Log2((double)MaximumDelayMilliseconds / BaseDelayMilliseconds));
 
     private static TimeSpan DelayFor(int attempt)
     {
         var ceilingMs = Math.Min(
-            MaximumBackoffMilliseconds,
-            InitialBackoffMilliseconds << Math.Min(attempt, MaximumBackoffShift)
+            MaximumDelayMilliseconds,
+            BaseDelayMilliseconds << Math.Min(attempt, SaturationShift)
         );
         return TimeSpan.FromMilliseconds(Random.Shared.Next(0, ceilingMs + 1));
     }

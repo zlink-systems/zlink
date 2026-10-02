@@ -16,6 +16,8 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // Spot pull consumers and completion callbacks retain their existing contracts.
 internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
+    private const int MinimumApplicationWorkers = 2;
+
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkApplicationJobQueue? _applicationJobQueue;
@@ -89,7 +91,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _node.SetReadyHandler(OnReady);
         using (ExecutionContext.SuppressFlow())
         {
-            var workers = new Task[Math.Max(2, Environment.ProcessorCount)];
+            var workers = new Task[Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount)];
             for (var index = 0; index < workers.Length; index++)
                 workers[index] = _applicationTaskRunner is { } runner
                     ? runner.Run("mesh-application-worker", ct => RunAsync(_stop.Token, ct))

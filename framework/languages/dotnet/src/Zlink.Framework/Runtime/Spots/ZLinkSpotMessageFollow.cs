@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -46,7 +47,7 @@ internal sealed class ZLinkSpotMessageFollow(
         TimeSpan now
     ) =>
         ExpiresAt > now
-        && received.MessageFollowHopCount < 8
+        && received.MessageFollowHopCount < ZLinkServiceWireCodec.MessageFollowMaximumHopCount
         && received.OperationId.High != 0
         && received.OperationId.Low != 0
         && ObjectGeneration != 0

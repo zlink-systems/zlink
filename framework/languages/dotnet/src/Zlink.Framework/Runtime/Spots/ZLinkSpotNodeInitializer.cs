@@ -9,6 +9,8 @@ internal sealed class ZLinkSpotNodeInitializer(
     ZLinkDispatchErrorReporter dispatchErrors
 )
 {
+    private static readonly TimeSpan NodeConvergencePollInterval = TimeSpan.FromMilliseconds(10);
+
     public async ValueTask InitializeAsync(ZLinkFrameworkComponentState state)
     {
         if (registration.SpotNodes.Count == 0)
@@ -351,8 +353,7 @@ internal sealed class ZLinkSpotNodeInitializer(
                 router.PeerRoutingIds[descriptor.Endpoint] = descriptor.Rid;
             }
             if (unresolved.Count != 0)
-                await Task.Delay(TimeSpan.FromMilliseconds(10), deadline.Token)
-                    .ConfigureAwait(false);
+                await Task.Delay(NodeConvergencePollInterval, deadline.Token).ConfigureAwait(false);
         }
     }
 

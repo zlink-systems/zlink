@@ -60,6 +60,7 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
+import { ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE } from '../../packages/framework/src/runtime/host/relocation-integrity-fault-gate';
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -547,10 +548,11 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     const first = dispatch(prepare);
     const second = dispatch(prepare);
     assert.equal(prepareCalls, 1);
-    await assert.rejects(
-      dispatch({ ...prepare, applicationVersion: 5n }),
-      /repeated Prepare with different bytes/
+    assert.equal(
+      await dispatch({ ...prepare, coordinator: { ...coordinator, leaseGeneration: 4n } }),
+      true
     );
+    assert.equal(sent.length, 0, 'a different exact identity must not receive the active reply');
     release();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     assert.equal(prepareCalls, 1);
@@ -605,6 +607,154 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     );
     assert.deepEqual(oneWay, ['data', 'cutover']);
     assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+for (const restoreOutcome of ['ready', 'failed'] as const) {
+  test(`Prepare manifest conflict preserves the original ${restoreOutcome} replay`, async () => {
+    const prepare: ServiceMaintenanceRelocationPrepare = {
+      kind: 'prepare',
+      relocation: { high: 107n, low: 109n },
+      targetAttemptGeneration: 1n,
+      coordinator,
+      target,
+      initiatorRole: 'source',
+      object,
+      sourceNodeRid: 'source',
+      sourceNodeGeneration: 2n,
+      payloadTotalLength: 24n,
+      payloadChunkCount: 1,
+      payloadChecksumCrc32c: 123,
+      applicationVersion: 4n
+    };
+    const sent: Buffer[] = [];
+    let prepareCalls = 0;
+    let readySubmitted = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
+    const internals = runtime as unknown as {
+      handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
+    };
+    internals.handlePrepareControl = async () => {
+      prepareCalls += 1;
+      await held;
+      if (restoreOutcome === 'failed') {
+        throw new ServiceRelocationDataLostError('restore manifest failed');
+      }
+      return {
+        kind: 'ready',
+        relocation: prepare.relocation,
+        targetAttemptGeneration: prepare.targetAttemptGeneration,
+        coordinator,
+        target,
+        object,
+        senderRole: 'target'
+      };
+    };
+    const dispatch = async (request: ServiceMaintenanceRelocationPrepare) => {
+      const part = Message.from(encodeServiceRelocationControlRequest(request));
+      try {
+        return await runtime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts: [part],
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            const bytes = Buffer.from(Array.isArray(reply) ? reply[0]! : reply);
+            sent.push(bytes);
+            if (decodeServiceRelocationControlResponse(bytes).kind === 'ready' && !readySubmitted) {
+              readySubmitted = true;
+              return SubmitResult.NotConnected;
+            }
+            return SubmitResult.Ok;
+          }
+        } as never);
+      } finally {
+        part.close();
+      }
+    };
+    try {
+      await dispatch(prepare);
+      await dispatch({ ...prepare, payloadChecksumCrc32c: 124 });
+      await waitUntil(() => sent.length === 1);
+      const conflict = decodeServiceRelocationControlResponse(sent[0]!);
+      assert.equal(conflict.kind, 'failed');
+      assert.equal((conflict as ServiceMaintenanceRelocationFailed).failureCode, 35);
+      assert.equal(prepareCalls, 1, 'conflict must not restart the existing restore');
+      release();
+      await waitUntil(() => sent.length === 2);
+      const originalTerminal = sent[1]!;
+      assert.equal(decodeServiceRelocationControlResponse(originalTerminal).kind, restoreOutcome);
+      await dispatch({ ...prepare, sourceNodeGeneration: 3n });
+      assert.equal(sent.length, 2, 'stale identity must not change the terminal reply');
+      await dispatch(prepare);
+      assert.equal(sent.length, 3);
+      assert.deepEqual(sent[2], originalTerminal, 'the accepted restore outcome must still replay');
+      assert.equal(prepareCalls, 1);
+    } finally {
+      release();
+      await runtime.dispose();
+    }
+  });
+}
+
+test('the integrity fault gate fails the original Prepare with replayable DataLost', async () => {
+  const prepare: ServiceMaintenanceRelocationPrepare = {
+    kind: 'prepare',
+    relocation: { high: 127n, low: 131n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object,
+    sourceNodeRid: 'source',
+    sourceNodeGeneration: 2n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
+    applicationVersion: 4n
+  };
+  const gate = {
+    consumeChecksumMismatch: () => false,
+    consumeIdentityConflict: () => true
+  };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({}),
+    providerResolver: {
+      get: (token: unknown) =>
+        token === ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE ? gate : undefined
+    }
+  } as never);
+  const sent: Buffer[] = [];
+  const dispatch = async () => {
+    const part = Message.from(encodeServiceRelocationControlRequest(prepare));
+    try {
+      await runtime.tryHandleControl('mesh-a', {
+        kind: ReceiveKind.NodeRequest,
+        sourceNodeRid: 'source',
+        parts: [part],
+        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
+          return SubmitResult.Ok;
+        }
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  try {
+    await dispatch();
+    await waitUntil(() => sent.length === 1);
+    const terminal = decodeServiceRelocationControlResponse(sent[0]!);
+    assert.equal(terminal.kind, 'failed');
+    assert.equal((terminal as ServiceMaintenanceRelocationFailed).failureCode, 35);
+    await dispatch();
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1], sent[0], 'fault terminal must replay without attempting Restore');
   } finally {
     await runtime.dispose();
   }

@@ -2037,19 +2037,24 @@ public sealed class StreamSessionForcedCleanupTests
             _ = dependency;
             _registration = cancellationToken.Register(() =>
             {
-                lifetime.CancellationCallbackStarted.TrySetResult();
-                lifetime.AllowCancellationCallback.Task.GetAwaiter().GetResult();
-                if (lifetime.ThrowFromCancellationCallback)
-                    throw new InvalidOperationException("terminal cancellation callback failed");
+                try
+                {
+                    lifetime.CancellationCallbackStarted.TrySetResult();
+                    lifetime.AllowCancellationCallback.Task.GetAwaiter().GetResult();
+                    if (lifetime.ThrowFromCancellationCallback)
+                        throw new InvalidOperationException(
+                            "terminal cancellation callback failed"
+                        );
+                }
+                finally
+                {
+                    lifetime.CancellationObserved.TrySetResult();
+                }
             });
             lifetime.DisconnectedStarted.TrySetResult();
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                lifetime.CancellationObserved.TrySetResult();
+                await lifetime.CancellationObserved.Task;
             }
             finally
             {
@@ -2208,15 +2213,9 @@ public sealed class StreamSessionForcedCleanupTests
                 lifetime.CancellationCallbackCompleted.TrySetResult();
             });
             lifetime.Entered.TrySetResult();
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                lifetime.CancellationObserved.TrySetResult();
-                throw;
-            }
+            await lifetime.CancellationCallbackCompleted.Task;
+            lifetime.CancellationObserved.TrySetResult();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         public async ValueTask DisposeAsync()

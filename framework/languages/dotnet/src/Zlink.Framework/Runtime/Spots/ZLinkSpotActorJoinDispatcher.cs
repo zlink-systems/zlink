@@ -65,7 +65,11 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         var hasHandler = actorJoins.TryResolve(out var descriptor) && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-join-handler");
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerMissing
+            );
             return;
         }
 
@@ -79,13 +83,22 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
         if (actor is null)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-target-actor");
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerMissing
+            );
             return;
         }
 
         if (payload.Error is { } payloadError)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "payload-decode-failed", payloadError);
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.PayloadDecodeFailed,
+                payloadError
+            );
             return;
         }
 
@@ -105,7 +118,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         }
         catch (Exception ex)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "handler-exception", ex);
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerException,
+                ex
+            );
             return;
         }
 
@@ -117,7 +135,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
             catch (Exception ex)
             {
-                ReplyRejected(joinRequest, payload.MessageName, "join-commit-failed", ex);
+                ReplyRejected(
+                    joinRequest,
+                    payload.MessageName,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ex
+                );
                 return;
             }
         }
@@ -274,17 +297,10 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     private void ReplyRejected(
         ZLinkBackendActorJoinRequest joinRequest,
         string messageName,
-        string reason,
+        ZLinkDispatchErrorReason errorReason,
         Exception? exception = null
     )
     {
-        var errorReason = reason switch
-        {
-            "payload-decode-failed" => ZLinkDispatchErrorReason.PayloadDecodeFailed,
-            "handler-exception" or "join-commit-failed" =>
-                ZLinkDispatchErrorReason.HandlerException,
-            _ => ZLinkDispatchErrorReason.HandlerMissing,
-        };
         if (_dispatchErrors.Enabled)
             _dispatchErrors.Report(
                 new ZLinkDispatchFailure(
