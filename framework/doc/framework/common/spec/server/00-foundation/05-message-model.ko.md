@@ -47,7 +47,7 @@ metadata를 reply matching key로 사용하지 않는다. Reply는 성공 payloa
 
 Object creation request는 일반 Send·Request와 다른 manager operation 입력이다.
 
-Framework는 typed codec으로 encode한 최대 1 MiB payload의 immutable content reference와 hash를
+Framework는 typed codec으로 [크기 한도](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 안에서 encode한 payload의 immutable content reference와 hash를
 placement reservation 전에 durable creation intent에 기록한다.
 
 Factory는 logical key, ObjectGeneration과 creation attempt를 함께 받아 같은 attempt의

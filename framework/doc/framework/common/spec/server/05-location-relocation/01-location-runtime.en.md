@@ -885,8 +885,10 @@ A Create call can only be submitted once. Submission uses one deadline spanning 
 location lookup through `Ready` confirmation. Specifying the same option twice, or
 resubmitting the same call, is `InvalidOperation`.
 
-The creation request's stored size is at most 1 MiB. Actor and User Spot requests are
-stored in the Location Store's in-progress creation record. They aren't stored in the
+The creation request's encoded size is at most 512 KiB (524,288 bytes). Actor and User Spot
+requests go base64url-encoded into the Location Store's in-progress authority record (`pendingCreation`
+of §3.4), and at this size the whole record fits within the Store value limit
+([02 §3](02-location-store-redis.en.md#3-key-value-version-and-clock)). They aren't stored in the
 Relocation Store.
 
 ```mermaid

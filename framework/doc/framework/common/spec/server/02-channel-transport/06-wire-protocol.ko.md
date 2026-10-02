@@ -396,7 +396,7 @@ state를 opaque bytes로 저장하며 JSON parsing, state contract ID와 applica
 Actor와 User Spot manager create와 target-owned Instance activation은 generic reservation으로 final object·owner generation과
 `Creating` row를 만든다.
 
-- Creation record는 object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence와 최대 1 MiB complete request envelope의 content reference·hash를 보존한다.
+- Creation record는 object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence와 [크기 한도](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 안의 complete request envelope의 content reference·hash를 보존한다.
 - Pending current row에 보존된 이 값을 `stored creation intent`, 즉 저장된 생성 의도 기록이라고 한다. 복구할 때는 이 기록을 훑어 fence 값과 receipt가 그대로 일치하는지 확인한 뒤 복원할 수 있다.
 - 객체를 실제로 만드는 application 코드를 [Factory](../00-foundation/02-glossary.ko.md#factory)라고 한다. Factory, initialize와 initial membership이 끝나면 같은 fence로 reservation commit과 `Ready` CAS를 수행한다.
 - Target-owned Instance cold activation만 commit 전에 [durable activation inbox](../00-foundation/02-glossary.ko.md#durable-activation-inbox) first record도 확정한다.

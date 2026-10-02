@@ -741,7 +741,7 @@ Actor membership과 Logical Multicast subscription을 등록할 수 없다.
 Actor manager와 User Spot manager는 global ID를 받는 `Create`, `GetOrCreate`, `Find` family를 제공한다. Actor
 `Create`·`GetOrCreate`는 Actor ID와 stable type을, User Spot `GetOrCreate`는 caller가 정한 [Spot ID](02-glossary.ko.md#spot-id)와 stable
 type을 필수로 받는다. User Spot `Create`는 Framework가 global Spot ID를 생성한다. Optional fluent 설정은 initial Mesh,
-최대 1 MiB로 encode되는 creation request와 deadline이다. 같은 option을 두 번
+[크기 한도](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 안에서 encode되는 creation request와 deadline이다. 같은 option을 두 번
 설정하면 startup configuration error, terminal submit을 두 번 실행하면 `InvalidOperation`이다.
 
 Initial Mesh 지정에 따른 결과는 다음과 같다.

@@ -173,7 +173,7 @@ ZLinkSpotCreateResult result = await spotManager
 Mesh가 없으면 `NotFound`로 끝난다. Framework는 role, stable type capability, active·pending
 capacity를 먼저 검사하고 남은 후보를 node-wide placement weight로 선택한다.
 
-Encoded creation request는 최대 1 MiB다. Framework는 reservation 전에 변경할 수 없는 content
+Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. Framework는 reservation 전에 변경할 수 없는 content
 reference와 hash를 creation intent에 기록하고, Spot이 [Ready](../00-foundation/02-glossary.ko.md#ready)가
 되거나 실패한 생성을 정리할 때까지 유지한다. 생성 권한을 얻은 target만 request를
 [factory](../00-foundation/02-glossary.ko.md#factory)에 전달한다. **Factory는, 같은 ActorId/Spot ID의

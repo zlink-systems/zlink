@@ -795,8 +795,9 @@ Create call은 한 번만 제출할 수 있다. 제출할 때 위치 조회부�
 deadline을 사용한다. 같은 option을 중복 지정하거나 같은 call을 다시 제출하면
 `InvalidOperation`이다.
 
-생성 요청의 저장 크기는 최대 1 MiB다. Actor와 User Spot 요청은 Location Store의 생성 중인
-record에 저장한다. Relocation Store에는 저장하지 않는다.
+생성 요청의 encoded 크기는 최대 512 KiB(524,288 bytes)다. Actor와 User Spot 요청은 base64url로
+Location Store의 생성 중인 authority record(§3.4의 `pendingCreation`)에 들어가며, 이 크기면 record
+전체가 Store value 한도([02 §3](02-location-store-redis.ko.md#3-key-value-version과-clock)) 안에 든다. Relocation Store에는 저장하지 않는다.
 
 ```mermaid
 sequenceDiagram

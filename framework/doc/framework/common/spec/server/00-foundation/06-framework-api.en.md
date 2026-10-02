@@ -848,7 +848,7 @@ The Actor manager and User Spot manager provide `Create`, `GetOrCreate`, `Find` 
 that take a global ID. Actor `Create`/`GetOrCreate` require an Actor ID and stable type; User
 Spot `GetOrCreate` requires a caller-specified [Spot ID](02-glossary.en.md#spot-id) and
 stable type. User Spot `Create` has Framework generate the global Spot ID. Optional
-fluent settings are the initial Mesh, a creation request encoded to at most 1 MiB, and a
+fluent settings are the initial Mesh, a creation request encoded within the [size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot), and a
 deadline. Setting the same option twice is a startup configuration error; running terminal
 submit twice is `InvalidOperation`.
 

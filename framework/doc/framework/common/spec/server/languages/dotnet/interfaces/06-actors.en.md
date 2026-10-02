@@ -275,8 +275,8 @@ re-invocation errors of `Create` and `GetOrCreate` calls.
 
 [Actor model](../../../03-spot-actor/04-actor-model.en.md), [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.en.md), and [Framework API](../../../00-foundation/06-framework-api.en.md) define Create/GetOrCreate outcomes and terminal replay. .NET projects `AlreadyExists`, `TypeMismatch`, `Existing`, and `DeadlineExceeded`.
 
-The creation request and semantic terminal envelope are each at most 1
-MiB. The creation request records an immutable reference and hash before
+The size limit of the creation request is defined by
+[Location runtime §7](../../../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot), and the semantic terminal envelope is at most 1 MiB. The creation request records an immutable reference and hash before
 reservation. The factory must be retry-safe for the same ID,
 ObjectGeneration, and creation attempt.
 

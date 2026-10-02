@@ -52,8 +52,8 @@ never complete twice.
 An object creation request is a manager-operation input distinct from a regular
 send/request.
 
-The framework encodes it with the typed codec into at most a 1 MiB
-payload and records its immutable content reference and hash into a durable
+The framework encodes it with the typed codec into a payload within the
+[size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) and records its immutable content reference and hash into a durable
 creation intent before the placement reservation.
 
 A factory receives the logical
