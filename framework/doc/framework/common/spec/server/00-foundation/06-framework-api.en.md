@@ -324,8 +324,9 @@ limit protecting concurrently in-flight activations, and it doesn't change the a
 population count. [MeshNode §5.1](../03-spot-actor/03-mesh-node.en.md#51-weight-and-capacity)
 sets which work it counts, the counted interval, the default and the allowed range.
 
-All the capacity needed to create or relocate one object is reserved as a single typed
-bundle. An Actor bundle contains one Actor slot. A Spot bundle contains one overall Spot
+The capacity one object needs is a single typed bundle. Creation reserves this bundle before
+creating the object, and a standalone relocation moves it from source to target in the CAS that
+changes the owner. An Actor bundle contains one Actor slot. A Spot bundle contains one overall Spot
 slot, plus — if a stable-type limit is configured — one slot for that
 [Spot kind](02-glossary.en.md#spot-kind) — the value marking whether a Spot is Entry, User, or
 Instance — and stable

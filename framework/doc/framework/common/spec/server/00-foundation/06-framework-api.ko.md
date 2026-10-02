@@ -285,7 +285,8 @@ Pending activation 제한은 object population limit이 아니라 동시에 진�
 admission 제한이며 active·reserved population count를 바꾸지 않는다. 세는 작업, 세는 구간, 기본값과 허용 범위는
 [MeshNode §5.1](../03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)이 정한다.
 
-하나의 object를 만들거나 relocation할 때 필요한 모든 capacity는 하나의 typed bundle로 예약한다.
+하나의 object에 필요한 capacity는 하나의 typed bundle이다. 생성은 이 bundle을 생성 전에 예약하고,
+단독 relocation은 owner를 바꾸는 CAS가 이 bundle을 source에서 target으로 옮긴다.
 Actor bundle에는 Actor slot 하나가 들어간다. Spot bundle에는 Spot 전체 slot 하나와, stable type limit을
 설정했다면 Entry·User·Instance 중 어떤 종류의 Spot인지 나타내는 값인
 [Spot kind](02-glossary.ko.md#spot-kind)·stable type slot 하나가 함께 들어간다. User Spot

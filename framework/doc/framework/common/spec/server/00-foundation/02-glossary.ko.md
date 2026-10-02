@@ -459,8 +459,8 @@ Source가 target을 선택할 때 확인한 target 등록 정보의 version이�
 |---|---|
 | 형태 | Target descriptor identity와 lifecycle을 고정한 복합 fence |
 | .NET 표기 | `ZLinkMeshNodeDescriptorKey`, `ulong` lifecycle generation과 `ZLinkLocationOwnerToken`의 조합 |
-| 공개 구성 | MeshName·RID descriptor key, target lifecycle generation과 그 target의 owner lease token을 포함한다. Reservation에서는 capacity delta와 descriptor 조건도 함께 검증한다. |
-| 생성·관리 | Source가 target을 선택할 때 고정하고 target과 Store가 reservation 전에 다시 확인한다. |
+| 공개 구성 | MeshName·RID descriptor key, target lifecycle generation과 그 target의 owner lease token을 포함한다. Target에 capacity를 쓰는 Store write(생성 reservation, owner 변경 CAS)에서는 capacity와 descriptor 조건도 함께 검증한다. |
+| 생성·관리 | Source가 target을 선택할 때 고정하고 target과 Store가 그 write 전에 다시 확인한다. |
 | 수명 | Descriptor lifecycle이나 owner lease가 바뀌면 stale이 된다. |
 
 <a id="positive-route-cache"></a>

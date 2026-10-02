@@ -492,8 +492,8 @@ or lifecycle information changed after selection.
 |---|---|
 | Shape | A composite fence fixing target descriptor identity and lifecycle |
 | .NET notation | A combination of `ZLinkMeshNodeDescriptorKey`, a `ulong` lifecycle generation, and `ZLinkLocationOwnerToken` |
-| Public composition | Includes the MeshName/RID descriptor key, target lifecycle generation, and that target's owner lease token. For reservation, capacity delta and descriptor conditions are also verified together. |
-| Creation/management | Fixed by the source when selecting a target, and re-verified by the target and Store before reservation. |
+| Public composition | Includes the MeshName/RID descriptor key, target lifecycle generation, and that target's owner lease token. A Store write that changes target capacity (a creation reservation, an owner-change CAS) also verifies capacity and descriptor conditions together. |
+| Creation/management | Fixed by the source when selecting a target, and re-verified by the target and Store before that write. |
 | Lifetime | Becomes stale if the descriptor lifecycle or owner lease changes. |
 
 <a id="positive-route-cache"></a>

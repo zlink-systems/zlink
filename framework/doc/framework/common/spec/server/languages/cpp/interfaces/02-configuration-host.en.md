@@ -156,7 +156,7 @@ connection-bound work wasn't terminal drained within the pre-`Captured`
 [deadline](../../../00-foundation/02-glossary.en.md#deadline). A bound-session
 request is not drained; it follows the same frozen-journal and
 ingress-hold rules as any other Actor request. The Framework
-cleans up the relocation staging and reservation, releases the
+cleans up the relocation staging, releases the
 reversible seal, and restores host state and admission. If every
 target is `Prepared` and `Relocating` publication succeeds, it
 completes every relocation unit and switches to `relocated`.

@@ -698,7 +698,7 @@ process Q1, Q2, H1, H2 once each, in order?
 
 - Starting condition: The source User Spot has frozen Q1/Q2, and a target adapter failure can be
   selected with an application marker.
-- Procedure: Relocate is started, and H1/H2 are sent during the seal window. Target-reservation and
+- Procedure: Relocate is started, and H1/H2 are sent during the seal window. Target-check and
   restore-failure variants that are declared before the RelayReady reply are each run on fresh
   objects.
 - Verification: Relocate has a blocked or failed terminal, and the public current location is the
