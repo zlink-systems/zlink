@@ -141,10 +141,6 @@ A descriptor records the
 relationship between the MeshNode and that Entry Spot ID, and the application
 doesn't infer node relationships by parsing the Spot ID string.
 
-This format is reserved for
-framework issuance, so if a caller specifies a User/Instance Spot ID in the same
-format, it's rejected with `InvalidOperation` before the Store and factory run.
-
 The three kinds' functionality, and the differences in Actor membership, close, and
 relocation, are defined by the [Spot model](../03-spot-actor/01-spot-model.en.md).
 

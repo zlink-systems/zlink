@@ -407,11 +407,9 @@ Entry Spot ID는 Framework가 startup에서 발급한다. Caller가 Spot ID를 �
 public member는 제공하지 않는다. Entry Spot factory 등록과 초기화가 완료된 뒤에만 Framework가 [descriptor](../../../00-foundation/02-glossary.ko.md#descriptor)와
 resolver에 RID를 게시한다.
 
-RID 형식은 `<prefix>-entry-<lowercase-canonical-uuid-v4>`이며 MeshNode와 별도로 생성한 UUID v4를
-사용한다. Framework 내부 MeshNode descriptor의 `entry_spot_id`가 lifecycle의 mapping을 제공한다. Global Spot
-ID가 active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 configuration exception으로 startup을
-실패시킨다. Caller가 지정한 User·Instance Spot ID가 이 예약 형식과 일치하면
-Store와 factory를 시작하기 전에 `invalid_operation`으로 거부한다.
+Framework 내부 MeshNode descriptor의 `entry_spot_id`가 lifecycle의 mapping을 제공한다. Entry Spot ID의
+발급·형식과 예약 형식의 거부는 [공통 Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정하며, C++에서
+그 거부의 오류는 `invalid_operation`이다.
 
 Framework가 모든 registration에서 만든 fully encoded MeshNode descriptor는 1 MiB 이하여야 한다.
 Spot type과 stateful object capability collection은 각각 최대 1024개다. Runtime은 완성된 descriptor를 socket

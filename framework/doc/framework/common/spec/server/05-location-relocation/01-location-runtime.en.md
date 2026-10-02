@@ -43,8 +43,8 @@ The Framework guarantees the following results.
 
 - It finds the service and connection address that can handle the current request.
 - It recognizes only one current owner per Actor/Spot.
-- It secures the needed capacity in advance on the node that will create or move an
-  Actor/Spot.
+- It secures capacity on the node that will create an Actor/Spot before creating it, and when
+  moving one, the CAS that changes the owner moves the capacity.
 - It doesn't create the same Actor/Spot twice at once.
 - It prevents a previous owner from belatedly changing the location.
 - It restores application state and not-yet-executed work on another node during a host
@@ -1491,7 +1491,7 @@ same binding values, the existing assembly state is neither reused nor overwritt
 ends as an explicit conflict failure.
 
 **The authority commit (the CAS in the "Owner change" row above) only fences the
-authority row's own identity — the reservation id and the generations
+authority row's own identity — the first-read `StoreVersion` and the generations
 (`AuthorityOwnerGeneration`, target attempt) that identify which move this CAS belongs
 to.** It doesn't validate target-node liveness or the target's lifecycle generation; that
 validation belongs to the admission/join path (§7) that ran before Restore, not to the
@@ -1598,7 +1598,7 @@ Explicit cancellation before the relay-ready reply is accepted follows this orde
    messages — is defined by
    [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
    All that matters here is that it doesn't wait for an apply reply.
-4. Cleans up secured target space and the target's in-progress chunk-assembly staging.
+4. Cleans up the target's in-progress chunk-assembly staging.
 5. Without reading or writing the Location Store, the Framework keeps source owner,
    generation, and space in use; it removes only the move's progress info.
 6. The source starts accepting new work again.

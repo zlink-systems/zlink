@@ -453,14 +453,10 @@ option isn't provided. Only after Entry Spot factory registration and
 initialization complete does the Framework publish the RID to the
 [descriptor](../../../00-foundation/02-glossary.en.md#descriptor) and resolver.
 
-The RID format is `<prefix>-entry-<lowercase-canonical-uuid-v4>`, using
-a UUID v4 generated separately from the MeshNode. The Framework's
-internal MeshNode descriptor's `entry_spot_id` provides the
-mapping of the lifecycle. If the global Spot ID conflicts with an
-active owner, it doesn't retry with a new UUID — it immediately fails
-startup with a configuration exception. If a caller-specified
-User/Instance Spot ID matches this reserved format, it's rejected with
-`invalid_operation` before starting the Store and factory.
+The Framework's internal MeshNode descriptor's `entry_spot_id` provides the
+mapping of the lifecycle. [Common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id)
+defines how the Entry Spot ID is issued, its format, and the rejection of the reserved format;
+in C++ that rejection's error is `invalid_operation`.
 
 The fully encoded MeshNode descriptor the Framework builds from every
 registration must be at most 1 MiB. Spot type and stateful object

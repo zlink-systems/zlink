@@ -674,9 +674,8 @@ item maps to one contract test.
 
 - Spot ID is a global key across the whole Store namespace and doesn't
   allow duplication per MeshName.
-- If a caller specifies a User/Instance Spot ID in the reserved
-  `<prefix>-entry-<lowercase-canonical-uuid-v4>` format, it's rejected
-  with `InvalidOperation` before Store reservation and factory execution.
+- Rejecting a User/Instance Spot ID in the reserved format behaves as
+  [Transport RID and Spot ID policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines.
 - User Spot `Create` issues a lowercase canonical UUID v4 string and does
   not generate a second UUID on an active conflict.
 - Entry Spot join and placement use the descriptor's lifecycle

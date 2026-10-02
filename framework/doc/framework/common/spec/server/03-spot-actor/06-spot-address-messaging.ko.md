@@ -563,8 +563,8 @@ Instance intent·`InMesh`, `SpotRef`, command 47·20·48의 wire tail, 반환값
 **Spot ID와 예약 형식**
 
 - Spot ID가 Store namespace 전체의 global key이고 MeshName별 중복을 허용하지 않는다.
-- Caller가 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 예약 형식으로 User·Instance Spot ID를
-  지정하면 Store reservation과 factory 실행 전에 `InvalidOperation`으로 거부한다.
+- 예약 형식의 User·Instance Spot ID 거부가
+  [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)대로 동작한다.
 - User Spot `Create`가 lowercase canonical UUID v4 문자열을 발급하고 active conflict에서 두 번째
   UUID를 만들지 않는다.
 - Entry Spot join과 placement가 descriptor의 lifecycle mapping을 사용하고 Spot ID 문자열을

@@ -124,9 +124,6 @@ Entry Spot ID의 발급·형식·lifecycle은 [Transport RID와 Spot ID 정책 �
 Descriptor가 MeshNode와 해당 Entry Spot ID의 관계를 기록하며 application은 Spot ID 문자열을 parsing해 node
 관계를 추론하지 않는다.
 
-이 형식은 Framework 발급용으로 예약하므로 caller가 같은 형식의
-User·Instance Spot ID를 지정하면 Store와 factory를 실행하기 전에 `InvalidOperation`으로 거부한다.
-
 세 종류의 기능, Actor membership, close와 relocation 차이는
 [Spot 모델](../03-spot-actor/01-spot-model.ko.md)이 정의한다.
 

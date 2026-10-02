@@ -38,7 +38,8 @@ Framework는 다음 결과를 보장한다.
 
 - 현재 요청을 처리할 수 있는 service와 연결 주소를 찾는다.
 - Actor·Spot마다 현재 owner를 하나만 인정한다.
-- Actor·Spot을 만들거나 옮길 node에 필요한 수용 공간을 미리 확보한다.
+- Actor·Spot을 만들 node의 수용 공간은 생성 전에 확보하고, 옮길 때는 owner를 바꾸는 CAS가 수용
+  공간을 옮긴다.
 - 같은 Actor·Spot을 동시에 두 번 만들지 않는다.
 - 이전 owner가 뒤늦게 위치를 변경하지 못하게 한다.
 - Host 교체 중 application state와 아직 실행하지 않은 작업을 다른 node에서 복원한다.
@@ -1349,8 +1350,8 @@ target attempt가 다르면 이전 attempt의 temporary queue와 조립 상태�
 재사용한다. 같은 결합 값에 다른 길이나 checksum이 도착하면 기존 조립 상태를 재사용하지도
 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다.
 
-**Authority commit(위 "Owner 변경" 행의 CAS)은 authority row 자신의 identity — reservation
-id와 이 CAS가 어느 이동에 속하는지 식별하는 generation(`AuthorityOwnerGeneration`, target
+**Authority commit(위 "Owner 변경" 행의 CAS)은 authority row 자신의 identity — 처음 읽은
+`StoreVersion`과 이 CAS가 어느 이동에 속하는지 식별하는 generation(`AuthorityOwnerGeneration`, target
 attempt) — 만 fence한다.** Target node의 liveness나 target의 lifecycle generation 검증은
 여기서 하지 않으며, 그 검증은 Restore 이전에 실행된 admission/join 경로(§7)의 책임이지 Store
 commit 자체의 책임이 아니다. 일치하는 identity fence 아래 성공한 Store commit은 그 순간
@@ -1445,7 +1446,7 @@ Relay-ready reply가 accepted 상태가 되기 전 명시적으로 취소할 때
    하는 일 — matching seal 해제와 held message 제출 순서 — 은
    [session/02 「8. Actor relocation 중 Session의 책임」](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
    정의한다. 여기서는 적용 reply를 기다리지 않는다는 사실만 필요하다.
-4. 확보한 target 공간과 target의 조립 중인 chunk staging을 정리한다.
+4. Target의 조립 중인 chunk staging을 정리한다.
 5. Location Store를 읽거나 쓰지 않고 source owner, generation과 사용 중인 공간을 유지하며
    이동 진행 정보만 제거한다.
 6. Source가 새 작업을 다시 받는다.
