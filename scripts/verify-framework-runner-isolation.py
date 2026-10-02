@@ -396,6 +396,32 @@ def verify_sample_runner_helper(
             )
 
 
+def verify_cpp_sample_run_dir_close_helper() -> None:
+    helper_path = ROOT / "framework/languages/cpp/samples/redis-common.sh"
+    close_function = shell_function(helper_path, "zlink_sample_close_run_dir")
+    failure_guard = re.search(
+        r'(?m)^\s*if \[\[ "\$\{status\}" -ne 0 \]\]; then\s*$',
+        close_function,
+    )
+    removal = re.search(
+        r'(?m)^\s*rm -rf "\$\{run_dir\}"\s*$',
+        close_function,
+    )
+    failure_return = (
+        None
+        if failure_guard is None or removal is None
+        else re.search(
+            r"(?m)^\s*return 0\s*$",
+            close_function[failure_guard.end():removal.start()],
+        )
+    )
+    if failure_guard is None or removal is None or failure_return is None:
+        raise ValueError(
+            f"{helper_path.relative_to(ROOT)}: run directory helper must "
+            "preserve failed-run evidence and remove the directory after success"
+        )
+
+
 def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
     total = 0
     bash_runners: list[Path] = []
@@ -409,6 +435,8 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
         r"Join-Path\s+\$(?:ScriptDir|SampleDir|PSScriptRoot)\s+"
         r"[\"'](?:logs|sample-logs|flow-logs)[\"']"
     )
+
+    verify_cpp_sample_run_dir_close_helper()
 
     for inventory in SAMPLE_RUNNER_INVENTORIES:
         root = ROOT / inventory.root
@@ -465,7 +493,16 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
                         f"{path.relative_to(ROOT)}: C++ flow logs must be owned "
                         f"by RUN_DIR, found {assignments}"
                     )
-                require_text(path, 'rm -rf "$RUN_DIR"')
+                cleanup = shell_function(path, "cleanup")
+                if not re.search(
+                    r'(?m)^\s*zlink_sample_close_run_dir "\$RUN_DIR" '
+                    r'"\$[A-Za-z_][A-Za-z0-9_]*" "[^"]+"\s*$',
+                    cleanup,
+                ):
+                    raise ValueError(
+                        f"{path.relative_to(ROOT)}: cleanup must delegate "
+                        "RUN_DIR lifetime to zlink_sample_close_run_dir"
+                    )
             total += 1
     return total, bash_runners
 
