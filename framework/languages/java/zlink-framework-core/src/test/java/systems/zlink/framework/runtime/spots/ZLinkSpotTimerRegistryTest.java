@@ -436,6 +436,37 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
+    void dispatchObserverSeesFinalizedTimerBeforeEnqueueReturns() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        AtomicReference<ZLinkSpotTimerRegistry> owner = new AtomicReference<>();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new PreviousTimerHandler(new AtomicBoolean()),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) ->
+                                operation
+                                        .get()
+                                        .thenRun(() -> frozen.complete(owner.get().freeze())));
+        owner.set(registry);
+        registry.setSpot(new TestSpot());
+        try {
+            registry.add("timer", Duration.ofMillis(1), PreviousTimerHandler.class, null);
+            var timers = frozen.get(2, TimeUnit.SECONDS).timers();
+            assertEquals(1, timers.size());
+            assertTrue(timers.getFirst().nextScheduledAt().isPresent());
+            assertTrue(timers.getFirst().pendingTick().isEmpty());
+        } finally {
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void failureObserverCanFreezeTheNextLogicalTimerAction() throws Exception {
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
@@ -451,23 +482,24 @@ final class ZLinkSpotTimerRegistryTest {
         registry.setSpot(new TestSpot());
         java.util.logging.Logger logger =
                 java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
-        java.util.logging.Handler observer = new java.util.logging.Handler() {
-            @Override
-            public void publish(java.util.logging.LogRecord record) {
-                if (!record.getMessage().contains("source=freeze-observer")) return;
-                try {
-                    frozen.complete(registry.freeze());
-                } catch (RuntimeException failure) {
-                    frozen.completeExceptionally(failure);
-                }
-            }
+        java.util.logging.Handler observer =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (!record.getMessage().contains("source=freeze-observer")) return;
+                        try {
+                            frozen.complete(registry.freeze());
+                        } catch (RuntimeException failure) {
+                            frozen.completeExceptionally(failure);
+                        }
+                    }
 
-            @Override
-            public void flush() {}
+                    @Override
+                    public void flush() {}
 
-            @Override
-            public void close() {}
-        };
+                    @Override
+                    public void close() {}
+                };
         logger.addHandler(observer);
         try {
             registry.add("timer", Duration.ofMillis(1), ThrowingTimerHandler.class, null);
