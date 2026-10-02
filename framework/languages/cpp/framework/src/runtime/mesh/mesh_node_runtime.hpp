@@ -224,7 +224,7 @@ class mesh_node_runtime_t
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_bound_session_relocation_resolver (
-      std::function<std::optional<bound_session_relocation_route_t> (
+      std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
@@ -641,7 +641,7 @@ class mesh_node_runtime_t
     runtime::stateful::relocation_limits_t _relocation_limits;
     std::function<std::optional<location_owner_token_t> ()> _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
-    std::function<std::optional<bound_session_relocation_route_t> (
+    std::function<task_t<std::optional<bound_session_relocation_route_t>> (
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;

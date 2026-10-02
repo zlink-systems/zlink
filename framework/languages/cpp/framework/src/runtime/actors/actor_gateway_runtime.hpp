@@ -322,6 +322,8 @@ class actor_gateway_runtime_t
     std::vector<relayed_frame_t> bound_session_pushes () const;
     std::optional<actor_bound_session_route_t>
     bound_session_route (const actor_ref_t &actor_ref) const;
+    task_t<std::optional<actor_bound_session_route_t>>
+    bound_session_route_async (actor_ref_t actor_ref) const;
     std::optional<actor_bound_session_route_t>
     resolve_bound_session_push_route (const actor_ref_t &actor_ref,
                                       const actor_bound_session_route_t &staged_route) const;

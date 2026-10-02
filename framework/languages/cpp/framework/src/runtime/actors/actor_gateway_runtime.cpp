@@ -2313,9 +2313,16 @@ std::vector<relayed_frame_t> actor_gateway_runtime_t::bound_session_pushes () co
 std::optional<actor_bound_session_route_t>
 actor_gateway_runtime_t::bound_session_route (const actor_ref_t &actor_ref) const
 {
-    return _state->sync ([this, &actor_ref] () -> std::optional<actor_bound_session_route_t> {
-        const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
-        if (found == _state->actors_by_id.end () || !found->second.bound
+    return bound_session_route_async (actor_ref).result ().value ();
+}
+
+task_t<std::optional<actor_bound_session_route_t>>
+actor_gateway_runtime_t::bound_session_route_async (actor_ref_t actor_ref) const
+{
+    return _state->lane.run_task ([state = _state, actor_ref = std::move (actor_ref)] ()
+                                    -> std::optional<actor_bound_session_route_t> {
+        const auto found = state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
+        if (found == state->actors_by_id.end () || !found->second.bound
             || !actor_types_compatible (found->second.ref, actor_ref)
             || found->second.ref.object_generation () != actor_ref.object_generation ()
             || (found->second.bound_session_route

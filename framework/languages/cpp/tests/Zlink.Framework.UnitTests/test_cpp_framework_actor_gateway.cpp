@@ -1053,6 +1053,59 @@ int bound_session_route_preserves_private_fences ()
     return advanced && advanced->session_sequence == 29 ? 0 : 3;
 }
 
+int bound_session_route_suspends_until_owner_lane_runs ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    const auto actor = test_actor_ref ("actor-node", "player", "pending-route", 7);
+    {
+        actor_gateway_runtime_t gateway (state);
+        gateway.bind_session_sink (actor,
+                                   [] (std::string, stream_codec_t, const zlink::message_t &) {
+                                       return task_t<void> (result_t<void>::success ());
+                                   });
+        gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("session-node"),
+                                            std::nullopt, 11, 13, 17, 19, 23, 29);
+    }
+
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    if (!state->lane.try_post ([&entered, released] {
+            entered.set_value ();
+            released.wait ();
+        }))
+        return 1;
+    entered.get_future ().wait ();
+
+    std::promise<task_t<std::optional<actor_bound_session_route_t>>> submitted;
+    auto submission = submitted.get_future ();
+    std::promise<void> progressed;
+    auto progress = progressed.get_future ();
+    runtime::offload_executor_t infrastructure (1);
+    if (!infrastructure.try_submit_internal ([state, actor, &submitted] {
+            actor_gateway_runtime_t gateway (state);
+            submitted.set_value (gateway.bound_session_route_async (actor));
+        })) {
+        release.set_value ();
+        return 2;
+    }
+    if (!infrastructure.try_submit_internal ([&progressed] { progressed.set_value (); })) {
+        release.set_value ();
+        return 3;
+    }
+    progress.wait ();
+    auto query = submission.get ();
+    const bool pending = !query.await_ready ();
+    release.set_value ();
+    const auto route = query.result ().value ();
+    if (!pending)
+        return 4;
+    return route && route->binding_generation == 19 && route->session_sequence == 29 ? 0 : 5;
+}
+
 int bound_session_send_does_not_publish_caller_location ()
 {
     using namespace zlink::framework;
@@ -5889,6 +5942,10 @@ int main (int argc, char **argv)
     if (const auto route_fence = bound_session_route_preserves_private_fences ();
         route_fence != 0) {
         return 100 + route_fence;
+    }
+    if (const auto pending_route = bound_session_route_suspends_until_owner_lane_runs ();
+        pending_route != 0) {
+        return 100 + pending_route;
     }
     if (const auto bound_send = bound_session_send_does_not_publish_caller_location ();
         bound_send != 0) {
