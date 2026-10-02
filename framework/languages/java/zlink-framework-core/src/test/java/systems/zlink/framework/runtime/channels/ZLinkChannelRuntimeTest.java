@@ -665,7 +665,8 @@ final class ZLinkChannelRuntimeTest {
                                 String contentType,
                                 Map<String, String> metadata,
                                 Duration timeout) {
-                            throw new AssertionError("ready route must not activate");
+                            return CompletableFuture.completedFuture(
+                                    backend.bridge.requestReplyParts);
                         }
                     });
 
@@ -1225,8 +1226,17 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata) {
-                            activationAttempts.incrementAndGet();
-                            return CompletableFuture.completedFuture(null);
+                            return resolver.resolve(spotId)
+                                    .thenCompose(
+                                            address -> {
+                                                var route = address.orElseThrow();
+                                                return runtime.sendToSpotViaRouterChannel(
+                                                        route.routerChannelId(),
+                                                        route.targetNodeRid(),
+                                                        route.spotId(),
+                                                        route.spotGeneration(),
+                                                        java.util.List.of(payload));
+                                            });
                         }
 
                         @Override

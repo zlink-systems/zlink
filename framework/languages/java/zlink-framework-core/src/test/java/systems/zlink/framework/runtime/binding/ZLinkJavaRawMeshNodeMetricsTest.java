@@ -113,26 +113,21 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                             "activation unavailable")));
             try (Message packet = Message.from("Packet");
                     Message body = Message.from("body")) {
+                var route = pair.instanceRoute("missing");
+                spots.registerInstanceSpotAuthority("unregistered", route);
                 pair.source
                         .sendInstanceSpot(
-                                pair.instanceRoute("missing"),
-                                "unregistered",
-                                null,
-                                new byte[0],
-                                List.of(packet, body))
+                                route, "unregistered", null, new byte[0], List.of(packet, body))
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
                 sink.expectDrop("instance_spot", "no_handler");
             }
             try (Message packet = Message.from("Packet");
                     Message body = Message.from("body")) {
+                var route = pair.instanceRoute("full");
+                spots.registerInstanceSpotAuthority("full", route);
                 pair.source
-                        .sendInstanceSpot(
-                                pair.instanceRoute("full"),
-                                "full",
-                                null,
-                                new byte[0],
-                                List.of(packet, body))
+                        .sendInstanceSpot(route, "full", null, new byte[0], List.of(packet, body))
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
                 sink.expectDrop("instance_spot", "no_handler");
@@ -160,13 +155,10 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                         new ZLinkFrameworkException(kind, "activation failed")));
                 try (Message packet = Message.from("Packet");
                         Message body = Message.from("body")) {
+                    var route = pair.instanceRoute(type);
+                    spots.registerInstanceSpotAuthority(type, route);
                     pair.source
-                            .sendInstanceSpot(
-                                    pair.instanceRoute(type),
-                                    type,
-                                    null,
-                                    new byte[0],
-                                    List.of(packet, body))
+                            .sendInstanceSpot(route, type, null, new byte[0], List.of(packet, body))
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS);
                 }
@@ -192,7 +184,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                     new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                             0,
                             pair.instanceRoute("stale"),
-                            "missing",
+                            true,
                             pair.source.lifecycleGeneration() + 1,
                             pair.source.routingId(),
                             null,

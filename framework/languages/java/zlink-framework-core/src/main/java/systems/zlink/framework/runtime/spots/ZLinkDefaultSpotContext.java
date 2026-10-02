@@ -857,6 +857,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.enqueueSpotLifecycleAdmission(() -> runLifecycleExecution(operation));
     }
 
+    CompletionStage<Void> enqueueClose(
+            Supplier<CompletionStage<Void>> operation,
+            java.util.function.BooleanSupplier committed) {
+        return serials.enqueueClose(() -> runLifecycleExecution(operation), committed);
+    }
+
+    void commitClose() {
+        serials.commitClose();
+    }
+
     @Override
     public boolean usesSharedExecutionGate() {
         return serials.usesSharedExecutionGate();

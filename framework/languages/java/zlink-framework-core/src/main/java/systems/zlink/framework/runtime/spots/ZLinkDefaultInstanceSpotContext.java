@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -50,6 +51,17 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             String meshName,
             RoutingId nodeRid,
             ZLinkBackendSpot backendSpot) {
+        this(host, workerPool, handlerLoader, meshName, nodeRid, backendSpot, null);
+    }
+
+    DefaultInstanceSpotContext(
+            ZLinkSpotContextHost host,
+            ZLinkWorkerPool workerPool,
+            ZLinkSpotHandlerLoader handlerLoader,
+            String meshName,
+            RoutingId nodeRid,
+            ZLinkBackendSpot backendSpot,
+            ZLinkSerialExecutionQueue ownerQueue) {
         this.host = Objects.requireNonNull(host, "host");
         this.workerPool = Objects.requireNonNull(workerPool, "workerPool");
         this.handlerLoader = Objects.requireNonNull(handlerLoader, "handlerLoader");
@@ -58,8 +70,10 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
         this.objectGeneration = backendSpot.lifecycleGeneration();
         this.dispatchQueue =
-                new ZLinkSerialExecutionQueue(
-                        host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
+                ownerQueue == null
+                        ? new ZLinkSerialExecutionQueue(
+                                host.serialExecutor(), ZLinkExecutionLanePolicy.spot())
+                        : ownerQueue;
         this.infrastructureQueue =
                 new ZLinkSerialExecutionQueue(
                         host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
@@ -107,6 +121,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     CompletionStage<Void> runClosing(
             boolean initiatedInsideTurn, Supplier<CompletionStage<Void>> operation) {
         sealTimerAdmission();
+        if (dispatchQueue.isCurrent()) return runLifecycleExecution(operation);
         CompletionStage<Void> acceptedTurns =
                 initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
         return acceptedTurns.thenCompose(
@@ -158,9 +173,13 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                 new systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .ApplicationExecution(spotId(), null, true, true, false, ignored -> false);
         try (var ignored =
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .enterApplicationExecution(execution)) {
-            return host.runWithOutbound(outbound, operation);
+                        systems.zlink.framework.runtime.internal.handlers
+                                .ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                execution);
+                var outboundScope =
+                        systems.zlink.framework.runtime.internal.handlers
+                                .ZLinkSuspendInvocationContext.enterSpotOutbound(outbound)) {
+            return Objects.requireNonNull(operation.get(), "operation result");
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -232,6 +251,40 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     void sealClosingAdmission() {
         dispatchQueue.sealClosingAdmission();
+    }
+
+    ZLinkSerialExecutionQueue ownerQueue() {
+        return dispatchQueue;
+    }
+
+    CompletionStage<Void> enqueueClose(
+            Supplier<CompletionStage<Void>> operation,
+            java.util.function.Function<Object, CompletionStage<Void>> dispatch,
+            java.util.function.BooleanSupplier committed) {
+        CompletionStage<Void> close =
+                dispatchQueue.enqueueLifecycleTransition(
+                        () -> runLifecycleExecution(operation),
+                        dispatch,
+                        committed,
+                        message ->
+                                ((ZLinkBackendReceived) message).activationMessage().isPresent());
+        return dispatchQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
+    }
+
+    CompletionStage<Void> enqueueMessage(
+            ZLinkBackendReceived received,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        host.ensureOwnerAdmissionOpen();
+        return dispatchQueue.enqueueMessage(
+                received,
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget.bytesOf(
+                        received.parts(),
+                        received.applicationMetadataSize(),
+                        received.acceptedJournalRecordSize()),
+                () -> runLifecycleExecution(operation),
+                received::close,
+                admission);
     }
 
     @Override

@@ -97,7 +97,10 @@ final class ZLinkProviderAuthorityRepository {
                                         .thenApply(visible -> new ZLinkAuthorityConflict(visible));
                             }
                             AuthorityRecord current = decode(found.value().bytes());
-                            if (current.aggregate() != null) {
+                            if (current.aggregate() != null
+                                    || (!(mutation instanceof ZLinkAuthorityRestore)
+                                            && current.allocation().state()
+                                                    != ZLinkPlacementAllocationState.ACTIVE)) {
                                 return projectRead(read, opaqueCancellation)
                                         .thenApply(visible -> new ZLinkAuthorityConflict(visible));
                             }
@@ -189,7 +192,8 @@ final class ZLinkProviderAuthorityRepository {
                                 return put(
                                         rowKey, found, next, conditions, opaqueCancellation, read);
                             }
-                            ZLinkAuthorityPut put = (ZLinkAuthorityPut) mutation;
+                            byte[] reincarnatePayload =
+                                    ZLinkAuthorityMutation.reincarnatePayload(mutation);
                             ZLinkLocationOwnerToken owner =
                                     new ZLinkLocationOwnerToken(
                                             current.ownerId(), current.ownerLeaseGeneration());
@@ -201,10 +205,56 @@ final class ZLinkProviderAuthorityRepository {
                                                             new ZLinkAuthorityConflict(
                                                                     toRead(read)));
                                                 }
+                                                if (reincarnatePayload != null) {
+                                                    return nextPair(conditions, opaqueCancellation)
+                                                            .thenCompose(
+                                                                    counters -> {
+                                                                        if (counters.exhausted()) {
+                                                                            return completed(
+                                                                                    new ZLinkAuthorityGenerationExhausted());
+                                                                        }
+                                                                        AuthorityRecord next =
+                                                                                new AuthorityRecord(
+                                                                                        reincarnatePayload,
+                                                                                        counters
+                                                                                                .objectGeneration(),
+                                                                                        counters
+                                                                                                .ownerGeneration(),
+                                                                                        current
+                                                                                                .ownerId(),
+                                                                                        current
+                                                                                                .ownerLeaseGeneration(),
+                                                                                        current
+                                                                                                .allocation(),
+                                                                                        current
+                                                                                                .pendingCreation());
+                                                                        List<ZLinkStoreMutation>
+                                                                                mutations =
+                                                                                        new ArrayList<>(
+                                                                                                counters
+                                                                                                        .mutations());
+                                                                        mutations.add(
+                                                                                new ZLinkStorePut(
+                                                                                        rowKey,
+                                                                                        encode(
+                                                                                                next),
+                                                                                        null));
+                                                                        return writeAuthority(
+                                                                                rowKey,
+                                                                                found,
+                                                                                next,
+                                                                                conditions,
+                                                                                mutations,
+                                                                                opaqueCancellation,
+                                                                                read);
+                                                                    });
+                                                }
                                                 return put(
                                                         rowKey,
                                                         found,
-                                                        current.withPayload(put.payload()),
+                                                        current.withPayload(
+                                                                ((ZLinkAuthorityPut) mutation)
+                                                                        .payload()),
                                                         conditions,
                                                         opaqueCancellation,
                                                         read);

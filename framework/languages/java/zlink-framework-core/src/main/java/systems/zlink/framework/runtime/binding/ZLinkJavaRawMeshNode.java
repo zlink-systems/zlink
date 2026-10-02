@@ -63,6 +63,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -2536,9 +2537,9 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts) {
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
-        if (peer.isEmpty()
-                || peer.orElseThrow().descriptor().lifecycleGeneration()
-                        != route.targetNodeGeneration()
+        if ((peer.isPresent()
+                        && peer.orElseThrow().descriptor().lifecycleGeneration()
+                                != route.targetNodeGeneration())
                 || localDescriptor == null) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
@@ -2551,7 +2552,7 @@ final class ZLinkJavaRawMeshNode
                         new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                                 flags,
                                 route,
-                                stableType,
+                                true,
                                 localDescriptor.lifecycleGeneration(),
                                 routingId,
                                 sourceSpotId,
@@ -2587,11 +2588,11 @@ final class ZLinkJavaRawMeshNode
         Objects.requireNonNull(route, "route");
         Objects.requireNonNull(parts, "parts");
         Objects.requireNonNull(timeout, "timeout");
-        return submitInstanceSpotSendWhenConnected(
+        return dispatchInstanceSpotSend(
                 route, stableType, sourceSpotId, metadata, parts, addDeadlineNanos(timeout));
     }
 
-    private CompletionStage<Void> submitInstanceSpotSendWhenConnected(
+    private CompletionStage<Void> dispatchInstanceSpotSend(
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             String stableType,
             String sourceSpotId,
@@ -2600,41 +2601,10 @@ final class ZLinkJavaRawMeshNode
             long deadlineNanos) {
         if (route.targetNodeRid().equals(routingId)) {
             return dispatchLocalInstanceSpot(
-                            route, stableType, sourceSpotId, metadata, parts, false)
+                            route, stableType, sourceSpotId, metadata, parts, false, deadlineNanos)
                     .thenAccept(replyParts -> replyParts.forEach(Message::close));
         }
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
-        if (peer.isPresent()
-                && peer.orElseThrow().descriptor().lifecycleGeneration()
-                        != route.targetNodeGeneration()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot target is not connected"));
-        }
-        if (peer.isEmpty() || localDescriptor == null) {
-            return awaitInstanceSpotTargetConnection(route, deadlineNanos)
-                    .thenCompose(
-                            ignored ->
-                                    submitInstanceSpotSendWhenConnected(
-                                            route,
-                                            stableType,
-                                            sourceSpotId,
-                                            metadata,
-                                            parts,
-                                            deadlineNanos));
-        }
-        if (closed.get() || deadlineNanos - System.nanoTime() <= 0) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot send was not submitted"));
-        }
-        long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot send was not submitted"));
-        }
-        return sendInstanceSpot(route, stableType, sourceSpotId, metadata, parts)
-                .toCompletableFuture()
-                .orTimeout(remainingNanos, TimeUnit.NANOSECONDS);
+        return sendInstanceSpot(route, stableType, sourceSpotId, metadata, parts);
     }
 
     @Override
@@ -2649,11 +2619,11 @@ final class ZLinkJavaRawMeshNode
         Objects.requireNonNull(parts, "parts");
         Objects.requireNonNull(timeout, "timeout");
         long deadlineNanos = addDeadlineNanos(timeout);
-        return requestInstanceSpotWhenConnected(
+        return dispatchInstanceSpotRequest(
                 route, stableType, sourceSpotId, metadata, parts, deadlineNanos);
     }
 
-    private CompletionStage<List<Message>> requestInstanceSpotWhenConnected(
+    private CompletionStage<List<Message>> dispatchInstanceSpotRequest(
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             String stableType,
             String sourceSpotId,
@@ -2662,7 +2632,7 @@ final class ZLinkJavaRawMeshNode
             long deadlineNanos) {
         if (route.targetNodeRid().equals(routingId)) {
             return dispatchLocalInstanceSpot(
-                    route, stableType, sourceSpotId, metadata, parts, true);
+                    route, stableType, sourceSpotId, metadata, parts, true, deadlineNanos);
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
@@ -2670,124 +2640,131 @@ final class ZLinkJavaRawMeshNode
                 && peer.orElseThrow().descriptor().lifecycleGeneration()
                         != route.targetNodeGeneration()) {
             return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot target is not connected"));
-        }
-        if (peer.isEmpty() || localDescriptor == null) {
-            return awaitInstanceSpotTargetConnection(route, deadlineNanos)
-                    .thenCompose(
-                            ignored ->
-                                    requestInstanceSpotWhenConnected(
-                                            route,
-                                            stableType,
-                                            sourceSpotId,
-                                            metadata,
-                                            parts,
-                                            deadlineNanos));
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkBackendRequestResult.NOT_CONNECTED.toFrameworkErrorKind(),
+                            "remote Instance Spot target is not connected"));
         }
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0 || closed.get()) {
             return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot target is not connected"));
+                    ZLinkFrameworkErrorOrigin.framework(
+                            (closed.get()
+                                            ? ZLinkBackendRequestResult.TERMINATED
+                                            : ZLinkBackendRequestResult.TIMED_OUT)
+                                    .toFrameworkErrorKind(),
+                            "remote Instance Spot request cannot start"));
         }
         Duration remainingTimeout = Duration.ofNanos(remainingNanos);
         long correlation = allocateCorrelation();
         ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
                 operations.register(remainingTimeout);
         UUID operationId = operation.id();
-        int flags =
-                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
-        List<byte[]> frames = new ArrayList<>();
-        frames.add(
-                statefulWire.encodeInstanceSpotHeader(
-                        new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
-                                flags,
-                                route,
-                                stableType,
-                                localDescriptor.lifecycleGeneration(),
-                                routingId,
-                                sourceSpotId,
-                                true,
-                                operationId.getMostSignificantBits(),
-                                operationId.getLeastSignificantBits(),
-                                correlation)));
-        if (flags != 0) {
-            frames.add(metadata.clone());
+        CompletionStage<List<byte[]>> submitted;
+        try {
+            int flags =
+                    metadata == null || metadata.length == 0
+                            ? 0
+                            : ServiceWireConstants.FLAG_METADATA;
+            List<byte[]> frames = new ArrayList<>();
+            frames.add(
+                    statefulWire.encodeInstanceSpotHeader(
+                            new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                                    flags,
+                                    route,
+                                    true,
+                                    localDescriptor.lifecycleGeneration(),
+                                    routingId,
+                                    sourceSpotId,
+                                    true,
+                                    operationId.getMostSignificantBits(),
+                                    operationId.getLeastSignificantBits(),
+                                    correlation)));
+            if (flags != 0) {
+                frames.add(metadata.clone());
+            }
+            frames.add(wire.encodeFrameworkMultipartFrame(parts));
+            remainingNanos = deadlineNanos - System.nanoTime();
+            submitted =
+                    remainingNanos > 0
+                            ? requestApplication(
+                                    route.targetNodeRid(), frames, Duration.ofNanos(remainingNanos))
+                            : CompletableFuture.failedFuture(
+                                    new ZlinkRequestException(RequestResult.TIMED_OUT));
+        } catch (RuntimeException | Error failure) {
+            submitted = CompletableFuture.failedFuture(failure);
         }
-        frames.add(wire.encodeFrameworkMultipartFrame(parts));
-        ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-        requestApplication(route.targetNodeRid(), frames, remainingTimeout)
-                .whenComplete(
-                        (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure);
-                            List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
-                            if (!terminal.tryWin(requestTerminalCause(result))) {
-                                return;
+        submitted.whenComplete(
+                (replyFrames, failure) -> {
+                    RequestResult result = requestResult(failure);
+                    List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
+                    if (result != RequestResult.OK || replies.isEmpty()) {
+                        operations.completeExceptionally(
+                                operation.id(),
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkBackendRequestResult.fromWireTerminal(result.value())
+                                                .toFrameworkErrorKind(),
+                                        "remote Instance Spot request failed: " + result,
+                                        failure));
+                        return;
+                    }
+                    try {
+                        var header = wire.decodeReplyHeader(replies.getFirst());
+                        if (header.correlation() != correlation) {
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                    "Instance Spot request correlation mismatch");
+                        }
+                        if (header.terminalResult() != 0 || header.failureCode() != 0) {
+                            //  Spec 51-internal-service-wire-protocol:97 — a
+                            //  failed reply carries exactly the header frame; an
+                            //  attached tail is rejected as a protocol error
+                            //  before the carried terminal is honored.
+                            if (replies.size() != 1) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "invalid Instance Spot failed reply frame count");
                             }
-                            if (result != RequestResult.OK || replies.isEmpty()) {
-                                operations.completeExceptionally(
-                                        operation.id(),
-                                        new IllegalStateException(
-                                                "remote Instance Spot request failed: " + result));
-                                return;
-                            }
-                            try {
-                                var header = wire.decodeReplyHeader(replies.getFirst());
-                                if (header.correlation() != correlation) {
-                                    throw new ZLinkFrameworkException(
-                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                            "Instance Spot request correlation mismatch");
-                                }
-                                if (header.terminalResult() != 0 || header.failureCode() != 0) {
-                                    //  Spec 51-internal-service-wire-protocol:97 — a
-                                    //  failed reply carries exactly the header frame; an
-                                    //  attached tail is rejected as a protocol error
-                                    //  before the carried terminal is honored.
-                                    if (replies.size() != 1) {
-                                        throw new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                "invalid Instance Spot failed reply frame count");
-                                    }
-                                    //  Classify the carried terminal + fine failure code
-                                    //  via the authoritative ownership-aware translator
-                                    //  instead of collapsing to a generic rejection
-                                    //  (spec 32-framework-error-model:81-118, 99-108).
-                                    throw new ZLinkFrameworkException(
-                                            ZLinkBackendRequestResult.fromWireTerminal(
-                                                            header.terminalResult())
-                                                    .toFrameworkErrorKind(header.failureCode()),
-                                            "remote Instance Spot request failed: terminal="
-                                                    + header.terminalResult()
-                                                    + " failureCode="
-                                                    + header.failureCode());
-                                }
-                                if (replies.size() != 2) {
-                                    throw new ZLinkFrameworkException(
-                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                            "invalid Instance Spot request reply frame count");
-                                }
-                                var payload = wire.decodeApplicationPayload(replies.get(1));
-                                List<Message> replyParts = decodeApplicationMessages(payload);
-                                if (!operations.complete(operation.id(), replyParts)) {
-                                    replyParts.forEach(Message::close);
-                                }
-                            } catch (ZLinkFrameworkException decodeFailure) {
-                                operations.completeExceptionally(operation.id(), decodeFailure);
-                            } catch (IllegalArgumentException decodeFailure) {
-                                //  A codec/malformed-wire failure (ZLinkServiceWireException
-                                //  and friends derive from IllegalArgumentException) means
-                                //  the reply can't be processed -> ProtocolError
-                                //  (spec 32-framework-error-model:91-92).
-                                operations.completeExceptionally(
-                                        operation.id(),
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                "remote Instance Spot request reply could not be"
-                                                        + " processed",
-                                                decodeFailure));
-                            } catch (RuntimeException decodeFailure) {
-                                operations.completeExceptionally(operation.id(), decodeFailure);
-                            }
-                        });
+                            //  Classify the carried terminal + fine failure code
+                            //  via the authoritative ownership-aware translator
+                            //  instead of collapsing to a generic rejection
+                            //  (spec 32-framework-error-model:81-118, 99-108).
+                            throw new ZLinkFrameworkException(
+                                    ZLinkBackendRequestResult.fromWireTerminal(
+                                                    header.terminalResult())
+                                            .toFrameworkErrorKind(header.failureCode()),
+                                    "remote Instance Spot request failed: terminal="
+                                            + header.terminalResult()
+                                            + " failureCode="
+                                            + header.failureCode());
+                        }
+                        if (replies.size() != 2) {
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                    "invalid Instance Spot request reply frame count");
+                        }
+                        var payload = wire.decodeApplicationPayload(replies.get(1));
+                        List<Message> replyParts = decodeApplicationMessages(payload);
+                        if (!operations.complete(operation.id(), replyParts)) {
+                            replyParts.forEach(Message::close);
+                        }
+                    } catch (ZLinkFrameworkException decodeFailure) {
+                        operations.completeExceptionally(operation.id(), decodeFailure);
+                    } catch (IllegalArgumentException decodeFailure) {
+                        //  A codec/malformed-wire failure (ZLinkServiceWireException
+                        //  and friends derive from IllegalArgumentException) means
+                        //  the reply can't be processed -> ProtocolError
+                        //  (spec 32-framework-error-model:91-92).
+                        operations.completeExceptionally(
+                                operation.id(),
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "remote Instance Spot request reply could not be"
+                                                + " processed",
+                                        decodeFailure));
+                    } catch (RuntimeException decodeFailure) {
+                        operations.completeExceptionally(operation.id(), decodeFailure);
+                    }
+                });
         return operation.completion();
     }
 
@@ -2803,7 +2780,8 @@ final class ZLinkJavaRawMeshNode
             String sourceSpotId,
             byte[] metadata,
             List<Message> parts,
-            boolean request) {
+            boolean request,
+            long deadlineNanos) {
         if (closed.get()
                 || localDescriptor == null
                 || route.targetNodeGeneration() != localDescriptor.lifecycleGeneration()) {
@@ -2812,21 +2790,43 @@ final class ZLinkJavaRawMeshNode
         }
         int flags =
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
+        long correlation = allocateCorrelation();
+        List<Message> messages = new ArrayList<>(parts.size());
+        String contentType;
+        try {
+            for (Message part : parts) messages.add(Message.from(part.toByteArray()));
+            contentType = applicationContentType(messages);
+        } catch (RuntimeException | Error failure) {
+            messages.forEach(Message::close);
+            throw failure;
+        }
+        ZLinkServiceOperationRegistry.Operation<List<Message>> operation;
+        try {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (request && remainingNanos <= 0) {
+                messages.forEach(Message::close);
+                return CompletableFuture.failedFuture(
+                        new TimeoutException("Instance Spot request deadline expired"));
+            }
+            operation = request ? operations.register(Duration.ofNanos(remainingNanos)) : null;
+        } catch (RuntimeException | Error failure) {
+            messages.forEach(Message::close);
+            throw failure;
+        }
         var header =
                 new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                         flags,
                         route,
-                        stableType,
+                        true,
                         localDescriptor.lifecycleGeneration(),
                         routingId,
                         sourceSpotId,
                         request,
-                        0,
-                        0,
-                        null);
-        List<Message> messages =
-                parts.stream().map(part -> Message.from(part.toByteArray())).toList();
-        CompletableFuture<List<Message>> completion = new CompletableFuture<>();
+                        operation == null ? 0 : operation.id().getMostSignificantBits(),
+                        operation == null ? correlation : operation.id().getLeastSignificantBits(),
+                        request ? correlation : null);
+        CompletableFuture<List<Message>> completion =
+                operation == null ? new CompletableFuture<>() : operation.completion();
         boolean accepted;
         try {
             accepted =
@@ -2836,9 +2836,14 @@ final class ZLinkJavaRawMeshNode
                                     header,
                                     flags == 0 ? new byte[0] : metadata.clone(),
                                     messages,
-                                    applicationContentType(messages),
+                                    contentType,
                                     replyParts -> {
-                                        if (!completion.complete(replyParts)) {
+                                        boolean completed =
+                                                operation == null
+                                                        ? completion.complete(replyParts)
+                                                        : operations.complete(
+                                                                operation.id(), replyParts);
+                                        if (!completed) {
                                             replyParts.forEach(Message::close);
                                         }
                                     },
@@ -2846,63 +2851,25 @@ final class ZLinkJavaRawMeshNode
                                         if (!request) {
                                             recordInstanceActivationDrop(failure);
                                         }
-                                        completion.completeExceptionally(unwrap(failure));
+                                        if (operation == null)
+                                            completion.completeExceptionally(unwrap(failure));
+                                        else
+                                            operations.completeExceptionally(
+                                                    operation.id(), unwrap(failure));
                                     });
         } catch (RuntimeException failure) {
             messages.forEach(Message::close);
+            if (operation != null) operations.completeExceptionally(operation.id(), failure);
             return CompletableFuture.failedFuture(failure);
         }
         if (!accepted) {
             messages.forEach(Message::close);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("local Instance Spot target rejected the message"));
+            var failure =
+                    new IllegalStateException("local Instance Spot target rejected the message");
+            if (operation != null) operations.completeExceptionally(operation.id(), failure);
+            return CompletableFuture.failedFuture(failure);
         }
         return request ? completion : CompletableFuture.completedFuture(List.of());
-    }
-
-    private CompletionStage<Void> awaitInstanceSpotTargetConnection(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route, long deadlineNanos) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
-        if (peer.isPresent()
-                && peer.orElseThrow().descriptor().lifecycleGeneration()
-                        != route.targetNodeGeneration()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot target is not connected"));
-        }
-        if (peer.isPresent() && localDescriptor != null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0 || closed.get()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("remote Instance Spot target is not connected"));
-        }
-
-        CompletableFuture<Void> waiting = new CompletableFuture<>();
-        long delayNanos = Math.min(remainingNanos, Duration.ofMillis(10).toNanos());
-        try {
-            deadlines.schedule(
-                    () -> {
-                        if (waiting.isDone()) {
-                            return;
-                        }
-                        awaitInstanceSpotTargetConnection(route, deadlineNanos)
-                                .whenComplete(
-                                        (ignored, failure) -> {
-                                            if (failure == null) {
-                                                waiting.complete(null);
-                                            } else {
-                                                waiting.completeExceptionally(unwrap(failure));
-                                            }
-                                        });
-                    },
-                    delayNanos,
-                    TimeUnit.NANOSECONDS);
-        } catch (RuntimeException failure) {
-            waiting.completeExceptionally(failure);
-        }
-        return waiting;
     }
 
     private long addDeadlineNanos(Duration timeout) {
