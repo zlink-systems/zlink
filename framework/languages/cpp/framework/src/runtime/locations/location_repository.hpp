@@ -30,6 +30,7 @@ namespace zlink::framework
 
 inline constexpr std::size_t location_page_item_limit = 1000;
 inline constexpr auto creation_terminal_retention = std::chrono::minutes (5);
+inline constexpr std::size_t location_record_payload_limit = 1024u * 1024u;
 
 struct authority_key_t
 {
@@ -208,6 +209,7 @@ struct object_reserve_request_t
     object_creation_target_t target;
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
+    std::chrono::system_clock::time_point operation_deadline{};
 };
 struct object_reservation_fence_t
 {
@@ -508,10 +510,14 @@ class location_repository_t
     virtual task_t<object_complete_creation_result_t>
     complete_creation (object_complete_creation_request_t request,
                        std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                                   std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_abort_result_t> abort (object_abort_request_t request,
-                                                 std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_commit_result_t>
+    commit (object_commit_request_t request,
+            std::stop_token cancellation = {},
+            std::chrono::system_clock::time_point operation_deadline = {}) = 0;
+    virtual task_t<object_abort_result_t>
+    abort (object_abort_request_t request,
+           std::stop_token cancellation = {},
+           std::chrono::system_clock::time_point operation_deadline = {}) = 0;
     virtual task_t<aggregate_prepare_result_t>
     prepare_aggregate (aggregate_prepare_request_t request, std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_commit_result_t>

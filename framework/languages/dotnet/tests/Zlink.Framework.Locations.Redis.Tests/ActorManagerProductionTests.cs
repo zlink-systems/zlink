@@ -19,6 +19,54 @@ namespace Zlink.Framework.Locations.Redis.Tests;
 public sealed class ActorManagerProductionTests
 {
     [Fact]
+    public async Task ConcurrentActorCreationRebuildsSharedCapacityWithoutRepeatingCallbacks()
+    {
+        const int actorCount = 64;
+        TestActorFactory.Reset();
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(inner);
+        var (store, _) = ReservationConflictLocationStore.Create(inner, 65, completion: true);
+        await using var provider = BuildServer(store, "tcp://127.0.0.1:0");
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        await FrameworkHost(provider).StartAsync(CancellationToken.None);
+        try
+        {
+            var node = runtime.GetSpotNodeRuntime("objects").Node;
+            await PublishServerDescriptorAsync(
+                repository,
+                runtime,
+                node.RoutingId,
+                Assert.IsType<string>(node.MeshStatus().LocalEndpoint)
+            );
+            var actors = provider.GetRequiredService<IZLinkActorManager>();
+            var results = await Task.WhenAll(
+                Enumerable
+                    .Range(0, actorCount)
+                    .Select(async index =>
+                        await actors
+                            .GetOrCreate($"capacity-conflict-{index}", "player")
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Async()
+                    )
+            );
+            Assert.All(results, result => Assert.IsType<ZLinkActorCreateResult.Created>(result));
+            Assert.Equal(actorCount, TestActorFactory.CreateCount);
+            Assert.Equal(actorCount, TestEntrySpot.CreateCount);
+            Assert.Equal(
+                (0L, (long)actorCount),
+                await ReadActorCapacityUsageAsync(
+                    inner,
+                    new ZLinkMeshNodeDescriptorKey("objects", node.RoutingId)
+                )
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task CapacityRaceReleasesLosingReservationAndRunsOnlyFinalFactory()
     {
         TestActorFactory.Reset();
@@ -609,18 +657,25 @@ public sealed class ActorManagerProductionTests
     private sealed class ReservationConflictLocationStore(IZLinkLocationStore inner)
         : IZLinkLocationStore
     {
+        private const string CreationTerminalKeyPrefix = "creation-terminal\0";
+
         private int _actorReserveAttempts;
         private int _conflictsBeforeSuccess;
+        private bool _completion;
+        private string? _completionKey;
+        private int _completionAttempts;
 
         public int ActorReserveAttempts => Volatile.Read(ref _actorReserveAttempts);
 
         public static (IZLinkLocationStore Store, ReservationConflictLocationStore Control) Create(
             IZLinkLocationStore inner,
-            int conflictsBeforeSuccess
+            int conflictsBeforeSuccess,
+            bool completion = false
         )
         {
             var proxy = new ReservationConflictLocationStore(inner);
             proxy._conflictsBeforeSuccess = conflictsBeforeSuccess;
+            proxy._completion = completion;
             return (proxy, proxy);
         }
 
@@ -634,6 +689,28 @@ public sealed class ActorManagerProductionTests
             CancellationToken cancellationToken = default
         )
         {
+            if (_completion)
+            {
+                var terminal = request
+                    .Mutations.OfType<ZLinkStoreMutation.Put>()
+                    .FirstOrDefault(mutation =>
+                        mutation.Key.Value.StartsWith(
+                            CreationTerminalKeyPrefix,
+                            StringComparison.Ordinal
+                        )
+                    );
+                if (terminal is not null)
+                    Interlocked.CompareExchange(ref _completionKey, terminal.Key.Value, null);
+                if (
+                    terminal is not null
+                    && terminal.Key.Value == _completionKey
+                    && Interlocked.Increment(ref _completionAttempts) <= _conflictsBeforeSuccess
+                )
+                    return ValueTask.FromResult<ZLinkStoreWriteResult>(
+                        new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow)
+                    );
+                return inner.WriteAsync(request, cancellationToken);
+            }
             if (
                 TryGetActorReservationTransaction(request, out _, out _, out _)
                 && Interlocked.Increment(ref _actorReserveAttempts) <= _conflictsBeforeSuccess

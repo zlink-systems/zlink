@@ -102,6 +102,7 @@ struct spot_actor_commit_route_request_t
 
 struct spot_actor_leave_route_command_t
 {
+    static constexpr const char *channel_name = "node";
     static constexpr const char *packet_name = "__zlink.spot.actor.leave";
 
     std::string transfer_id;

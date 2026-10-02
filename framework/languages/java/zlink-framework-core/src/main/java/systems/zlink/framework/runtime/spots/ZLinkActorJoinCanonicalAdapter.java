@@ -516,13 +516,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
 
     CompletionStage<Void> notifyTargetJoined(
             Admission admission, ZLinkStandaloneActorRelocationStagingOwner.Staged staged) {
-        ZLinkActor actor = prepared(staged).actor();
-        actors.markRelocatedActorJoined(
-                actor,
-                prepared(staged).actorRef(),
-                admission.targetSpotId(),
-                (systems.zlink.framework.spots.ZLinkSpot<?>) admission.targetSpot());
+        ZLinkActorRuntime.PreparedTransferredActor prepared = prepared(staged);
+        ZLinkActor actor = prepared.actor();
         try {
+            actors.markRelocatedActorJoined(
+                    actor,
+                    prepared.actorRef(),
+                    admission.targetSpotId(),
+                    (systems.zlink.framework.spots.ZLinkSpot<?>) admission.targetSpot());
             return Objects.requireNonNull(
                     admission.joined().apply(actor), "target OnJoined callback returned null");
         } catch (RuntimeException failure) {
@@ -565,22 +566,32 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
     }
 
-    CompletionStage<Void> notifyTargetAccepted(
-            Admission admission, ZLinkStandaloneActorRelocationStagingOwner.Staged staged) {
+    CompletionStage<Void> notifyTargetCompletion(
+            Admission admission,
+            ZLinkStandaloneActorRelocationStagingOwner.Staged staged,
+            Throwable lifecycleFailure) {
         ZLinkActorRuntime.PreparedTransferredActor prepared = prepared(staged);
         ZLinkActor actor = prepared.actor();
-        ActorRef actorRef =
-                new ActorRef(
-                        prepared.actorRef().actorId(),
-                        prepared.actorRef().generation(),
-                        actor.context().meshName(),
-                        prepared.actorRef().nodeRid());
-        return actors.invokeActorLifecycle(
-                actor,
-                () ->
-                        actor.onJoinCompleted(
-                                new ZLinkActorJoinCompletion.Accepted(
-                                        admission.operationId(), actorRef, admission.reply())));
+        ZLinkActorJoinCompletion completion;
+        if (lifecycleFailure == null) {
+            ActorRef actorRef =
+                    new ActorRef(
+                            prepared.actorRef().actorId(),
+                            prepared.actorRef().generation(),
+                            actor.context().meshName(),
+                            prepared.actorRef().nodeRid());
+            completion =
+                    new ZLinkActorJoinCompletion.Accepted(
+                            admission.operationId(), actorRef, admission.reply());
+        } else {
+            Throwable cause = unwrap(lifecycleFailure);
+            ZLinkFrameworkErrorKind kind =
+                    cause instanceof ZLinkFrameworkException framework
+                            ? framework.kind()
+                            : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+            completion = new ZLinkActorJoinCompletion.Failed(admission.operationId(), kind);
+        }
+        return actors.invokeActorLifecycle(actor, () -> actor.onJoinCompleted(completion));
     }
 
     void completeTarget(Admission admission) {

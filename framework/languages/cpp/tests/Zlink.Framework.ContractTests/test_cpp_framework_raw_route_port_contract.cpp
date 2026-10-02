@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <optional>
 #include <iostream>
 #include <memory>
@@ -106,15 +107,25 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     assert (initial == zlink::request_result_t::not_connected);
     const auto refused = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::transport_failed, "tokenless capacity");
-    assert (refused.kind () == framework_error_kind_t::unavailable);
-    assert (zlink::framework::detail::boundary_state (refused)
-            != zlink::framework::detail::boundary_error_t::timed_out);
+    try {
+        std::rethrow_exception (refused);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == framework_error_kind_t::unavailable);
+        assert (zlink::framework::detail::boundary_state (error)
+                != zlink::framework::detail::boundary_error_t::timed_out);
+    }
     const auto completion = zlink::framework::runtime::messaging::map_submit_request_result (
       zlink::submit_result_t::backpressured, true);
     assert (completion == zlink::request_result_t::timed_out);
     const auto expired = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::timed_out, "expired WRITABLE token");
-    assert (expired.kind () == framework_error_kind_t::deadline_exceeded);
+    try {
+        std::rethrow_exception (expired);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == framework_error_kind_t::deadline_exceeded);
+    }
     std::cout << "f20 tokenless=Unavailable writable_timeout=DeadlineExceeded" << std::endl;
 }
 

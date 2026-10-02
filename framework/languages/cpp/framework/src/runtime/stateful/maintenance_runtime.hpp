@@ -133,6 +133,7 @@ struct relocation_authority_fence_t
     std::string expected_store_version;
     location_owner_token_t source_owner;
     location_owner_token_t target_owner;
+    protocol::relocation_id_t relocation;
 };
 
 /* Settled authority of one relocation unit as the Location Store shows it.
@@ -207,7 +208,9 @@ class authority_relocation_port_t
              std::vector<std::byte> target_application_payload = {},
              /* The StoreVersion the relocation NewOwner CAS expects (the source
               * fence); empty for a publish that is not a relocation CAS. */
-             std::string expected_store_version = {}) = 0;
+             std::string expected_store_version = {},
+             protocol::relocation_id_t relocation = {},
+             location_owner_token_t source_owner = {}) = 0;
     virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                                   const std::string &key) = 0;
     virtual authority_publish_result_t publish_completion (object_kind_t,

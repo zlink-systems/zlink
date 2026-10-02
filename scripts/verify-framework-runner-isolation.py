@@ -64,12 +64,12 @@ RANGES = (
     RangeSource("kotlin", "sample", "application", "framework/languages/java/samples/runner-common.sh",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MIN=(26100)$",
                 r"^\s*ZLINK_SAMPLE_APP_PORT_MAX=(27999)$"),
-    RangeSource("node", "sample", "redis", "framework/languages/node/samples/run-sample.mjs",
-                r"^const redisPortRange = \{ min: (\d+), max: \d+ \};$",
-                r"^const redisPortRange = \{ min: \d+, max: (\d+) \};$"),
-    RangeSource("node", "sample", "application", "framework/languages/node/samples/run-sample.mjs",
-                r"^const applicationPortRange = \{ min: (\d+), max: \d+ \};$",
-                r"^const applicationPortRange = \{ min: \d+, max: (\d+) \};$"),
+    RangeSource("node", "sample", "redis", "framework/languages/node/samples/port-lease.mjs",
+                r"^export const redisPortRange = \{ min: (\d+), max: \d+ \};$",
+                r"^export const redisPortRange = \{ min: \d+, max: (\d+) \};$"),
+    RangeSource("node", "sample", "application", "framework/languages/node/samples/port-lease.mjs",
+                r"^export const applicationPortRange = \{ min: (\d+), max: \d+ \};$",
+                r"^export const applicationPortRange = \{ min: \d+, max: (\d+) \};$"),
 )
 
 SAMPLE_NAMES = (
@@ -101,15 +101,17 @@ SAMPLE_RUNNER_INVENTORIES = (
         "java",
         "framework/languages/java/samples/java",
         "",
+        # Java ZoneWorld gained run_sample.ps1 in cbe9bcd094 (Windows sample pass).
         ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
-         "SupportChat", "TicTacToe"),
+         "SupportChat", "TicTacToe", "ZoneWorld"),
     ),
     SampleRunnerInventory(
         "kotlin",
         "framework/languages/java/samples/kotlin",
         "",
+        # Kotlin ZoneWorld gained run_sample.ps1 in cbe9bcd094 (Windows sample pass).
         ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
-         "SupportChat", "TicTacToe"),
+         "SupportChat", "TicTacToe", "ZoneWorld"),
     ),
     SampleRunnerInventory(
         "node",
@@ -235,6 +237,12 @@ def verify_mirrored_ranges(
             r"^\s*local redis_min_port=(\d+)$",
             r"^\s*local redis_max_port=(\d+)$",
         ),
+        RangeSource(
+            "dotnet", "sample", "application",
+            "framework/languages/dotnet/samples/redis-common.sh",
+            r"^\s*local min_port=(\d+)$",
+            r"^\s*local max_port=(\d+)$",
+        ),
     )
     for mirror in mirrors:
         actual = (
@@ -249,7 +257,8 @@ def verify_mirrored_ranges(
                 f"{expected[0]}-{expected[1]}"
             )
 
-    dotnet_app_range = resolved_ranges[("dotnet", "sample", "application")]
+    # #673 moved application port selection into redis-common.sh (mirrored above);
+    # each runner must take its ports from that helper rather than its own range.
     dotnet_sample_root = ROOT / "framework/languages/dotnet/samples"
     dotnet_shell_runners = sorted(dotnet_sample_root.glob("*/run_sample.sh"))
     if len(dotnet_shell_runners) != 7:
@@ -258,15 +267,11 @@ def verify_mirrored_ranges(
             f"runners, found {len(dotnet_shell_runners)}"
         )
     for runner in dotnet_shell_runners:
-        pairs = re.findall(
-            r"random\.randint\((\d+),\s*(\d+)\)",
-            runner.read_text(encoding="utf-8"),
-        )
-        if pairs != [(str(dotnet_app_range[0]), str(dotnet_app_range[1]))]:
+        text = runner.read_text(encoding="utf-8")
+        if "zlink_sample_pick_ports" not in text or re.search(r"random\.randint\(", text):
             raise ValueError(
-                f"{runner.relative_to(ROOT)}: expected one application port "
-                f"mirror for {dotnet_app_range[0]}-{dotnet_app_range[1]}, "
-                f"found {pairs}"
+                f"{runner.relative_to(ROOT)}: expected application ports from "
+                "zlink_sample_pick_ports and no runner-local port range"
             )
 
     jvm_powershell = ROOT / "framework/languages/java/samples/redis-common.ps1"
@@ -393,6 +398,32 @@ def verify_sample_runner_helper(
             )
 
 
+def verify_cpp_sample_run_dir_close_helper() -> None:
+    helper_path = ROOT / "framework/languages/cpp/samples/redis-common.sh"
+    close_function = shell_function(helper_path, "zlink_sample_close_run_dir")
+    failure_guard = re.search(
+        r'(?m)^\s*if \[\[ "\$\{status\}" -ne 0 \]\]; then\s*$',
+        close_function,
+    )
+    removal = re.search(
+        r'(?m)^\s*rm -rf "\$\{run_dir\}"\s*$',
+        close_function,
+    )
+    failure_return = (
+        None
+        if failure_guard is None or removal is None
+        else re.search(
+            r"(?m)^\s*return 0\s*$",
+            close_function[failure_guard.end():removal.start()],
+        )
+    )
+    if failure_guard is None or removal is None or failure_return is None:
+        raise ValueError(
+            f"{helper_path.relative_to(ROOT)}: run directory helper must "
+            "preserve failed-run evidence and remove the directory after success"
+        )
+
+
 def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
     total = 0
     bash_runners: list[Path] = []
@@ -406,6 +437,8 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
         r"Join-Path\s+\$(?:ScriptDir|SampleDir|PSScriptRoot)\s+"
         r"[\"'](?:logs|sample-logs|flow-logs)[\"']"
     )
+
+    verify_cpp_sample_run_dir_close_helper()
 
     for inventory in SAMPLE_RUNNER_INVENTORIES:
         root = ROOT / inventory.root
@@ -462,7 +495,16 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
                         f"{path.relative_to(ROOT)}: C++ flow logs must be owned "
                         f"by RUN_DIR, found {assignments}"
                     )
-                require_text(path, 'rm -rf "$RUN_DIR"')
+                cleanup = shell_function(path, "cleanup")
+                if not re.search(
+                    r'(?m)^\s*zlink_sample_close_run_dir "\$RUN_DIR" '
+                    r'"\$[A-Za-z_][A-Za-z0-9_]*" "[^"]+"\s*$',
+                    cleanup,
+                ):
+                    raise ValueError(
+                        f"{path.relative_to(ROOT)}: cleanup must delegate "
+                        "RUN_DIR lifetime to zlink_sample_close_run_dir"
+                    )
             total += 1
     return total, bash_runners
 
