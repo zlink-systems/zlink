@@ -415,10 +415,10 @@ descriptor's and fanout publisher descriptor's key, is called a
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
-| Aggregate (§3.5) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
-| Aggregate inventory root (§3.5) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0root` |
-| Aggregate inventory page (§3.5) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
-| Aggregate participant (§3.5) | `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0{Index}\0{authority \| membership}` |
+| Aggregate ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
+| Aggregate inventory root ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0root` |
+| Aggregate inventory page ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
+| Aggregate participant ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0{Index}\0{authority \| membership}` |
 
 `{hex(RoutingId)}` and `{hex(SourceNodeRid)}` are the lowercase hex representation of each
 identifier's raw bytes. `{SourceHostGeneration}` is a decimal with no sign and no leading
@@ -439,8 +439,9 @@ pins the key-derivation vectors for this preimage shape.
 
 The provider stores and compares each record's value only as bytes, without interpreting
 its meaning. A creation terminal's value is the `creation-operation-terminal-v1` bytes as
-they are (§7). Every other record's value is a canonical JSON value that includes at least
-the following fields.
+they are (§7). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
+values from that section. Every other record's value is a canonical JSON value that includes at
+least the following fields.
 
 | Field | Meaning |
 |---|---|
@@ -545,8 +546,8 @@ number precision).
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
 | `allocation` | Placement information (§3.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §4), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§3.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
 | `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
-| `aggregate` | The participant marker of the SpotWide relocation this object takes part in (§3.5). The field is absent when the object takes part in none. |
-| `visibleStoreVersion` | Preserves the public `StoreVersion` when it differs from this row's physical version (§3.5). The field is absent when they are equal. |
+| `aggregate` | The participant marker of the SpotWide relocation this object takes part in ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when the object takes part in none. |
+| `visibleStoreVersion` | Preserves the public `StoreVersion` when it differs from this row's physical version ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when they are equal. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
 decoded bytes have the length `requestEncodedSize` and the SHA-256 `requestSha256`. If
@@ -576,20 +577,27 @@ fixture that verifies the opaque record's key derivation and value byte represen
 A `SpotWide` User Spot relocation (§8) changes the authority of the Spot and its member Actors as
 one result. A runtime in another language than the one that started the relocation also reads
 participants in progress and cleans up finished relocations, so progress lives only in the
-records below, and all four languages use the same keys (§3.4) and bytes. No other progress
-information (a separate lock record, before/after pages, a per-participant metadata record) is
-kept.
+records below, and all four languages use the same keys
+([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) and bytes. No other
+progress information (a separate lock record, before/after pages, a per-participant metadata
+record) is kept.
 
 | Record | Value |
 |---|---|
 | Aggregate | The only record that decides the state and result of one relocation. Canonical JSON below. |
-| Aggregate inventory root and pages | The participant list. Written once during preparation and never changed. |
-| Aggregate participant | Raw bytes of each participant's post-commit authority payload (`authority`) and membership change (`membership`). Written once during preparation and never changed. |
-| Authority `aggregate` and `visibleStoreVersion` | The marker and public version kept on each participant authority (§3.4). |
+| Aggregate inventory root and pages | The participant list. Canonical JSON below; written once and never changed. |
+| Aggregate participant `authority` | Raw bytes of the participant's post-commit application payload (the `payload` of the §3.4 authority). Written once and never changed. |
+| Aggregate participant `membership` | Raw bytes of the participant membership change defined by the relocation envelope. The storage layer does not interpret them, only checks their hash before commit, and applies them to no other key. Written once and never changed. |
+| Authority `aggregate` and `visibleStoreVersion` | The marker and the preserved public version on each participant authority (§3.4). |
 
-All canonical JSON is written in the field order of the tables below without whitespace;
-generation-like integers are JSON strings, counts are JSON numbers, and hashes are lowercase
-SHA-256 hex (the same rules as §3.4).
+**Canonical JSON.** UTF-8 without a BOM, no whitespace, fields in the order of the schemas below
+(nested objects included). Strings follow the ECMAScript `JSON.stringify` string rules — only `"`,
+`\`, and control characters are escaped (`\b \f \n \r \t`, other control characters as lowercase
+`\u00xx`), and every other character is written as UTF-8. Generation-like integers are decimal JSON
+strings with no sign and no leading zero, counts and indexes are JSON numbers, hashes are 64-character
+lowercase SHA-256 hex, and a `StoreVersion` is a JSON string holding the provider's token verbatim.
+Fields written as `null` when absent and fields omitted when absent are used only as the schemas
+below state.
 
 **Aggregate record**
 
@@ -597,74 +605,89 @@ SHA-256 hex (the same rules as §3.4).
 |---|---|
 | `recordVersion` | `1`. |
 | `state` | `staging \| prepared \| committed \| aborted`. This value alone decides the result of the relocation. |
-| `requestFingerprint` | A hex value the runtime that started preparation uses to recognize re-entry of the same request. Other runtimes do not interpret it. |
+| `requestFingerprint` | SHA-256 hex the runtime that started preparation computes from its own request encoding. Only that runtime re-enters the same request, so other runtimes do not interpret it. |
 | `participantCount` | The number of participants. |
-| `inventoryDigest` | Equal to the inventory root's `digest`. |
 | `sourceOwner`, `targetOwner` | `{ownerId, leaseGeneration}` (§3.1) of the relocation's source and target hosts. |
 | `targetDescriptor` | `{meshName, routingIdHex}`. |
 | `targetDescriptorLifecycleGeneration` | The target MeshNode's `lifecycleGeneration`. |
 | `capacity` | The space to reserve on the target: `{actors, spots, spotTypes}`, where `spotTypes` is an array of `{objectKind, stableType, count}` sorted by the UTF-8 byte order of `objectKind`, then `stableType`. |
-| `ownerGenerationStart`, `ownerGenerationEnd` | The inclusive range of `AuthorityOwnerGeneration` values issued to `newOwner` participants. Both are `null` when there are none. |
+| `ownerGenerationStart`, `ownerGenerationEnd` | The inclusive range of `AuthorityOwnerGeneration` values issued to `newOwner` participants. Both are `null` until issued or when there is no `newOwner` participant. |
 
 The **participant marker** (the authority's `aggregate`) has `aggregateId`,
 `aggregateGeneration`, `index`, `expectedStoreVersion`, `ownerTransition`
 (`preserve \| newOwner`), `targetAuthorityOwnerGeneration`, `authorityPayloadSha256`, and
-`membershipMutationSha256`, in that order. The two hashes are the SHA-256 of the participant
-record's `authority` and `membership` bytes.
+`membershipMutationSha256`, in that order. `aggregateId` is the 16 bytes of the 128-bit aggregate ID
+in big-endian order written as lowercase `8-4-4-4-12`. `expectedStoreVersion` is the public
+`StoreVersion` before the marker was installed. `targetAuthorityOwnerGeneration` is the current
+value for `preserve`, and for `newOwner` it is `ownerGenerationStart + k` of the issued range, where
+k is the participant's rank among `newOwner` participants in inventory order, from 0. The two hashes
+are the SHA-256 of the participant record's `authority` and `membership` bytes. Fields that appear
+in both an inventory entry and a marker are immutable copies compared once at marker installation.
 
 The **inventory** sorts participants by the UTF-8 byte order of their authority logical key
-preimage (§3.4) and numbers them from 0 as `index`. An entry has `index`, `authorityKey` (the
-preimage string), `expectedStoreVersion`, `ownerTransition`, `authorityPayloadSha256`, and
-`membershipMutationSha256`. A page is `{kind: "aggregate-inventory-page-v1", level, index,
-startIndex, entryCount, entries, children}`. A level-0 page holds entries and has an empty
-`children` array; a higher-level page has an empty `entries` array and holds in `children`
-references to pages one level below, `{level, index, startIndex, entryCount, sha256}`, where
-`sha256` is the hash of that page's bytes. The root is `{kind: "aggregate-inventory-root-v1",
-totalCount, digest, declaredDigest, topLevel, topPages, pageCountsByLevel}`. `digest` is the
-SHA-256 of the entries' canonical JSON bytes concatenated in `index` order, and
-`declaredDigest` is §8's list content check value. One page holds at most 1,024 entries or
-references and at most 1 MiB. A read page whose hash, count, or `digest` does not match is data
-lost.
+preimage (§3.4) and numbers them from 0 as `index`.
+
+| Object | Fields (in order) |
+|---|---|
+| Entry | `index`, `authorityKey` (the preimage string), `expectedStoreVersion`, `ownerTransition`, `authorityPayloadSha256`, `membershipMutationSha256` |
+| Page reference | `level`, `index`, `startIndex` (the `index` of the first entry it covers), `entryCount` (the number of entries it covers), `sha256` (the hash of that page's bytes) |
+| Page | `kind` (`"aggregate-inventory-page-v1"`), `level`, `index`, `startIndex`, `entryCount`, `entries`, `children` |
+| Root | `kind` (`"aggregate-inventory-root-v1"`), `totalCount`, `digest`, `topLevel`, `topPages`, `pageCountsByLevel` |
+
+A level-0 page holds entries in `entries` and has an empty `children` array. A higher-level page
+has an empty `entries` array and holds references to pages one level below in `children`. Page
+`index` values at each level start at 0 without gaps, and `entries`, `children`, and `topPages` are
+in `index` order. `pageCountsByLevel` is a number array of each level's page count from level 0.
+`digest` is the SHA-256 of the entries' canonical JSON bytes concatenated in `index` order. A page
+and the root each hold at most 1,024 entries or references and at most 1 MiB; when the root would
+exceed this, one more level is added. A read page whose hash, count, or `digest` does not match is
+data lost.
 
 **State transitions.** The aggregate record changes only `staging → prepared → committed` or
-`staging/prepared → aborted`, and each transition is one Store write conditioned on that
-record's version. `committed` and `aborted` never change again. The result is never inferred
-from participant markers, the inventory, elapsed time, or process memory.
+`staging/prepared → aborted`. `committed` and `aborted` never change again. The result is never
+inferred from participant markers, the inventory, elapsed time, or process memory. Each step below
+is one Store write ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
 
-| Step | Contents and conditions of one Store write |
+| Step | Contents and conditions |
 |---|---|
-| Claim | Writes `staging` when the aggregate record is missing. A `staging` record with the same `requestFingerprint` continues preparation; a different one is `Conflict`. |
-| List | Writes each inventory page and root and each participant record when missing. |
-| Marker installation | For each participant whose public `StoreVersion` equals the entry's `expectedStoreVersion`, writes the marker conditioned on the physical version. The payload and owner are unchanged. The write of the first `newOwner` marker also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate record ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). |
-| Prepare | After every marker is confirmed, writes `staging → prepared` and the target pending capacity, conditioned on the target descriptor's lifecycle generation, the target owner lease, and the capacity records. |
-| Commit | Writes `prepared → committed` and §8's space transfer, conditioned on the physical version of the Spot participant's authority, the target descriptor and owner lease, and the capacity records. Only one of this write and a source fence (§8) on the same Spot succeeds. |
-| Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the pending capacity. The counter is not rolled back. |
+| Claim | Writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. A `staging` record with the same `requestFingerprint` continues preparation, a different request is `Conflict`, and a fence that is already terminal returns that result. |
+| List | Conditioned on the aggregate's `staging` version, writes the participant records, pages, and root in that order, each when missing. Identical existing bytes count as done; different bytes are `Conflict`. |
+| Marker installation | Starts after every list record through the root is confirmed. For each participant, conditioned on the aggregate's `staging` version and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. An existing marker with the same fence and `index` counts as done; a marker of another fence is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. When an authority with the marker would exceed the provider value limit, the relocation is `Abort`ed. |
+| Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease, and the capacity records. |
+| Commit | Writes `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and the cleanup of the Spot participant's authority (the cleanup write below), conditioned on the aggregate version, the physical version of the Spot participant's authority, and the capacity records. The target's liveness and lifecycle are not conditions ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
+| Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Writes `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and the cleanup of the Spot participant's authority, conditioned on the aggregate version and the physical version of the Spot participant's authority. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
+| Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the reserved count, conditioned on the aggregate version. |
+
+The Prepare, Commit, Source fence, and Abort writes carry only the aggregate, the Spot authority,
+and capacity records, never keys proportional to the number of participants.
 
 **Public values.** When the repository reads a participant authority it exposes the following.
 
-| Authority row | Public payload and owner | Public `StoreVersion` |
+| Authority row | Public payload, owner, and allocation | Public `StoreVersion` |
 |---|---|---|
-| Marker present and the aggregate is `committed` | The participant `authority` bytes, the aggregate's `targetOwner` and `targetDescriptor`, and the marker's `targetAuthorityOwnerGeneration` | The row's physical version |
+| Marker present and the aggregate is `committed` | `payload` is the participant `authority` bytes. For `newOwner`, the owner is the aggregate's `targetOwner`, `authorityOwnerGeneration` is the marker's value, the allocation's `descriptor` and `descriptorLifecycleGeneration` are the aggregate's target values, and the other allocation fields are kept. For `preserve`, everything outside the payload is kept. | The row's physical version |
 | Marker present in any other state | The row's values | The marker's `expectedStoreVersion` |
 | No marker | The row's values | `visibleStoreVersion`, otherwise the physical version |
 
 The `StoreVersion` condition of an authority change request is compared with this public value,
 and when they match the write is conditioned on the physical version. A row written with a new
 value carries neither a marker nor `visibleStoreVersion`. A participant whose marker refers to a
-`staging` or `prepared` aggregate accepts only §8's source fence; any other change is
-`Conflict`.
+`staging` or `prepared` aggregate accepts only the Source fence; any other change is `Conflict`.
 
-**Cleanup.** Once the aggregate is `committed` or `aborted`, any runtime may clean up its
-participants. Cleanup is, per participant, a write conditioned on the physical version that
-stores the public payload and owner above in the row, removes the marker, and keeps the public
-`StoreVersion` of that moment in `visibleStoreVersion`. The aggregate, inventory, and participant
-records are deleted only after every participant's marker is confirmed removed. When the
-aggregate or participant record a marker refers to is missing, the authority is read again; if
-its physical version is unchanged, the result is data lost.
+**Cleanup.** Cleaning up a participant is a write conditioned on the physical version that stores
+the public payload, owner, and allocation above in the row, removes the marker, and keeps the public
+`StoreVersion` of that moment in `visibleStoreVersion`. The runtime that made the aggregate terminal
+cleans up every participant in inventory order, then deletes the participant records, pages, root,
+and aggregate in that order. This deletion starts only after every marker is removed, so when a
+child of a terminal aggregate is missing, the remaining children and the aggregate are deleted. A
+runtime that reads a participant and finds a marker referring to a terminal aggregate cleans up that
+participant and continues the same inventory cleanup. A `staging` or `prepared` aggregate is
+finished by the runtime that started the relocation; when the `sourceOwner` lease has expired, the
+runtime that finds the marker `Abort`s it and then cleans up.
 
-A `staging` or `prepared` aggregate is finished by the runtime that started the relocation.
-Another runtime changes it to `aborted` only when the `sourceOwner` lease has expired (§8's
-cleanup target).
+When the aggregate, root, page, or participant record a marker refers to is missing, the authority
+is read again. If its physical version is unchanged the result is data lost; if it changed, the new
+row is projected again.
 
 ## 4. Finding Running Nodes and Their Capabilities
 
