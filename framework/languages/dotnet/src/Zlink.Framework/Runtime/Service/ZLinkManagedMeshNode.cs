@@ -95,11 +95,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     > _pendingRelocationPrepares = new();
 
     //  Inbound direct-transfer assemblies (spec 28 §4.3), keyed by the exact
-    //  relocation identity plus the authenticated source rid. Registered
-    //  synchronously when command 40 arrives so command 52 chunks on the same
+    //  relocation and attempt; their owner validates the declared identity.
+    //  Registered synchronously when command 40 arrives so command 52 chunks on the same
     //  ordered connection always find their assembly.
     private readonly ConcurrentDictionary<
-        PendingRelocationPrepareKey,
+        (ZLinkServiceWireCodec.RelocationWireId RelocationId, ulong TargetAttemptGeneration),
         InboundRelocationPreparation
     > _inboundRelocationAssemblies = new();
 
@@ -6702,12 +6702,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         //  registered synchronously here. A prepare with the same exact
         //  identity but a different manifest is a conflict failure
         //  (spec 28 §4.3) and never reuses or replaces the existing assembly.
-        var assemblyKey = new PendingRelocationPrepareKey(
-            sourceNodeRid,
-            prepare.RelocationId,
-            prepare.TargetAttemptGeneration,
-            prepare.Coordinator
-        );
+        var assemblyKey = (prepare.RelocationId, prepare.TargetAttemptGeneration);
         InboundRelocationPreparation preparation;
         try
         {
@@ -6726,6 +6721,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
             );
             preparation = _inboundRelocationAssemblies.GetOrAdd(assemblyKey, candidate);
+            if (
+                !preparation.MatchesIdentity(
+                    prepare.SourceNodeRid,
+                    prepare.SourceNodeGeneration,
+                    prepare.Coordinator,
+                    prepare.Target,
+                    prepare.Object
+                )
+            )
+                return;
             if (preparation.Prepare != prepare)
                 throw new ZLinkRelocationDataLostException(
                     "A relocation prepare retry changed its declaration."
@@ -6862,7 +6867,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceNodeRid,
         ReplyOperation nativeReply,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        PendingRelocationPrepareKey assemblyKey,
+        (ZLinkServiceWireCodec.RelocationWireId RelocationId, ulong TargetAttemptGeneration) assemblyKey,
         InboundRelocationPreparation preparation
     )
     {
@@ -6890,7 +6895,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // an explicit terminal.
                 target.ReadySubmissionFailed(prepare, sourceNodeRid);
                 _inboundRelocationAssemblies.TryRemove(
-                    new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
+                    new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
                         assemblyKey,
                         preparation
                     )
@@ -6906,7 +6911,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}"
             );
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
+                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
                     assemblyKey,
                     preparation
                 )
@@ -6920,7 +6925,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // retransmitted Prepare submit READY again.
             target.ReadySubmissionFailed(prepare, sourceNodeRid);
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
+                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
                     assemblyKey,
                     preparation
                 )
@@ -6933,7 +6938,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (Exception exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
+                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
                     assemblyKey,
                     preparation
                 )
@@ -7143,13 +7148,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
-        var key = new PendingRelocationPrepareKey(
-            sourceNodeRid,
-            state.RelocationId,
-            state.TargetAttemptGeneration,
-            state.Coordinator
-        );
-        if (!_inboundRelocationAssemblies.TryGetValue(key, out var preparation))
+        var key = (state.RelocationId, state.TargetAttemptGeneration);
+        if (
+            !_inboundRelocationAssemblies.TryGetValue(key, out var preparation)
+            || !preparation.MatchesIdentity(
+                sourceNodeRid,
+                peer.LifecycleGeneration,
+                state.Coordinator,
+                preparation.Prepare.Target,
+                state.Object
+            )
+        )
         {
             //  Spec 28 §4.3: a chunk whose exact identity has no in-progress
             //  assembly is discarded and never attached to another assembly.
@@ -7168,7 +7177,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (ZLinkRelocationDataLostException exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
+                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
                     key,
                     preparation
                 )
@@ -12788,7 +12797,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkRelocationChunkAssembler Assembler,
         ZLinkCanonicalRelocationPreparationLease Lease,
         Lazy<Task<ZLinkServiceWireCodec.RelocationReadyRecord>> Ready
-    );
+    )
+    {
+        internal bool MatchesIdentity(
+            RoutingId sourceNodeRid,
+            ulong sourceNodeGeneration,
+            ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator,
+            ZLinkServiceWireCodec.RelocationTargetRecord target,
+            ZLinkServiceWireCodec.RelocationObjectRecord @object
+        ) =>
+            Prepare.SourceNodeRid == sourceNodeRid
+            && Prepare.SourceNodeGeneration == sourceNodeGeneration
+            && Prepare.Coordinator == coordinator
+            && Prepare.Target == target
+            && Prepare.Object == @object;
+    }
 
     private sealed class PendingRelocationPrepare(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,

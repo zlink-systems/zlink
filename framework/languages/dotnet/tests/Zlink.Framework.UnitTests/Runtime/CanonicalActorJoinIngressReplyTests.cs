@@ -65,6 +65,25 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
         var first = Request(prepare);
         var duplicate = Request(prepare);
+        var differentIdentityReplies = new[]
+        {
+            prepare with { SourceNodeRid = RoutingId.From("other-source") },
+            prepare with { SourceNodeGeneration = prepare.SourceNodeGeneration + 1 },
+            prepare with { Coordinator = prepare.Coordinator with { ExpectedAuthorityStoreVersion = "other-version" } },
+            prepare with { Target = prepare.Target with { OwnerId = "other-owner" } },
+            prepare with { Object = prepare.Object with { ObjectId = "other-actor" } },
+        }.Select(Request).ToArray();
+        foreach (var other in new[]
+        {
+            (prepare.Coordinator with { ExpectedAuthorityStoreVersion = "other-version" }, prepare.Object),
+            (prepare.Coordinator, prepare.Object with { ObjectId = "other-actor" }),
+        })
+        {
+            using var chunk = Message.From(ZLinkServiceWireCodec.EncodeRelocationState(
+                new(prepare.RelocationId, prepare.TargetAttemptGeneration, other.Item1,
+                    1, other.Item2, 0, payload.Chunk(0))));
+            await runtime.Source.Send().Message(chunk).Async(CancellationToken.None).Admitted;
+        }
         var conflict = prepare with { PayloadChecksumCrc32c = prepare.PayloadChecksumCrc32c ^ 1 };
         var failedParts = await Request(conflict);
         try
@@ -144,6 +163,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             }
         }
         Assert.Equal(1, target.PrepareCount);
+        foreach (var ignored in differentIdentityReplies)
+        {
+            var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => ignored);
+            Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        }
     }
 
     private sealed class CountingRelocationTarget : ICanonicalRelocationTarget
