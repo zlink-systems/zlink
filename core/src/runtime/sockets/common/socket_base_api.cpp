@@ -309,7 +309,9 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *pair_application = NULL;
     distinct_pipe_lifetime_refs_t pair_pipe_refs (pipe_);
     //  A rejected pair is torn down after the table is unlocked: terminate()
-    //  reaches other objects and must not run under this mutex.
+    //  reaches other objects and must not run under this mutex. Slot zero
+    //  identifies a protocol rejection; slots one and two also carry lanes
+    //  whose transport termination cancelled admission.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
     bool reject_attached_application = false;
     if (pair_id != 0) {
@@ -391,16 +393,19 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                   pair.application->get_transport_connection_id ();
                 // Either lane may start termination while its sibling's bind
                 // is queued. A retained object is still alive, but it is not
-                // an admissible transport; never publish a pair assembled
-                // from an inactive lane.
+                // an admissible transport; cancel admission and finish the
+                // lane teardown without reporting a READY protocol error.
                 if (!pair.application->is_lifecycle_active ()
                     || application_connection_id == 0
                     || (pair.expected_lane_count == 2u
                         && (!pair.completion->is_lifecycle_active ()
                             || pair.completion->get_transport_connection_id ()
-                                 == 0
-                            || !same_pair_peer_identity (pair.application,
-                                                         pair.completion)))) {
+                                 == 0))) {
+                    reject_pipes[1] = pair.application;
+                    reject_pipes[2] = pair.completion;
+                } else if (pair.expected_lane_count == 2u
+                           && !same_pair_peer_identity (pair.application,
+                                                       pair.completion)) {
                     reject_pipes[0] = pipe_;
                     reject_pipes[1] = pair.application;
                     reject_pipes[2] = pair.completion;
@@ -426,8 +431,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             }
             pair_application = pair.application;
         }
-        if (reject_pipes[0] && pair.application_attached
-            && pair.application) {
+        if (reject_pipes[1] && pair.application_attached) {
             reject_attached_application = true;
             pair.application_attached = false;
         }
@@ -458,12 +462,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         }
     }
 
-    if (reject_pipes[0]) {
+    if (reject_pipes[0] || reject_pipes[1] || reject_pipes[2]) {
         // Duplicate count-two lanes and cross-lane identity/topology conflicts
         // are only knowable when socket admission compares both validated
         // physical connections. Publish the READY protocol failure for every
         // network connection before terminating the related lane set.
-        for (size_t i = 0; i < 3; ++i) {
+        for (size_t i = 0; reject_pipes[0] && i < 3; ++i) {
             pipe_t *const rejected = reject_pipes[i];
             if (!rejected || rejected->get_transport_connection_id () == 0)
                 continue;
