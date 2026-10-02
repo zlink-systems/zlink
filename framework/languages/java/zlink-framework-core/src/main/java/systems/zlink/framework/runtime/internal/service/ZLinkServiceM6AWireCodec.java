@@ -17,7 +17,17 @@ import java.util.Objects;
 
 /** Closed M6A codec for admission, Node/Channel messaging and reply records. */
 public final class ZLinkServiceM6AWireCodec {
-    private static final int PREFIX_BYTES = 5;
+    private static final int FIELD_STATE = 1;
+    private static final int FIELD_APPLICATION_VERSION = 2;
+    private static final int FIELD_PROTOCOL_CAPABILITIES = 6;
+    private static final int FIELD_OBJECT_ROLE = 7;
+    private static final int FIELD_PLACEMENT_WEIGHT = 8;
+    private static final int FIELD_ACTIVE_CAPACITY_LIMIT = 9;
+    private static final int FIELD_PENDING_CAPACITY_LIMIT = 10;
+    private static final int FIELD_ACTIVE_CAPACITY_USED = 11;
+    private static final int FIELD_PENDING_CAPACITY_USED = 12;
+    private static final ZLinkServiceNodeDescriptor.ObjectRole[] ROLES =
+            ZLinkServiceNodeDescriptor.ObjectRole.values();
     private static final int APPLICATION_PREFIX_BYTES = 1 + Integer.BYTES;
     private static final byte[] FRAMEWORK_MULTIPART_PROFILE_FIELDS =
             applicationProfileFields(
@@ -43,10 +53,12 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         Writer extension = new Writer();
-        extension.tlv(1, new byte[] {(byte) stateToWire(descriptor.state())});
-        extension.tlv(2, Writer.bytes(writer -> writer.u64(descriptor.applicationVersion())));
+        extension.tlv(FIELD_STATE, new byte[] {(byte) stateToWire(descriptor.state())});
         extension.tlv(
-                6,
+                FIELD_APPLICATION_VERSION,
+                Writer.bytes(writer -> writer.u64(descriptor.applicationVersion())));
+        extension.tlv(
+                FIELD_PROTOCOL_CAPABILITIES,
                 Writer.bytes(
                         writer -> {
                             writer.u16(descriptor.protocolCapabilities().size());
@@ -56,12 +68,22 @@ public final class ZLinkServiceM6AWireCodec {
                                             capability ->
                                                     writer.text8(capability, "protocolCapability"));
                         }));
-        extension.tlv(7, new byte[] {(byte) roleToWire(descriptor.objectRole())});
-        extension.tlv(8, Writer.bytes(writer -> writer.u32(descriptor.placementWeight())));
-        extension.tlv(9, Writer.bytes(writer -> writer.u32(descriptor.activeCapacityLimit())));
-        extension.tlv(10, Writer.bytes(writer -> writer.u32(descriptor.pendingCapacityLimit())));
-        extension.tlv(11, Writer.bytes(writer -> writer.u32(descriptor.activeCapacityUsed())));
-        extension.tlv(12, Writer.bytes(writer -> writer.u32(descriptor.pendingCapacityUsed())));
+        extension.tlv(FIELD_OBJECT_ROLE, new byte[] {(byte) roleToWire(descriptor.objectRole())});
+        extension.tlv(
+                FIELD_PLACEMENT_WEIGHT,
+                Writer.bytes(writer -> writer.u32(descriptor.placementWeight())));
+        extension.tlv(
+                FIELD_ACTIVE_CAPACITY_LIMIT,
+                Writer.bytes(writer -> writer.u32(descriptor.activeCapacityLimit())));
+        extension.tlv(
+                FIELD_PENDING_CAPACITY_LIMIT,
+                Writer.bytes(writer -> writer.u32(descriptor.pendingCapacityLimit())));
+        extension.tlv(
+                FIELD_ACTIVE_CAPACITY_USED,
+                Writer.bytes(writer -> writer.u32(descriptor.activeCapacityUsed())));
+        extension.tlv(
+                FIELD_PENDING_CAPACITY_USED,
+                Writer.bytes(writer -> writer.u32(descriptor.pendingCapacityUsed())));
         route.u32(extension.size());
         route.raw(extension.toByteArray());
 
@@ -79,7 +101,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (header.command() != expectedCommand || header.flags() != 0) {
             throw protocol("unexpected admission header");
         }
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         if (reader.u8("topologyKind") != 1) {
             throw protocol("admission is not RouteMesh topology");
         }
@@ -130,9 +152,10 @@ public final class ZLinkServiceM6AWireCodec {
             previousId = id;
             Reader value = new Reader(reader.bytes(length, "extensionValue"));
             switch (id) {
-                case 1 -> state = stateFromWire(value.u8("state"));
-                case 2 -> applicationVersion = value.nonnegativeU64("applicationVersion");
-                case 6 -> {
+                case FIELD_STATE -> state = stateFromWire(value.u8("state"));
+                case FIELD_APPLICATION_VERSION ->
+                        applicationVersion = value.nonnegativeU64("applicationVersion");
+                case FIELD_PROTOCOL_CAPABILITIES -> {
                     int count = value.u16("capabilityCount");
                     List<String> found = new ArrayList<>(count);
                     for (int index = 0; index < count; index++) {
@@ -140,9 +163,13 @@ public final class ZLinkServiceM6AWireCodec {
                     }
                     capabilities = List.copyOf(found);
                 }
-                case 7 -> role = roleFromWire(value.u8("objectRole"));
-                case 8, 9, 10, 11, 12 -> {
-                    int offset = id - 8;
+                case FIELD_OBJECT_ROLE -> role = roleFromWire(value.u8("objectRole"));
+                case FIELD_PLACEMENT_WEIGHT,
+                        FIELD_ACTIVE_CAPACITY_LIMIT,
+                        FIELD_PENDING_CAPACITY_LIMIT,
+                        FIELD_ACTIVE_CAPACITY_USED,
+                        FIELD_PENDING_CAPACITY_USED -> {
+                    int offset = id - FIELD_PLACEMENT_WEIGHT;
                     capacity[offset] = value.intU32("capacity");
                     capacityFound[offset] = true;
                 }
@@ -194,7 +221,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (header.command() != ServiceWireConstants.COMMAND_NODE_REQUEST) {
             throw protocol("invalid nodeRequest header");
         }
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         long correlation = reader.opaqueNonzeroU64("correlation");
         reader.end();
         return correlation;
@@ -211,7 +238,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (header.command() != ServiceWireConstants.COMMAND_CHANNEL_SEND) {
             throw protocol("invalid channelSend header");
         }
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         String channelName = reader.text8("channelName");
         reader.end();
         return channelName;
@@ -230,7 +257,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (header.command() != ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
             throw protocol("invalid channelRequest header");
         }
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         long correlation = reader.opaqueNonzeroU64("correlation");
         String channelName = reader.text8("channelName");
         reader.end();
@@ -261,7 +288,7 @@ public final class ZLinkServiceM6AWireCodec {
         //  reply decoder, matching Node/.NET's decodeReplyHeader semantics.
         //  Do not call reader.end() here: it would reject a reply that
         //  carries a non-empty tail.
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         long correlation = reader.opaqueNonzeroU64("correlation");
         int terminal = reader.intU32("terminalResult");
         int failure = reader.intU32("failureCode");
@@ -477,7 +504,7 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public Header decodeHeader(byte[] frame) {
-        if (frame == null || frame.length < PREFIX_BYTES) {
+        if (frame == null || frame.length < ZLinkServiceWireCodec.PREFIX_BYTES) {
             throw protocol("truncated service wire prefix");
         }
         if (Byte.toUnsignedInt(frame[0]) != ServiceWireConstants.MAGIC_0
@@ -504,7 +531,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (header.command() != ServiceWireConstants.COMMAND_REJECT || header.flags() != 0) {
             throw protocol("invalid reject record");
         }
-        Reader reader = new Reader(frame, PREFIX_BYTES);
+        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
         int reason = reader.intU32("reason");
         reader.end();
         if (reason < 1 || reason > 12) {
@@ -562,23 +589,31 @@ public final class ZLinkServiceM6AWireCodec {
     //  of the remote ready-peer set forever.
     private static int stateToWire(ZLinkServiceNodeDescriptor.State value) {
         return switch (value) {
-            case PREPARING -> 0;
-            case SERVING -> 1;
-            case RETIRING, DRAINING -> 2;
-            case STOPPED -> 3;
-            case ERROR -> 4;
+            case PREPARING -> (int) ServiceWireCodec.RuntimeState.PREPARING.wire;
+            case SERVING -> (int) ServiceWireCodec.RuntimeState.SERVING.wire;
+            case RETIRING, DRAINING -> (int) ServiceWireCodec.RuntimeState.DRAINING.wire;
+            case STOPPED -> (int) ServiceWireCodec.RuntimeState.STOPPED.wire;
+            case ERROR -> (int) ServiceWireCodec.RuntimeState.ERROR.wire;
         };
     }
 
     private static ZLinkServiceNodeDescriptor.State stateFromWire(int value) {
-        return switch (value) {
-            case 0 -> ZLinkServiceNodeDescriptor.State.PREPARING;
-            case 1 -> ZLinkServiceNodeDescriptor.State.SERVING;
-            case 2 -> ZLinkServiceNodeDescriptor.State.DRAINING;
-            case 3 -> ZLinkServiceNodeDescriptor.State.STOPPED;
-            case 4 -> ZLinkServiceNodeDescriptor.State.ERROR;
-            default -> throw protocol("invalid runtime state");
-        };
+        if (value == ServiceWireCodec.RuntimeState.PREPARING.wire) {
+            return ZLinkServiceNodeDescriptor.State.PREPARING;
+        }
+        if (value == ServiceWireCodec.RuntimeState.SERVING.wire) {
+            return ZLinkServiceNodeDescriptor.State.SERVING;
+        }
+        if (value == ServiceWireCodec.RuntimeState.DRAINING.wire) {
+            return ZLinkServiceNodeDescriptor.State.DRAINING;
+        }
+        if (value == ServiceWireCodec.RuntimeState.STOPPED.wire) {
+            return ZLinkServiceNodeDescriptor.State.STOPPED;
+        }
+        if (value == ServiceWireCodec.RuntimeState.ERROR.wire) {
+            return ZLinkServiceNodeDescriptor.State.ERROR;
+        }
+        throw protocol("invalid runtime state");
     }
 
     private static int roleToWire(ZLinkServiceNodeDescriptor.ObjectRole value) {
@@ -586,10 +621,10 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static ZLinkServiceNodeDescriptor.ObjectRole roleFromWire(int value) {
-        if (value < 0 || value >= ZLinkServiceNodeDescriptor.ObjectRole.values().length) {
+        if (value < 0 || value >= ROLES.length) {
             throw protocol("invalid object role");
         }
-        return ZLinkServiceNodeDescriptor.ObjectRole.values()[value];
+        return ROLES[value];
     }
 
     private static ZLinkServiceWireException protocol(String message) {

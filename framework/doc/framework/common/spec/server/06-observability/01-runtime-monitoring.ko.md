@@ -281,8 +281,11 @@ await foreach (var observed in routeMeshRuntime.ObserveAsync("game-mesh", cancel
 ```
 
 Status는 runtime instance 안에서 단조 증가하는 `Sequence`와 관찰 시각을 포함한다.
-같은 source에서는 큰 `Sequence`가 더 나중 상태다. 서로 다른 source의 값은 비교하지
-않는다. Process가 다시 시작되면 `Sequence`는 0부터 시작할 수 있다.
+같은 source에서는 큰 `Sequence`가 더 나중 상태다. `Sequence`는 §7.1의 각 source가 `Sequence`와
+관찰 시각을 제외한 status의 공개 field 값이 마지막 게시 status와 달라진 status를 게시할 때만
+1 늘어난다. 해당 값이 같으면 마지막 게시 status를 그대로 사용한다. 조회와 관찰은 같은 게시
+status를 사용하므로 관찰자 유무에 따라 `Sequence`가 달라지지 않는다. 서로 다른 source의 값은
+비교하지 않는다. Process가 다시 시작되면 `Sequence`는 1부터 다시 시작할 수 있다.
 
 **변화 stream의 각 항목은 일부 field만 담은 event가 아니라 완전한 status다.** Nullable
 field를 조합하는 범용 event DTO는 제공하지 않는다. 관찰자가 `Sequence` gap을

@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Reflection;
 using Systems.Zlink;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
@@ -58,6 +60,103 @@ public sealed class SpotPeerConnectorTests
             connector.DisconnectPeerBeforeAdmission(peerRid, "tcp://peer:1", lifecycleGeneration: 7)
         );
         Assert.Equal((peerRid, "tcp://peer:1", 7UL), proxy.Cleanup);
+    }
+
+    [Fact]
+    public void Auto_Router_Logs_None_For_An_Absent_Peer_Rid()
+    {
+        if (Environment.GetEnvironmentVariable("ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE") == "enabled")
+        {
+            var originalError = Console.Error;
+            using var capturedError = new StringWriter();
+            try
+            {
+                Console.SetError(capturedError);
+                var node = DispatchProxy.Create<IZLinkBackendSpotNode, BusyOnceSpotNode>();
+                var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
+
+                Assert.False(connector.ConnectPeerAuto(null, "tcp://peer:1", "none"));
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            Assert.Contains("spot_peer_claim peer=<none>", capturedError.ToString());
+            return;
+        }
+
+        RunIsolatedTraceProbe(nameof(Auto_Router_Logs_None_For_An_Absent_Peer_Rid), "enabled");
+    }
+
+    [Fact]
+    public void Spot_Discovery_Handler_Does_Not_Evaluate_Holes_When_Disabled()
+    {
+        if (
+            Environment.GetEnvironmentVariable("ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE") == "disabled"
+        )
+        {
+            Assert.False(ZLinkFrameworkDebugLog.SpotDiscoveryEnabled);
+            var evaluations = 0;
+
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"interpolation={Interlocked.Increment(ref evaluations)}"
+            );
+
+            Assert.Equal(0, evaluations);
+            return;
+        }
+
+        RunIsolatedTraceProbe(
+            nameof(Spot_Discovery_Handler_Does_Not_Evaluate_Holes_When_Disabled),
+            "disabled"
+        );
+    }
+
+    private static void RunIsolatedTraceProbe(string testName, string mode)
+    {
+        var projectPath = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "..",
+                "..",
+                "Zlink.Framework.UnitTests.csproj"
+            )
+        );
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = Path.GetDirectoryName(projectPath)!,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("test");
+        startInfo.ArgumentList.Add(projectPath);
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--no-restore");
+        startInfo.ArgumentList.Add("--framework");
+        startInfo.ArgumentList.Add(new DirectoryInfo(AppContext.BaseDirectory).Name);
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add($"FullyQualifiedName~{testName}");
+        startInfo.ArgumentList.Add("--verbosity");
+        startInfo.ArgumentList.Add("quiet");
+        startInfo.Environment["ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY"] =
+            mode == "enabled" ? "1" : "0";
+        startInfo.Environment["ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE"] = mode;
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process!.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(output, error);
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Isolated trace probe '{testName}' failed.{Environment.NewLine}{output.Result}{error.Result}"
+        );
     }
 
     private class BusyOnceSpotNode : DispatchProxy

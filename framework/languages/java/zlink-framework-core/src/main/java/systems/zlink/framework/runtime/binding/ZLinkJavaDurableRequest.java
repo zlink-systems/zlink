@@ -20,6 +20,7 @@ import java.util.function.Supplier;
 
 /** Owns the encoded identity and typed admission history of one durable request. */
 final class ZLinkJavaDurableRequest {
+    private static final long ADMISSION_RETRY_DELAY_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
     private final Supplier<List<byte[]>> prepare;
     private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
     private final BooleanSupplier targetLifecycleEnded;
@@ -128,7 +129,7 @@ final class ZLinkJavaDurableRequest {
         ZLinkProcessExecutionLanes.deadlines()
                 .schedule(
                         this::attempt,
-                        Math.max(0, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10))),
+                        Math.max(0, Math.min(remaining, ADMISSION_RETRY_DELAY_NANOS)),
                         TimeUnit.NANOSECONDS);
     }
 

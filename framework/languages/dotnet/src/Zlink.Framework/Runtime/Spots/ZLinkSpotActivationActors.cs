@@ -762,12 +762,7 @@ internal abstract partial class ZLinkSpotActivation
             && _actorHandlers!.TryResolveJoined(actor.GetType(), out descriptor)
             && descriptor is not null;
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            "actor_joined_hook actor="
-                + actor.GetType().Name
-                + " handlers="
-                + hasHandlers
-                + " resolved="
-                + resolved
+            $"actor_joined_hook actor={actor.GetType().Name} handlers={hasHandlers} resolved={resolved}"
         );
         if (resolved)
             await HandlerInvoker

@@ -692,9 +692,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         //  callback are known. Waiting for the host-wide count here would
         //  block the marker publication that those turns may be waiting for.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"relocation_admission_fence_committed active_operations="
-                + $"{operationBaseline.ActiveCount} "
-                + $"active_actor_admissions={actorBaseline.ActiveCount}"
+            $"relocation_admission_fence_committed active_operations={operationBaseline.ActiveCount} active_actor_admissions={actorBaseline.ActiveCount}"
         );
         return ValueTask.FromResult(fence);
     }
@@ -1216,6 +1214,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     public async ValueTask StopAsync(CancellationToken cancellationToken)
     {
         ThrowIfStopRequestedFromOwnedWork();
+        if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
+            await clientServerRuntime.StopAsync().ConfigureAwait(false);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -1260,6 +1260,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal async ValueTask ForceStopAsync(CancellationToken cancellationToken)
     {
         ThrowIfStopRequestedFromOwnedWork();
+        if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
+            await clientServerRuntime.StopAsync().ConfigureAwait(false);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

@@ -322,7 +322,11 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
             await runtime
                 .ReplaceAsync(
                     plans,
-                    new ZLinkLocationRuntimeSnapshot("healthy", DateTimeOffset.UtcNow, null)
+                    new ZLinkLocationRuntimeSnapshot(
+                        ZLinkLocationRuntimeSnapshot.HealthyState,
+                        DateTimeOffset.UtcNow,
+                        null
+                    )
                 )
                 .ConfigureAwait(false);
         }
@@ -379,7 +383,11 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
 
             await runtime
                 .ClearAsync(
-                    new ZLinkLocationRuntimeSnapshot("healthy", DateTimeOffset.UtcNow, null)
+                    new ZLinkLocationRuntimeSnapshot(
+                        ZLinkLocationRuntimeSnapshot.HealthyState,
+                        DateTimeOffset.UtcNow,
+                        null
+                    )
                 )
                 .ConfigureAwait(false);
         }

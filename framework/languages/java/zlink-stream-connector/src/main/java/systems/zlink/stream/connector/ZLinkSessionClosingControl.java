@@ -9,11 +9,12 @@ final class ZLinkSessionClosingControl {
     static final String NAME = "session-closing";
     static final int VERSION = 1;
     private static final int MAX_DIAGNOSTIC_BYTES = 512;
+    private static final int HEADER_BYTES = Byte.BYTES + Byte.BYTES + Short.BYTES;
 
     private ZLinkSessionClosingControl() {}
 
     static ZLinkStreamCloseReason decode(byte[] payload) {
-        if (payload.length < 4) {
+        if (payload.length < HEADER_BYTES) {
             throw new IllegalArgumentException("session-closing payload is too short");
         }
         ByteBuffer buffer = ByteBuffer.wrap(payload);

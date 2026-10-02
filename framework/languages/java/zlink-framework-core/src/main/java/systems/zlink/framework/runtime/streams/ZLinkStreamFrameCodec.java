@@ -9,6 +9,8 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class ZLinkStreamFrameCodec {
+    private static final int PREFIX_BYTES = Short.BYTES + Integer.BYTES;
+
     private ZLinkStreamFrameCodec() {}
 
     public static byte[] encode(ZLinkStreamHeader header, byte[] body) {
@@ -25,7 +27,7 @@ public final class ZLinkStreamFrameCodec {
         if (header.length > 0xFFFF) {
             throw new IllegalArgumentException("stream header exceeds u16 header size");
         }
-        ByteBuffer frame = ByteBuffer.allocate(6 + header.length + body.length);
+        ByteBuffer frame = ByteBuffer.allocate(PREFIX_BYTES + header.length + body.length);
         frame.putShort((short) header.length);
         frame.putInt(body.length);
         frame.put(header);
@@ -34,13 +36,13 @@ public final class ZLinkStreamFrameCodec {
     }
 
     public static Optional<DecodedFrame> tryDecode(byte[] frame) {
-        if (frame == null || frame.length < 6) {
+        if (frame == null || frame.length < PREFIX_BYTES) {
             return Optional.empty();
         }
         ByteBuffer buffer = ByteBuffer.wrap(frame);
         int headerSize = Short.toUnsignedInt(buffer.getShort());
         int payloadSize = buffer.getInt();
-        if (payloadSize < 0 || frame.length != 6 + headerSize + payloadSize) {
+        if (payloadSize < 0 || frame.length != PREFIX_BYTES + headerSize + payloadSize) {
             return Optional.empty();
         }
         byte[] header = new byte[headerSize];

@@ -191,6 +191,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                                                 routingId ->
                                                                         handler.handle(
                                                                                 routingId,
+                                                                                event.event(),
                                                                                 0,
                                                                                 event.event()
                                                                                         .name()));
@@ -354,7 +355,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return inStateLane(
                 () ->
                         ZLinkJavaStreamFraming.submit(
-                                socket.send(routingId), 3, requestSeq, packetName, parts, flags));
+                                socket.send(routingId),
+                                ZLinkStreamMessageKind.RESPONSE.value(),
+                                requestSeq,
+                                packetName,
+                                parts,
+                                flags));
     }
 
     @Override

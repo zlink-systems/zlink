@@ -13,30 +13,74 @@ import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkTopologyReason;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyRuntimeProjection;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyStatusSource;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.Flow;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
     private final ZLinkChannelSocketRegistry sockets;
     private final Supplier<ZLinkFrameworkRuntimeState> hostState;
-    private final AtomicLong sequence = new AtomicLong();
+    private final ZLinkTopologyStatusSource<ZLinkClientServerStatus> statuses;
 
     ZLinkClientServerRuntimeView(
             ZLinkChannelSocketRegistry sockets, Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.sockets = Objects.requireNonNull(sockets, "sockets");
         this.hostState = Objects.requireNonNull(hostState, "hostState");
+        statuses =
+                new ZLinkTopologyStatusSource<>(
+                        this::buildSnapshot,
+                        status ->
+                                List.of(
+                                        status.localRole(),
+                                        status.state(),
+                                        status.isReady(),
+                                        status.readyTargetCount(),
+                                        status.targets()),
+                        (status, sequence) ->
+                                new ZLinkClientServerStatus(
+                                        status.channelName(),
+                                        status.localRole(),
+                                        status.state(),
+                                        status.isReady(),
+                                        status.readyTargetCount(),
+                                        status.targets(),
+                                        sequence,
+                                        status.observedAt()),
+                        ZLinkClientServerStatus::sequence,
+                        status ->
+                                status.state() == ZLinkTopologyState.STOPPED
+                                        || status.state() == ZLinkTopologyState.FAILED,
+                        status -> status.state() == ZLinkTopologyState.STOPPING);
+        sockets.onTopologyChanged(statuses::signalAll);
     }
 
     @Override
     public ZLinkClientServerStatus snapshot(String channelName) {
+        return statuses.snapshot(channelName);
+    }
+
+    private ZLinkClientServerStatus buildSnapshot(
+            String channelName, ZLinkClientServerStatus previous) {
+        ZLinkFrameworkRuntimeState currentHostState = hostState.get();
+        if (previous != null
+                && (currentHostState == ZLinkFrameworkRuntimeState.STOPPED
+                        || currentHostState == ZLinkFrameworkRuntimeState.ERROR)) {
+            return new ZLinkClientServerStatus(
+                    channelName,
+                    previous.localRole(),
+                    ZLinkTopologyRuntimeProjection.hostState(currentHostState),
+                    false,
+                    previous.readyTargetCount(),
+                    previous.targets(),
+                    0,
+                    Instant.now());
+        }
         ChannelRegistration registration = requireChannel(channelName, ChannelKind.CLIENT_SERVER);
         boolean client = registration.clientServerClientEnabled();
         boolean server = registration.clientServerServerEnabled();
@@ -47,18 +91,20 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
         List<ZLinkClientServerTargetStatus> targets =
                 sockets.clientServerTargetSnapshots(channelName).stream()
                         .map(
-                                target ->
-                                        new ZLinkClientServerTargetStatus(
-                                                target.nodeRid(),
-                                                target.weight(),
-                                                target.ready()
-                                                        ? ZLinkPeerState.READY
-                                                        : ZLinkPeerState.NOT_CONNECTED,
-                                                target.ready()
-                                                        ? Optional.empty()
-                                                        : Optional.of(
-                                                                ZLinkTopologyReason
-                                                                        .NO_READY_TARGET)))
+                                target -> {
+                                    var peer =
+                                            ZLinkTopologyRuntimeProjection.snapshot(
+                                                    target.nodeRid(),
+                                                    target.hostState(),
+                                                    target.ready(),
+                                                    target.connecting(),
+                                                    ZLinkTopologyReason.NO_READY_TARGET);
+                                    return new ZLinkClientServerTargetStatus(
+                                            peer.nodeRid(),
+                                            target.weight(),
+                                            peer.state(),
+                                            peer.unavailableReason());
+                                })
                         .toList();
         int readyTargetCount =
                 Math.toIntExact(
@@ -66,7 +112,6 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                                 .filter(target -> target.state() == ZLinkPeerState.READY)
                                 .filter(target -> target.weight() > 0)
                                 .count());
-        ZLinkFrameworkRuntimeState currentHostState = hostState.get();
         boolean hostServing = currentHostState == ZLinkFrameworkRuntimeState.SERVING;
         boolean ready = hostServing && readyTargetCount > 0;
         return new ZLinkClientServerStatus(
@@ -76,43 +121,18 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                         ? ZLinkTopologyState.READY
                         : hostServing
                                 ? ZLinkTopologyState.DEGRADED
-                                : topologyState(currentHostState),
+                                : ZLinkTopologyRuntimeProjection.hostState(currentHostState),
                 ready,
                 readyTargetCount,
                 targets,
-                sequence.incrementAndGet(),
+                0,
                 Instant.now());
-    }
-
-    private static ZLinkTopologyState topologyState(ZLinkFrameworkRuntimeState state) {
-        return switch (state) {
-            case PREPARING -> ZLinkTopologyState.STARTING;
-            case SERVING -> ZLinkTopologyState.READY;
-            case RELOCATING, RELOCATED, DRAINING -> ZLinkTopologyState.STOPPING;
-            case STOPPED -> ZLinkTopologyState.STOPPED;
-            case ERROR -> ZLinkTopologyState.FAILED;
-        };
     }
 
     @Override
     public Flow.Publisher<ZLinkObservedStatus<ZLinkClientServerStatus>> observe(
             String channelName, int capacity) {
-        requireChannel(channelName, ChannelKind.CLIENT_SERVER);
-        return ZLinkStatusPublisher.create(
-                () -> snapshot(channelName),
-                status ->
-                        List.of(
-                                status.localRole(),
-                                status.state(),
-                                status.isReady(),
-                                status.readyTargetCount(),
-                                status.targets()),
-                ZLinkClientServerStatus::channelName,
-                capacity,
-                status ->
-                        status.state() == ZLinkTopologyState.STOPPED
-                                || status.state() == ZLinkTopologyState.FAILED,
-                status -> status.state() == ZLinkTopologyState.STOPPING);
+        return statuses.observe(channelName, capacity);
     }
 
     @Override
@@ -138,7 +158,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
     private final Supplier<ZLinkFanoutLocationRuntime> locationRuntime;
     private final Supplier<ZLinkManualFanoutRuntime> manualRuntime;
     private final Supplier<ZLinkFrameworkRuntimeState> hostState;
-    private final AtomicLong sequence = new AtomicLong();
+    private final ZLinkTopologyStatusSource<ZLinkFanoutStatus> statuses;
 
     ZLinkFanoutRuntimeView(
             ZLinkChannelSocketRegistry sockets,
@@ -149,10 +169,51 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
         this.locationRuntime = Objects.requireNonNull(locationRuntime, "locationRuntime");
         this.manualRuntime = Objects.requireNonNull(manualRuntime, "manualRuntime");
         this.hostState = Objects.requireNonNull(hostState, "hostState");
+        statuses =
+                new ZLinkTopologyStatusSource<>(
+                        this::buildSnapshot,
+                        status ->
+                                List.of(
+                                        status.state(),
+                                        status.isReady(),
+                                        status.readyPublisherCount(),
+                                        status.publishers()),
+                        (status, sequence) ->
+                                new ZLinkFanoutStatus(
+                                        status.channelName(),
+                                        status.state(),
+                                        status.isReady(),
+                                        status.readyPublisherCount(),
+                                        status.publishers(),
+                                        sequence,
+                                        status.observedAt()),
+                        ZLinkFanoutStatus::sequence,
+                        status ->
+                                status.state() == ZLinkTopologyState.STOPPED
+                                        || status.state() == ZLinkTopologyState.FAILED,
+                        status -> status.state() == ZLinkTopologyState.STOPPING);
+        sockets.onTopologyChanged(statuses::signalAll);
     }
 
     @Override
     public ZLinkFanoutStatus snapshot(String channelName) {
+        return statuses.snapshot(channelName);
+    }
+
+    private ZLinkFanoutStatus buildSnapshot(String channelName, ZLinkFanoutStatus previous) {
+        ZLinkFrameworkRuntimeState currentHostState = hostState.get();
+        if (previous != null
+                && (currentHostState == ZLinkFrameworkRuntimeState.STOPPED
+                        || currentHostState == ZLinkFrameworkRuntimeState.ERROR)) {
+            return new ZLinkFanoutStatus(
+                    channelName,
+                    ZLinkTopologyRuntimeProjection.hostState(currentHostState),
+                    false,
+                    previous.readyPublisherCount(),
+                    previous.publishers(),
+                    0,
+                    Instant.now());
+        }
         requireChannel(channelName);
         ZLinkFanoutLocationRuntime location = locationRuntime.get();
         List<ZLinkMeshPeerSnapshot> publishers = new ArrayList<>();
@@ -161,16 +222,12 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                     location.publisherSnapshots(channelName).stream()
                             .map(
                                     publisher ->
-                                            new ZLinkMeshPeerSnapshot(
+                                            ZLinkTopologyRuntimeProjection.snapshot(
                                                     publisher.nodeRid(),
-                                                    publisher.ready()
-                                                            ? ZLinkPeerState.READY
-                                                            : ZLinkPeerState.NOT_CONNECTED,
-                                                    publisher.ready()
-                                                            ? Optional.empty()
-                                                            : Optional.of(
-                                                                    ZLinkTopologyReason
-                                                                            .NO_READY_PEER)))
+                                                    publisher.hostState(),
+                                                    publisher.ready(),
+                                                    publisher.connecting(),
+                                                    ZLinkTopologyReason.NO_READY_PEER))
                             .toList());
         }
         ZLinkManualFanoutRuntime manual = manualRuntime.get();
@@ -179,16 +236,12 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                     manual.publisherSnapshots(channelName).stream()
                             .map(
                                     publisher ->
-                                            new ZLinkMeshPeerSnapshot(
+                                            ZLinkTopologyRuntimeProjection.snapshot(
                                                     publisher.nodeRid(),
-                                                    publisher.ready()
-                                                            ? ZLinkPeerState.READY
-                                                            : ZLinkPeerState.NOT_CONNECTED,
-                                                    publisher.ready()
-                                                            ? Optional.empty()
-                                                            : Optional.of(
-                                                                    ZLinkTopologyReason
-                                                                            .NO_READY_PEER)))
+                                                    ZLinkFrameworkRuntimeState.SERVING,
+                                                    publisher.ready(),
+                                                    publisher.connecting(),
+                                                    ZLinkTopologyReason.NO_READY_PEER))
                             .toList());
         }
         int readyPublisherCount =
@@ -196,7 +249,6 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                         publishers.stream()
                                 .filter(publisher -> publisher.state() == ZLinkPeerState.READY)
                                 .count());
-        ZLinkFrameworkRuntimeState currentHostState = hostState.get();
         boolean hostServing = currentHostState == ZLinkFrameworkRuntimeState.SERVING;
         boolean ready = hostServing && readyPublisherCount > 0;
         return new ZLinkFanoutStatus(
@@ -205,42 +257,18 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                         ? ZLinkTopologyState.READY
                         : hostServing
                                 ? ZLinkTopologyState.DEGRADED
-                                : topologyState(currentHostState),
+                                : ZLinkTopologyRuntimeProjection.hostState(currentHostState),
                 ready,
                 readyPublisherCount,
                 publishers,
-                sequence.incrementAndGet(),
+                0,
                 Instant.now());
-    }
-
-    private static ZLinkTopologyState topologyState(ZLinkFrameworkRuntimeState state) {
-        return switch (state) {
-            case PREPARING -> ZLinkTopologyState.STARTING;
-            case SERVING -> ZLinkTopologyState.READY;
-            case RELOCATING, RELOCATED, DRAINING -> ZLinkTopologyState.STOPPING;
-            case STOPPED -> ZLinkTopologyState.STOPPED;
-            case ERROR -> ZLinkTopologyState.FAILED;
-        };
     }
 
     @Override
     public Flow.Publisher<ZLinkObservedStatus<ZLinkFanoutStatus>> observe(
             String channelName, int capacity) {
-        requireChannel(channelName);
-        return ZLinkStatusPublisher.create(
-                () -> snapshot(channelName),
-                status ->
-                        List.of(
-                                status.state(),
-                                status.isReady(),
-                                status.readyPublisherCount(),
-                                status.publishers()),
-                ZLinkFanoutStatus::channelName,
-                capacity,
-                status ->
-                        status.state() == ZLinkTopologyState.STOPPED
-                                || status.state() == ZLinkTopologyState.FAILED,
-                status -> status.state() == ZLinkTopologyState.STOPPING);
+        return statuses.observe(channelName, capacity);
     }
 
     private void requireChannel(String channelName) {

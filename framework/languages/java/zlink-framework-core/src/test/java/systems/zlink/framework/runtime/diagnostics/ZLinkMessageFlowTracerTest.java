@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
@@ -306,6 +307,51 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
+    void channelRouteKindAcceptsBothChannelSurfacesAndRejectsOtherSurfaces() {
+        for (ZLinkDispatchErrorSurface surface : ZLinkDispatchErrorSurface.values()) {
+            java.util.function.Supplier<ZLinkMessageFlowEvent> event =
+                    () ->
+                            new ZLinkMessageFlowEvent(
+                                    ZLinkTraceEventId.MESSAGE_FLOW,
+                                    ZLinkMessageFlowOutcome.COMPLETED,
+                                    ZLinkMessageFlowResult.SUCCEEDED,
+                                    surface,
+                                    ZLinkDispatchMessageKind.ACTOR_SEND,
+                                    "PlaceOrder",
+                                    "orders",
+                                    ZLinkChannelRouteKind.ROUTE_MESH,
+                                    "mesh-a",
+                                    "topic-a",
+                                    "corr-1",
+                                    "source-1",
+                                    "target-1",
+                                    "server-1",
+                                    "spot-1",
+                                    "CartSpot",
+                                    ZLinkActivationState.READY,
+                                    "actor-1",
+                                    42L,
+                                    0.125d,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    17L,
+                                    null);
+            if (surface == ZLinkDispatchErrorSurface.CHANNEL
+                    || surface == ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL) {
+                assertEquals(ZLinkChannelRouteKind.ROUTE_MESH, event.get().channelRouteKind());
+            } else {
+                assertThrows(IllegalArgumentException.class, event::get);
+            }
+        }
+    }
+
+    @Test
     void formatterUsesNormativeEventIdsValuesPrefixAndExactStructuredKeys() {
         ZLinkMessageFlowEvent event =
                 new ZLinkMessageFlowEvent(
@@ -490,6 +536,67 @@ class ZLinkMessageFlowTracerTest {
         assertFalse(line.contains("password=p"));
         assertFalse(line.contains("token=t"));
         assertFalse(line.contains("Secret.Handler"));
+    }
+
+    @Test
+    void reporterKeepsConfigurationExceptionTypeIndependentOfItsMessage() {
+        List<String> records = new ArrayList<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level previousLevel = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        try {
+            ZLinkDispatchErrorReporter reporter =
+                    new ZLinkDispatchErrorReporter(
+                            options(ZLinkMessageFlowLogMode.NORMAL),
+                            ZLinkHandlerActivator.reflection(),
+                            Runnable::run);
+            for (String message :
+                    List.of("failed to invoke user-selected message", "configuration failed")) {
+                ZLinkConfigurationException error =
+                        new ZLinkConfigurationException(
+                                message, new IllegalStateException("underlying cause"));
+                reporter.report(
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.DROP,
+                        "Notice",
+                        "orders",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        error);
+            }
+            assertEquals(2, records.size());
+            for (String record : records) {
+                assertTrue(
+                        record.contains(
+                                "error_type=" + ZLinkConfigurationException.class.getSimpleName()),
+                        record);
+            }
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(previousLevel);
+        }
     }
 
     @Test

@@ -14,10 +14,10 @@
 class socket_handle_t
 {
   public:
-    socket_handle_t () : socket (NULL), _public_handle (NULL) {}
+    socket_handle_t () : socket (NULL), _public_handle (NULL), _receive (false) {}
 
     socket_handle_t (const socket_handle_t &other_) :
-        socket (other_.socket), _public_handle (other_._public_handle)
+        socket (other_.socket), _public_handle (other_._public_handle), _receive (false)
     {
         if (_public_handle)
             _public_handle->add_ref ();
@@ -30,17 +30,19 @@ class socket_handle_t
         if (other_._public_handle)
             other_._public_handle->add_ref ();
         if (_public_handle)
-            _public_handle->release ();
+            _public_handle->release (_receive);
         socket = other_.socket;
         _public_handle = other_._public_handle;
+        _receive = false;
         return *this;
     }
 
     socket_handle_t (socket_handle_t &&other_) noexcept :
-        socket (other_.socket), _public_handle (other_._public_handle)
+        socket (other_.socket), _public_handle (other_._public_handle), _receive (other_._receive)
     {
         other_.socket = NULL;
         other_._public_handle = NULL;
+        other_._receive = false;
     }
 
     socket_handle_t &operator= (socket_handle_t &&other_) noexcept
@@ -48,18 +50,20 @@ class socket_handle_t
         if (this == &other_)
             return *this;
         if (_public_handle)
-            _public_handle->release ();
+            _public_handle->release (_receive);
         socket = other_.socket;
         _public_handle = other_._public_handle;
+        _receive = other_._receive;
         other_.socket = NULL;
         other_._public_handle = NULL;
+        other_._receive = false;
         return *this;
     }
 
     ~socket_handle_t ()
     {
         if (_public_handle)
-            _public_handle->release ();
+            _public_handle->release (_receive);
     }
 
     bool begin_close ()
@@ -77,15 +81,17 @@ class socket_handle_t
 
   private:
     friend socket_handle_t make_socket_handle (zlink::socket_base_t *);
-    friend socket_handle_t as_socket_handle (void *);
+    friend socket_handle_t as_socket_handle (void *, bool);
 
     socket_handle_t (zlink::socket_base_t *socket_,
-                     zlink::socket_public_handle_t *public_handle_) :
-        socket (socket_), _public_handle (public_handle_)
+                     zlink::socket_public_handle_t *public_handle_,
+                     bool receive_ = false) :
+        socket (socket_), _public_handle (public_handle_), _receive (receive_)
     {
     }
 
     zlink::socket_public_handle_t *_public_handle;
+    bool _receive;
 };
 
 inline socket_handle_t make_socket_handle (zlink::socket_base_t *socket_)
@@ -93,7 +99,7 @@ inline socket_handle_t make_socket_handle (zlink::socket_base_t *socket_)
     return socket_handle_t (socket_, NULL);
 }
 
-inline socket_handle_t as_socket_handle (void *s_)
+inline socket_handle_t as_socket_handle (void *s_, bool receive_ = false)
 {
     if (!s_) {
         errno = EFAULT;
@@ -108,15 +114,20 @@ inline socket_handle_t as_socket_handle (void *s_)
     }
 
     zlink::socket_base_t *socket = NULL;
-    if (!public_handle->acquire (&socket))
+    if (!public_handle->acquire (&socket, receive_))
         return socket_handle_t ();
     if (!socket->check_tag ()) {
-        public_handle->release ();
+        public_handle->release (receive_);
         errno = EFAULT;
         return socket_handle_t ();
     }
 
-    return socket_handle_t (socket, public_handle);
+    return socket_handle_t (socket, public_handle, receive_);
+}
+
+inline socket_handle_t as_socket_receive_handle (void *s_)
+{
+    return as_socket_handle (s_, true);
 }
 
 static inline int socket_type (const socket_handle_t &handle_)

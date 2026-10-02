@@ -3,6 +3,12 @@ using Zlink.Framework.Contracts.Locations;
 
 namespace Zlink.Framework.Contracts.Configuration;
 
+internal static class ZLinkTopologyStateExtensions
+{
+    internal static bool IsTerminal(this ZLinkTopologyState state) =>
+        state is ZLinkTopologyState.Stopped or ZLinkTopologyState.Failed;
+}
+
 internal enum ZLinkMeshNodeState
 {
     Starting = 0,
@@ -19,9 +25,7 @@ internal sealed record ZLinkMeshPeerSnapshot(
     ulong LifecycleGeneration,
     ulong DescriptorRevision,
     string Endpoint,
-    string AdmissionState,
-    bool Ready,
-    string DrainState,
+    MeshPeerState State,
     IReadOnlyList<string> ChannelNames,
     string? LastFailure
 );
@@ -46,10 +50,11 @@ internal sealed record ZLinkLocationRuntimeSnapshot(
     DateTimeOffset? LastFailureAt
 )
 {
-    internal const string UnknownState = "unknown";
-    internal const string NotConfiguredState = "not_configured";
     internal const string ReadyState = "ready";
+    internal const string HealthyState = "healthy";
     internal const string DegradedState = "degraded";
+    internal const string NotConfiguredState = "not_configured";
+    internal const string UnknownState = "unknown";
 }
 
 internal sealed record ZLinkInstanceSpotTypeSnapshot(
@@ -95,23 +100,3 @@ internal sealed record ZLinkMeshNodeSnapshot(
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> InstanceSpots { get; init; } =
         Array.Empty<ZLinkInstanceSpotTypeSnapshot>();
 }
-
-internal sealed record ZLinkMeshRuntimeEvent(
-    string Identifier,
-    ulong Sequence,
-    DateTimeOffset Timestamp,
-    string MeshName,
-    RoutingId SourceRid,
-    RoutingId? PeerRid,
-    ulong? LifecycleGeneration,
-    ulong? DescriptorRevision,
-    string? ChannelName,
-    string? ClaimDomain,
-    string? MessageKind,
-    string? PlacementOutcome,
-    ZLinkCapacityVector? Capacity,
-    ZLinkPlacementCapacity? PopulationCapacity,
-    ZLinkActivationConcurrency? ActivationConcurrency,
-    string? Reason,
-    ZLinkMeshNodeState? State
-);

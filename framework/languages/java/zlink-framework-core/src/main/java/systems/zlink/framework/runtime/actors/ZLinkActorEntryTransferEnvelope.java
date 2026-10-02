@@ -10,6 +10,7 @@ import java.util.List;
 
 /** Internal route-mesh envelope for the multipart actor transfer protocol. */
 public final class ZLinkActorEntryTransferEnvelope {
+    private static final int MAX_ENTRY_COUNT = 1_000_000;
     public static final String PACKET_NAME = "__zlink.actor.transferEntrySpot";
 
     private ZLinkActorEntryTransferEnvelope() {}
@@ -33,7 +34,7 @@ public final class ZLinkActorEntryTransferEnvelope {
             throw invalid();
         }
         int count = bytes.getInt();
-        if (count < 0 || count > 1_000_000) {
+        if (count < 0 || count > MAX_ENTRY_COUNT) {
             throw invalid();
         }
         List<Message> parts = new ArrayList<>(count);

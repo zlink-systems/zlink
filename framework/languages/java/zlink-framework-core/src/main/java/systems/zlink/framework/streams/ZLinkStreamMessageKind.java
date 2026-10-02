@@ -7,6 +7,8 @@ public enum ZLinkStreamMessageKind {
     ERROR(4),
     CONTROL(5);
 
+    private static final ZLinkStreamMessageKind[] VALUES = values();
+
     private final int value;
 
     ZLinkStreamMessageKind(int value) {
@@ -18,7 +20,7 @@ public enum ZLinkStreamMessageKind {
     }
 
     public static ZLinkStreamMessageKind fromValue(int value) {
-        for (ZLinkStreamMessageKind kind : values()) {
+        for (ZLinkStreamMessageKind kind : VALUES) {
             if (kind.value == value) {
                 return kind;
             }

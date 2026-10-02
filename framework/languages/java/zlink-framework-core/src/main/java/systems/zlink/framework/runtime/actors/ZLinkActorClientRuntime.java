@@ -472,25 +472,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 default -> submit;
             };
         }
-        String text = unwrapped.getMessage() == null ? "" : unwrapped.getMessage();
-        if (text.contains("NOT_CONNECTED")) {
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    operationName + " failed because the target route is not connected.",
-                    unwrapped);
-        }
-        if (text.contains("NOT_FOUND")) {
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                    operationName + " failed because the actor route was not found.",
-                    unwrapped);
-        }
-        if (text.contains("CONFLICT")) {
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    operationName + " failed because the actor location is stale.",
-                    unwrapped);
-        }
         if (unwrapped instanceof RuntimeException runtimeException) {
             return runtimeException;
         }

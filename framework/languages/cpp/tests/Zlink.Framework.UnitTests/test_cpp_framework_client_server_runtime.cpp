@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <future>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -838,6 +839,11 @@ class observation_1295_drain_probe_t final
       public zlink::framework::runtime::hosted_service_lifecycle_t
 {
   public:
+    explicit observation_1295_drain_probe_t (std::shared_ptr<std::atomic_bool> called) :
+        _called (std::move (called))
+    {
+    }
+
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         _runtime = &services.get_required<zlink::framework::client_server_runtime_t> ();
@@ -846,6 +852,7 @@ class observation_1295_drain_probe_t final
     void stop () noexcept override {}
     bool drain_sessions_until (std::chrono::steady_clock::time_point) noexcept override
     {
+        _called->store (true, std::memory_order_release);
         const auto status = _runtime->snapshot ("1295-zero-weight");
         assert (status.state == zlink::framework::topology_state_t::stopping);
         assert (!status.is_ready);
@@ -857,6 +864,7 @@ class observation_1295_drain_probe_t final
     }
 
   private:
+    std::shared_ptr<std::atomic_bool> _called;
     zlink::framework::client_server_runtime_t *_runtime = nullptr;
 };
 
@@ -961,8 +969,10 @@ void verify_reconnecting_target_status ()
 
 void verify_draining_host_target_status ()
 {
+    auto called = std::make_shared<std::atomic_bool> (false);
     with_observation_runtime ([] (auto &, auto &, const auto &) {},
-                              std::make_unique<observation_1295_drain_probe_t> ());
+                              std::make_unique<observation_1295_drain_probe_t> (called));
+    assert (called->load (std::memory_order_acquire));
 }
 
 void verify_status_sequence_tracks_current_readiness ()

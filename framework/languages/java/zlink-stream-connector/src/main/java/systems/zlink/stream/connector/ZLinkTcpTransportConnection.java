@@ -23,7 +23,7 @@ final class ZLinkTcpTransportConnection implements ZLinkStreamTransportConnectio
 
     @Override
     public CompletionStage<ZLinkStreamWireProtocol.Frame> readFrameAsync() {
-        ByteBuffer prefix = ByteBuffer.allocate(6);
+        ByteBuffer prefix = ByteBuffer.allocate(ZLinkStreamWireProtocol.FRAME_PREFIX_BYTES);
         return readFully(channel, prefix)
                 .thenCompose(
                         ignored -> {

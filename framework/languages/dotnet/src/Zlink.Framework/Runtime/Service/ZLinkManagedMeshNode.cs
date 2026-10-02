@@ -5147,15 +5147,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         )
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"managed_operation_completion_rejected operation={operation.OperationId.High:x16}{operation.OperationId.Low:x16} "
-                    + $"reply_route={operation.OperationId.Low:x16} kind={operation.Kind}"
+                $"managed_operation_completion_rejected operation={operation.OperationId.High:x16}{operation.OperationId.Low:x16} reply_route={operation.OperationId.Low:x16} kind={operation.Kind}"
             );
             DisposeParts(parts);
             return;
         }
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"managed_operation_completed operation={operation.OperationId.High:x16}{operation.OperationId.Low:x16} "
-                + $"reply_route={operation.OperationId.Low:x16} kind={operation.Kind}"
+            $"managed_operation_completed operation={operation.OperationId.High:x16}{operation.OperationId.Low:x16} reply_route={operation.OperationId.Low:x16} kind={operation.Kind}"
         );
         if (operation.AwaitedCompletion is { } awaitedCompletion)
         {
@@ -6891,8 +6889,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             target.ReadySubmitted(prepare, sourceNodeRid);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} "
-                    + $"attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}"
+                $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}"
             );
             _inboundRelocationAssemblies.TryRemove(
                 new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
@@ -7010,8 +7007,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_ready_received relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} "
-                + $"attempt={ready.TargetAttemptGeneration} role={ready.SenderRole} kind={ready.Object.Kind}"
+            $"canonical_ready_received relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} attempt={ready.TargetAttemptGeneration} role={ready.SenderRole} kind={ready.Object.Kind}"
         );
         var key = new PendingRelocationPrepareKey(
             sourceNodeRid,
@@ -7141,7 +7137,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  Spec 28 §4.3: a chunk whose exact identity has no in-progress
             //  assembly is discarded and never attached to another assembly.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "relocation_state_chunk_discarded reason=no_matching_prepare"
+                $"relocation_state_chunk_discarded reason=no_matching_prepare"
             );
             return;
         }
@@ -7625,10 +7621,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         )
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"stateful_route_rejected reason=node_generation "
-                    + $"source={sourceRid} target={stateful.TargetNodeRid} "
-                    + $"wire_node_gen={stateful.TargetNodeGeneration} "
-                    + $"local_node_gen={_lifecycleGeneration}"
+                $"stateful_route_rejected reason=node_generation source={sourceRid} target={stateful.TargetNodeRid} wire_node_gen={stateful.TargetNodeGeneration} local_node_gen={_lifecycleGeneration}"
             );
             if (request)
                 Reply(
@@ -7688,16 +7681,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"stateful_spot_rejected source={sourceRid} "
-                        + $"target_node={stateful.TargetNodeRid} "
-                        + $"spot={stateful.TargetSpotId} "
-                        + $"wire_spot_gen={stateful.TargetSpotGeneration} "
-                        + $"wire_authority_gen={stateful.AuthorityOwnerGeneration} "
-                        + $"wire_lease_gen={stateful.OwnerLeaseGeneration} "
-                        + $"has_spot={hasTargetSpot} "
-                        + $"local_spot_gen={(hasTargetSpot ? spot!.LifecycleGeneration : 0)} "
-                        + $"local_authority_gen={(hasTargetSpot ? spot!.AuthorityOwnerGeneration : 0)} "
-                        + $"local_lease_gen={localOwnerLeaseGeneration}"
+                    $"stateful_spot_rejected source={sourceRid} target_node={stateful.TargetNodeRid} spot={stateful.TargetSpotId} wire_spot_gen={stateful.TargetSpotGeneration} wire_authority_gen={stateful.AuthorityOwnerGeneration} wire_lease_gen={stateful.OwnerLeaseGeneration} has_spot={hasTargetSpot} local_spot_gen={(hasTargetSpot ? spot!.LifecycleGeneration : 0)} local_authority_gen={(hasTargetSpot ? spot!.AuthorityOwnerGeneration : 0)} local_lease_gen={localOwnerLeaseGeneration}"
                 );
                 if (request)
                 {
@@ -7773,9 +7757,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 //  Follow taking responsibility without replying and the stale
                 //  reply below are indistinguishable from the caller's side.
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_stale_path actor={stateful.TargetActor} "
-                        + $"followed={followed} has_follow_target={messageFollowTarget is not null} "
-                        + $"request={request}"
+                    $"actor_stale_path actor={stateful.TargetActor} followed={followed} has_follow_target={messageFollowTarget is not null} request={request}"
                 );
                 if (followed == true)
                     return false;
@@ -8394,8 +8376,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // outcome, not a malformed Actor reservation; the source must be
                 // allowed to abort and retry the reservation within its deadline.
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_create_rejected reason=peer_not_admitted source={sourceRid} "
-                        + $"operation={operation.OperationId}"
+                    $"actor_create_rejected reason=peer_not_admitted source={sourceRid} operation={operation.OperationId}"
                 );
                 SendActorCreateFailure(
                     sourceRid,
@@ -8913,10 +8894,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_received local={_routingId} peer={sourceRid} "
-                + $"command={command} endpoint={admission.AdvertisedEndpoint} "
-                + $"lifecycle={admission.LifecycleGeneration} "
-                + $"revision={admission.DescriptorRevision}"
+            $"mesh_peer_admission_received local={_routingId} peer={sourceRid} command={command} endpoint={admission.AdvertisedEndpoint} lifecycle={admission.LifecycleGeneration} revision={admission.DescriptorRevision}"
         );
         // Core selected the route that delivered this record. Its generation
         // replaces the previous admission even when this record is rejected.
@@ -8938,8 +8916,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!string.Equals(admission.MeshName, _meshName, StringComparison.Ordinal))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
-                    + $"reason=mesh_mismatch expected={_meshName} actual={admission.MeshName}"
+                $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} reason=mesh_mismatch expected={_meshName} actual={admission.MeshName}"
             );
             Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
             return;
@@ -8981,9 +8958,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // peer, otherwise a retired connection can re-enter the
                 // public mesh status during a same-endpoint handover.
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
-                        + $"reason=stale_{command.ToString().ToLowerInvariant()} "
-                        + $"endpoint={admission.AdvertisedEndpoint}"
+                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} reason=stale_{command.ToString().ToLowerInvariant()} endpoint={admission.AdvertisedEndpoint}"
                 );
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
                 return;
@@ -9026,13 +9001,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     admission.AdvertisedEndpoint
                 );
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
-                        + $"reason=route_mismatch expected_endpoint="
-                        + $"{(hasExpectedRoute ? expectedRoute.Endpoint : matchedIntent?.Endpoint ?? peer.Admission?.AdvertisedEndpoint ?? admission.AdvertisedEndpoint)} "
-                        + $"actual_endpoint={admission.AdvertisedEndpoint} "
-                        + $"expected_lifecycle="
-                        + $"{(hasExpectedRoute ? expectedRoute.LifecycleGeneration : 0)} "
-                        + $"actual_lifecycle={admission.LifecycleGeneration}"
+                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} reason=route_mismatch expected_endpoint={(hasExpectedRoute ? expectedRoute.Endpoint : matchedIntent?.Endpoint ?? peer.Admission?.AdvertisedEndpoint ?? admission.AdvertisedEndpoint)} actual_endpoint={admission.AdvertisedEndpoint} expected_lifecycle={(hasExpectedRoute ? expectedRoute.LifecycleGeneration : 0)} actual_lifecycle={admission.LifecycleGeneration}"
                 );
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
                 return;
@@ -9099,8 +9068,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 RejectPeerAdmissionUnderLock(peer);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
-                        + $"reason=guard decision={decision} command={command}"
+                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} reason=guard decision={decision} command={command}"
                 );
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
@@ -9158,10 +9126,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SendAdmission(peer, ServiceWireConstants.Command.Admit, admissionResponse);
         if (admissionCompleted)
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} "
-                    + $"command={command} endpoint={admission.AdvertisedEndpoint} "
-                    + $"lifecycle={admission.LifecycleGeneration} "
-                    + $"revision={admission.DescriptorRevision}"
+                $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} command={command} endpoint={admission.AdvertisedEndpoint} lifecycle={admission.LifecycleGeneration} revision={admission.DescriptorRevision}"
             );
     }
 
@@ -9416,9 +9381,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // (Core ROUTER §10.1). They remain diagnostics only.
     private void OnSocketMonitorEvent(MonitorEvent value) =>
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_transport_event local={_routingId} event={value.Event} "
-                + $"peer={value.RoutingId?.ToString() ?? "-"} remote={value.RemoteAddr} "
-                + $"connection={value.ConnectionId}"
+            $"mesh_transport_event local={_routingId} event={value.Event} peer={ZLinkFrameworkDebugLog.OrAbsent(value.RoutingId)} remote={value.RemoteAddr} connection={value.ConnectionId}"
         );
 
     private void DrainSocketMonitorEvents()
@@ -11670,8 +11633,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ConnectPeerTransport(intent);
         intent.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_connect local={_routingId} peer={intent.ExpectedRid?.ToString() ?? "<unknown>"} "
-                + $"endpoint={intent.Endpoint} intent={intent.Id}"
+            $"mesh_peer_connect local={_routingId} peer={ZLinkFrameworkDebugLog.OrAbsent(intent.ExpectedRid)} endpoint={intent.Endpoint} intent={intent.Id}"
         );
         Publish(MeshMonitorEventKind.PeerConnecting, peerRid: intent.ExpectedRid ?? default);
     }
@@ -11714,9 +11676,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return;
         var descriptor = EncodeLocalAdmission(command);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} "
-                + $"command={command} endpoint={_advertisedEndpoint} "
-                + $"lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
+            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={command} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
         );
         SendControl(target, peer.RouteGeneration, command, descriptor, exactResponse);
     }
@@ -12210,8 +12170,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void RemovePeer(Peer peer)
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_remove local={_routingId} peer={peer.RoutingId} "
-                + $"endpoint={peer.Admission?.AdvertisedEndpoint ?? "<unknown>"} state={peer.State}"
+            $"mesh_peer_remove local={_routingId} peer={peer.RoutingId} endpoint={ZLinkFrameworkDebugLog.OrAbsent(peer.Admission?.AdvertisedEndpoint)} state={peer.State}"
         );
         if (
             !peer.RoutingId.IsEmpty
@@ -12234,8 +12193,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (!physicalRoutingId.IsEmpty)
                     _socket!.DisconnectRid(physicalRoutingId);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"mesh_peer_transport_disconnect local={_routingId} "
-                        + $"peer={peer.RoutingId} mode=rid physical={physicalRoutingId}"
+                    $"mesh_peer_transport_disconnect local={_routingId} peer={peer.RoutingId} mode=rid physical={physicalRoutingId}"
                 );
             }
         }

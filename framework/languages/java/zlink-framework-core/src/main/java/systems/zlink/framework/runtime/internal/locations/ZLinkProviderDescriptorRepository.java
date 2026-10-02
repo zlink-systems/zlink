@@ -64,6 +64,62 @@ import java.util.function.Function;
  * versioned bytes and atomic conditions.
  */
 final class ZLinkProviderDescriptorRepository {
+    private static final long STORE_QUERY_TIMEOUT_SECONDS = 5;
+    private static final String WIRE_OBJECT_KIND_ACTOR = "actor";
+    private static final String WIRE_OBJECT_KIND_USER_SPOT = "userSpot";
+    private static final String WIRE_OBJECT_KIND_INSTANCE_SPOT = "instanceSpot";
+    private static final String FIELD_ACTIVATION_CONCURRENCY = "activationConcurrency";
+    private static final String FIELD_ACTIVE = "active";
+    private static final String FIELD_ACTORS = "actors";
+    private static final String FIELD_APPLICATION_VERSION = "applicationVersion";
+    private static final String FIELD_CAPACITY = "capacity";
+    private static final String FIELD_CHANNEL_NAME = "channelName";
+    private static final String FIELD_CHANNEL_WEIGHTS = "channelWeights";
+    private static final String FIELD_DESCRIPTOR = "descriptor";
+    private static final String FIELD_DESCRIPTOR_REVISION = "descriptorRevision";
+    private static final String FIELD_ENDPOINT = "endpoint";
+    private static final String FIELD_ENTRY_SPOT_ID = "entrySpotId";
+    private static final String FIELD_HAS_SNAPSHOT_ADAPTER = "hasSnapshotAdapter";
+    private static final String FIELD_LEASE_GENERATION = "leaseGeneration";
+    private static final String FIELD_LIFECYCLE_GENERATION = "lifecycleGeneration";
+    private static final String FIELD_LIMIT = "limit";
+    private static final String FIELD_MAINTENANCE_WAVE = "maintenanceWave";
+    private static final String FIELD_MESH_NAME = "meshName";
+    private static final String FIELD_OBJECT_CAPABILITIES = "objectCapabilities";
+    private static final String FIELD_OBJECT_KIND = "objectKind";
+    private static final String FIELD_OBJECT_ROLE = "objectRole";
+    private static final String FIELD_OWNER_ID = "ownerId";
+    private static final String FIELD_PLACEMENT_WEIGHT = "placementWeight";
+    private static final String FIELD_POLICY = "policy";
+    private static final String FIELD_PUBLISHER_ROUTING_ID_HEX = "publisherRoutingIdHex";
+    private static final int DESCRIPTOR_RECORD_VERSION = 1;
+    private static final String FIELD_RECORD_VERSION = "recordVersion";
+    private static final String FIELD_RESERVED = "reserved";
+    private static final String FIELD_ROUTING_ID_HEX = "routingIdHex";
+    private static final String FIELD_SECURITY_IDENTITY = "securityIdentity";
+    private static final String FIELD_SERVER_ROUTING_ID_HEX = "serverRoutingIdHex";
+    private static final String FIELD_SPOT_TYPES = "spotTypes";
+    private static final String FIELD_SPOTS = "spots";
+    private static final String FIELD_STABLE_TYPE = "stableType";
+    private static final String FIELD_STATE = "state";
+    private static final String FIELD_UPDATED_AT_EPOCH_MS = "updatedAtEpochMs";
+    private static final String FIELD_WEIGHT = "weight";
+    private static final String WIRE_POLICY_DISABLED = "disabled";
+    private static final String WIRE_POLICY_RECREATE = "recreate";
+    private static final String WIRE_POLICY_SNAPSHOT = "snapshot";
+    private static final String WIRE_ROLE_NONE = "none";
+    private static final String WIRE_ROLE_CLIENT = "client";
+    private static final String WIRE_ROLE_SERVER = "server";
+    private static final String WIRE_STATE_PREPARING = "preparing";
+    private static final String WIRE_STATE_SERVING = "serving";
+    private static final String WIRE_STATE_RELOCATING = "relocating";
+    private static final String WIRE_STATE_RELOCATED = "relocated";
+    private static final String WIRE_STATE_DRAINING = "draining";
+    private static final String WIRE_STATE_STOPPED = "stopped";
+    private static final String WIRE_STATE_ERROR = "error";
+    private static final String CONTINUATION_VERSION = "v1";
+    private static final int CONTINUATION_COMPONENT_COUNT = 3;
+
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final int DEFAULT_MESH_PAGE = 100;
     private static final int DEFAULT_CHANNEL_PAGE = 256;
@@ -77,7 +133,7 @@ final class ZLinkProviderDescriptorRepository {
 
     CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
             ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        Objects.requireNonNull(descriptor, "descriptor");
+        Objects.requireNonNull(descriptor, FIELD_DESCRIPTOR);
         return update(
                 meshKey(descriptor.meshName(), descriptor.rid()),
                 descriptor.ownerId(),
@@ -123,7 +179,7 @@ final class ZLinkProviderDescriptorRepository {
 
     CompletionStage<ZLinkLocationWriteResult> updateClientServer(
             ZLinkClientServerServerDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        Objects.requireNonNull(descriptor, "descriptor");
+        Objects.requireNonNull(descriptor, FIELD_DESCRIPTOR);
         return update(
                 clientServerKey(descriptor.channelName(), descriptor.serverRid()),
                 descriptor.ownerId(),
@@ -159,7 +215,7 @@ final class ZLinkProviderDescriptorRepository {
 
     CompletionStage<ZLinkLocationWriteResult> updateFanoutPublisher(
             ZLinkFanoutPublisherDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        Objects.requireNonNull(descriptor, "descriptor");
+        Objects.requireNonNull(descriptor, FIELD_DESCRIPTOR);
         return update(
                 fanoutKey(descriptor.channelName(), descriptor.publisherRid()),
                 descriptor.ownerId(),
@@ -348,7 +404,7 @@ final class ZLinkProviderDescriptorRepository {
             ZLinkStoreKey rowKey, byte[] expected, long generation, Throwable originalFailure) {
         return provider.read(rowKey, active())
                 .toCompletableFuture()
-                .orTimeout(5, TimeUnit.SECONDS)
+                .orTimeout(STORE_QUERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .handle(
                         (result, failure) -> {
                             if (failure == null
@@ -401,7 +457,8 @@ final class ZLinkProviderDescriptorRepository {
         Objects.requireNonNull(request, "request");
         int pageSize = request.pageSize() <= 0 ? defaultPageSize : request.pageSize();
         if (pageSize < 1 || pageSize > MAXIMUM_PAGE_SIZE) {
-            throw new IllegalArgumentException("pageSize must be in the range 1..1000");
+            throw new IllegalArgumentException(
+                    "pageSize must be in the range 1.." + MAXIMUM_PAGE_SIZE);
         }
         ZLinkStoreScanCursor cursor =
                 request.continuationToken() == null
@@ -442,11 +499,11 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeMeshNodeRecord(ZLinkMeshNodeDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put("recordVersion", 1);
-        root.put("ownerId", descriptor.ownerId());
-        root.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        root.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
-        root.set("descriptor", encodeMeshNodePayload(descriptor));
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
+        root.put(FIELD_OWNER_ID, descriptor.ownerId());
+        root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
+        root.set(FIELD_DESCRIPTOR, encodeMeshNodePayload(descriptor));
         try {
             return CANONICAL_JSON.writeValueAsBytes(root);
         } catch (JsonProcessingException error) {
@@ -456,81 +513,84 @@ final class ZLinkProviderDescriptorRepository {
 
     private static ObjectNode encodeMeshNodePayload(ZLinkMeshNodeDescriptor descriptor) {
         ObjectNode node = CANONICAL_JSON.createObjectNode();
-        node.put("meshName", descriptor.meshName());
-        node.put("routingIdHex", descriptor.rid().toHex());
-        node.put("lifecycleGeneration", Long.toUnsignedString(descriptor.lifecycleGeneration()));
-        node.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
-        node.put("endpoint", descriptor.endpoint());
+        node.put(FIELD_MESH_NAME, descriptor.meshName());
+        node.put(FIELD_ROUTING_ID_HEX, descriptor.rid().toHex());
+        node.put(
+                FIELD_LIFECYCLE_GENERATION,
+                Long.toUnsignedString(descriptor.lifecycleGeneration()));
+        node.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
+        node.put(FIELD_ENDPOINT, descriptor.endpoint());
         if (descriptor.entrySpotId().isPresent()) {
-            node.put("entrySpotId", descriptor.entrySpotId().get());
+            node.put(FIELD_ENTRY_SPOT_ID, descriptor.entrySpotId().get());
         } else {
-            node.putNull("entrySpotId");
+            node.putNull(FIELD_ENTRY_SPOT_ID);
         }
         ObjectNode channelWeights = CANONICAL_JSON.createObjectNode();
         descriptor.channelWeights().entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .forEach(entry -> channelWeights.put(entry.getKey(), entry.getValue()));
-        node.set("channelWeights", channelWeights);
-        node.put("applicationVersion", Long.toUnsignedString(descriptor.applicationVersion()));
+        node.set(FIELD_CHANNEL_WEIGHTS, channelWeights);
+        node.put(FIELD_APPLICATION_VERSION, Long.toUnsignedString(descriptor.applicationVersion()));
         ArrayNode capabilities = CANONICAL_JSON.createArrayNode();
         descriptor
                 .objectCapabilities()
                 .forEach(
                         capability -> {
                             ObjectNode encoded = CANONICAL_JSON.createObjectNode();
-                            encoded.put("objectKind", objectKindWire(capability.objectKind()));
-                            encoded.put("stableType", capability.stableType());
-                            encoded.put("policy", policyWire(capability.policy()));
-                            encoded.put("hasSnapshotAdapter", capability.hasSnapshotAdapter());
-                            encoded.put("limit", capability.spotLimit());
+                            encoded.put(FIELD_OBJECT_KIND, objectKindWire(capability.objectKind()));
+                            encoded.put(FIELD_STABLE_TYPE, capability.stableType());
+                            encoded.put(FIELD_POLICY, policyWire(capability.policy()));
+                            encoded.put(
+                                    FIELD_HAS_SNAPSHOT_ADAPTER, capability.hasSnapshotAdapter());
+                            encoded.put(FIELD_LIMIT, capability.spotLimit());
                             capabilities.add(encoded);
                         });
-        node.set("objectCapabilities", capabilities);
-        node.put("objectRole", objectRoleWire(descriptor.objectRole()));
-        node.put("placementWeight", descriptor.placementWeight());
-        node.set("capacity", encodeCapacity(descriptor.capacity()));
+        node.set(FIELD_OBJECT_CAPABILITIES, capabilities);
+        node.put(FIELD_OBJECT_ROLE, objectRoleWire(descriptor.objectRole()));
+        node.put(FIELD_PLACEMENT_WEIGHT, descriptor.placementWeight());
+        node.set(FIELD_CAPACITY, encodeCapacity(descriptor.capacity()));
         ObjectNode activation = CANONICAL_JSON.createObjectNode();
-        activation.put("active", descriptor.activationConcurrency().active());
-        activation.put("limit", descriptor.activationConcurrency().limit());
-        node.set("activationConcurrency", activation);
+        activation.put(FIELD_ACTIVE, descriptor.activationConcurrency().active());
+        activation.put(FIELD_LIMIT, descriptor.activationConcurrency().limit());
+        node.set(FIELD_ACTIVATION_CONCURRENCY, activation);
         if (descriptor.maintenanceWave().isPresent()) {
-            node.put("maintenanceWave", descriptor.maintenanceWave().get());
+            node.put(FIELD_MAINTENANCE_WAVE, descriptor.maintenanceWave().get());
         } else {
-            node.putNull("maintenanceWave");
+            node.putNull(FIELD_MAINTENANCE_WAVE);
         }
-        node.put("state", stateWire(descriptor.state()));
-        node.put("securityIdentity", descriptor.securityIdentity());
-        node.put("ownerId", descriptor.ownerId());
-        node.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        node.put("updatedAtEpochMs", Long.toString(descriptor.updatedAt().toEpochMilli()));
+        node.put(FIELD_STATE, stateWire(descriptor.state()));
+        node.put(FIELD_SECURITY_IDENTITY, descriptor.securityIdentity());
+        node.put(FIELD_OWNER_ID, descriptor.ownerId());
+        node.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        node.put(FIELD_UPDATED_AT_EPOCH_MS, Long.toString(descriptor.updatedAt().toEpochMilli()));
         return node;
     }
 
     private static ObjectNode encodeCapacity(ZLinkPlacementCapacity capacity) {
         ObjectNode node = CANONICAL_JSON.createObjectNode();
-        node.set("actors", encodeUsage(capacity.actors()));
-        node.set("spots", encodeUsage(capacity.spots()));
+        node.set(FIELD_ACTORS, encodeUsage(capacity.actors()));
+        node.set(FIELD_SPOTS, encodeUsage(capacity.spots()));
         ArrayNode spotTypes = CANONICAL_JSON.createArrayNode();
         capacity.spotTypes()
                 .forEach(
                         spotType -> {
                             ObjectNode encoded = CANONICAL_JSON.createObjectNode();
-                            encoded.put("objectKind", objectKindWire(spotType.objectKind()));
-                            encoded.put("stableType", spotType.stableType());
-                            encoded.put("active", spotType.usage().active());
-                            encoded.put("reserved", spotType.usage().reserved());
-                            encoded.put("limit", spotType.usage().limit());
+                            encoded.put(FIELD_OBJECT_KIND, objectKindWire(spotType.objectKind()));
+                            encoded.put(FIELD_STABLE_TYPE, spotType.stableType());
+                            encoded.put(FIELD_ACTIVE, spotType.usage().active());
+                            encoded.put(FIELD_RESERVED, spotType.usage().reserved());
+                            encoded.put(FIELD_LIMIT, spotType.usage().limit());
                             spotTypes.add(encoded);
                         });
-        node.set("spotTypes", spotTypes);
+        node.set(FIELD_SPOT_TYPES, spotTypes);
         return node;
     }
 
     private static ObjectNode encodeUsage(ZLinkCapacityUsage usage) {
         ObjectNode node = CANONICAL_JSON.createObjectNode();
-        node.put("active", usage.active());
-        node.put("reserved", usage.reserved());
-        node.put("limit", usage.limit());
+        node.put(FIELD_ACTIVE, usage.active());
+        node.put(FIELD_RESERVED, usage.reserved());
+        node.put(FIELD_LIMIT, usage.limit());
         return node;
     }
 
@@ -541,156 +601,163 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path("recordVersion").asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }
-        JsonNode descriptor = root.path("descriptor");
+        JsonNode descriptor = root.path(FIELD_DESCRIPTOR);
         Map<String, Integer> channelWeights = new LinkedHashMap<>();
         descriptor
-                .path("channelWeights")
+                .path(FIELD_CHANNEL_WEIGHTS)
                 .fields()
                 .forEachRemaining(
                         entry -> channelWeights.put(entry.getKey(), entry.getValue().asInt()));
         List<ZLinkObjectCapability> capabilities = new ArrayList<>();
         descriptor
-                .path("objectCapabilities")
+                .path(FIELD_OBJECT_CAPABILITIES)
                 .forEach(
                         capability ->
                                 capabilities.add(
                                         new ZLinkObjectCapability(
                                                 objectKindFromWire(
-                                                        capability.path("objectKind").asText()),
-                                                capability.path("stableType").asText(),
-                                                policyFromWire(capability.path("policy").asText()),
-                                                capability.path("hasSnapshotAdapter").asBoolean(),
-                                                capability.path("limit").asInt())));
-        JsonNode capacityNode = descriptor.path("capacity");
+                                                        capability
+                                                                .path(FIELD_OBJECT_KIND)
+                                                                .asText()),
+                                                capability.path(FIELD_STABLE_TYPE).asText(),
+                                                policyFromWire(
+                                                        capability.path(FIELD_POLICY).asText()),
+                                                capability
+                                                        .path(FIELD_HAS_SNAPSHOT_ADAPTER)
+                                                        .asBoolean(),
+                                                capability.path(FIELD_LIMIT).asInt())));
+        JsonNode capacityNode = descriptor.path(FIELD_CAPACITY);
         List<ZLinkSpotTypeCapacity> spotTypes = new ArrayList<>();
         capacityNode
-                .path("spotTypes")
+                .path(FIELD_SPOT_TYPES)
                 .forEach(
                         spotType ->
                                 spotTypes.add(
                                         new ZLinkSpotTypeCapacity(
                                                 objectKindFromWire(
-                                                        spotType.path("objectKind").asText()),
-                                                spotType.path("stableType").asText(),
+                                                        spotType.path(FIELD_OBJECT_KIND).asText()),
+                                                spotType.path(FIELD_STABLE_TYPE).asText(),
                                                 decodeUsage(spotType))));
         ZLinkPlacementCapacity capacity =
                 new ZLinkPlacementCapacity(
-                        decodeUsage(capacityNode.path("actors")),
-                        decodeUsage(capacityNode.path("spots")),
+                        decodeUsage(capacityNode.path(FIELD_ACTORS)),
+                        decodeUsage(capacityNode.path(FIELD_SPOTS)),
                         spotTypes);
-        JsonNode activation = descriptor.path("activationConcurrency");
-        JsonNode entrySpotId = descriptor.path("entrySpotId");
-        JsonNode maintenanceWave = descriptor.path("maintenanceWave");
+        JsonNode activation = descriptor.path(FIELD_ACTIVATION_CONCURRENCY);
+        JsonNode entrySpotId = descriptor.path(FIELD_ENTRY_SPOT_ID);
+        JsonNode maintenanceWave = descriptor.path(FIELD_MAINTENANCE_WAVE);
         return new ZLinkMeshNodeDescriptor(
-                descriptor.path("meshName").asText(),
-                RoutingId.fromHex(descriptor.path("routingIdHex").asText()),
-                Long.parseUnsignedLong(descriptor.path("lifecycleGeneration").asText()),
-                Long.parseUnsignedLong(descriptor.path("descriptorRevision").asText()),
-                descriptor.path("endpoint").asText(),
+                descriptor.path(FIELD_MESH_NAME).asText(),
+                RoutingId.fromHex(descriptor.path(FIELD_ROUTING_ID_HEX).asText()),
+                Long.parseUnsignedLong(descriptor.path(FIELD_LIFECYCLE_GENERATION).asText()),
+                Long.parseUnsignedLong(descriptor.path(FIELD_DESCRIPTOR_REVISION).asText()),
+                descriptor.path(FIELD_ENDPOINT).asText(),
                 channelWeights,
-                Long.parseUnsignedLong(descriptor.path("applicationVersion").asText()),
+                Long.parseUnsignedLong(descriptor.path(FIELD_APPLICATION_VERSION).asText()),
                 capabilities,
-                objectRoleFromWire(descriptor.path("objectRole").asText()),
+                objectRoleFromWire(descriptor.path(FIELD_OBJECT_ROLE).asText()),
                 entrySpotId.isMissingNode() || entrySpotId.isNull()
                         ? Optional.empty()
                         : Optional.of(entrySpotId.asText()),
-                descriptor.path("placementWeight").asInt(),
+                descriptor.path(FIELD_PLACEMENT_WEIGHT).asInt(),
                 capacity,
                 new ZLinkActivationConcurrency(
-                        activation.path("active").asInt(), activation.path("limit").asInt()),
+                        activation.path(FIELD_ACTIVE).asInt(),
+                        activation.path(FIELD_LIMIT).asInt()),
                 maintenanceWave.isMissingNode() || maintenanceWave.isNull()
                         ? Optional.empty()
                         : Optional.of(maintenanceWave.asText()),
-                stateFromWire(descriptor.path("state").asText()),
-                descriptor.path("securityIdentity").asText(),
-                descriptor.path("ownerId").asText(),
-                Long.parseUnsignedLong(descriptor.path("leaseGeneration").asText()),
-                Instant.ofEpochMilli(Long.parseLong(descriptor.path("updatedAtEpochMs").asText())));
+                stateFromWire(descriptor.path(FIELD_STATE).asText()),
+                descriptor.path(FIELD_SECURITY_IDENTITY).asText(),
+                descriptor.path(FIELD_OWNER_ID).asText(),
+                Long.parseUnsignedLong(descriptor.path(FIELD_LEASE_GENERATION).asText()),
+                Instant.ofEpochMilli(
+                        Long.parseLong(descriptor.path(FIELD_UPDATED_AT_EPOCH_MS).asText())));
     }
 
     private static ZLinkCapacityUsage decodeUsage(JsonNode node) {
         return new ZLinkCapacityUsage(
-                node.path("active").asInt(),
-                node.path("reserved").asInt(),
-                node.path("limit").asInt());
+                node.path(FIELD_ACTIVE).asInt(),
+                node.path(FIELD_RESERVED).asInt(),
+                node.path(FIELD_LIMIT).asInt());
     }
 
     private static String objectKindWire(ZLinkPlacementObjectKind kind) {
         return switch (kind) {
-            case ACTOR -> "actor";
-            case USER_SPOT -> "userSpot";
-            case INSTANCE_SPOT -> "instanceSpot";
+            case ACTOR -> WIRE_OBJECT_KIND_ACTOR;
+            case USER_SPOT -> WIRE_OBJECT_KIND_USER_SPOT;
+            case INSTANCE_SPOT -> WIRE_OBJECT_KIND_INSTANCE_SPOT;
         };
     }
 
     private static ZLinkPlacementObjectKind objectKindFromWire(String value) {
         return switch (value) {
-            case "actor" -> ZLinkPlacementObjectKind.ACTOR;
-            case "userSpot" -> ZLinkPlacementObjectKind.USER_SPOT;
-            case "instanceSpot" -> ZLinkPlacementObjectKind.INSTANCE_SPOT;
+            case WIRE_OBJECT_KIND_ACTOR -> ZLinkPlacementObjectKind.ACTOR;
+            case WIRE_OBJECT_KIND_USER_SPOT -> ZLinkPlacementObjectKind.USER_SPOT;
+            case WIRE_OBJECT_KIND_INSTANCE_SPOT -> ZLinkPlacementObjectKind.INSTANCE_SPOT;
             default -> throw new IllegalStateException("Unrecognized objectKind: " + value);
         };
     }
 
     private static String policyWire(ZLinkObjectMaintenancePolicyKind policy) {
         return switch (policy) {
-            case DISABLED -> "disabled";
-            case RECREATE -> "recreate";
-            case SNAPSHOT -> "snapshot";
+            case DISABLED -> WIRE_POLICY_DISABLED;
+            case RECREATE -> WIRE_POLICY_RECREATE;
+            case SNAPSHOT -> WIRE_POLICY_SNAPSHOT;
         };
     }
 
     private static ZLinkObjectMaintenancePolicyKind policyFromWire(String value) {
         return switch (value) {
-            case "disabled" -> ZLinkObjectMaintenancePolicyKind.DISABLED;
-            case "recreate" -> ZLinkObjectMaintenancePolicyKind.RECREATE;
-            case "snapshot" -> ZLinkObjectMaintenancePolicyKind.SNAPSHOT;
+            case WIRE_POLICY_DISABLED -> ZLinkObjectMaintenancePolicyKind.DISABLED;
+            case WIRE_POLICY_RECREATE -> ZLinkObjectMaintenancePolicyKind.RECREATE;
+            case WIRE_POLICY_SNAPSHOT -> ZLinkObjectMaintenancePolicyKind.SNAPSHOT;
             default -> throw new IllegalStateException("Unrecognized policy: " + value);
         };
     }
 
     private static String objectRoleWire(ZLinkMeshNodeObjectRole role) {
         return switch (role) {
-            case NONE -> "none";
-            case CLIENT -> "client";
-            case SERVER -> "server";
+            case NONE -> WIRE_ROLE_NONE;
+            case CLIENT -> WIRE_ROLE_CLIENT;
+            case SERVER -> WIRE_ROLE_SERVER;
         };
     }
 
     private static ZLinkMeshNodeObjectRole objectRoleFromWire(String value) {
         return switch (value) {
-            case "none" -> ZLinkMeshNodeObjectRole.NONE;
-            case "client" -> ZLinkMeshNodeObjectRole.CLIENT;
-            case "server" -> ZLinkMeshNodeObjectRole.SERVER;
+            case WIRE_ROLE_NONE -> ZLinkMeshNodeObjectRole.NONE;
+            case WIRE_ROLE_CLIENT -> ZLinkMeshNodeObjectRole.CLIENT;
+            case WIRE_ROLE_SERVER -> ZLinkMeshNodeObjectRole.SERVER;
             default -> throw new IllegalStateException("Unrecognized objectRole: " + value);
         };
     }
 
     private static String stateWire(ZLinkFrameworkRuntimeState state) {
         return switch (state) {
-            case PREPARING -> "preparing";
-            case SERVING -> "serving";
-            case RELOCATING -> "relocating";
-            case RELOCATED -> "relocated";
-            case DRAINING -> "draining";
-            case STOPPED -> "stopped";
-            case ERROR -> "error";
+            case PREPARING -> WIRE_STATE_PREPARING;
+            case SERVING -> WIRE_STATE_SERVING;
+            case RELOCATING -> WIRE_STATE_RELOCATING;
+            case RELOCATED -> WIRE_STATE_RELOCATED;
+            case DRAINING -> WIRE_STATE_DRAINING;
+            case STOPPED -> WIRE_STATE_STOPPED;
+            case ERROR -> WIRE_STATE_ERROR;
         };
     }
 
     private static ZLinkFrameworkRuntimeState stateFromWire(String value) {
         return switch (value) {
-            case "preparing" -> ZLinkFrameworkRuntimeState.PREPARING;
-            case "serving" -> ZLinkFrameworkRuntimeState.SERVING;
-            case "relocating" -> ZLinkFrameworkRuntimeState.RELOCATING;
-            case "relocated" -> ZLinkFrameworkRuntimeState.RELOCATED;
-            case "draining" -> ZLinkFrameworkRuntimeState.DRAINING;
-            case "stopped" -> ZLinkFrameworkRuntimeState.STOPPED;
-            case "error" -> ZLinkFrameworkRuntimeState.ERROR;
+            case WIRE_STATE_PREPARING -> ZLinkFrameworkRuntimeState.PREPARING;
+            case WIRE_STATE_SERVING -> ZLinkFrameworkRuntimeState.SERVING;
+            case WIRE_STATE_RELOCATING -> ZLinkFrameworkRuntimeState.RELOCATING;
+            case WIRE_STATE_RELOCATED -> ZLinkFrameworkRuntimeState.RELOCATED;
+            case WIRE_STATE_DRAINING -> ZLinkFrameworkRuntimeState.DRAINING;
+            case WIRE_STATE_STOPPED -> ZLinkFrameworkRuntimeState.STOPPED;
+            case WIRE_STATE_ERROR -> ZLinkFrameworkRuntimeState.ERROR;
             default -> throw new IllegalStateException("Unrecognized state: " + value);
         };
     }
@@ -709,23 +776,27 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeClientServerRecord(ZLinkClientServerServerDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put("recordVersion", 1);
-        root.put("ownerId", descriptor.ownerId());
-        root.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        root.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
+        root.put(FIELD_OWNER_ID, descriptor.ownerId());
+        root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
         ObjectNode payload = CANONICAL_JSON.createObjectNode();
-        payload.put("channelName", descriptor.channelName());
-        payload.put("serverRoutingIdHex", descriptor.serverRid().toHex());
-        payload.put("lifecycleGeneration", Long.toUnsignedString(descriptor.lifecycleGeneration()));
-        payload.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
-        payload.put("endpoint", descriptor.endpoint());
-        payload.put("weight", descriptor.weight());
-        payload.put("state", stateWire(descriptor.state()));
-        payload.put("securityIdentity", descriptor.securityIdentity());
-        payload.put("ownerId", descriptor.ownerId());
-        payload.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        payload.put("updatedAtEpochMs", Long.toString(descriptor.updatedAt().toEpochMilli()));
-        root.set("descriptor", payload);
+        payload.put(FIELD_CHANNEL_NAME, descriptor.channelName());
+        payload.put(FIELD_SERVER_ROUTING_ID_HEX, descriptor.serverRid().toHex());
+        payload.put(
+                FIELD_LIFECYCLE_GENERATION,
+                Long.toUnsignedString(descriptor.lifecycleGeneration()));
+        payload.put(
+                FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
+        payload.put(FIELD_ENDPOINT, descriptor.endpoint());
+        payload.put(FIELD_WEIGHT, descriptor.weight());
+        payload.put(FIELD_STATE, stateWire(descriptor.state()));
+        payload.put(FIELD_SECURITY_IDENTITY, descriptor.securityIdentity());
+        payload.put(FIELD_OWNER_ID, descriptor.ownerId());
+        payload.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        payload.put(
+                FIELD_UPDATED_AT_EPOCH_MS, Long.toString(descriptor.updatedAt().toEpochMilli()));
+        root.set(FIELD_DESCRIPTOR, payload);
         try {
             return CANONICAL_JSON.writeValueAsBytes(root);
         } catch (JsonProcessingException error) {
@@ -742,26 +813,28 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path("recordVersion").asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }
-        JsonNode descriptor = root.path("descriptor");
+        JsonNode descriptor = root.path(FIELD_DESCRIPTOR);
         return new StoredDescriptor<>(
                 0,
                 new ZLinkClientServerServerDescriptor(
-                        descriptor.path("channelName").asText(),
-                        RoutingId.fromHex(descriptor.path("serverRoutingIdHex").asText()),
-                        Long.parseUnsignedLong(descriptor.path("lifecycleGeneration").asText()),
-                        Long.parseUnsignedLong(descriptor.path("descriptorRevision").asText()),
-                        descriptor.path("endpoint").asText(),
-                        descriptor.path("weight").asInt(),
-                        stateFromWire(descriptor.path("state").asText()),
-                        descriptor.path("securityIdentity").asText(),
-                        descriptor.path("ownerId").asText(),
-                        Long.parseUnsignedLong(descriptor.path("leaseGeneration").asText()),
+                        descriptor.path(FIELD_CHANNEL_NAME).asText(),
+                        RoutingId.fromHex(descriptor.path(FIELD_SERVER_ROUTING_ID_HEX).asText()),
+                        Long.parseUnsignedLong(
+                                descriptor.path(FIELD_LIFECYCLE_GENERATION).asText()),
+                        Long.parseUnsignedLong(descriptor.path(FIELD_DESCRIPTOR_REVISION).asText()),
+                        descriptor.path(FIELD_ENDPOINT).asText(),
+                        descriptor.path(FIELD_WEIGHT).asInt(),
+                        stateFromWire(descriptor.path(FIELD_STATE).asText()),
+                        descriptor.path(FIELD_SECURITY_IDENTITY).asText(),
+                        descriptor.path(FIELD_OWNER_ID).asText(),
+                        Long.parseUnsignedLong(descriptor.path(FIELD_LEASE_GENERATION).asText()),
                         Instant.ofEpochMilli(
-                                Long.parseLong(descriptor.path("updatedAtEpochMs").asText()))));
+                                Long.parseLong(
+                                        descriptor.path(FIELD_UPDATED_AT_EPOCH_MS).asText()))));
     }
 
     // --- Fanout publisher descriptor canonical JSON
@@ -770,22 +843,26 @@ final class ZLinkProviderDescriptorRepository {
 
     private static byte[] encodeFanoutPublisherRecord(ZLinkFanoutPublisherDescriptor descriptor) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
-        root.put("recordVersion", 1);
-        root.put("ownerId", descriptor.ownerId());
-        root.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        root.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
+        root.put(FIELD_RECORD_VERSION, DESCRIPTOR_RECORD_VERSION);
+        root.put(FIELD_OWNER_ID, descriptor.ownerId());
+        root.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        root.put(FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
         ObjectNode payload = CANONICAL_JSON.createObjectNode();
-        payload.put("channelName", descriptor.channelName());
-        payload.put("publisherRoutingIdHex", descriptor.publisherRid().toHex());
-        payload.put("lifecycleGeneration", Long.toUnsignedString(descriptor.lifecycleGeneration()));
-        payload.put("descriptorRevision", Long.toUnsignedString(descriptor.descriptorRevision()));
-        payload.put("endpoint", descriptor.endpoint());
-        payload.put("state", stateWire(descriptor.state()));
-        payload.put("securityIdentity", descriptor.securityIdentity());
-        payload.put("ownerId", descriptor.ownerId());
-        payload.put("leaseGeneration", Long.toUnsignedString(descriptor.leaseGeneration()));
-        payload.put("updatedAtEpochMs", Long.toString(descriptor.updatedAt().toEpochMilli()));
-        root.set("descriptor", payload);
+        payload.put(FIELD_CHANNEL_NAME, descriptor.channelName());
+        payload.put(FIELD_PUBLISHER_ROUTING_ID_HEX, descriptor.publisherRid().toHex());
+        payload.put(
+                FIELD_LIFECYCLE_GENERATION,
+                Long.toUnsignedString(descriptor.lifecycleGeneration()));
+        payload.put(
+                FIELD_DESCRIPTOR_REVISION, Long.toUnsignedString(descriptor.descriptorRevision()));
+        payload.put(FIELD_ENDPOINT, descriptor.endpoint());
+        payload.put(FIELD_STATE, stateWire(descriptor.state()));
+        payload.put(FIELD_SECURITY_IDENTITY, descriptor.securityIdentity());
+        payload.put(FIELD_OWNER_ID, descriptor.ownerId());
+        payload.put(FIELD_LEASE_GENERATION, Long.toUnsignedString(descriptor.leaseGeneration()));
+        payload.put(
+                FIELD_UPDATED_AT_EPOCH_MS, Long.toString(descriptor.updatedAt().toEpochMilli()));
+        root.set(FIELD_DESCRIPTOR, payload);
         try {
             return CANONICAL_JSON.writeValueAsBytes(root);
         } catch (JsonProcessingException error) {
@@ -801,25 +878,27 @@ final class ZLinkProviderDescriptorRepository {
         } catch (IOException error) {
             throw new IllegalStateException("Location descriptor record is invalid", error);
         }
-        if (root.path("recordVersion").asInt(-1) != 1) {
+        if (root.path(FIELD_RECORD_VERSION).asInt(-1) != DESCRIPTOR_RECORD_VERSION) {
             throw new IllegalStateException(
                     "Location descriptor record has an unrecognized" + " recordVersion");
         }
-        JsonNode descriptor = root.path("descriptor");
+        JsonNode descriptor = root.path(FIELD_DESCRIPTOR);
         return new StoredDescriptor<>(
                 0,
                 new ZLinkFanoutPublisherDescriptor(
-                        descriptor.path("channelName").asText(),
-                        RoutingId.fromHex(descriptor.path("publisherRoutingIdHex").asText()),
-                        Long.parseUnsignedLong(descriptor.path("lifecycleGeneration").asText()),
-                        Long.parseUnsignedLong(descriptor.path("descriptorRevision").asText()),
-                        descriptor.path("endpoint").asText(),
-                        stateFromWire(descriptor.path("state").asText()),
-                        descriptor.path("securityIdentity").asText(),
-                        descriptor.path("ownerId").asText(),
-                        Long.parseUnsignedLong(descriptor.path("leaseGeneration").asText()),
+                        descriptor.path(FIELD_CHANNEL_NAME).asText(),
+                        RoutingId.fromHex(descriptor.path(FIELD_PUBLISHER_ROUTING_ID_HEX).asText()),
+                        Long.parseUnsignedLong(
+                                descriptor.path(FIELD_LIFECYCLE_GENERATION).asText()),
+                        Long.parseUnsignedLong(descriptor.path(FIELD_DESCRIPTOR_REVISION).asText()),
+                        descriptor.path(FIELD_ENDPOINT).asText(),
+                        stateFromWire(descriptor.path(FIELD_STATE).asText()),
+                        descriptor.path(FIELD_SECURITY_IDENTITY).asText(),
+                        descriptor.path(FIELD_OWNER_ID).asText(),
+                        Long.parseUnsignedLong(descriptor.path(FIELD_LEASE_GENERATION).asText()),
                         Instant.ofEpochMilli(
-                                Long.parseLong(descriptor.path("updatedAtEpochMs").asText()))));
+                                Long.parseLong(
+                                        descriptor.path(FIELD_UPDATED_AT_EPOCH_MS).asText()))));
     }
 
     private static DescriptorIdentity identity(Object descriptor) {
@@ -912,15 +991,16 @@ final class ZLinkProviderDescriptorRepository {
         if (cursorBytes.length < 1 || cursorBytes.length > 4096) {
             throw new IllegalStateException("Location Store returned an invalid snapshot cursor.");
         }
-        return "v1." + base64(digest(prefix)) + "." + base64(cursorBytes);
+        return CONTINUATION_VERSION + "." + base64(digest(prefix)) + "." + base64(cursorBytes);
     }
 
     private static ZLinkStoreScanCursor decodeContinuation(String prefix, String token) {
         if (token.length() < 1 || token.length() > MAXIMUM_CONTINUATION_CHARACTERS) {
             throw invalidContinuation();
         }
-        String[] parts = token.split("\\.", 3);
-        if (parts.length != 3 || !"v1".equals(parts[0])) {
+        String[] parts = token.split("\\.", CONTINUATION_COMPONENT_COUNT);
+        if (parts.length != CONTINUATION_COMPONENT_COUNT
+                || !CONTINUATION_VERSION.equals(parts[0])) {
             throw invalidContinuation();
         }
         try {

@@ -507,7 +507,7 @@ test('rejected provisional Join releases its current Actor mailbox record before
   } finally {
     newerParts?.forEach((part) => part.close());
     await actorMailbox.close();
-    await spotSerial.close();
+    await spotSerial.whenIdle();
   }
 });
 

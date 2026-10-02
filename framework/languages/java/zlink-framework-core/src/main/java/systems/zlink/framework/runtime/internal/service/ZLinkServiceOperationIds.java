@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Process-unique 128-bit identities without per-operation randomness. */
 public final class ZLinkServiceOperationIds {
+    private static final long FALLBACK_PROCESS_PREFIX = 0x6a09e667f3bcc909L;
     private static final HexFormat HEX = HexFormat.of();
     private static final long PROCESS_PREFIX = processPrefix();
     private static final AtomicLong NEXT_COUNTER = new AtomicLong(1);
@@ -35,6 +36,6 @@ public final class ZLinkServiceOperationIds {
     private static long processPrefix() {
         UUID seed = UUID.randomUUID();
         long prefix = seed.getMostSignificantBits() ^ seed.getLeastSignificantBits();
-        return prefix == 0 ? 0x6a09e667f3bcc909L : prefix;
+        return prefix == 0 ? FALLBACK_PROCESS_PREFIX : prefix;
     }
 }

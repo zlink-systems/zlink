@@ -183,9 +183,7 @@ internal sealed class ZLinkActorMessageFollower
         )
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_follow_reply_rejected actor={actorId} request_id={requestId} "
-                    + $"flags={flags} authenticated={authenticatedResponder} "
-                    + $"declared={declaredResponder}"
+                $"actor_follow_reply_rejected actor={actorId} request_id={requestId} flags={flags} authenticated={authenticatedResponder} declared={declaredResponder}"
             );
             return false;
         }

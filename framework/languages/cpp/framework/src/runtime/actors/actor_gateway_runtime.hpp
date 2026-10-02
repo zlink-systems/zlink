@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/channels/channel.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
@@ -282,6 +283,32 @@ class actor_gateway_state_t
     std::uint64_t next_binding_token = 1;
 };
 
+template <typename BuildResult>
+void trace_detached_bound_session_send_stage (const std::shared_ptr<actor_gateway_state_t> &state,
+                                              std::string_view actor_id,
+                                              std::string_view stage,
+                                              BuildResult &&build_result,
+                                              const zlink::routing_id_t *session_rid,
+                                              const std::string *session_rid_hex)
+{
+    message_flow_tracer_t (state->dispatch)
+      .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::admitted, [&] {
+          auto event = message_flow_event_t{
+            message_flow_outcome_t::admitted, dispatch_error_surface_t::stream_session,
+            dispatch_message_kind_t::send, std::string ("bound_session_push")};
+          event.actor_id = std::string (actor_id);
+          if (session_rid)
+              event.stream_session_id = session_rid->to_hex ();
+          else if (session_rid_hex)
+              event.stream_session_id = *session_rid_hex;
+          event.detail_stage = std::string (stage);
+          auto result = std::string (std::invoke (std::forward<BuildResult> (build_result)));
+          if (!result.empty ())
+              event.detail_result = std::move (result);
+          return event;
+      });
+}
+
 class actor_gateway_runtime_t
 {
   public:
@@ -433,14 +460,16 @@ class actor_gateway_runtime_t
       const std::shared_ptr<bound_session_delivery_fence_t> &fence,
       result_t<void> callback_result,
       std::function<void (result_t<void>)> settled);
-    /* Stage traces emit only at detailed; callers building stage/result
-     * strings must gate on trace_bound_session_send_stage_enabled() so the
-     * off/errors/normal hot path pays no allocation (spec 26 §4). */
-    bool trace_bound_session_send_stage_enabled () const noexcept;
-    void trace_bound_session_send_stage (const std::string &actor_id,
+    bool trace_bound_session_send_stage_enabled () const;
+    template <typename BuildResult>
+    void trace_bound_session_send_stage (std::string_view actor_id,
                                          std::string_view stage,
-                                         std::string_view result,
-                                         const zlink::routing_id_t *session_rid) const;
+                                         BuildResult &&build_result,
+                                         const zlink::routing_id_t *session_rid) const
+    {
+        trace_detached_bound_session_send_stage (
+          _state, actor_id, stage, std::forward<BuildResult> (build_result), session_rid, nullptr);
+    }
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 
