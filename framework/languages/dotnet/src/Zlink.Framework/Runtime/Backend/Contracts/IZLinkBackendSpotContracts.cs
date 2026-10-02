@@ -192,7 +192,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException(

@@ -172,6 +172,8 @@
         <Compile Include="Runtime/GatedTaskScheduler.cs"/>
         <Compile Include="Runtime/DurableSenderRuntimeTests.cs"/>
         <Compile Include="Runtime/DurableRequestTests.cs"/>
+        <Compile Include="Runtime/SessionBindDurableTests.cs"/>
+        <Compile Include="Runtime/NativeSessionBindDurableTests.cs"/>
         <Compile Include="Runtime/StoreRecordGoldenTests.cs"/>
         <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>

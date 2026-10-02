@@ -12327,7 +12327,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public Exception? NodeRequestFailure { get; set; }
 
+        public Func<
+            IReadOnlyList<Message>,
+            TimeSpan,
+            ValueTask<ZLinkBackendRouteReceived>
+        >? NodeRequestHandler { get; set; }
+
         public int NodeRequestAttempts { get; private set; }
+
+        public bool LastNodeRequestDurable { get; private set; }
 
         public RoutingId LastNodeSendTarget { get; private set; }
 
@@ -12962,16 +12970,20 @@ public sealed partial class EntrySpotActorDispatchTests
             SendFlags flags,
             TimeSpan timeout,
             CancellationToken cancellationToken,
-            ReadOnlyMemory<byte> metadata = default
+            ReadOnlyMemory<byte> metadata = default,
+            bool durable = false
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
             NodeRequestAttempts++;
+            LastNodeRequestDurable = durable;
             LastNodeRequestTarget = targetNodeRid;
             _ = parts;
             LastNodeRequestFlags = flags;
             _ = timeout;
             LastNodeRequestMetadata = metadata.ToArray();
+            if (NodeRequestHandler is { } handler)
+                return handler(parts, timeout);
             return ValueTask.FromException<ZLinkBackendRouteReceived>(
                 NodeRequestFailure
                     ?? new NotSupportedException(

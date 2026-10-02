@@ -468,9 +468,13 @@ internal sealed class ZLinkSessionActorCoordinator(
                 ? await runtime
                     .BindRemoteBoundSessionRouteAsync(request, sessionNodeRid, cancellationToken)
                     .ConfigureAwait(false)
-                : await runtime
-                    .Services.GetRequiredService<IZLinkRouteClient>()
-                    .RequestToNode(actor.MeshName, actor.NodeRid, request)
+                : await new ZLinkRouteRequestCall<ZLinkRemoteSessionBindRequest>(
+                    runtime,
+                    actor.MeshName,
+                    actor.NodeRid,
+                    request,
+                    durable: true
+                )
                     .Timeout(runtime.Registration.DefaultRequestTimeout)
                     .Async<ZLinkRemoteSessionBindResponse>(cancellationToken)
                     .ConfigureAwait(false);

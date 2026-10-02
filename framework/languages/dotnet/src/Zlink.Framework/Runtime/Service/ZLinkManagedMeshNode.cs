@@ -4783,18 +4783,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? CompleteNativeActorJoinRequest
                 : CompleteNativeInfrastructureRequest;
         var pendingToken = pending.Token;
-        void OnIntentRemoved(RoutingId target)
-        {
-            if (target == targetRid)
-                complete(pending, RequestResult.NotConnected, Array.Empty<Message>());
-        }
-
-        RunState(() => PeerConnectionIntentRemoved += OnIntentRemoved);
+        var lifetime = new NativeDurableRequestLifetime(
+            this,
+            targetRid,
+            () => complete(pending, RequestResult.NotConnected, Array.Empty<Message>())
+        );
         if (
             !RunInboundOperation(async () =>
             {
-                try
-                {
+                using (lifetime)
                     await CompleteNativeDurableRequestAsync(
                             targetRid,
                             targetNodeGeneration,
@@ -4803,18 +4800,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             (operation, result, parts) =>
                                 RunState(() => complete(operation, result, parts)),
                             pendingToken,
-                            _stop?.Token ?? CancellationToken.None
+                            lifetime
                         )
                         .ConfigureAwait(false);
-                }
-                finally
-                {
-                    RunState(() => PeerConnectionIntentRemoved -= OnIntentRemoved);
-                }
             })
         )
         {
-            RunState(() => PeerConnectionIntentRemoved -= OnIntentRemoved);
+            lifetime.Dispose();
             return SubmitResult.Terminated;
         }
 
@@ -9674,24 +9666,56 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendFlags flags,
         ReadOnlyMemory<byte> metadata,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool durable = false
     )
     {
-        var peer = RequireDirectPeer(targetRid);
+        var peer = durable ? null : RequireDirectPeer(targetRid);
+        var started = _deadlineTimeProvider.GetTimestamp();
         var operationId = NextStandaloneOperationId();
-        var reply = await RequestDirectWireAsync(
-                peer.PhysicalRoutingId,
-                CreateApplicationWire(
-                    ServiceWireConstants.Command.NodeRequest,
-                    operationId.Low,
-                    null,
-                    parts,
-                    metadata
-                ),
-                timeout,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        using var lifetime = durable ? new NativeDurableRequestLifetime(this, targetRid) : null;
+        var messages = CreateApplicationWire(
+            ServiceWireConstants.Command.NodeRequest,
+            operationId.Low,
+            null,
+            parts,
+            metadata
+        );
+        IReadOnlyList<Message> reply;
+        if (durable)
+        {
+            IReadOnlyList<ReadOnlyMemory<byte>> wire;
+            try
+            {
+                wire = messages
+                    .Select(message => (ReadOnlyMemory<byte>)message.AsReadOnlySpan().ToArray())
+                    .ToArray();
+            }
+            finally
+            {
+                DisposeParts(messages);
+            }
+            reply = await RequestNativeDurableWireAsync(
+                    targetRid,
+                    0,
+                    wire,
+                    started,
+                    timeout,
+                    cancellationToken,
+                    lifetime!
+                )
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            reply = await RequestDirectWireAsync(
+                    peer!.PhysicalRoutingId,
+                    messages,
+                    timeout,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
@@ -10153,6 +10177,96 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    private sealed class NativeDurableRequestLifetime : IDisposable
+    {
+        private readonly ZLinkManagedMeshNode _node;
+        private readonly CancellationTokenSource _lifecycle = new();
+        private readonly Action<RoutingId> _onIntentRemoved;
+
+        public NativeDurableRequestLifetime(
+            ZLinkManagedMeshNode node,
+            RoutingId target,
+            Action? onLifecycleEnded = null
+        )
+        {
+            _node = node;
+            _onIntentRemoved = removed =>
+            {
+                if (removed == target)
+                {
+                    _lifecycle.Cancel();
+                    onLifecycleEnded?.Invoke();
+                }
+            };
+            node.RunState(() => node.PeerConnectionIntentRemoved += _onIntentRemoved);
+        }
+
+        public CancellationToken Token => _lifecycle.Token;
+
+        public bool Ended => _lifecycle.IsCancellationRequested;
+
+        public void Dispose()
+        {
+            _node.RunState(() => _node.PeerConnectionIntentRemoved -= _onIntentRemoved);
+            _lifecycle.Dispose();
+        }
+    }
+
+    private async ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
+        RoutingId target,
+        ulong targetNodeGeneration,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        long started,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        NativeDurableRequestLifetime lifetime,
+        CancellationToken pendingToken = default
+    )
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            lifetime.Token,
+            _stop?.Token ?? CancellationToken.None,
+            pendingToken
+        );
+        try
+        {
+            return await ZLinkDurableRequest
+                .RequestAsync(
+                    wire,
+                    started,
+                    timeout,
+                    (frames, remaining, token) =>
+                    {
+                        var peer = RequireDirectPeer(target);
+                        if (
+                            targetNodeGeneration != 0
+                            && peer.LifecycleGeneration != targetNodeGeneration
+                        )
+                            throw new ZlinkSubmitException(
+                                ZlinkSubmitException.ErrorCode.NotConnected
+                            );
+                        return RequestDirectWireAsync(
+                            peer.PhysicalRoutingId,
+                            frames,
+                            remaining,
+                            token
+                        );
+                    },
+                    cancellation.Token,
+                    _deadlineTimeProvider
+                )
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetime.Ended)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Durable request target lifecycle ended."
+            );
+        }
+    }
+
     private async Task CompleteNativeDurableRequestAsync(
         RoutingId target,
         ulong targetNodeGeneration,
@@ -10160,37 +10274,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         Action<PendingOperation, RequestResult, IReadOnlyList<Message>> complete,
         CancellationToken pendingToken,
-        CancellationToken cancellationToken
+        NativeDurableRequestLifetime lifetime
     )
     {
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            pendingToken
-        );
         try
         {
-            var replies = await ZLinkDurableRequest
-                .RequestAsync(
+            var replies = await RequestNativeDurableWireAsync(
+                    target,
+                    targetNodeGeneration,
                     wire,
                     pending.DeadlineStartTimestamp,
                     pending.DeadlineTimeout,
-                    async (frames, remaining, token) =>
-                    {
-                        var peer = RequireDirectPeer(target);
-                        if (peer.LifecycleGeneration != targetNodeGeneration)
-                            throw new ZlinkSubmitException(
-                                ZlinkSubmitException.ErrorCode.NotConnected
-                            );
-                        return await RequestDirectWireAsync(
-                                peer.PhysicalRoutingId,
-                                frames,
-                                remaining,
-                                token
-                            )
-                            .ConfigureAwait(false);
-                    },
-                    cancellation.Token,
-                    _deadlineTimeProvider
+                    CancellationToken.None,
+                    lifetime,
+                    pendingToken
                 )
                 .ConfigureAwait(false);
             complete(pending, RequestResult.Ok, replies);

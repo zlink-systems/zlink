@@ -1308,7 +1308,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     ) =>
         _node.RequestToNodeDirectAsync(
             targetNodeRid,
@@ -1316,7 +1317,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             flags,
             metadata,
             timeout,
-            cancellationToken
+            cancellationToken,
+            durable
         );
 
     public SubmitResult SendToActor(
