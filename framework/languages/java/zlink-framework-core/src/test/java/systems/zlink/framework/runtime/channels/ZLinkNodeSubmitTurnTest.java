@@ -152,7 +152,8 @@ final class ZLinkNodeSubmitTurnTest {
             var request = fixture.runtime.requestToChannel("missing", "request");
             Message sendPayload = (Message) field(send, "payload");
             Message requestPayload = (Message) field(request, "payload");
-            // 01-execution/01-submit-and-completion.ko.md:50: rejected submit is a terminal stage.
+            // Missing-route validation runs in the Registry submit turn; its stage retains the
+            // original configuration exception and releases the encoded payload.
             assertSubmitFailure(ZLinkConfigurationException.class, send::submit);
             assertSubmitFailure(
                     ZLinkConfigurationException.class, () -> request.submit(String.class));

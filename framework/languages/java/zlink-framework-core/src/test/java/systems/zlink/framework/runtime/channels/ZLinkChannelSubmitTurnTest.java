@@ -88,8 +88,8 @@ final class ZLinkChannelSubmitTurnTest {
                     new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
             channel.enableClient();
             f.sockets.registerChannel(channel);
-            // 01-execution/01-submit-and-completion.ko.md:50: admission failure completes submit's
-            // stage.
+            // 02-channel-transport/02-channel-messaging.ko.md: ClientServer readiness admission
+            // completes with DeadlineExceeded when the configured send timeout expires.
             for (Map<String, String> values :
                     java.util.List.of(Map.<String, String>of(), Map.of("key", "value"))) {
                 ZLinkSendCall send = f.send().metadata(values);
