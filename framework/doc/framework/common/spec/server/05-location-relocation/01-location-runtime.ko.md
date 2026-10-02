@@ -66,8 +66,8 @@ timer는 어느 Store에도 저장하지 않는다. Source가 memory에 유지�
 전송한다(§8).
 
 어떤 Actor가 User Spot에 속하는 관계를
-[Actor membership](../00-foundation/02-glossary.ko.md#actor-membership)이라고 한다. Location Store에
-저장한 이동 대상 목록이 membership의 기준이다. Restore 대화가 전달하는 payload는 이
+[Actor membership](../00-foundation/02-glossary.ko.md#actor-membership)이라고 한다. 그 기준은 Location Store의
+Actor authority `payload`가 담는 현재 Spot이다([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)). Restore 대화가 전달하는 payload는 이
 관계를 바꾸지 못한다.
 
 **Actor가 많아도 이동 대상 목록 전체를 record 하나에 넣지 않는다.** Framework는 이 목록을
@@ -381,7 +381,6 @@ publisher descriptor의 key가 참조하는, message를 보낼 Channel 범위를
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 | Aggregate([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
-| Aggregate inventory root([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0root` |
 | Aggregate inventory page([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
 | Aggregate participant([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0{Index}` |
 
@@ -495,7 +494,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | Field | 의미 |
 |---|---|
 | `recordVersion` | 위와 같다. 현재 값은 `1`이다. |
-| `payload` | Framework가 의미를 해석하지 않는 application 정의 opaque bytes다. 네 언어 모두 JSON 안에서 base64로 인코딩한다. |
+| `payload` | Framework가 [authority payload 형식](../02-channel-transport/06-wire-protocol.ko.md#location-store-authority-key-형식)으로 encode한 bytes다. Actor의 현재 Spot(membership)도 여기에 들어간다. Location Store provider는 해석하지 않으며, 네 언어 모두 JSON 안에서 base64로 인코딩한다. |
 | `objectGeneration` | 이 object(§3.2)의 현재 generation이다. 위에서 정한 Store 전역 단조 sequence에서 발급한다. |
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
@@ -531,14 +530,12 @@ record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw b
 진행 정보는 아래 record에만 두고 네 언어가 같은 key([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법))와
 bytes를 사용한다. 이 밖의 진행 정보(별도 lock record, 변경 전후 page, participant별 metadata
 record)를 두지 않는다. `SpotWide` 이동은 [Actor membership](../00-foundation/02-glossary.ko.md#actor-membership)을
-바꾸지 않는다. 이동하는 동안 membership의 기준([§1.2](#12-두-store가-나누어-저장하는-정보))은 inventory이며, inventory의 Actor
-entry는 모두 aggregate의 `spotAuthorityKey`가 가리키는 Spot의 member다. 이동이 끝난 뒤의 membership은
-이동 전과 같다.
+바꾸지 않는다(§8). Inventory는 participant를 열거할 뿐 membership을 정하지 않는다.
 
 | Record | Value |
 |---|---|
-| Aggregate | 이동 하나의 상태와 결과를 정하는 유일한 record다. 아래 canonical JSON이다. |
-| Aggregate inventory root·page | Participant 목록이다. 아래 canonical JSON이며 한 번 쓰고 바꾸지 않는다. |
+| Aggregate | 이동 하나의 상태와 결과, participant 목록의 root를 정하는 유일한 record다. 아래 canonical JSON이다. |
+| Aggregate inventory page | Participant 목록이다. 아래 canonical JSON이며 한 번 쓰고 바꾸지 않는다. |
 | Aggregate participant | Participant의 commit 뒤 application payload(§3.4 authority의 `payload`) raw bytes다. 한 번 쓰고 바꾸지 않는다. |
 | Authority의 `aggregate`·`visibleStoreVersion` | 각 participant authority의 marker와 보존한 공개 version이다(§3.4). |
 
@@ -563,8 +560,9 @@ escape하고(`\b \f \n \r \t`, 나머지 제어 문자는 소문자 `\u00xx`) �
 | `targetDescriptorLifecycleGeneration` | Target MeshNode의 `lifecycleGeneration`이다. |
 | `capacity` | Target에서 확보할 공간이다. `{actors, spots, spotTypes}`이며 `spotTypes`는 `{objectKind, stableType, count}` 배열로 `objectKind`, `stableType`의 UTF-8 byte 순서로 정렬한다. |
 | `ownerGenerationStart`, `ownerGenerationEnd` | `newOwner` participant에 발급한 `AuthorityOwnerGeneration` 구간(양 끝 포함)이다. 아직 발급하지 않았거나 `newOwner` participant가 없으면 둘 다 `null`이다. |
+| `inventory` | 목록 기록의 마지막 write가 쓰는 inventory root 객체다. 그 전에는 `null`이다. |
 
-Participant 수는 inventory root의 `totalCount` 하나가 정한다.
+Participant 수는 aggregate `inventory`의 `totalCount` 하나가 정한다.
 
 **Participant marker**(authority의 `aggregate`)는 `aggregateId`, `aggregateGeneration`, `index`,
 `expectedStoreVersion`, `ownerTransition`(`preserve \| newOwner`), `targetAuthorityOwnerGeneration`,
@@ -582,14 +580,14 @@ big-endian 순서 그대로 소문자 `8-4-4-4-12`로 쓴 값이다. `expectedSt
 | Entry | `index`, `authorityKey`(preimage 문자열), `objectGeneration`, `expectedStoreVersion`, `ownerTransition`, `authorityPayloadSha256` |
 | Page 참조 | `level`, `index`, `startIndex`(덮는 첫 entry의 `index`), `entryCount`(덮는 entry 수), `sha256`(그 page bytes의 hash) |
 | Page | `kind`(`"aggregate-inventory-page-v1"`), `level`, `index`, `startIndex`, `entryCount`, `entries`, `children` |
-| Root | `kind`(`"aggregate-inventory-root-v1"`), `totalCount`, `digest`, `topLevel`, `topPages`, `pageCountsByLevel` |
+| Root(aggregate의 `inventory`) | `totalCount`, `digest`, `topLevel`, `topPages`, `pageCountsByLevel` |
 
 Level 0 page는 `entries`에 entry를 담고 `children`이 빈 배열이다. 상위 level page는 `entries`가
 빈 배열이고 `children`에 바로 아래 level의 page 참조를 담는다. 각 level의 page `index`는 0부터
 빈틈없이 매기고, `entries`·`children`·`topPages`는 `index` 순서다. `pageCountsByLevel`은 level
 0부터 각 level의 page 수를 담은 number 배열이다. `digest`는 entry의 canonical JSON bytes를
 `index` 순서로 이어 붙인 값의 SHA-256이며, §8의 이동 대상 목록 내용 확인값이 이 값이다. Page
-하나와 root는 각각 entry 또는 참조 1,024개 이하, 1 MiB 이하이며, root가 이 한도를 넘으면 level을
+하나는 entry 또는 참조 1,024개 이하, 1 MiB 이하다. Root의 `topPages`는 참조 1,024개 이하이며, 넘으면 level을
 하나 더 만든다. 읽은 page의 hash, 개수 또는 `digest`가 맞지 않으면 data lost다.
 
 **상태 전이.** Aggregate record는 `staging → prepared → committed`, 또는 `staging·prepared →
@@ -600,9 +598,9 @@ write 하나다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batc
 
 | 단계 | 내용과 조건 |
 |---|---|
-| Claim | 같은 fence의 aggregate가 있으면 그것으로 끝난다: terminal이면 그 결과를 돌려주고, 같은 `requestFingerprint`의 `staging`이면 이어서 준비하며, 그 밖은 `Conflict`다. 없으면 marker를 넣은 authority, committed 투영과 정리 뒤의 authority, participant record, page, root의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 아직 발급되지 않은 `StoreVersion`은 provider token 최대 길이의 모든 byte를 `\u00xx` escape로 쓴 크기로 계산한다. 한도 안이면 aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. |
-| 목록 기록 | Aggregate가 `staging`인 version을 조건으로 participant record, page, root를 이 순서로 각각 없을 때 쓴다. 같은 bytes가 이미 있으면 완료로 보고 다른 bytes면 `Conflict`다. |
-| Marker 설치 | Root까지 모든 목록 record를 확인한 뒤 시작한다. Participant마다 aggregate가 `staging`인 version, root의 version과 participant 물리 version을 조건으로, 공개 `StoreVersion`이 entry의 `expectedStoreVersion`과 같을 때 marker를 쓰고 `visibleStoreVersion`을 지운다. Payload와 owner는 바꾸지 않는다. 같은 canonical marker bytes가 이미 있으면 완료이고, 다른 marker가 있으면 `Conflict`다. Inventory 순서로 첫 `newOwner` entry의 write에만 `AuthorityOwnerGeneration` counter 갱신과 aggregate의 구간 기록을 함께 넣는다([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 구간이 이미 기록돼 있으면 다시 발급하지 않는다. |
+| Claim | 같은 fence의 aggregate가 있으면 그것으로 끝난다: terminal이면 그 결과를 돌려주고, 같은 `requestFingerprint`이면 `staging`은 이어서 준비하고 `prepared`는 `AlreadyPrepared`(§8.1)이며, 그 밖은 `Conflict`다. 없으면 marker를 넣은 authority, committed 투영과 정리 뒤의 authority, participant record, page와 `inventory`를 넣은 aggregate의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 아직 발급되지 않은 `StoreVersion`은 provider token 최대 길이의 모든 byte를 `\u00xx` escape로 쓴 크기로 계산한다. 한도 안이면 aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. |
+| 목록 기록 | Aggregate가 `staging`인 version을 조건으로 participant record와 page를 각각 없을 때 쓰고, 마지막에 aggregate의 `inventory`를 쓴다. 같은 bytes가 이미 있으면 완료로 보고 다른 bytes면 `Conflict`다. |
+| Marker 설치 | Aggregate에 `inventory`가 있고 모든 목록 record를 확인한 뒤 시작한다. Participant마다 aggregate가 `staging`인 version과 participant 물리 version을 조건으로, 공개 `StoreVersion`이 entry의 `expectedStoreVersion`과 같을 때 marker를 쓰고 `visibleStoreVersion`을 지운다. Payload와 owner는 바꾸지 않는다. 같은 canonical marker bytes가 이미 있으면 완료이고, 다른 marker가 있으면 `Conflict`다. Inventory 순서로 첫 `newOwner` entry의 write에만 `AuthorityOwnerGeneration` counter 갱신과 aggregate의 구간 기록을 함께 넣는다([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 구간이 이미 기록돼 있으면 다시 발급하지 않는다. |
 | Prepare | 모든 marker를 확인한 뒤 `staging → prepared`와 target host capacity counter의 reserved 증가를 쓴다. Aggregate version, target descriptor의 `lifecycleGeneration`, target owner lease와 capacity record가 조건이다. Reserved 증가는 일반 host capacity counter의 점유이며 relocation 전용 reservation record가 아니다. |
 | Commit | `prepared → committed`, target capacity의 reserved → active 전환과 source active 감소, Spot participant authority에 아래 committed 공개 값을 marker 없이 쓰는 Put을 담는다. Aggregate version, Spot participant authority의 물리 version과 capacity record가 조건이다. Target의 lease·liveness·lifecycle은 다시 검사하지 않는다([§9.1](#91-복원-데이터가-공식-데이터가-되는-시점)). |
 | Source fence | [§6.1](#61-read와-cas)의 source `Preserve`다. `staging·prepared → aborted`, `prepared`였으면 reserved 해제, Spot participant authority에 이동 전 값을 marker 없이 쓰는 Put을 담는다. Aggregate version과 Spot participant authority의 물리 version이 조건이다. Commit과 같은 두 조건을 쓰고 둘 다 바꾸므로 둘 중 하나만 성공한다. |
@@ -631,23 +629,22 @@ Authority 변경 요청의 `StoreVersion` 조건은 이 공개 값과 비교하�
 
 1. `staging·prepared` aggregate는 이동을 시작한 runtime이 끝낸다. `sourceOwner`의 lease가
    만료됐으면 정리하는 runtime이 `Abort`한다.
-2. `cleaned`가 `false`인 aggregate의 root가 없으면 root를 쓰기 전에 멈춘 이동이다. Root는 `cleaned`
-   뒤에만 지우고, marker 설치는 root version을 조건으로 하므로 이 이동의 marker는 없다. 이 경우는
+2. `cleaned`가 `false`이고 `inventory`가 `null`인 aggregate는 목록 기록을 마치기 전에 멈춘 이동이다. Marker
+   설치는 `inventory`가 있는 aggregate version을 조건으로 하므로 이 이동의 marker는 없다. 이 경우는
    `staging`과 `aborted`뿐이며, `staging`이면 1번을 먼저 따른다. 같은 fence의 child preimage
    prefix(`aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0`,
    `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0`)를 scan해 찾은 child를 지우고
-   aggregate version을 조건으로 `cleaned`를 `true`로 쓴다. `prepared`나 `committed`에서 root가 없으면
-   data lost다.
-3. Root가 있는 terminal이고 `cleaned`가 `false`인 aggregate는 inventory 순서대로 모든 entry의 authority를 다시
+   aggregate version을 조건으로 `cleaned`를 `true`로 쓴다.
+3. `inventory`가 있는 terminal이고 `cleaned`가 `false`인 aggregate는 inventory 순서대로 모든 entry의 authority를 다시
    읽어 이 fence의 marker가 있으면 정리한다. 모든 entry에 이 fence의 marker가 없음을 확인한 뒤
    aggregate version을 조건으로 `cleaned`를 `true`로 쓴다.
-4. `cleaned`가 `true`인 aggregate의 participant record, page, root를 지운다. 없는 child는 이미 지운
+4. `cleaned`가 `true`인 aggregate의 participant record와 page를 지운다. 없는 child는 이미 지운
    것이다.
 5. Aggregate는 `sourceOwner`와 `targetOwner`의 lease가 둘 다 현재 lease가 아닐 때 지운다. 그 뒤에는
    같은 fence의 Claim(현재 `sourceOwner` lease가 조건)도 target의 재제출([§10](#10-store-응답을-받지-못했을-때),
    target lease 만료로 끝남)도 일어나지 않으므로, 그 전까지 같은 fence는 terminal 결과를 받는다.
 
-Marker가 가리키는 aggregate, root, page 또는 participant record가 없으면 authority를 다시 읽는다. 물리 version이 그대로면 data lost이고, 바뀌었으면 새 row로 다시 투영한다.
+Marker가 가리키는 aggregate, page 또는 participant record가 없으면 authority를 다시 읽는다. 물리 version이 그대로면 data lost이고, 바뀌었으면 새 row로 다시 투영한다.
 
 ## 4. 실행 중인 node와 제공 기능을 찾는다
 
@@ -1320,7 +1317,7 @@ attempt의 payload가 현재 이동에 섞이지 않는다. Location Store는 pa
 | `Preparing` | Source owner 정보와 이동 대상 목록의 내용 확인값 | 현재 source와 모두 같아야 한다. |
 | `Captured` | Capture 완료와 목록 내용 확인값. Payload 위치는 기록하지 않는다. | Source가 payload 전체를 memory에 유지하고 있어야 한다. |
 | `Prepared` | Target 시도 번호와 target owner 정보 | Target이 payload 조립과 checksum 확인, Restore와 relocation temporary queue 등록을 끝내야 한다. |
-| Owner 변경 | Target owner와 membership | Restore를 끝내고 Object 하나 또는 User Spot 전체의 CAS가 성공해야 한다. 일반 host capacity accounting은 같은 authority CAS가 소유하지만 relocation 전용 reservation handshake는 없다. |
+| Owner 변경 | Target owner. Membership이 바뀌는 이동이면 membership도 함께 기록한다. `SpotWide` 이동은 membership을 바꾸지 않는다([§3.5](#35-spotwide-이동의-진행-record)). | Restore를 끝내고 Object 하나 또는 User Spot 전체의 CAS가 성공해야 한다. 일반 host capacity accounting은 같은 authority CAS가 소유하지만 relocation 전용 reservation handshake는 없다. |
 | `Completed` | Target dispatch와 필요한 lifecycle을 열고 필요한 Session route update를 보냈다는 상태 | 별도 target completion reply는 없으며 이전 주소를 통한 모든 relay 종료를 기다리지 않는다. 늦은 relay는 Message Follow가 처리한다(§7.3). 기록 조건에는 [§9.3](#93-source가-바뀐-뒤-끝난-request를-처리한다)의 수락 request 완료 결과 저장과 전달 대기 0이 포함된다. |
 
 Target은 Restore 요청과 결합 값이 같은 chunk만 조립에 넣는다. 조립한 payload의 checksum이

@@ -122,7 +122,7 @@ Batch에는 다음 bound를 적용한다.
 User Spot participant 전체를 이 batch 하나에 넣지 않는다. Framework는 이동 대상 목록
 페이지 하나당 최대 1,024개 항목과 encoded 1 MiB로 제한한 immutable inventory chunk를
 미리 저장한다 — 이 페이지 상한은 위 CAS batch의 unique key 합계 상한과는 다른 대상에
-적용되는 별개의 수치다. 마지막 batch에는 aggregate authority, inventory root·count·digest와
+적용되는 별개의 수치다. 마지막 batch에는 inventory root·count·digest를 담은 aggregate와
 capacity counter처럼 공개 시점에 함께 바뀌어야 하는 작은 record만 넣는다.
 
 따라서 한 User Spot에 속할 수 있는 Actor 총수는 batch의 2,048-key 제한으로 정하지 않는다.

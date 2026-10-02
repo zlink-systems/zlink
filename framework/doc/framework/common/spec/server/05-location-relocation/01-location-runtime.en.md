@@ -75,8 +75,8 @@ Actor/Spot relocation aren't stored in either Store. The source keeps them in me
 sends them to the target directly (§8).
 
 The relationship of which Actor belongs to which User Spot is called
-[Actor membership](../00-foundation/02-glossary.en.md#actor-membership). The list of relocation targets
-stored in the Location Store is the source of truth for membership. The payload the
+[Actor membership](../00-foundation/02-glossary.en.md#actor-membership). Its source of truth is the current Spot
+in the Actor authority `payload` in the Location Store ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)). The payload the
 Restore conversation carries can't change this relationship.
 
 **Even with many Actors, the whole list isn't put into a single record.** The Framework
@@ -416,7 +416,6 @@ descriptor's and fanout publisher descriptor's key, is called a
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 | Aggregate ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
-| Aggregate inventory root ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0root` |
 | Aggregate inventory page ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
 | Aggregate participant ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0{Index}` |
 
@@ -540,7 +539,7 @@ number precision).
 | Field | Meaning |
 |---|---|
 | `recordVersion` | Same as above. The current value is `1`. |
-| `payload` | Application-defined opaque bytes whose meaning the Framework doesn't interpret. Encoded in JSON as base64 in all four languages. |
+| `payload` | Bytes the Framework encodes in the [authority payload format](../02-channel-transport/06-wire-protocol.en.md#location-store-authority-key-format). An Actor's current Spot (membership) is also in it. The Location Store provider doesn't interpret it, and all four languages encode it in JSON as base64. |
 | `objectGeneration` | The object's (§3.2) current generation. Issued from the Store-wide monotonic sequence defined above. |
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
@@ -581,15 +580,12 @@ records below, and all four languages use the same keys
 ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) and bytes. No other
 progress information (a separate lock record, before/after pages, a per-participant metadata
 record) is kept. A `SpotWide` relocation does not change
-[Actor membership](../00-foundation/02-glossary.en.md#actor-membership). While it moves, the
-reference of membership ([§1.2](#12-information-the-two-stores-store-separately)) is the inventory, and every Actor entry of the inventory
-is a member of the Spot that the aggregate's `spotAuthorityKey` names. Membership after the
-relocation is the same as before it.
+[Actor membership](../00-foundation/02-glossary.en.md#actor-membership) (§8). The inventory only enumerates participants and does not decide membership.
 
 | Record | Value |
 |---|---|
-| Aggregate | The only record that decides the state and result of one relocation. Canonical JSON below. |
-| Aggregate inventory root and pages | The participant list. Canonical JSON below; written once and never changed. |
+| Aggregate | The only record that decides the state and result of one relocation and the root of its participant list. Canonical JSON below. |
+| Aggregate inventory pages | The participant list. Canonical JSON below; written once and never changed. |
 | Aggregate participant | Raw bytes of the participant's post-commit application payload (the `payload` of the §3.4 authority). Written once and never changed. |
 | Authority `aggregate` and `visibleStoreVersion` | The marker and the preserved public version on each participant authority (§3.4). |
 
@@ -616,8 +612,9 @@ below state.
 | `targetDescriptorLifecycleGeneration` | The target MeshNode's `lifecycleGeneration`. |
 | `capacity` | The space to reserve on the target: `{actors, spots, spotTypes}`, where `spotTypes` is an array of `{objectKind, stableType, count}` sorted by the UTF-8 byte order of `objectKind`, then `stableType`. |
 | `ownerGenerationStart`, `ownerGenerationEnd` | The inclusive range of `AuthorityOwnerGeneration` values issued to `newOwner` participants. Both are `null` until issued or when there is no `newOwner` participant. |
+| `inventory` | The inventory root object written by the last write of the List step. `null` before that. |
 
-The number of participants is decided by the inventory root's `totalCount` alone.
+The number of participants is decided by the aggregate `inventory`'s `totalCount` alone.
 
 The **participant marker** (the authority's `aggregate`) has `aggregateId`,
 `aggregateGeneration`, `index`, `expectedStoreVersion`, `ownerTransition`
@@ -637,15 +634,15 @@ preimage (§3.4) and numbers them from 0 as `index`.
 | Entry | `index`, `authorityKey` (the preimage string), `objectGeneration`, `expectedStoreVersion`, `ownerTransition`, `authorityPayloadSha256` |
 | Page reference | `level`, `index`, `startIndex` (the `index` of the first entry it covers), `entryCount` (the number of entries it covers), `sha256` (the hash of that page's bytes) |
 | Page | `kind` (`"aggregate-inventory-page-v1"`), `level`, `index`, `startIndex`, `entryCount`, `entries`, `children` |
-| Root | `kind` (`"aggregate-inventory-root-v1"`), `totalCount`, `digest`, `topLevel`, `topPages`, `pageCountsByLevel` |
+| Root (the aggregate's `inventory`) | `totalCount`, `digest`, `topLevel`, `topPages`, `pageCountsByLevel` |
 
 A level-0 page holds entries in `entries` and has an empty `children` array. A higher-level page
 has an empty `entries` array and holds references to pages one level below in `children`. Page
 `index` values at each level start at 0 without gaps, and `entries`, `children`, and `topPages` are
 in `index` order. `pageCountsByLevel` is a number array of each level's page count from level 0.
 `digest` is the SHA-256 of the entries' canonical JSON bytes concatenated in `index` order, and it
-is §8's content check value of the relocation list. A page and the root each hold at most 1,024
-entries or references and at most 1 MiB; when the root would exceed this, one more level is added.
+is §8's content check value of the relocation list. A page holds at most 1,024
+entries or references and at most 1 MiB. The root's `topPages` hold at most 1,024 references; beyond that one more level is added.
 A read page whose hash, count, or `digest` does not match is data lost.
 
 **State transitions.** The aggregate record changes only `staging → prepared → committed` or
@@ -656,9 +653,9 @@ is one Store write ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-
 
 | Step | Contents and conditions |
 |---|---|
-| Claim | An existing aggregate of the same fence settles it: a terminal one returns its result, a `staging` one with the same `requestFingerprint` continues preparation, and anything else is `Conflict`. Otherwise it checks the value of every authority with its marker, the authority after commit projection and after cleanup, every participant record, page, and root, and the encoded size and unique key count of each write below, against the limits of [02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch). A `StoreVersion` not yet issued is counted as the provider token's maximum length with every byte written as a `\u00xx` escape. Within the limits it writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. |
-| List | Conditioned on the aggregate's `staging` version, writes the participant records, pages, and root in that order, each when missing. Identical existing bytes count as done; different bytes are `Conflict`. |
-| Marker installation | Starts after every list record through the root is confirmed. For each participant, conditioned on the aggregate's `staging` version, the root's version, and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. Identical existing canonical marker bytes count as done; any other marker is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. |
+| Claim | An existing aggregate of the same fence settles it: a terminal one returns its result, with the same `requestFingerprint` a `staging` one continues preparation and a `prepared` one is `AlreadyPrepared` (§8.1), and anything else is `Conflict`. Otherwise it checks the value of every authority with its marker, the authority after commit projection and after cleanup, every participant record and page and the aggregate with its `inventory`, and the encoded size and unique key count of each write below, against the limits of [02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch). A `StoreVersion` not yet issued is counted as the provider token's maximum length with every byte written as a `\u00xx` escape. Within the limits it writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. |
+| List | Conditioned on the aggregate's `staging` version, writes the participant records and pages, each when missing, and last writes the aggregate's `inventory`. Identical existing bytes count as done; different bytes are `Conflict`. |
+| Marker installation | Starts after the aggregate has its `inventory` and every list record is confirmed. For each participant, conditioned on the aggregate's `staging` version and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. Identical existing canonical marker bytes count as done; any other marker is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. |
 | Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity counter's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease, and the capacity records. The reserved increase occupies the ordinary host capacity counter and is not a relocation-specific reservation record. |
 | Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, and the capacity records. The target's lease, liveness, and lifecycle are not checked again ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
 | Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Carries `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and a Put that writes the pre-move values to the Spot participant's authority without a marker, conditioned on the aggregate version and the physical version of the Spot participant's authority. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
@@ -690,25 +687,24 @@ scan of the `aggregate\0` preimage prefix
 
 1. A `staging` or `prepared` aggregate is finished by the runtime that started the relocation. When
    the `sourceOwner` lease has expired, the cleaning runtime `Abort`s it.
-2. An aggregate whose `cleaned` is `false` and that has no root stopped before writing its root. The
-   root is deleted only after `cleaned`, and marker installation is conditioned on the root's version,
-   so this relocation has no markers. This happens only in `staging` and `aborted`; a `staging` one
+2. An aggregate whose `cleaned` is `false` and whose `inventory` is `null` stopped before the List step
+   finished. Marker installation is conditioned on an aggregate version that has an `inventory`, so this
+   relocation has no markers. This happens only in `staging` and `aborted`; a `staging` one
    follows step 1 first. The children found by scanning the same fence's child preimage prefixes
    (`aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0`,
    `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0`) are deleted, and `cleaned` is
-   written as `true` conditioned on the aggregate version. A missing root in `prepared` or `committed`
-   is data lost.
-3. For a terminal aggregate with a root whose `cleaned` is `false`, the authority of every entry is read again in
+   written as `true` conditioned on the aggregate version.
+3. For a terminal aggregate with an `inventory` whose `cleaned` is `false`, the authority of every entry is read again in
    inventory order and cleaned up if it carries this fence's marker. After confirming that no entry
    carries this fence's marker, `cleaned` is written as `true` conditioned on the aggregate version.
-4. The participant records, pages, and root of an aggregate whose `cleaned` is `true` are deleted. A
+4. The participant records and pages of an aggregate whose `cleaned` is `true` are deleted. A
    missing child was already deleted.
 5. The aggregate is deleted when neither the `sourceOwner` lease nor the `targetOwner` lease is the
    current lease. After that neither a Claim of the same fence (conditioned on the current `sourceOwner`
    lease) nor the target's resubmission ([§10](#10-when-a-store-response-isnt-received), which ends when
    the target lease expires) can happen, so until then the same fence receives the terminal result.
 
-When the aggregate, root, page, or participant record a marker refers to is missing, the authority is read again. If its physical version is unchanged the
+When the aggregate, page, or participant record a marker refers to is missing, the authority is read again. If its physical version is unchanged the
 result is data lost; if it changed, the new row is projected again.
 
 ## 4. Finding Running Nodes and Their Capabilities
@@ -1456,7 +1452,7 @@ Location Store doesn't point at the payload's location or checksum.
 | `Preparing` | Source owner information and the relocation target list's content checksum | Must match the current source exactly. |
 | `Captured` | Capture completion and the list content checksum. No payload location is recorded. | The source must be keeping the whole payload in memory. |
 | `Prepared` | Target attempt number and target owner information | Target's payload assembly and checksum verification, Restore, and relocation temporary queue registration must finish. |
-| Owner change | Target owner and membership | Restore must finish and the CAS for one object or the whole User Spot must succeed. The same authority CAS owns normal host-capacity accounting, but there is no relocation-specific reservation handshake. |
+| Owner change | Target owner. A move that changes membership records the membership too. A `SpotWide` move does not change membership ([§3.5](#35-progress-records-of-a-spotwide-relocation)). | Restore must finish and the CAS for one object or the whole User Spot must succeed. The same authority CAS owns normal host-capacity accounting, but there is no relocation-specific reservation handshake. |
 | `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | There is no separate target completion reply, and it doesn't wait for all relay through the previous address to end. Message Follow handles late relay (§7.3). The recording condition also includes [§9.3](#93-handling-a-request-that-finished-after-the-source-changed): stored completion results for accepted requests and zero pending deliveries. |
 
 The target puts into assembly only chunks whose binding values match the Restore

@@ -141,8 +141,8 @@ framework pre-stores immutable inventory chunks bounded to at most 1,024
 entries per relocation-target-list page and 1 MiB encoded — this page bound
 is a separate figure from the CAS batch's unique-key-total bound above, and
 applies to a different target. The final batch only puts in small records
-that must change together at publish time — aggregate authority, inventory
-root/count/digest, and capacity counter.
+that must change together at publish time — the aggregate carrying the
+inventory root/count/digest, and capacity counter.
 
 So the total number of Actors that can belong to one User Spot isn't set by
 the batch's 2,048-key limit. The provider doesn't interpret the meaning of
