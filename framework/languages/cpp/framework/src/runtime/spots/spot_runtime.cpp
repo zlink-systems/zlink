@@ -8095,6 +8095,7 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
 bool spot_node_runtime_t::commit_relocation_materialization (
   const std::vector<runtime::stateful::object_ref_t> &targets)
 {
+    static constexpr const char *completion_failure_message = "Actor Join completion failed";
     end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
     std::vector<std::pair<std::string, runtime::stateful::object_ref_t>> actor_fences;
@@ -8222,162 +8223,171 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         }
         auto completion_record =
           std::make_shared<actor_join_completion_record_t> (std::move (completion));
-        auto complete_join = [node = _state, completion_record] () mutable {
+        auto fail_commit = [node = _state, completion_record] (result_t<void> failed) noexcept {
+            try {
+                (void) node->actor_transfer_coordinator.fail_commit (completion_record->handoff_id,
+                                                                     true);
+            }
+            catch (...) {
+                failed = detail::current_exception_result<void> (completion_failure_message);
+            }
+            if (completion_record->lifecycle_reservation)
+                completion_record->lifecycle_reservation->settle (std::move (failed));
+        };
+        auto complete_join = [node = _state, completion_record, fail_commit] () mutable {
             auto &completion = *completion_record;
-            auto runtime = spot_node_runtime_t (node);
-            const auto fail_commit = [node, handoff_id = completion.handoff_id,
-                                      reservation = completion.lifecycle_reservation] () noexcept {
-                try {
-                    fail_handoff_backlog (
-                      node, node->actor_transfer_coordinator.fail_commit (handoff_id, true));
-                }
-                catch (...) {
-                }
-                if (reservation)
-                    reservation->settle (result_t<void>::failure (
-                      framework_error_kind_t::internal_failure, "Actor Join commit failed"));
-            };
             std::shared_ptr<join_completion_delivery_fence_scope_t> delivery_scope;
             try {
                 auto root_services = node->lane.run ([&] { return node->root_services; }).get ();
                 if (!root_services) {
-                    fail_commit ();
+                    fail_commit (result_t<void>::failure (
+                      framework_error_kind_t::internal_failure,
+                      "Actor Join completion root services are unavailable"));
                     return;
                 }
                 delivery_scope = join_completion_delivery_fence_scope_t::begin (
                   root_services->get_required<actor_gateway_runtime_t> (), completion.actor,
-                  fail_commit);
+                  [fail_commit] {
+                      fail_commit (result_t<void>::failure (
+                        framework_error_kind_t::internal_failure, "Actor Join commit failed"));
+                  });
             }
             catch (...) {
-                fail_commit ();
+                fail_commit (detail::current_exception_result<void> (completion_failure_message));
                 return;
             }
-            auto fail_join = [node, delivery_scope, handoff_id = completion.handoff_id,
-                              reservation = completion.lifecycle_reservation] (
-                               framework_error_kind_t kind, std::string error) mutable {
-                auto failed = result_t<void>::failure (kind, std::move (error));
-                auto finish = [node, handoff_id, reservation] (result_t<void> result) noexcept {
-                    try {
-                        fail_handoff_backlog (
-                          node, node->actor_transfer_coordinator.fail_commit (handoff_id, true));
-                    }
-                    catch (...) {
-                    }
-                    if (reservation)
-                        reservation->settle (std::move (result));
-                };
-                delivery_scope->settle (std::move (failed), std::move (finish));
+            auto fail_join = [delivery_scope, fail_commit] (result_t<void> failed) mutable {
+                delivery_scope->settle (std::move (failed), fail_commit);
             };
-            auto finish_join = [node, completion_record, delivery_scope,
-                                fail_join] (result_t<void> joined) mutable {
+            auto finish_join = [node, completion_record, delivery_scope, fail_join,
+                                fail_commit] (result_t<void> joined) mutable {
                 auto &completion = *completion_record;
                 auto runtime = spot_node_runtime_t (node);
-                if (!joined) {
-                    fail_join (joined.error_kind (), joined.error () != nullptr
-                                                       ? joined.error ()->what ()
-                                                       : "spot actor joined callback failed");
-                    return;
-                }
-                serializer_registry_t *serializers = nullptr;
-                serializers = node->lane
-                                .run ([&] {
-                                    if (node->channel_runtime)
-                                        return node->channel_runtime->serializers;
-                                    return static_cast<serializer_registry_t *> (nullptr);
-                                })
-                                .get ();
-                if (serializers == nullptr) {
-                    fail_join (framework_error_kind_t::protocol_error,
-                               "Actor Join completion serializer registry is unavailable");
-                    return;
-                }
-                try {
-                    runtime::messaging::envelope_header_t leave_header;
-                    leave_header.kind = runtime::messaging::message_kind_t::command;
-                    leave_header.channel_name = "node";
-                    leave_header.message_name =
-                      detail::spot_actor_leave_route_command_t::packet_name;
-                    auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
-                      leave_header,
-                      detail::spot_actor_leave_route_command_t{
-                        .transfer_id = completion.handoff_id,
-                        .actor_node_rid =
-                          std::string (completion.source_actor.node_rid ().value ()),
-                        .actor_type =
-                          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
-                            completion.source_actor)),
-                        .actor_id = std::string (completion.source_actor.actor_id ().value ()),
-                        .actor_generation = completion.source_actor.object_generation (),
-                        .source_spot_id = std::string (completion.source_spot_id),
-                        .source_spot_generation = 0,
-                        .target_spot_id = std::string (completion.target_spot_id),
-                        .target_node_rid = std::string (completion.actor.node_rid ().value ()),
-                        .target_node_generation = completion.target_node_generation,
-                        .target_authority_owner_generation =
-                          completion.target_authority_owner_generation,
-                        .target_owner_lease_generation = completion.target_owner_lease_generation},
-                      *serializers);
-                    auto notification = std::make_shared<task_t<zlink::submit_result_t>> (
-                      runtime.send_actor_leave_notification (
-                        zlink::routing_id_t::from (
-                          std::string (completion.source_actor.node_rid ().value ())),
-                        std::move (leave_parts)));
-                    detail::observe_task_completion (
-                      *notification, [notification] (const result_t<zlink::submit_result_t> &) {});
-                }
-                catch (...) {
-                    // Source OnLeave is post-commit, one-way housekeeping.
-                }
                 std::optional<message_t> reply;
-                try {
-                    if (!completion.reply.empty ()) {
-                        reply = message_t::from_raw (
-                          zlink::message_t::from (std::move (completion.reply)), serializers);
+                auto report_source_leave_failure = [node, completion_record] (auto &&build_error) {
+                    detail::message_flow_tracer_t (node->dispatch)
+                      .trace (
+                        message_flow_outcome_t::completed, message_flow_result_t::failed, [&] {
+                            return message_flow_event_t{
+                              .outcome = message_flow_outcome_t::completed,
+                              .surface = dispatch_error_surface_t::spot_actor,
+                              .message_kind = dispatch_message_kind_t::control,
+                              .packet_name = detail::spot_actor_leave_route_command_t::packet_name,
+                              .correlation_id = completion_record->handoff_id,
+                              .spot_id = std::string (completion_record->source_spot_id),
+                              .actor_id =
+                                std::string (completion_record->source_actor.actor_id ().value ()),
+                              .exception = build_error (),
+                              .result = message_flow_result_t::failed};
+                        });
+                };
+                if (joined) {
+                    try {
+                        auto *serializers = node->lane
+                                              .run ([&] {
+                                                  return node->channel_runtime
+                                                           ? node->channel_runtime->serializers
+                                                           : nullptr;
+                                              })
+                                              .get ();
+                        if (serializers == nullptr) {
+                            throw framework_exception_t (
+                              framework_error_kind_t::protocol_error,
+                              "Actor Join completion serializer registry is unavailable");
+                        }
+                        try {
+                            runtime::messaging::envelope_header_t leave_header;
+                            leave_header.kind = runtime::messaging::message_kind_t::command;
+                            leave_header.channel_name =
+                              detail::spot_actor_leave_route_command_t::channel_name;
+                            leave_header.message_name =
+                              detail::spot_actor_leave_route_command_t::packet_name;
+                            auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
+                              leave_header,
+                              detail::spot_actor_leave_route_command_t{
+                                .transfer_id = completion.handoff_id,
+                                .actor_node_rid =
+                                  std::string (completion.source_actor.node_rid ().value ()),
+                                .actor_type = std::string (
+                                  ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                                    completion.source_actor)),
+                                .actor_id =
+                                  std::string (completion.source_actor.actor_id ().value ()),
+                                .actor_generation = completion.source_actor.object_generation (),
+                                .source_spot_id = std::string (completion.source_spot_id),
+                                .source_spot_generation = 0,
+                                .target_spot_id = std::string (completion.target_spot_id),
+                                .target_node_rid =
+                                  std::string (completion.actor.node_rid ().value ()),
+                                .target_node_generation = completion.target_node_generation,
+                                .target_authority_owner_generation =
+                                  completion.target_authority_owner_generation,
+                                .target_owner_lease_generation =
+                                  completion.target_owner_lease_generation},
+                              *serializers);
+                            auto notification = std::make_shared<task_t<zlink::submit_result_t>> (
+                              runtime.send_actor_leave_notification (
+                                zlink::routing_id_t::from (
+                                  std::string (completion.source_actor.node_rid ().value ())),
+                                std::move (leave_parts)));
+                            detail::observe_task_completion (
+                              *notification, [notification, report_source_leave_failure] (
+                                               const result_t<zlink::submit_result_t> &submitted) {
+                                  if (submitted && submitted.value () == zlink::submit_result_t::ok)
+                                      return;
+                                  report_source_leave_failure ([&] {
+                                      if (!submitted && submitted.error ())
+                                          return std::make_exception_ptr (*submitted.error ());
+                                      return std::make_exception_ptr (framework_exception_t (
+                                        submitted
+                                          ? runtime::messaging::map_submit_result_error_kind (
+                                              submitted.value ())
+                                          : submitted.error_kind (),
+                                        "source Actor leave submission failed"));
+                                  });
+                              });
+                        }
+                        catch (...) {
+                            report_source_leave_failure ([] { return std::current_exception (); });
+                        }
+                        if (!completion.reply.empty ()) {
+                            reply = message_t::from_raw (
+                              zlink::message_t::from (std::move (completion.reply)), serializers);
+                        }
+                    }
+                    catch (...) {
+                        joined =
+                          detail::current_exception_result<void> (completion_failure_message);
                     }
                 }
-                catch (const framework_exception_t &error) {
-                    fail_join (error.kind (), error.what ());
-                    return;
-                }
-                catch (const std::exception &error) {
-                    fail_join (framework_error_kind_t::internal_failure, error.what ());
-                    return;
-                }
-                catch (...) {
-                    fail_join (framework_error_kind_t::internal_failure,
-                               "Actor Join completion reply decoding failed");
-                    return;
-                }
                 const auto actor = completion.actor;
-                const auto source_actor = completion.source_actor;
-                const auto target_spot_id = completion.target_spot_id;
-                const auto completion_handoff_id = completion.handoff_id;
-                const auto key = actor_key (actor);
+                actor_join_completion_t outcome =
+                  joined
+                    ? actor_join_completion_t (actor_join_accepted_t{completion.operation_high,
+                                                                     completion.operation_low,
+                                                                     actor, std::move (reply)})
+                    : actor_join_completion_t (actor_join_failed_t{
+                        completion.operation_high, completion.operation_low, joined.error_kind ()});
                 try {
                     runtime.deliver_actor_join_completion_async (
-                      actor,
-                      actor_join_accepted_t{completion.operation_high, completion.operation_low,
-                                            actor, std::move (reply)},
-                      target_spot_id,
-                      [node, actor, source_actor, target_spot_id, completion_handoff_id, key,
-                       reservation =
-                         completion.lifecycle_reservation] (result_t<void> delivered) noexcept {
+                      actor, std::move (outcome), completion.target_spot_id,
+                      [node, completion_record, joined = std::move (joined),
+                       fail_commit] (result_t<void> delivered) mutable noexcept {
+                          if (!delivered || !joined) {
+                              fail_commit (!delivered ? std::move (delivered) : std::move (joined));
+                              return;
+                          }
+                          auto &completion = *completion_record;
                           try {
-                              if (!delivered) {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                                  if (reservation)
-                                      reservation->settle (std::move (delivered));
-                                  return;
-                              }
+                              const auto key = actor_key (completion.actor);
                               auto [replay, replay_services] =
                                 node->lane
                                   .run ([&] {
                                       auto backlog =
                                         node->actor_transfer_coordinator
                                           .complete_commit_and_take_backlog (
-                                            completion_handoff_id, source_actor, target_spot_id);
+                                            completion.handoff_id, completion.source_actor,
+                                            completion.target_spot_id);
                                       if (backlog)
                                           node->actor_join_relocation_recoveries.erase (key);
                                       return std::make_pair (std::move (backlog),
@@ -8385,48 +8395,32 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   })
                                   .get ();
                               if (!replay) {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::failure (
-                                        framework_error_kind_t::internal_failure,
-                                        "Actor Join completion commit failed"));
+                                  fail_commit (result_t<void>::failure (
+                                    framework_error_kind_t::internal_failure,
+                                    "Actor Join completion commit failed"));
                                   return;
                               }
-                              if (replay->empty ()) {
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::success ());
-                                  return;
-                              }
-                              if (!replay_services) {
-                                  auto runtime = spot_node_runtime_t (node);
-                                  if (runtime.actor_transfer_marker_enabled ()) {
-                                      runtime.emit_actor_transfer_marker (
-                                        "handoff_replay_unavailable", actor, completion_handoff_id);
+                              if (!replay->empty ()) {
+                                  if (replay_services) {
+                                      spot_node_runtime_t (node).enqueue_actor_handoff_replay (
+                                        completion.actor, std::move (*replay), *replay_services,
+                                        completion.handoff_id);
+                                  } else {
+                                      auto runtime = spot_node_runtime_t (node);
+                                      if (runtime.actor_transfer_marker_enabled ()) {
+                                          runtime.emit_actor_transfer_marker (
+                                            "handoff_replay_unavailable", completion.actor,
+                                            completion.handoff_id);
+                                      }
                                   }
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::success ());
-                                  return;
                               }
-                              spot_node_runtime_t (node).enqueue_actor_handoff_replay (
-                                actor, std::move (*replay), *replay_services,
-                                completion_handoff_id);
-                              if (reservation)
-                                  reservation->settle (result_t<void>::success ());
+                              if (completion.lifecycle_reservation)
+                                  completion.lifecycle_reservation->settle (
+                                    result_t<void>::success ());
                           }
                           catch (...) {
-                              try {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                              }
-                              catch (...) {
-                              }
-                              if (reservation)
-                                  reservation->settle (result_t<void>::failure (
-                                    framework_error_kind_t::internal_failure,
-                                    "Actor Join completion failed"));
+                              fail_commit (detail::current_exception_result<void> (
+                                completion_failure_message));
                           }
                       },
                       [delivery_scope] (result_t<void> result,
@@ -8434,15 +8428,8 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                           delivery_scope->settle (std::move (result), std::move (settled));
                       });
                 }
-                catch (const framework_exception_t &error) {
-                    fail_join (error.kind (), error.what ());
-                }
-                catch (const std::exception &error) {
-                    fail_join (framework_error_kind_t::internal_failure, error.what ());
-                }
                 catch (...) {
-                    fail_join (framework_error_kind_t::internal_failure,
-                               "Actor Join completion delivery failed");
+                    fail_join (detail::current_exception_result<void> (completion_failure_message));
                 }
             };
             if (completion.admission.on_actor_joined) {
@@ -8460,28 +8447,22 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                               try {
                                   finish_join (std::move (value));
                               }
-                              catch (const framework_exception_t &error) {
-                                  fail_join (error.kind (), error.what ());
-                              }
-                              catch (const std::exception &error) {
-                                  fail_join (framework_error_kind_t::internal_failure,
-                                             error.what ());
+                              catch (...) {
+                                  fail_join (detail::current_exception_result<void> (
+                                    completion_failure_message));
                               }
                           });
                     }
-                    catch (const framework_exception_t &error) {
-                        fail_join (error.kind (), error.what ());
-                    }
-                    catch (const std::exception &error) {
-                        fail_join (framework_error_kind_t::internal_failure, error.what ());
+                    catch (...) {
+                        finish_join (
+                          detail::current_exception_result<void> (completion_failure_message));
                     }
                 };
                 if (completion.lifecycle_reservation) {
                     const auto activated =
                       completion.lifecycle_reservation->activate_async (std::move (run_joined));
                     if (!activated)
-                        fail_join (activated.error_kind (),
-                                   "Actor Join lifecycle reservation was not activated");
+                        fail_join (activated);
                 } else {
                     run_joined ();
                 }
@@ -8493,8 +8474,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             complete_join ();
         }
         catch (...) {
-            // The delivery scope owns the exact failure terminal after it is
-            // installed; setup failures call fail_commit before returning.
+            fail_commit (detail::current_exception_result<void> (completion_failure_message));
         }
     }
     return true;

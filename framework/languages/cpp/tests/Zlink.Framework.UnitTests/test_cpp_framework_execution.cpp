@@ -63,6 +63,8 @@
 namespace
 {
 
+constexpr std::uint32_t handler_coroutine_worker_count = 4;
+
 #ifndef ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH
 #error "serial execution conformance fixture path is required"
 #endif
@@ -4859,14 +4861,40 @@ class actor_cutover_authority_t final
     std::string last_expected_store_version;
 };
 
-bool verify_join_commit_does_not_wait_for_joined_callback ()
+bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failure = false,
+                                                           bool completion_failure = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     namespace stateful = zlink::framework::runtime::stateful;
 
+    constexpr const char *transfer_id = "join-commit-transfer";
+    std::atomic_int source_leave_failures{0};
+    std::atomic_bool source_leave_identity{false};
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("join-commit-target");
+    node->dispatch.message_flow (message_flow_log_mode_t::errors);
+    dispatch_options_access_t::set_observer_for_tests (
+      node->dispatch, [&source_leave_failures, &source_leave_identity,
+                       transfer_id] (const message_flow_event_t &event) {
+          if (event.packet_name != spot_actor_leave_route_command_t::packet_name)
+              return;
+          ++source_leave_failures;
+          if (!event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              source_leave_identity.store (event.outcome == message_flow_outcome_t::completed
+                                           && event.surface == dispatch_error_surface_t::spot_actor
+                                           && event.message_kind == dispatch_message_kind_t::control
+                                           && event.result == message_flow_result_t::failed
+                                           && !event.reason && event.correlation_id == transfer_id
+                                           && error.kind ()
+                                                == framework_error_kind_t::not_configured);
+          }
+      });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -4878,13 +4906,51 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
     spot->spot_instance = std::make_shared<int> (1);
     spot->channel_runtime = node->channel_runtime;
     spot->serial_executor = node->worker_executor;
+    constexpr std::uint64_t operation_high = 31;
+    constexpr std::uint64_t operation_low = 37;
+    constexpr std::string_view lifecycle_error = "materialized lifecycle failure";
+    constexpr std::string_view completion_error = "materialized completion failure";
+    std::atomic_int reservation_failures{0};
+    std::atomic_bool reservation_identity{false};
     spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *spot->serial_executor, runtime::serial_execution_queue_options_t{},
-      runtime::serial_execution_queue_t::error_handler_t{},
+      [&reservation_failures, &reservation_identity, completion_failure, lifecycle_error,
+       completion_error] (const std::string &, const std::exception_ptr &error) {
+          ++reservation_failures;
+          try {
+              std::rethrow_exception (error);
+          }
+          catch (const framework_exception_t &failure) {
+              if (failure.kind ()
+                    == (completion_failure ? framework_error_kind_t::deadline_exceeded
+                                           : framework_error_kind_t::unavailable)
+                  && std::string_view (failure.what ())
+                       == (completion_failure ? completion_error : lifecycle_error))
+                  reservation_identity.store (true);
+          }
+      },
       runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
+    std::atomic_int completions{0};
+    std::atomic_bool completion_identity{false};
+    factory.on_join_completed =
+      [&completions, &completion_identity, lifecycle_failure, completion_failure,
+       completion_error] (void *, actor_join_completion_outcome_t outcome, std::uint64_t high,
+                          std::uint64_t low, const actor_ref_t *, const std::optional<message_t> &,
+                          framework_error_kind_t kind, bool) -> task_t<void> {
+        completion_identity.store (high == operation_high && low == operation_low
+                                   && (lifecycle_failure
+                                         ? outcome == actor_join_completion_outcome_t::failed
+                                             && kind == framework_error_kind_t::unavailable
+                                         : outcome == actor_join_completion_outcome_t::accepted));
+        ++completions;
+        if (completion_failure)
+            throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                         std::string (completion_error));
+        co_return;
+    };
     node->actor_factories.emplace ("player", std::move (factory));
     std::promise<void> joined_started;
     auto started = joined_started.get_future ();
@@ -4938,13 +5004,19 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
     authority->publish (source, target, location_owner_token_t{"target-owner", 6},
                         object_creation_target_t{}, "join-commit-ref", 0, {});
     owner.bind_relocation_authority (authority);
-    const auto admitted = owner
-                            .admit_remote_actor_to_spot (
-                              "join-commit-transfer", source_actor, spot_id_t ("source-spot"),
-                              spot->spot_id, zlink::message_t{}, 31, 37, 19, 3, 5, true, 1, 1)
-                            .result ();
-    const auto pending = node->actor_transfer_coordinator.admission ("join-commit-transfer");
+    const auto admitted =
+      owner
+        .admit_remote_actor_to_spot (transfer_id, source_actor, spot_id_t ("source-spot"),
+                                     spot->spot_id, zlink::message_t{}, operation_high,
+                                     operation_low, 19, 3, 5, true, 1, 1)
+        .result ();
+    const auto pending = node->actor_transfer_coordinator.admission (transfer_id);
     if (!admitted || !admitted.value ().accepted || !pending || !pending->lifecycle_reservation)
+        return false;
+    std::vector<handoff_packet_t> discarded;
+    if (!node->actor_transfer_coordinator.begin_commit (transfer_id, source_actor, spot->spot_id,
+                                                        discarded)
+        || !discarded.empty ())
         return false;
     const std::string key = "player:joined-actor";
     node->actor_types_by_id.emplace ("joined-actor", "player");
@@ -4953,13 +5025,13 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
       key, runtime::protocol::actor_route_fence_t{"joined-actor", 7, {}, 1, 20, 6});
     node->actor_join_relocation_recoveries.emplace (
       key, spot_node_builder_state_t::actor_join_relocation_recovery_t{
-             .handoff_id = "join-commit-transfer",
+             .handoff_id = transfer_id,
              .source_spot_id = spot_id_t ("source-spot"),
              .target_spot_id = spot->spot_id,
              .target_node_generation = 1,
              .source_actor = source_actor,
-             .completion_operation_id_high = 31,
-             .completion_operation_id_low = 37,
+             .completion_operation_id_high = operation_high,
+             .completion_operation_id_low = operation_low,
              .lifecycle_reservation = pending->lifecycle_reservation});
     std::promise<void> following_frame;
     auto following = following_frame.get_future ();
@@ -4972,11 +5044,35 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
       entered && following.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
-    release_joined->complete (result_t<void>::success ());
+    release_joined->complete (lifecycle_failure
+                                ? result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                           std::string (lifecycle_error))
+                                : result_t<void>::success ());
     receiver.join ();
     spot->serial_queue->drain ();
     node->worker_executor->drain ();
-    return progressed && committed.load ();
+    const bool failure_preserved =
+      completions.load () == 1 && completion_identity.load () && reservation_failures.load () == 1
+      && reservation_identity.load () && source_leave_failures.load () == 0
+      && node->actor_transfer_coordinator.phase (key) == actor_move_phase_t::reconcile
+      && node->actor_transfer_coordinator.blocks_dispatch (key)
+      && authority->read (target.kind, target.key)->target == target;
+    if (lifecycle_failure && !failure_preserved) {
+        std::cerr << "materialized Join failure: callbacks=" << completions.load ()
+                  << " identity=" << completion_identity.load ()
+                  << " reservation-errors=" << reservation_failures.load ()
+                  << " dispatch-blocked=" << node->actor_transfer_coordinator.blocks_dispatch (key)
+                  << " callback-failure=" << completion_failure << '\n';
+    }
+    const bool accepted_completed =
+      completions.load () == 1 && completion_identity.load () && reservation_failures.load () == 0
+      && source_leave_failures.load () == 1 && source_leave_identity.load ();
+    if (!lifecycle_failure && !accepted_completed) {
+        std::cerr << "materialized Join SourceLeave: observations=" << source_leave_failures.load ()
+                  << " identity=" << source_leave_identity.load () << '\n';
+    }
+    return progressed && committed.load ()
+           && (lifecycle_failure ? failure_preserved : accepted_completed);
 }
 
 class actor_cutover_probe_t final : public zlink::framework::actor_t
@@ -6909,8 +7005,24 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--actor-join-materialization") {
+        zlink::framework::runtime::configure_handler_coroutine_executor (
+          handler_coroutine_worker_count);
+        const bool accepted = verify_join_commit_does_not_wait_for_joined_callback ();
+        const bool failed = verify_join_commit_does_not_wait_for_joined_callback (true);
+        const bool callback_failed =
+          verify_join_commit_does_not_wait_for_joined_callback (true, true);
+        const bool passed = accepted && failed && callback_failed;
+        std::cout << "materialized Join: accepted=" << accepted << " failed=" << failed
+                  << " callback-failed=" << callback_failed << '\n';
+        zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+        if (!passed)
+            std::cerr << "materialized Actor Join lifecycle failure lost its Failed completion or "
+                         "barrier\n";
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (!verify_cpu_worker_completes_in_ordinary_turn ()) {
         std::cerr << "CPU worker did not complete while the ordinary handler retained its turn\n";
         return 141;
@@ -6929,7 +7041,8 @@ int main ()
                   << failed << '\n';
         return 235 + failed;
     }
-    zlink::framework::runtime::configure_handler_coroutine_executor (4);
+    zlink::framework::runtime::configure_handler_coroutine_executor (
+      handler_coroutine_worker_count);
     struct executor_shutdown_t
     {
         ~executor_shutdown_t ()
@@ -7362,6 +7475,12 @@ int main ()
     if (!verify_join_commit_does_not_wait_for_joined_callback ()) {
         std::cerr << "Join commit held the receive worker during OnJoinedActor\n";
         return 140;
+    }
+    if (!verify_join_commit_does_not_wait_for_joined_callback (true)
+        || !verify_join_commit_does_not_wait_for_joined_callback (true, true)) {
+        std::cerr
+          << "materialized Actor Join lifecycle failure lost its Failed completion or barrier\n";
+        return 141;
     }
     if (!verify_target_commit_stages_source_prefix_before_live_dispatch ()) {
         return 94;
