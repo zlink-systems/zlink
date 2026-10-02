@@ -226,7 +226,7 @@ Automatic discovery에서 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 자신의 identity와 접속 정보를 다른 node에 알리기 위해
 게시하는 [MeshNode descriptor](../00-foundation/02-glossary.ko.md#meshnode-descriptor), owner lease,
 ClientServer server descriptor, fanout publisher
-descriptor, authority record, creation request, creation terminal과
+descriptor, authority record, creation terminal과
 [SpotWide 이동의 진행 record](01-location-runtime.ko.md#35-spotwide-이동의-진행-record)는 언어가 달라도 같은 opaque record 표현을
 사용해야 한다 — 그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 record들은
 다음 저장 방식을

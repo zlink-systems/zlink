@@ -418,7 +418,7 @@ Caller는 target node나 endpoint를 선택하지 않는다.
 
 ### 6.4 Creation request와 factory 실행
 
-Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. 생성 권한을 확정하는 전체 절차 — reservation,
+Encoded creation request는 최대 1 MiB다. 생성 권한을 확정하는 전체 절차 — reservation,
 factory 실행이 안전해야 하는 이유, Entry Spot `OnCreateActor`의 승인·거절·예외 처리와
 그 결과로 공개되는 authority — 는 [Spot과 Actor membership §2](05-spot-actor-membership.ko.md#2-object를-하나만-생성하도록-확정하는-과정)가
 소유한다. 이 절은 Actor manager가 그 절차를 어떤 입력으로 시작하는지만 정의한다.

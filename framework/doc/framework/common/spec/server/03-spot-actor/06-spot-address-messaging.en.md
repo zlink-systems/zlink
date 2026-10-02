@@ -207,8 +207,10 @@ specified Mesh doesn't exist, `NotFound`. The framework checks role,
 stable-type capability, and active/pending capacity first, then selects
 among the remaining candidates by node-wide placement weight.
 
-The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines the request's content reference,
-hash, when it is stored, and its lifetime. Only
+An encoded creation request is at most 1 MiB. The framework records an
+unchangeable content reference and hash into the creation intent before
+reservation, and keeps it until the Spot becomes
+[Ready](../00-foundation/02-glossary.en.md#ready) or a failed creation is cleaned up. Only
 the target that obtained creation authority delivers the request to the
 [factory](../00-foundation/02-glossary.en.md#factory). **Since the factory can run more
 than once per `(SpotId, ObjectGeneration, creation attempt)` — where
