@@ -15,6 +15,7 @@
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/codecs/protobuf.hpp>
+#include <zlink/framework.hpp>
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
 #include <google/protobuf/wrappers.pb.h>
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -1161,6 +1163,131 @@ int bound_session_send_does_not_publish_caller_location ()
     return 0;
 }
 
+zlink::framework::task_t<zlink::framework::result_t<void>>
+invoke_app_bound_session_sender_with_temporary_arguments (
+  const zlink::framework::detail::actor_gateway_state_t::bound_session_sender_t &sender,
+  const zlink::framework::node_rid_t &node_rid,
+  const std::string &actor_id)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto actor =
+      std::make_unique<actor_ref_t> (actor_ref_access_t::make (node_rid, "player", actor_id, 7));
+    auto header = std::make_unique<stream_header_t> (
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      std::string (96, 'h'));
+    auto payload =
+      std::make_unique<zlink::message_t> (zlink::message_t::from (std::string (256, 'p')));
+    auto local_sender = sender;
+    return local_sender (*actor, 19, *header, *payload);
+}
+
+int app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto app = app_t::create ();
+    const auto node_id = "bound-session-lifetime-node";
+    const auto framework_node_rid = node_rid_t::from_string (node_id);
+    const auto node_rid = zlink::routing_id_t::from (node_id);
+    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.add_route_mesh ("bound-session-lifetime-mesh")
+          .set_object_role (object_role_t::none)
+          .set_routing_id (node_rid)
+          .listen (0);
+    });
+
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
+    const auto state = gateway.weak_state ().lock ();
+    if (!state || !state->bound_session_sender) {
+        provider.close ();
+        return 1;
+    }
+
+    const std::string actor_id = "bound-session-lifetime-actor-" + std::string (48, 'a');
+    const auto actor = actor_ref_access_t::make (framework_node_rid, "player", actor_id, 7);
+    if (!gateway.record_bound_session_route (
+          actor, node_rid, zlink::routing_id_t::from ("bound-session-lifetime-session"), 11, 13, 17,
+          19)) {
+        provider.close ();
+        return 2;
+    }
+
+    const char *const raw_arguments[] = {"actor-gateway-coroutine-lifetime"};
+    auto **const arguments = const_cast<char **> (raw_arguments);
+    int app_exit_code = -1;
+    std::exception_ptr app_failure;
+    std::thread app_thread ([&] {
+        try {
+            app_exit_code = app.run (1, arguments);
+        }
+        catch (const std::exception &) {
+            app_failure = std::current_exception ();
+        }
+    });
+    const auto app_ready_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!app.is_ready () && app.runtime_state () != framework_runtime_state_t::error
+           && std::chrono::steady_clock::now () < app_ready_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    if (!app.is_ready ()) {
+        app.stop ();
+        app_thread.join ();
+        provider.close ();
+        return 3;
+    }
+
+    std::promise<void> lane_entered;
+    auto lane_has_entered = lane_entered.get_future ();
+    std::promise<void> lane_release;
+    auto release_lane = lane_release.get_future ().share ();
+    std::exception_ptr lane_failure;
+    std::thread lane_thread ([&] {
+        try {
+            state->lane
+              .run ([&] {
+                  lane_entered.set_value ();
+                  release_lane.wait ();
+              })
+              .get ();
+        }
+        catch (const std::exception &) {
+            lane_failure = std::current_exception ();
+        }
+    });
+    if (lane_has_entered.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
+        lane_release.set_value ();
+        lane_thread.join ();
+        app.stop ();
+        app_thread.join ();
+        provider.close ();
+        return 4;
+    }
+
+    const auto sender = state->bound_session_sender;
+    auto pending = invoke_app_bound_session_sender_with_temporary_arguments (
+      sender, framework_node_rid, actor_id);
+    const bool suspended_on_route_lookup = !pending.result_for (std::chrono::milliseconds (0));
+    lane_release.set_value ();
+    lane_thread.join ();
+    const auto sent = pending.result ();
+
+    app.stop ();
+    app_thread.join ();
+    provider.close ();
+    if (app_failure || app_exit_code != 0 || lane_failure) {
+        return 5;
+    }
+    // The native Session may not exist in this unit scenario. The send outcome
+    // is immaterial here: the registered app callback must resume and consume
+    // its actor, header, and payload after route lookup has yielded.
+    (void) sent;
+    return suspended_on_route_lookup ? 0 : 6;
+}
+
 int generated_protobuf_bound_session_uses_typed_serializer_codec ()
 {
     using namespace zlink::framework;
@@ -2292,6 +2419,25 @@ zlink::framework::task_t<void> inspect_pending_disconnect_argument (
     co_return;
 }
 
+zlink::framework::task_t<void> inspect_pending_manager_disconnect_argument (
+  const zlink::framework::actor_ref_t &actor,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<std::atomic_bool> &started,
+  const std::shared_ptr<std::promise<bool>> &observed,
+  std::string expected_actor_id)
+{
+    started->store (true, std::memory_order_release);
+    co_await pending->task ();
+    bool retained = false;
+    try {
+        retained = actor.actor_id ().value () == expected_actor_id;
+    }
+    catch (const std::exception &) {
+    }
+    observed->set_value (retained);
+    co_return;
+}
+
 int disconnect_notification_survives_pending_dispatcher_completion ()
 {
     using namespace zlink::framework;
@@ -2333,6 +2479,42 @@ int disconnect_notification_survives_pending_dispatcher_completion ()
                  ? 0
                  : 3;
     });
+}
+
+int session_manager_disconnect_survives_pending_dispatcher_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const std::string actor_id (96, 'm');
+    const auto actor = test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
+    (void) manager.bind (actor).async ().result ().value ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto disconnect_started = std::make_shared<std::atomic_bool> (false);
+    auto observed = std::make_shared<std::promise<bool>> ();
+    auto actor_retained = observed->get_future ();
+    gateway.on_disconnect ([pending, disconnect_started, observed,
+                            actor_id] (const actor_ref_t &disconnected_actor) {
+        return inspect_pending_manager_disconnect_argument (disconnected_actor, pending,
+                                                            disconnect_started, observed, actor_id);
+    });
+
+    session_actor_manager_access_t::disconnect (manager);
+    if (!disconnect_started->load (std::memory_order_acquire))
+        return 1;
+
+    std::vector<std::string> reclaimed_storage;
+    reclaimed_storage.reserve (8192);
+    for (std::size_t index = 0; index < 8192; ++index) {
+        reclaimed_storage.emplace_back (96, static_cast<char> ('A' + (index % 26)));
+    }
+    std::thread completion ([pending] { pending->complete (result_t<void>::success ()); });
+    completion.join ();
+    actor_retained.wait ();
+    return actor_retained.get () ? 0 : 2;
 }
 
 int relay_request_survives_pending_dispatcher_completion ()
@@ -5912,6 +6094,10 @@ int main (int argc, char **argv)
         pending != 0) {
         return 190 + pending;
     }
+    if (const auto pending = session_manager_disconnect_survives_pending_dispatcher_completion ();
+        pending != 0) {
+        return 195 + pending;
+    }
     if (const auto pending = relay_request_survives_pending_dispatcher_completion ();
         pending != 0) {
         return 160 + pending;
@@ -5963,6 +6149,11 @@ int main (int argc, char **argv)
     if (const auto bound_send = bound_session_send_does_not_publish_caller_location ();
         bound_send != 0) {
         return 95 + bound_send;
+    }
+    if (const auto lifetime =
+          app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends ();
+        lifetime != 0) {
+        return 390 + lifetime;
     }
     if (const auto relocation_prewarm =
           relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically ();

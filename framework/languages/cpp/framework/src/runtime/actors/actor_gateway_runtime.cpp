@@ -1945,9 +1945,10 @@ void detail::session_actor_manager_access_t::disconnect (session_actor_manager_t
         if (dispatcher && actor
             && !::zlink::framework::detail::actor_ref_access_t::empty (*actor)) {
             try {
-                (void) dispatcher (*actor);
+                (void) complete_session_actor_disconnect_notification (
+                  manager._state, std::move (dispatcher), std::move (*actor), {}, 0);
             }
-            catch (...) {
+            catch (const std::exception &) {
             }
         }
         detail::actor_gateway_runtime_t (manager._state)
