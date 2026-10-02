@@ -9,11 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 /** Maps Framework wire failure codes using error model section 2.1. */
 public final class ZLinkRequestFailureMapping {
     private record Row(
-            ZLinkFrameworkErrorKind kind,
-            int terminal,
-            int code,
-            int codeOnly,
-            boolean receive) {}
+            ZLinkFrameworkErrorKind kind, int terminal, int code, int codeOnly, boolean receive) {}
 
     private static Row row(ZLinkFrameworkErrorKind kind, RequestResult terminal, long code) {
         return new Row(kind, terminal.value(), (int) code, (int) code, true);

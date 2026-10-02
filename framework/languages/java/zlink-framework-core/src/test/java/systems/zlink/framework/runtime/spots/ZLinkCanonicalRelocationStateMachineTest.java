@@ -138,7 +138,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         .join();
         var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
         assertEquals(late.id(), failed.id());
-        assertEquals(ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED, failed.failureCode());
+        assertEquals(
+                ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED, failed.failureCode());
         assertEquals(1, fixture.endpoint.staged.get());
 
         fixture.target

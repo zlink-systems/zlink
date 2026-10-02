@@ -1162,7 +1162,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                     () ->
                                                             new IllegalStateException(
                                                                     "direct Join source Actor"
-                                                                        + " authority is invalid"));
+                                                                            + " authority is invalid"));
                             return new ZLinkActorJoinCanonicalAdapter.PreviousMembership(
                                     authority.currentSpotId(), authority.currentSpotGeneration());
                         });
@@ -1419,10 +1419,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                 failure -> {
                                                                     LOGGER.warning(
                                                                             "Actor Join newest-wins"
-                                                                                + " eviction failed"
-                                                                                + " to discard the"
-                                                                                + " displaced"
-                                                                                + " stage: "
+                                                                                    + " eviction failed"
+                                                                                    + " to discard the"
+                                                                                    + " displaced"
+                                                                                    + " stage: "
                                                                                     + failure);
                                                                     return null;
                                                                 });
@@ -1442,10 +1442,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                         ZLinkFrameworkErrorKind
                                                                                 .INVALID_OPERATION,
                                                                         "canonical Actor Join"
-                                                                            + " PREPARE was"
-                                                                            + " superseded by a"
-                                                                            + " newer relocation"
-                                                                            + " identity",
+                                                                                + " PREPARE was"
+                                                                                + " superseded by a"
+                                                                                + " newer relocation"
+                                                                                + " identity",
                                                                         superseded,
                                                                         Map.of(
                                                                                 "zlink.origin",
