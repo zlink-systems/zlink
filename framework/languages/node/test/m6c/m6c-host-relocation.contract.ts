@@ -1162,6 +1162,7 @@ function targetCasFixture() {
     );
   };
   return {
+    envelope,
     expected,
     committedAuthority,
     // The settlement retry timer is unref'd like every runtime timer; the
@@ -1176,6 +1177,73 @@ function targetCasFixture() {
     }
   };
 }
+
+for (const operation of ['read', 'lease', 'preserve'] as const) {
+  for (const error of [
+    new TypeError('invalid source key'),
+    new RangeError('invalid source bound')
+  ]) {
+    test(`source settlement propagates ${error.name} from Store ${operation}`, async () => {
+      const fixture = targetCasFixture();
+      let calls = 0;
+      const runtime = new ZLinkHostServiceRelocationRuntime({
+        locationStore: () => ({
+          readAuthority: async () => {
+            if (operation === 'read' && ++calls === 1) throw error;
+            return calls > 0 && operation !== 'lease'
+              ? fixture.committedAuthority
+              : fixture.expected;
+          },
+          readOwnerLease: async () => {
+            if (operation === 'lease' && ++calls === 1) throw error;
+            return {
+              kind: 'found',
+              token: {
+                ownerId: fixture.expected.ownerId,
+                leaseGeneration: fixture.expected.ownerLeaseGeneration
+              },
+              leaseExpiresAt: new Date(Date.now() + 60_000),
+              storeNow: new Date()
+            };
+          },
+          compareExchangeAuthority: async () => {
+            if (operation === 'preserve' && ++calls === 1) throw error;
+            return { kind: 'stored' };
+          }
+        })
+      } as never);
+      const source = runtime as unknown as {
+        settleSourceAuthority(...args: unknown[]): Promise<unknown>;
+      };
+      await assert.rejects(
+        source.settleSourceAuthority(fixture.envelope, fixture.expected, target, () => true, {}),
+        (observed) => observed === error
+      );
+      assert.equal(calls, 1);
+    });
+  }
+}
+
+test('source settlement retains its fence after a provider read failure', async () => {
+  const fixture = targetCasFixture();
+  let reads = 0;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    locationStore: () => ({
+      readAuthority: async () => {
+        if (++reads === 1) throw new Error('Store response lost');
+        return fixture.committedAuthority;
+      }
+    })
+  } as never);
+  const source = runtime as unknown as {
+    settleSourceAuthority(...args: unknown[]): Promise<unknown>;
+  };
+  assert.equal(
+    await source.settleSourceAuthority(fixture.envelope, fixture.expected, target, () => false, {}),
+    'target'
+  );
+  assert.equal(reads, 2);
+});
 
 test('target-only CAS reconciles an unknown response to the exact committed owner', async () => {
   const fixture = targetCasFixture();
@@ -1210,7 +1278,10 @@ test('target CAS propagates public Store invalid key during reconciliation', asy
   );
 });
 
-for (const validationError of [new TypeError('invalid aggregate'), new RangeError('invalid bound')]) {
+for (const validationError of [
+  new TypeError('invalid aggregate'),
+  new RangeError('invalid bound')
+]) {
   for (const operation of ['commit', 'read', 'lease'] as const) {
     test(`target CAS propagates ${validationError.name} from Store ${operation}`, async () => {
       const fixture = targetCasFixture();

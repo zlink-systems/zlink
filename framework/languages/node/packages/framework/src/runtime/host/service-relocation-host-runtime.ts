@@ -2614,13 +2614,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (this.disposed) throw new Error('Relocation runtime stopped.');
       await this.resendSourceCutover(window);
       const observed = await this.readSourceSettlement(envelope, primary, target).catch(
-        () => undefined
+        (error: unknown) => {
+          if (!isIndeterminateLocationStoreFailure(error)) throw error;
+          return undefined;
+        }
       );
       if (observed?.kind === 'target') return 'target';
       if (observed?.kind === 'other') return 'lost';
       if (restoreDeadlineReached() && observed?.kind === 'source') {
         // An unreadable lease is an uncertain result, not an expiry.
-        if (await this.exactSourceLeaseExpired(owner).catch(() => false)) return 'lost';
+        if (
+          await this.exactSourceLeaseExpired(owner).catch((error: unknown) => {
+            if (!isIndeterminateLocationStoreFailure(error)) throw error;
+            return false;
+          })
+        )
+          return 'lost';
         const publication = this.codec.read(observed.current.payload);
         const preserved = await store
           .compareExchangeAuthority(
@@ -2635,7 +2644,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                   : this.codec.clear(observed.current.payload, publication.reference)
             }
           )
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            if (!isIndeterminateLocationStoreFailure(error)) throw error;
+            return undefined;
+          });
         if (preserved?.kind === 'stored') return 'source';
       }
       // The caller awaits this settlement, so the retry timer keeps the loop alive.
