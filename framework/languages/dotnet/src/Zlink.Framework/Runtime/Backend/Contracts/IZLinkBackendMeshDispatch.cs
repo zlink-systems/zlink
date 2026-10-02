@@ -89,11 +89,22 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 
     public MeshOperationId OperationId { get; }
 
-    public ulong TargetNodeGeneration { get; }
+    public ulong TargetNodeGeneration { get; private set; }
 
-    public ulong AuthorityOwnerGeneration { get; }
+    public ulong AuthorityOwnerGeneration { get; private set; }
 
-    public ulong OwnerLeaseGeneration { get; }
+    public ulong OwnerLeaseGeneration { get; private set; }
+
+    internal void RebindAuthority(
+        ulong targetNodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration
+    )
+    {
+        TargetNodeGeneration = targetNodeGeneration;
+        AuthorityOwnerGeneration = authorityOwnerGeneration;
+        OwnerLeaseGeneration = ownerLeaseGeneration;
+    }
 
     public byte MessageFollowHopCount { get; }
 

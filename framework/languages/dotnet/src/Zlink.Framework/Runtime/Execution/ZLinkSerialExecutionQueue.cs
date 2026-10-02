@@ -18,6 +18,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _executionToken;
     private readonly ZLinkExecutionLanePolicy _policy;
+    private readonly Func<ZLinkSerialWorkItem, bool>? _applicationStartAllowed;
+    private readonly Func<ZLinkSerialWorkItem, bool> _applicationRunnable;
 
     // Instance method groups convert to a fresh delegate at every use site;
     // these run once per drained work item, so cache them.
@@ -97,7 +99,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ZLinkRuntimeTaskRunner taskRunner,
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken executionToken,
-        ZLinkExecutionLanePolicy policy
+        ZLinkExecutionLanePolicy policy,
+        Func<ZLinkSerialWorkItem, bool>? applicationStartAllowed = null
     )
     {
         ArgumentNullException.ThrowIfNull(taskRunner);
@@ -107,6 +110,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _errorSink = errorSink;
         _executionToken = executionToken;
         _policy = policy;
+        _applicationStartAllowed = applicationStartAllowed;
+        _applicationRunnable = IsApplicationRunnable;
         _postResume = PostResume;
         _tryPostCallback = TryPostCallback;
         _reportHandlerException = ReportHandlerException;
@@ -392,7 +397,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         Func<CancellationToken, ValueTask> callback,
         Action relocationRelease,
         bool previousOwnerMessageFollow,
-        out ZLinkSerialWorkItem item
+        out ZLinkSerialWorkItem item,
+        object? acceptedState = null
     )
     {
         ArgumentNullException.ThrowIfNull(payloadFactory);
@@ -403,7 +409,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             callback,
             relocationRelease,
             previousOwnerMessageFollow,
-            out item
+            out item,
+            acceptedState
         );
     }
 
@@ -414,7 +421,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         Func<CancellationToken, ValueTask> callback,
         Action relocationRelease,
         bool previousOwnerMessageFollow,
-        out ZLinkSerialWorkItem item
+        out ZLinkSerialWorkItem item,
+        object? acceptedState = null
     )
     {
         ArgumentNullException.ThrowIfNull(callback);
@@ -444,7 +452,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 payload,
                 payloadFactory,
                 out item,
-                out var scheduleDrain
+                out var scheduleDrain,
+                acceptedState
             );
             drain = scheduleDrain ? ReserveDrainUnderLock() : null;
         }
@@ -767,7 +776,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ReadOnlyMemory<byte> payload,
         Func<ReadOnlyMemory<byte>>? payloadFactory,
         out ZLinkSerialWorkItem item,
-        out bool scheduleDrain
+        out bool scheduleDrain,
+        object? acceptedState = null
     )
     {
         if (_nextAcceptedSequence == ulong.MaxValue)
@@ -784,6 +794,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             payload,
             payloadFactory
         );
+        candidate.AcceptedState = acceptedState;
 
         CommitWorkItemUnderLock(destination, candidate, ZLinkSerialWorkLane.Application);
         _nextAcceptedSequence = acceptedSequence + 1;
@@ -908,9 +919,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (
             _drainScheduled != 0
             || (
-                _activeLifecycle is not null
-                && _activeLifecycle.ReadyContinuation is null
-                && _applicationQueue.Count == 0
+                !HasRunnableApplicationUnderLock()
+                && _activeLifecycle?.ReadyContinuation is null
+                && (_activeLifecycle is not null || _lifecycleQueue.Count == 0)
             )
         )
             return null;
@@ -927,6 +938,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 async () => await drain(CancellationToken.None).ConfigureAwait(false),
                 CancellationToken.None
             );
+    }
+
+    internal void SchedulePendingWork()
+    {
+        Func<CancellationToken, ValueTask>? drain;
+        lock (_admissionGate)
+            drain = ReserveDrainUnderLock();
+        PublishDrain(drain);
     }
 
     private void ReleaseDrain()
@@ -1060,10 +1079,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private bool TryDequeueNextUnderLock(out ZLinkSerialWorkItem item)
     {
+        if (_applicationQueue.Head is { } head && !IsApplicationRunnable(head))
+        {
+            if (TryDequeueInfrastructureUnderLock(out item))
+                return true;
+            return _applicationQueue.TryDequeueMatching(_applicationRunnable, out item);
+        }
         var lifecycleReady =
             _activeLifecycle?.ReadyContinuation is not null
             || (_activeLifecycle is null && _lifecycleQueue.Count != 0);
-        var applicationReady = _applicationQueue.Count != 0;
+        var applicationReady = HasRunnableApplicationUnderLock();
         if (!lifecycleReady && !applicationReady)
         {
             item = null!;
@@ -1088,6 +1113,55 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _consecutiveLifecycleTurns = 0;
         _lifecycleYieldDebt = false;
         return true;
+    }
+
+    private bool HasRunnableApplicationUnderLock()
+    {
+        return _applicationQueue.Head is { } head
+            && (IsApplicationRunnable(head) || _applicationQueue.Any(_applicationRunnable));
+    }
+
+    private bool IsApplicationRunnable(ZLinkSerialWorkItem item) =>
+        (
+            _activeLifecycle is not { } owner
+            || _applicationStartAllowed?.Invoke(owner) != false
+            || !item.IsAccepted
+        )
+        && _applicationStartAllowed?.Invoke(item) != false;
+
+    internal bool HasPendingAcceptedState(Func<object, bool> predicate)
+    {
+        lock (_admissionGate)
+            return _applicationQueue.Any(item =>
+                item.AcceptedState is { } state && predicate(state)
+            );
+    }
+
+    internal void VisitPendingAcceptedState(
+        ZLinkSerialExecutionQueue? successor,
+        Action<object> visit,
+        Action completed
+    )
+    {
+        lock (_admissionGate)
+        {
+            if (successor is null)
+            {
+                completed();
+                return;
+            }
+            lock (successor._admissionGate)
+            {
+                foreach (var item in _applicationQueue)
+                {
+                    if (item.AcceptedState is not { } state)
+                        continue;
+                    visit(state);
+                    item.AcceptedState = null;
+                }
+                completed();
+            }
+        }
     }
 
     private void RegisterSelectedLaneUnderLock(ZLinkSerialWorkItem item)

@@ -433,7 +433,10 @@ internal sealed class ZLinkSpotActivationDispatcher
                 var header = DecodeRejectionHeader(received, channelName, validateFlow);
                 if (header is null)
                     return;
-                var errorKind = admission.ErrorKind();
+                var errorKind =
+                    admission == ZLinkAcceptedWorkAdmission.Closing
+                        ? ZLinkFrameworkErrorKind.NotFound
+                        : admission.ErrorKind();
                 //  Sealed/rejected admission is framework-generated
                 //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(

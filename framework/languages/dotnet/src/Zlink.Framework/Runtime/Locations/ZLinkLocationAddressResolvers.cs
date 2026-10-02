@@ -122,11 +122,6 @@ internal sealed class ZLinkLocationAddressResolvers
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"{target} is currently unavailable."
                 );
-            case ZLinkLocationResolutionKind.Closing:
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    $"{target} is closing."
-                );
         }
     }
 

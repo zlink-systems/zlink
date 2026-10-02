@@ -515,9 +515,15 @@ internal sealed class ZLinkBackendSpotWrapper
         request as ZLinkMeshActorJoinRequest
         ?? throw new InvalidOperationException("Expected a MeshNode actor join request.");
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        _subscriptions?.RemoveSpot(SpotId);
-        return _spot.DisposeAsync();
+        var spotId = SpotId;
+        var failures = new ZLinkFailureCollector();
+        failures.Capture(() => _subscriptions?.RemoveSpot(spotId));
+        await failures.CaptureAsync(_spot.DisposeAsync).ConfigureAwait(false);
+        await failures
+            .CaptureAsync(() => _pump.UnregisterSpotAsync(spotId, _state))
+            .ConfigureAwait(false);
+        failures.ThrowIfAny();
     }
 }

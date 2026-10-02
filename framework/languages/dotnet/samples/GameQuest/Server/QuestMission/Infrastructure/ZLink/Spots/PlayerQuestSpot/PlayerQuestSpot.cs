@@ -16,7 +16,7 @@ internal sealed class PlayerQuestSpot(
 ) : IZLinkInstanceSpot
 {
     public string PlayerId { get; private set; } = string.Empty;
-    private int Generation { get; set; }
+    private int RehydrationCount { get; set; }
     private bool ReplayEvidencePending { get; set; }
     public IZLinkInstanceSpotContext Context { get; } = context;
 
@@ -26,13 +26,14 @@ internal sealed class PlayerQuestSpot(
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
         PlayerId = Context.SpotId;
-        Generation = await store.RecordOwnerRehydratedAsync(PlayerId, cancellationToken);
-        ReplayEvidencePending = Generation > 1;
+        RehydrationCount = await store.RecordOwnerRehydratedAsync(PlayerId, cancellationToken);
+        ReplayEvidencePending = RehydrationCount > 1;
         logger.LogInformation(
-            "gamequest-owner ready player={PlayerId} generation={Generation} node={NodeId}",
+            "gamequest-owner ready player={PlayerId} rehydrationCount={RehydrationCount} node={NodeId} objectGeneration={ObjectGeneration}",
             PlayerId,
-            Generation,
-            processor.MissionName
+            RehydrationCount,
+            processor.MissionName,
+            Context.ObjectGeneration
         );
     }
 
@@ -46,10 +47,11 @@ internal sealed class PlayerQuestSpot(
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
         logger.LogInformation(
-            "gamequest-owner closed player={PlayerId} generation={Generation} node={NodeId}",
+            "gamequest-owner closing-entered player={PlayerId} rehydrationCount={RehydrationCount} node={NodeId} objectGeneration={ObjectGeneration}",
             PlayerId,
-            Generation,
-            processor.MissionName
+            RehydrationCount,
+            processor.MissionName,
+            Context.ObjectGeneration
         );
         return ValueTask.CompletedTask;
     }
@@ -61,7 +63,8 @@ internal sealed class PlayerQuestSpot(
     {
         await processor.ProcessAsync(
             QuestContractMapper.ToDomain(message),
-            TakeReplayEvidenceGeneration(),
+            TakeReplayEvidenceRehydrationCount(),
+            Context.ObjectGeneration,
             cancellationToken
         );
     }
@@ -73,7 +76,8 @@ internal sealed class PlayerQuestSpot(
     {
         var projection = await processor.SyncAsync(
             request.PlayerId,
-            TakeReplayEvidenceGeneration(),
+            TakeReplayEvidenceRehydrationCount(),
+            Context.ObjectGeneration,
             cancellationToken
         );
         return new SyncQuestProgressRes(
@@ -81,12 +85,12 @@ internal sealed class PlayerQuestSpot(
         );
     }
 
-    private int? TakeReplayEvidenceGeneration()
+    private int? TakeReplayEvidenceRehydrationCount()
     {
         if (!ReplayEvidencePending)
             return null;
         ReplayEvidencePending = false;
-        return Generation;
+        return RehydrationCount;
     }
 }
 

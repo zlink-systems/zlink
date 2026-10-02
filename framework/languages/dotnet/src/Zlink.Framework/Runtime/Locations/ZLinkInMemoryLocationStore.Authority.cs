@@ -135,6 +135,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 );
             }
             var nextAllocation = current.Allocation;
+            var nextObjectGeneration = current.ObjectGeneration;
             var nextAuthorityOwnerGeneration = current.AuthorityOwnerGeneration;
             if (needsOwner)
             {
@@ -188,6 +189,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 }
                 nextAllocation = targetAllocation;
             }
+            if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
+            {
+                if (
+                    !CanIncrement(_authorityObjectGeneration)
+                    || !CanIncrement(_authorityOwnerGeneration)
+                )
+                    return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+                nextObjectGeneration = checked((ulong)(_authorityObjectGeneration + 1));
+                nextAuthorityOwnerGeneration = checked((ulong)(_authorityOwnerGeneration + 1));
+            }
             if (!CanIncrement(_authorityRevision))
                 return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
 
@@ -197,20 +208,24 @@ internal sealed partial class ZLinkInMemoryLocationStore
             var stored = new ZLinkAuthoritySnapshot(
                 Next(ref _authorityRevision).ToString(),
                 put.Payload.ToArray(),
-                current.ObjectGeneration,
-                needsOwner ? nextAuthorityOwnerGeneration : current.AuthorityOwnerGeneration,
+                nextObjectGeneration,
+                nextAuthorityOwnerGeneration,
                 owner.OwnerId,
                 owner.LeaseGeneration,
                 nextAllocation,
                 current.ReservedCreation,
                 now
             );
+            _authorityObjectGeneration = Math.Max(
+                _authorityObjectGeneration,
+                checked((long)nextObjectGeneration)
+            );
+            _authorityOwnerGeneration = Math.Max(
+                _authorityOwnerGeneration,
+                checked((long)nextAuthorityOwnerGeneration)
+            );
             if (needsOwner)
             {
-                _authorityOwnerGeneration = Math.Max(
-                    _authorityOwnerGeneration,
-                    checked((long)nextAuthorityOwnerGeneration)
-                );
                 MoveAuthorityAllocationCapacity(current.Allocation, nextAllocation);
             }
             _authorities[key.Value] = stored;
@@ -1230,7 +1245,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
     private static void ValidateAuthorityMutation(ZLinkAuthorityMutation.Put put)
     {
-        var preserve = put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve;
+        var preserve =
+            put.GenerationTransition
+            is ZLinkAuthorityGenerationTransition.Preserve
+                or ZLinkAuthorityGenerationTransition.Reincarnate;
         var newOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
         if (!preserve && !newOwner)
             throw new ArgumentOutOfRangeException(nameof(put));
@@ -1336,6 +1354,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || request.Participants.Count < 1
             || request.InventoryDigest.Length != 32
             || request.TargetDescriptorLifecycleGeneration == 0
+            || request.Participants.Any(static participant =>
+                participant.OwnerTransition
+                    is not (
+                        ZLinkAuthorityGenerationTransition.Preserve
+                        or ZLinkAuthorityGenerationTransition.NewOwner
+                    )
+            )
             || !IsAggregateCapacityValid(request)
             || request.TargetOwner.LeaseGeneration <= 0
         )

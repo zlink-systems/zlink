@@ -139,6 +139,7 @@ internal enum ZLinkAuthorityGenerationTransition
 {
     Preserve = 1,
     NewOwner = 2,
+    Reincarnate = 3,
 }
 
 internal abstract record ZLinkAuthorityCompareExchangeResult

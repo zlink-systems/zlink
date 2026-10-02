@@ -61,10 +61,25 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ZLinkSerialExecutionQueue CreateQueue(ZLinkExecutionLanePolicy policy)
     {
-        return new ZLinkSerialExecutionQueue(_taskRunner, _errorSink, _stopToken, policy);
+        return new ZLinkSerialExecutionQueue(
+            _taskRunner,
+            _errorSink,
+            _stopToken,
+            policy,
+            IsApplicationStartAllowed
+        );
     }
 
     private static bool AlwaysDisabled() => false;
+
+    private bool IsApplicationStartAllowed(ZLinkSerialWorkItem item) =>
+        Volatile.Read(ref _relocationBarrier)?.Kind != ZLinkExecutionSealKind.Close
+        || item.Lane == ZLinkSerialWorkLane.Application
+            && (
+                !item.ReservationHeld
+                || !item.IsAccepted && (_activation?.HasCommittedClose ?? true)
+                || item.IsAccepted && (_activation?.HasCompletedClose ?? true)
+            );
 
     public async ValueTask DisposeAsync()
     {
@@ -390,11 +405,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     // Posts one Close attempt to the lifecycle lane. Only the queue's own
     // admission decides. Null means the lane no longer admits work.
-    internal Task<bool>? PostCloseLifecycle(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> close
+    internal Task<T>? PostCloseLifecycle<T>(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> close
     )
     {
-        var outcome = new TaskCompletionSource<bool>(
+        var outcome = new TaskCompletionSource<T>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var admission = _queue.TryPostNextWithAdmission(
@@ -416,16 +431,20 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     },
                     ct
                 ),
-            out _
+            out var item
         );
-        return admission == ZLinkSerialPostAdmission.Accepted ? outcome.Task : null;
+        return admission == ZLinkSerialPostAdmission.Accepted ? CompleteAsync() : null;
+
+        async Task<T> CompleteAsync()
+        {
+            await item.Completion.ConfigureAwait(false);
+            return await outcome.Task.ConfigureAwait(false);
+        }
     }
 
-    // Close step 2 (spec 06 §7). The caller runs it in the step that committed
-    // Closing. The seal is the one decider of Closing admission from here: new
-    // work of every entry is answered Closing. Work the queue accepted before
-    // the seal, started or not, runs to completion before Close continues.
-    internal async ValueTask AwaitCloseDrainAsync(CancellationToken cancellationToken)
+    // Spot messaging §7: the lifecycle boundary keeps unstarted message
+    // records behind Close while started continuations retain their turn.
+    internal ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken)
     {
         if (
             !TryBeginRelocationBarrier(
@@ -441,16 +460,65 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             );
         }
         MarkBarrierBoundary(barrier.Generation);
-        var accepted = _queue.ApplicationDrained;
+        return ValueTask.CompletedTask;
+    }
+
+    internal bool HasPendingAcceptedState(Func<object, bool> predicate) =>
+        _queue.HasPendingAcceptedState(predicate);
+
+    internal void VisitPendingAcceptedState(
+        ZLinkSpotSerialExecutor? successor,
+        Action<object> visit,
+        Action completed
+    ) =>
+        RunBarrierState(() =>
+        {
+            if (successor is null)
+                _queue.VisitPendingAcceptedState(null, visit, completed);
+            else
+                successor.RunBarrierState(() =>
+                {
+                    _queue.VisitPendingAcceptedState(successor._queue, visit, completed);
+                    return true;
+                });
+            return true;
+        });
+
+    internal Task PendingApplicationCompletion => _queue.ApplicationDrained;
+
+    internal async ValueTask AwaitStartedCloseCallsAsync(CancellationToken cancellationToken)
+    {
+        var barrier =
+            Volatile.Read(ref _relocationBarrier)
+            ?? throw new InvalidOperationException("Close boundary has not started.");
         var turn =
             ZLinkSerialTurn.Current
             ?? throw new InvalidOperationException("Close requires a lifecycle turn.");
         await turn.YieldFrameworkCallAsync(
-                ct => new ValueTask(Task.WhenAll(barrier.Quiescent.Task, accepted).WaitAsync(ct)),
+                ct => new ValueTask(barrier.Quiescent.Task.WaitAsync(ct)),
                 cancellationToken
             )
             .ConfigureAwait(false);
     }
+
+    internal void AbortCloseBoundary()
+    {
+        if (Volatile.Read(ref _relocationBarrier) is { Kind: ZLinkExecutionSealKind.Close } barrier)
+        {
+            AbortBarrier(barrier.Generation);
+            SchedulePendingApplications();
+        }
+    }
+
+    internal void SchedulePendingApplications() =>
+        RunBarrierState(() =>
+        {
+            _queue.SchedulePendingWork();
+            foreach (var lane in _actorLanes.Values)
+                lane.SchedulePendingWork();
+            foreach (var lane in _timerLanes.Values)
+                lane.SchedulePendingWork();
+        });
 
     private async ValueTask ExecuteLifecycleOperationAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
@@ -524,7 +592,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             {
                 try
                 {
-                    await ExecuteOperationAsync(operation, onSkipped, ct).ConfigureAwait(false);
+                    if (!TrySkipClosingApplication(onSkipped))
+                        await ExecuteOperationAsync(operation, onSkipped, ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -597,7 +666,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             {
                 try
                 {
-                    await ExecuteOperationAsync(operation, onSkipped, ct).ConfigureAwait(false);
+                    if (!TrySkipClosingApplication(onSkipped))
+                        await ExecuteOperationAsync(operation, onSkipped, ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -686,7 +756,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         Action relocationRelease,
         bool previousOwnerMessageFollow,
-        out Task completion
+        out Task completion,
+        object? acceptedState = null
     )
     {
         ArgumentNullException.ThrowIfNull(acceptedJournalFactory);
@@ -697,7 +768,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             operation,
             relocationRelease,
             previousOwnerMessageFollow,
-            out completion
+            out completion,
+            acceptedState
         );
     }
 
@@ -708,48 +780,114 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         Action relocationRelease,
         bool previousOwnerMessageFollow,
-        out Task completion
+        out Task completion,
+        object? acceptedState = null
     )
     {
         var result = RunBarrierState(() =>
-        {
-            switch (_relocationBarrier?.Kind)
-            {
-                case ZLinkExecutionSealKind.Close:
-                    return (ZLinkAcceptedWorkAdmission.Closing, Task.CompletedTask);
-                case ZLinkExecutionSealKind.Quiescent:
-                    return (ZLinkAcceptedWorkAdmission.Closed, Task.CompletedTask);
-            }
-            var callback = CreateAcceptedOperation(operation, relocationRelease);
-            ZLinkAcceptedWorkAdmission admission;
-            ZLinkSerialWorkItem item;
-            if (acceptedJournalFactory is null)
-            {
-                admission = _queue.TryPostAccepted(
-                    acceptedJournalRecord,
-                    callback,
-                    relocationRelease,
-                    previousOwnerMessageFollow,
-                    out item
-                );
-            }
-            else
-            {
-                admission = _queue.TryPostAccepted(
-                    acceptedJournalLength,
-                    acceptedJournalFactory,
-                    callback,
-                    relocationRelease,
-                    previousOwnerMessageFollow,
-                    out item
-                );
-            }
-            if (admission == ZLinkAcceptedWorkAdmission.Accepted)
-                return (admission, item.Completion);
-            return (admission, Task.CompletedTask);
-        });
+            QueueAcceptedCoreOnLane(
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                acceptedJournalRecord,
+                operation,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                acceptedState
+            )
+        );
         completion = result.Item2;
         return result.Item1;
+    }
+
+    internal void RunIngress(Action work) =>
+        RunBarrierState(() =>
+        {
+            work();
+            return true;
+        });
+
+    internal T RunIngress<T>(Func<T> work) => RunBarrierState(work);
+
+    internal ZLinkAcceptedWorkAdmission QueueAcceptedOnLane(
+        int acceptedJournalLength,
+        Func<ReadOnlyMemory<byte>> acceptedJournalFactory,
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        Action relocationRelease,
+        bool previousOwnerMessageFollow,
+        out Task completion,
+        object? acceptedState = null
+    )
+    {
+        var result = QueueAcceptedCoreOnLane(
+            acceptedJournalLength,
+            acceptedJournalFactory,
+            default,
+            operation,
+            relocationRelease,
+            previousOwnerMessageFollow,
+            acceptedState
+        );
+        completion = result.Item2;
+        return result.Item1;
+    }
+
+    private (ZLinkAcceptedWorkAdmission, Task) QueueAcceptedCoreOnLane(
+        int acceptedJournalLength,
+        Func<ReadOnlyMemory<byte>>? acceptedJournalFactory,
+        ReadOnlyMemory<byte> acceptedJournalRecord,
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        Action relocationRelease,
+        bool previousOwnerMessageFollow,
+        object? acceptedState
+    )
+    {
+        if (acceptedState is not null && _activation?.CompletedSuccessor is { } successor)
+        {
+            var forwarded = successor._serial.QueueAcceptedCore(
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                acceptedJournalRecord,
+                operation,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                out var forwardedCompletion,
+                acceptedState
+            );
+            return (forwarded, forwardedCompletion);
+        }
+        switch (_relocationBarrier?.Kind)
+        {
+            case ZLinkExecutionSealKind.Quiescent:
+                return (ZLinkAcceptedWorkAdmission.Closed, Task.CompletedTask);
+        }
+        var callback = CreateAcceptedOperation(operation, relocationRelease);
+        ZLinkAcceptedWorkAdmission admission;
+        ZLinkSerialWorkItem item;
+        if (acceptedJournalFactory is null)
+        {
+            admission = _queue.TryPostAccepted(
+                acceptedJournalRecord,
+                callback,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                out item
+            );
+        }
+        else
+        {
+            admission = _queue.TryPostAccepted(
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                callback,
+                relocationRelease,
+                previousOwnerMessageFollow,
+                out item,
+                acceptedState
+            );
+        }
+        if (admission == ZLinkAcceptedWorkAdmission.Accepted)
+            return (admission, item.Completion);
+        return (admission, Task.CompletedTask);
     }
 
     private Func<CancellationToken, ValueTask> CreateAcceptedOperation(
@@ -1432,7 +1570,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     {
                         try
                         {
-                            await operation(ct).ConfigureAwait(false);
+                            if (!TrySkipClosingApplication(null))
+                                await operation(ct).ConfigureAwait(false);
                         }
                         finally
                         {
@@ -1456,6 +1595,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         // yielded continuation retain the application claim until their actual
         // terminal completion, so relocation cannot capture overlapping state.
         await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool TrySkipClosingApplication(Action? onSkipped)
+    {
+        if (Volatile.Read(ref _relocationBarrier)?.Kind != ZLinkExecutionSealKind.Close)
+            return false;
+        onSkipped?.Invoke();
+        return true;
     }
 
     private ZLinkExecutionClaim AcquireApplicationClaim()
