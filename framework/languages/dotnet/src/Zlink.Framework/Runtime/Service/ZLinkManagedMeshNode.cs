@@ -7786,15 +7786,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     const ServiceWireConstants.FrameworkErrorCode failureCode = ServiceWireConstants
                         .FrameworkErrorCode
                         .SpotMoving;
-                    if (request)
-                        Reply(RequestResult.Conflict, (uint)failureCode, Array.Empty<Message>());
-                    else if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
+                    if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
                         reporter.Report(
                             new ZLinkDispatchFailure(
                                 ZLinkDispatchErrorSurface.InstanceSpot,
-                                ZLinkDispatchMessageKind.Send,
+                                request
+                                    ? ZLinkDispatchMessageKind.Request
+                                    : ZLinkDispatchMessageKind.Send,
                                 ZLinkDispatchErrorReason.StaleTarget,
-                                ZLinkDispatchErrorAction.Drop,
+                                request
+                                    ? ZLinkDispatchErrorAction.ReplyError
+                                    : ZLinkDispatchErrorAction.Drop,
                                 PacketName: null,
                                 SpotId: stateful.TargetSpotId,
                                 SourceRid: sourceRid.ToString(),
@@ -7806,6 +7808,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                 MeshName: _logicalMulticastMeshName
                             )
                         );
+                    if (request)
+                        Reply(RequestResult.Conflict, (uint)failureCode, Array.Empty<Message>());
                     return false;
                 }
                 if (request)

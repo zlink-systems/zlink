@@ -121,13 +121,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-send-released", host.State.InstanceHandlerMarkers);
-            Assert.Contains(
-                File.ReadAllLines(flowPath),
-                line =>
+            var records = File.ReadAllLines(flowPath)
+                .Where(line =>
                     line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
-                    && line.Contains("\"action\":\"drop\"", StringComparison.Ordinal)
-                    && line.Contains($"\"reason\":\"{expectedReason}\"", StringComparison.Ordinal)
-            );
+                );
+            var record = Assert.Single(records);
+            Assert.Contains("\"action\":\"drop\"", record);
+            Assert.Contains($"\"reason\":\"{expectedReason}\"", record);
             var diagnostic = await ObserveSendDiagnosticAsync(flowPath);
             Assert.Equal("instance_spot", diagnostic.Surface);
             Assert.Equal(expectedReason, diagnostic.Reason);
@@ -149,6 +149,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         ZLinkFrameworkErrorKind expectedKind
     )
     {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"release-ready-request-{hostMode}-{sealedAdmission}-{Guid.NewGuid():N}.flow"
+        );
+        using var listener = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
         await using var host = await SpotCloseHost.StartAsync();
         var spotId = $"release-ready-request-{Guid.NewGuid():N}";
         await host.RequestInstanceAsync(spotId);
@@ -191,6 +198,16 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-request-released", host.State.InstanceHandlerMarkers);
+            var records = File.ReadAllLines(flowPath)
+                .Where(line =>
+                    line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                );
+            var record = Assert.Single(records);
+            Assert.Contains("\"surface\":\"instance_spot\"", record);
+            Assert.Contains("\"message_kind\":\"request\"", record);
+            Assert.Contains("\"action\":\"reply_error\"", record);
+            var expectedReason = hostMode == "Draining" ? "shutdown" : "stale_target";
+            Assert.Contains($"\"reason\":\"{expectedReason}\"", record);
         }
         finally
         {
@@ -921,6 +938,17 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             ).Async();
             sendDiagnostic = await ObserveSendDiagnosticAsync(flowPath);
         }
+        var records = File.ReadAllLines(flowPath)
+            .Where(line => line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal));
+        var record = Assert.Single(records);
+        var request = given.GetProperty("messageKind").GetString() == "request";
+        Assert.Contains("\"surface\":\"instance_spot\"", record);
+        Assert.Contains("\"reason\":\"stale_target\"", record);
+        Assert.Contains(request ? "\"action\":\"reply_error\"" : "\"action\":\"drop\"", record);
+        Assert.Contains(
+            request ? "\"message_kind\":\"request\"" : "\"message_kind\":\"send\"",
+            record
+        );
         foreach (var field in expected.EnumerateObject())
         {
             switch (field.Name)

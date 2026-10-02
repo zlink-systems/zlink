@@ -552,7 +552,7 @@ internal sealed class ZLinkSpotActivationDispatcher
             var header = DecodeRejectionHeader(received, channelName, validateFlow);
             if (header is null)
                 return;
-            if (!received.CanReply)
+            if (_dispatchErrors.Enabled)
             {
                 var captured = ZLinkEnvelopeCodec.ValidFlow(header);
                 using var flow = ZLinkFlowContext.Enter(
@@ -565,7 +565,9 @@ internal sealed class ZLinkSpotActivationDispatcher
                 _dispatchErrors.Report(
                     new ZLinkDispatchFailure(
                         ZLinkDispatchErrorSurface.InstanceSpot,
-                        ZLinkDispatchMessageKind.Send,
+                        received.CanReply
+                            ? ZLinkDispatchMessageKind.Request
+                            : ZLinkDispatchMessageKind.Send,
                         error
                             is ZLinkFrameworkException
                             {
@@ -573,15 +575,19 @@ internal sealed class ZLinkSpotActivationDispatcher
                             }
                             ? ZLinkDispatchErrorReason.Shutdown
                             : ZLinkDispatchErrorReason.StaleTarget,
-                        ZLinkDispatchErrorAction.Drop,
+                        received.CanReply
+                            ? ZLinkDispatchErrorAction.ReplyError
+                            : ZLinkDispatchErrorAction.Drop,
                         header.MessageName,
                         channelName,
                         SpotId: received.SpotId,
+                        CorrelationId: header.CorrelationId,
                         Exception: error
                     )
                 );
-                return;
             }
+            if (!received.CanReply)
+                return;
             ZLinkSpotReplySubmitter.SubmitAndDispose(
                 received,
                 ZLinkSpotReplyEnvelope.EncodeErrorParts(
