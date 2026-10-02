@@ -92,7 +92,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string expected_store_version = {}) override
+                                        std::string expected_store_version = {},
+                                        protocol::relocation_id_t relocation = {},
+                                        location_owner_token_t source_owner = {}) override
     {
         if (target.kind != source.kind || target.key != source.key
             || target.object_generation != source.object_generation
@@ -123,10 +125,11 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || target_placement.node_rid.value () != target.node_id
             || !same_owner (target_placement.owner, target_owner))
             return {authority_publish_status_t::failed, std::nullopt};
-        if (!expected_store_version.empty () && snapshot->store_version != expected_store_version)
+        if (!expected_store_version.empty () && snapshot->store_version != expected_store_version
+            && !holds_captured_fence (*snapshot, source.key, relocation, source_owner,
+                                      expected_store_version))
             return {authority_publish_status_t::conflict, decode_current (read)};
-        const std::string cas_version =
-          expected_store_version.empty () ? snapshot->store_version : expected_store_version;
+        const std::string cas_version = snapshot->store_version;
         std::vector<std::byte> application_payload = target_application_payload;
         authority_relocation_reference_t reference{
           source,
@@ -423,6 +426,34 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         return left.owner_id == right.owner_id && left.lease_generation == right.lease_generation;
     }
 
+    static bool holds_captured_fence (const authority_snapshot_t &snapshot,
+                                      std::string_view actor_id,
+                                      const protocol::relocation_id_t &relocation,
+                                      const location_owner_token_t &source_owner,
+                                      std::string_view original_version)
+    {
+        if ((relocation.high == 0 && relocation.low == 0) || source_owner.lease_generation <= 0)
+            return false;
+        runtime::actor_authority_detail::relocation_capture_identity_t identity;
+        const auto actor =
+          runtime::decode_direct_actor_authority_payload (snapshot.payload, &identity);
+        return actor && actor->actor_id == actor_id && actor->has_relocation_state
+               && actor->relocation_phase
+                    == runtime::actor_authority_detail::captured_relocation_phase
+               && actor->relocation_expected_store_version == original_version
+               && identity.high == relocation.high && identity.low == relocation.low
+               && same_owner (snapshot.owner, source_owner)
+               && actor->owner_id == source_owner.owner_id
+               && actor->owner_lease_generation
+                    == static_cast<std::uint64_t> (source_owner.lease_generation)
+               && identity.source_owner_id == source_owner.owner_id
+               && identity.source_owner_lease_generation
+                    == static_cast<std::uint64_t> (source_owner.lease_generation)
+               && identity.coordinator_owner_id == source_owner.owner_id
+               && identity.coordinator_lease_generation
+                    == static_cast<std::uint64_t> (source_owner.lease_generation);
+    }
+
     /* The one reading of a unit's primary row (01 §6.1, §10): owned by the
      * target -> committed; moved off the expected StoreVersion while not
      * target-owned -> the target CAS can no longer commit. */
@@ -435,6 +466,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         if (same_owner (snapshot->owner, fence.target_owner))
             return relocation_authority_t::target_committed;
         return snapshot->store_version == fence.expected_store_version
+                   || holds_captured_fence (*snapshot, fence.key, fence.relocation,
+                                            fence.source_owner, fence.expected_store_version)
                  ? relocation_authority_t::unsettled
                  : relocation_authority_t::source_preserved;
     }

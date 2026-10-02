@@ -4826,7 +4826,9 @@ class actor_cutover_authority_t final
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string expected_store_version = {}) override
+                                        std::string expected_store_version = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         if (on_publish)
             on_publish ();

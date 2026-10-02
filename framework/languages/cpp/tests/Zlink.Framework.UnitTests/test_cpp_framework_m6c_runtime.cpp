@@ -1807,7 +1807,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -3051,6 +3053,29 @@ void test_public_authority_store_adapter (test_context_t &test)
                          == source.authority_owner_generation
                     && !captured_store.observed_target_owner,
                   "captured source metadata must not replace the initial authority version fence");
+    const relocation_authority_fence_t captured_fence{
+      source.kind,           source.key,   store.snapshot->store_version,
+      store.snapshot->owner, target_owner, {relocation_id_high, relocation_id_low}};
+    test.require (captured_adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::unsettled,
+                  "matching Captured source must keep target staging eligible");
+    auto other_relocation = captured_fence;
+    ++other_relocation.relocation.low;
+    test.require (captured_adapter.observe_relocation (other_relocation)
+                    == relocation_authority_t::source_preserved,
+                  "another relocation must not inherit the captured source fence");
+    auto other_owner = captured_fence;
+    other_owner.source_owner.lease_generation++;
+    test.require (captured_adapter.observe_relocation (other_owner)
+                    == relocation_authority_t::source_preserved,
+                  "another source lease must not inherit the captured source fence");
+    const auto captured_published = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version,
+      {relocation_id_high, relocation_id_low}, store.snapshot->owner);
+    test.require (captured_published.status == authority_publish_status_t::published
+                    && captured_store.observed_target_owner,
+                  "matching Captured source must use its current provider version for target CAS");
     store.retarget_authority_generation_advance = 9;
     const auto published =
       adapter.publish (source, target, target_owner, target_placement, "root-public", 42,
@@ -3465,7 +3490,9 @@ class settlement_authority_t final : public authority_relocation_port_t
                                         std::uint32_t,
                                         inventory_digest_t,
                                         std::vector<std::byte> = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         return {};
     }

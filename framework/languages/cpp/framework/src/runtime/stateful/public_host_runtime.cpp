@@ -2920,7 +2920,8 @@ public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_
             coordinator.expected_authority_store_version,
             {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
             {attempt.prepare.target.target_owner_id,
-             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)}};
+             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
+            attempt.prepare.relocation};
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -3298,7 +3299,10 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.sources.front (), attempt.targets.front (), target_owner, target_placement,
               attempt.restore_identity.reference, attempt.restore_identity.checksum_crc32c,
               attempt.restore_identity.inventory_digest, std::move (target_application_payload),
-              attempt.prepare.coordinator.expected_authority_store_version);
+              attempt.prepare.coordinator.expected_authority_store_version,
+              attempt.prepare.relocation,
+              {attempt.prepare.coordinator.owner_id,
+               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)});
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();

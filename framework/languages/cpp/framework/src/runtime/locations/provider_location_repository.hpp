@@ -1418,8 +1418,7 @@ class provider_location_repository_t final : public location_repository_t
 
                 const auto before =
                   decode_authority (entry.before, found->value.version, found->value.store_now);
-                const auto source =
-                  read_target_descriptor (before.allocation.target, false, false);
+                const auto source = read_target_descriptor (before.allocation.target, false, false);
                 if (source) {
                     auto [source_state, inserted] =
                       descriptors.emplace (source->key.value, *source);
@@ -1427,8 +1426,8 @@ class provider_location_repository_t final : public location_repository_t
                         && source_state->second.provider_version != source->provider_version)
                         return completed (aggregate_commit_result_t::stale);
                 }
-                auto source_capacity = read_capacity (before.allocation.target,
-                                                      source ? &*source : nullptr);
+                auto source_capacity =
+                  read_capacity (before.allocation.target, source ? &*source : nullptr);
                 auto [capacity_state, capacity_inserted] =
                   capacities.emplace (source_capacity.key.value, std::move (source_capacity));
                 (void) capacity_inserted;
