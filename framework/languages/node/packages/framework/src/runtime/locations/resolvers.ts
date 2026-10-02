@@ -182,7 +182,7 @@ export class ZLinkStoreLocationResolvers
   private nextActorPlacement = 0n;
 
   constructor(private readonly options: ZLinkStoreLocationResolversOptions) {
-    this.liveRows = new ZLinkLiveRowFilter(options.leaseTracker);
+    this.liveRows = new ZLinkLiveRowFilter();
     this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
     this.authoritySpotResolver = new ZLinkAuthoritySpotRouteResolver(
       options.stores.authorityStore,
@@ -201,7 +201,7 @@ export class ZLinkStoreLocationResolvers
     const rows = await this.options.stores.peerStore.listPeers(filter, signal);
     return await this.liveRows.filter(
       rows,
-      (row) => row.ownerId,
+      (row, signal) => this.options.leaseTracker.isOwnerLive(row.ownerId, signal),
       signal,
       (row) =>
         isKnownZLinkLocationAutoConnectType(row.autoConnectType) &&
@@ -227,7 +227,7 @@ export class ZLinkStoreLocationResolvers
     for (const meshName of meshNames) {
       const descriptors = await this.liveRows.filter(
         (await this.options.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items,
-        (descriptor) => descriptor.ownerId,
+        (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
         signal
       );
       const descriptor = descriptors.find(
@@ -265,7 +265,7 @@ export class ZLinkStoreLocationResolvers
     ).items;
     const liveDescriptors = await this.liveRows.filter(
       descriptors,
-      (descriptor) => descriptor.ownerId,
+      (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
       signal
     );
     const candidates = liveDescriptors.filter((descriptor) => {
@@ -302,7 +302,7 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkRouteLocation | undefined> {
     const row = await this.liveRows.resolve(
       await this.options.stores.routeStore.resolveRoute(key, signal),
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerLive(candidate.ownerId, signal),
       signal
     );
     if (row === undefined) {
@@ -556,7 +556,7 @@ export class ZLinkStoreLocationResolvers
     if (cached !== undefined) return cached;
     const row = await this.liveRows.resolve(
       await this.options.stores.spotStore.resolveSpot(key, signal),
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerTokenLive(candidate, signal),
       signal
     );
     if (row === undefined) {
@@ -632,7 +632,7 @@ export class ZLinkStoreLocationResolvers
     }
     const row = await this.liveRows.resolve(
       stored,
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerTokenLive(candidate, signal),
       signal,
       (candidate) =>
         candidate.actorRef.objectGeneration > 0n &&

@@ -902,7 +902,7 @@ void verify_session_relocation_gateway_commit_is_atomic ()
         assert (ref_is_source);
     }
     assert (gateway.commit_session_relocation_route (route, previous, target));
-    const auto committed_route = gateway.bound_session_route (source);
+    const auto committed_route = gateway.bound_session_route_async (source).result ().value ();
     assert (
       committed_route && committed_route->node_rid == session_owner
       && committed_route->session_rid == std::make_optional (session)
@@ -939,7 +939,7 @@ void verify_session_relocation_gateway_commit_is_atomic ()
     assert (gateway.commit_session_relocation_route (return_route, target, returned));
     const auto returned_ref = actor_ref_access_t::make (node_rid_t::from_string ("source-node"),
                                                         "game.actor", "relocating-actor", 7);
-    const auto returned_route = gateway.bound_session_route (returned_ref);
+    const auto returned_route = gateway.bound_session_route_async (returned_ref).result ().value ();
     assert (returned_route && returned_route->node_rid == session_owner
             && returned_route->session_rid == std::make_optional (session)
             && returned_route->node_generation == 5
@@ -1463,7 +1463,8 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
                                    std::vector<zlink::message_t>) {};
     assert (session_owner->dispatch_ready (noop_dispatch).result ().value () == 1);
     const auto current = session_owner->sessions ().current_binding (target.key);
-    const auto lagging_projection = gateway.bound_session_route (previous_actor);
+    const auto lagging_projection =
+      gateway.bound_session_route_async (previous_actor).result ().value ();
     assert (deliveries.load (std::memory_order_acquire) == 1);
     // Session-Actor binding §8.1: a push never rewrites the Session-owned route.
     assert (current && current->owner_lease_generation == 23);

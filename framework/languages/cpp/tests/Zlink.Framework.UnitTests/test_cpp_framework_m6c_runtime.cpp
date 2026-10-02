@@ -2,6 +2,8 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
@@ -28,9 +30,11 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -3962,7 +3966,8 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
 }
 
 
-void test_application_relocation_remote_production_path (test_context_t &test)
+void test_application_relocation_remote_production_path (test_context_t &test,
+                                                         bool resolver_failure = false)
 {
     using namespace std::chrono_literals;
     namespace detail = zlink::framework::detail;
@@ -3970,6 +3975,7 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     namespace protocol = zlink::framework::runtime::protocol;
 
     const auto core_context = std::make_shared<zlink::context_t> ();
+    std::vector<framework::message_flow_event_t> resolver_failures;
     const auto make_state = [core_context] (const std::string &rid) {
         auto state =
           std::make_shared<detail::mesh_node_builder_state_t> ("production-relocation-mesh");
@@ -3981,7 +3987,14 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     };
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
-    detail::mesh_node_runtime_t source (make_state ("production-source"));
+    auto source_state = make_state ("production-source");
+    source_state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::errors);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      source_state->spot_state->dispatch, [&resolver_failures] (const auto &event) {
+          if (event.surface == framework::dispatch_error_surface_t::actor_relocation)
+              resolver_failures.push_back (event);
+      });
+    detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (make_state ("production-target"));
     detail::mesh_node_runtime_t session_owner (make_state ("production-session-owner"));
     source.configure_relocation_runtime (authority, roots);
@@ -3995,22 +4008,23 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
       [&bound_session_route, &observed_session_sequence, &first_route_resolution,
-       &first_route_started, &resolve_first_route] (const object_ref_t &candidate)
+       &first_route_started, &resolve_first_route, resolver_failure] (const object_ref_t &candidate)
         -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
+          using route_t = std::optional<detail::bound_session_relocation_route_t>;
           if (!bound_session_route || candidate.key != "production-remote-actor"
               || candidate.object_generation != 1 || candidate.authority_owner_generation != 1)
-              return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
-                framework::result_t<
-                  std::optional<detail::bound_session_relocation_route_t>>::success (std::nullopt));
+              return framework::task_t<route_t> (
+                framework::result_t<route_t>::success (std::nullopt));
+          if (resolver_failure)
+              throw std::runtime_error ("production Session owner lookup failed");
           if (std::exchange (resolve_first_route, false)) {
               first_route_started.set_value ();
               return first_route_resolution.task ();
           }
           auto resolved = *bound_session_route;
           resolved.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
-          return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
-            framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
-              std::move (resolved)));
+          return framework::task_t<route_t> (
+            framework::result_t<route_t>::success (std::move (resolved)));
       });
     source.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
@@ -4156,27 +4170,80 @@ void test_application_relocation_remote_production_path (test_context_t &test)
           *bound_source_object, "production.actor", std::nullopt}};
     }
     relocation_result_t result;
+    const std::string flow_id = "01930000-0000-7000-8000-000000000001";
     std::promise<bool> relocation_submitted;
     auto submitted = relocation_submitted.get_future ();
     std::thread relocation_thread ([&] {
+        framework::runtime::install_host_context_hooks ();
+        framework::runtime::flow_context_t::scope_t flow (
+          framework::runtime::flow_value_t{flow_id, framework::flow_origin_t::application,
+                                           framework::message_flow_log_mode_t::errors});
         auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
                                                              std::chrono::steady_clock::now ()
                                                                + std::chrono::seconds (5));
         relocation_submitted.set_value (!relocation.await_ready ());
         result = await_task (std::move (relocation));
     });
-    test.require (submitted.get (),
-                  "production relocation must suspend while Session route resolution is pending");
-    route_started.get ();
-    auto resolved_route = *bound_session_route;
-    resolved_route.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
-    first_route_resolution.complete (
-      framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
-        std::move (resolved_route)));
+    const bool relocation_suspended = submitted.get ();
+    if (!resolver_failure) {
+        test.require (
+          relocation_suspended,
+          "production relocation must suspend while Session route resolution is pending");
+        route_started.get ();
+        auto resolved_route = *bound_session_route;
+        resolved_route.observed_sequence =
+          observed_session_sequence.load (std::memory_order_acquire);
+        first_route_resolution.complete (
+          framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+            std::move (resolved_route)));
+    }
     std::thread source_dispatch ([&] { dispatch (source); });
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });
     relocation_thread.join ();
+    if (resolver_failure) {
+        stop_dispatch.store (true, std::memory_order_release);
+        source_dispatch.join ();
+        target_dispatch.join ();
+        session_owner_dispatch.join ();
+        test.require (result.terminal != relocation_terminal_t::completed,
+                      "Session owner lookup failure must reject relocation");
+        test.require (resolver_failures.size () == 1,
+                      "Session owner lookup failure must report one relocation terminal");
+        if (resolver_failures.size () == 1) {
+            const auto &event = resolver_failures.front ();
+            test.require (
+              event.outcome == framework::message_flow_outcome_t::completed
+                && event.result == framework::message_flow_result_t::failed
+                && event.message_kind == framework::dispatch_message_kind_t::control
+                && event.reason == framework::message_flow_reason_t::location_unavailable
+                && event.actor_id == "production-remote-actor"
+                && event.source_rid == source.status ().routing_id ().to_string ()
+                && event.mesh_name == "production-relocation-mesh" && event.flow_id == flow_id
+                && event.flow_origin == framework::flow_origin_t::application,
+              "Session owner lookup failure must retain the Actor identity and ambient flow");
+            bool actual_exception = false;
+            if (event.exception) {
+                try {
+                    std::rethrow_exception (event.exception);
+                }
+                catch (const std::runtime_error &error) {
+                    actual_exception = typeid (error) == typeid (std::runtime_error)
+                                       && std::string_view (error.what ())
+                                            == "production Session owner lookup failed";
+                }
+                catch (...) {
+                }
+            }
+            test.require (actual_exception,
+                          "Session owner lookup failure must retain the actual exception type and "
+                          "message");
+        }
+        source.stop ();
+        target.stop ();
+        session_owner.stop ();
+        return;
+    }
     const auto source_relocation_gate = source.native_node ().maintenance ()->gate_snapshot ();
     const auto route_deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < route_deadline) {
@@ -6329,6 +6396,7 @@ int main ()
     test_source_relocation_settles_by_authority (test);
     test_relocation_target_cutover_and_authority_settlement (test);
     test_application_relocation_remote_production_path (test);
+    test_application_relocation_remote_production_path (test, true);
     test_application_user_spot_aggregate_remote_production_path (test);
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
     test_relocation_adapter_single_capture_restore_path (test);

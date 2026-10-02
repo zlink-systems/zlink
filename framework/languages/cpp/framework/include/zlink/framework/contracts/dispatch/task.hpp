@@ -358,7 +358,10 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
                 std::terminate ();
             if (_ambient.wait_owner.stop_possible ())
                 return false;
-            std::terminate ();
+            /* No owner can cancel this wait and the context that captured the
+             * scheduler has stopped, so the completing thread delivers the
+             * result. */
+            return resume (false);
         }
         return true;
     }

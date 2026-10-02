@@ -896,6 +896,56 @@ await_mesh_request_completion (zlink::framework::detail::mesh_node_runtime_t &me
     }
 }
 
+zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_from_app_task (
+  std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> application_mesh,
+  zlink::framework::detail::actor_gateway_runtime_t actor_gateway_runtime,
+  zlink::framework::detail::stream_runtime_t stream_runtime,
+  zlink::framework::actor_ref_t actor,
+  std::uint64_t expected_binding_generation,
+  zlink::framework::detail::stream_header_t header,
+  zlink::message_t payload)
+{
+    using namespace zlink::framework;
+    try {
+        const auto route = co_await actor_gateway_runtime.bound_session_route_async (actor);
+        if (!route || !route->session_rid || route->binding_generation == 0
+            || (expected_binding_generation != 0
+                && expected_binding_generation != route->binding_generation)) {
+            co_return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                               "Actor bound Session route is not ready");
+        }
+        const auto local = application_mesh->native_node ().status ();
+        actor_gateway_runtime.trace_bound_session_send_stage (
+          actor.actor_id ().value (), "actor_owner_push_target",
+          [&] {
+              return "session_rid=" + route->session_rid->to_hex ()
+                     + " binding_generation=" + std::to_string (route->binding_generation);
+          },
+          &*route->session_rid);
+        const auto local_actor = detail::actor_ref_access_t::make (
+          node_rid_t::from_string (local.routing_id ().to_string ()),
+          std::string (detail::actor_ref_access_t::actor_type (actor)),
+          std::string (actor.actor_id ().value ()), actor.object_generation ());
+        /* The deferred raw-send completion can outlive this frame, so the
+         * trace factory must own every value it needs. */
+        detail::bound_session_send_stage_trace_context_t stage_trace_context{
+          &actor_gateway_runtime, local_actor.actor_id ().value (), &*route->session_rid};
+        auto stage_trace = detail::make_bound_session_send_stage_trace (stage_trace_context);
+        const auto submitted = co_await application_mesh->native_node ().send_bound_session (
+          local_actor, route->node_rid, route->binding_generation,
+          route->authority_owner_generation, route->owner_lease_generation,
+          detail::encode_bound_session_frame (stream_runtime, header, payload),
+          std::move (stage_trace));
+        co_return one_way_native_submit_result (submitted, "Framework Actor bound Session send");
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<void> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+    }
+}
+
 } // namespace
 
 namespace zlink::framework
@@ -1472,7 +1522,8 @@ void app_t::_apply_zlink_framework ()
                   const auto actor =
                     detail::actor_ref_access_t::make (node_rid_t::from_string (source.node_id), {},
                                                       source.key, source.object_generation);
-                  const auto route = actor_gateway_runtime.bound_session_route (actor);
+                  const auto route =
+                    co_await actor_gateway_runtime.bound_session_route_async (actor);
                   if (!route || !route->session_rid)
                       co_return std::nullopt;
                   if (route->object_generation != source.object_generation
@@ -2178,7 +2229,8 @@ void app_t::_apply_zlink_framework ()
                     target.node_generation, target.authority_owner_generation,
                     static_cast<std::uint64_t> (target.owner.lease_generation));
               }
-              const auto bound_session = actor_gateway_runtime.bound_session_route (actor);
+              const auto bound_session =
+                co_await actor_gateway_runtime.bound_session_route_async (actor);
               co_return co_await application_mesh->join_application_actor_to_spot (
                 actor, target, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
@@ -2194,53 +2246,12 @@ void app_t::_apply_zlink_framework ()
             return result_t<void>::success ();
         });
         actor_gateway_runtime.on_bound_session_send (
-          [application_mesh, actor_gateway_runtime,
-           stream_runtime] (const actor_ref_t &actor, std::uint64_t expected_binding_generation,
-                            const detail::stream_header_t &header,
-                            const zlink::message_t &payload) mutable -> task_t<result_t<void>> {
-              try {
-                  const auto route = actor_gateway_runtime.bound_session_route (actor);
-                  if (!route || !route->session_rid || route->binding_generation == 0
-                      || (expected_binding_generation != 0
-                          && expected_binding_generation != route->binding_generation)) {
-                      co_return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                                         "Actor bound Session route is not ready");
-                  }
-                  const auto local = application_mesh->native_node ().status ();
-                  actor_gateway_runtime.trace_bound_session_send_stage (
-                    actor.actor_id ().value (), "actor_owner_push_target",
-                    [&] {
-                        return "session_rid=" + route->session_rid->to_hex ()
-                               + " binding_generation="
-                               + std::to_string (route->binding_generation);
-                    },
-                    &*route->session_rid);
-                  const auto local_actor = detail::actor_ref_access_t::make (
-                    node_rid_t::from_string (local.routing_id ().to_string ()),
-                    std::string (detail::actor_ref_access_t::actor_type (actor)),
-                    std::string (actor.actor_id ().value ()), actor.object_generation ());
-                  /* The deferred raw-send completion can outlive this frame, so
-                   * the trace factory must own every value it needs. */
-                  detail::bound_session_send_stage_trace_context_t stage_trace_context{
-                    &actor_gateway_runtime, local_actor.actor_id ().value (), &*route->session_rid};
-                  auto stage_trace =
-                    detail::make_bound_session_send_stage_trace (stage_trace_context);
-                  const auto submitted =
-                    co_await application_mesh->native_node ().send_bound_session (
-                      local_actor, route->node_rid, route->binding_generation,
-                      route->authority_owner_generation, route->owner_lease_generation,
-                      encode_bound_session_frame (stream_runtime, header, payload),
-                      std::move (stage_trace));
-                  co_return one_way_native_submit_result (submitted,
-                                                          "Framework Actor bound Session send");
-              }
-              catch (const framework_exception_t &error) {
-                  co_return detail::result_access_t::failure<void> (error);
-              }
-              catch (const std::exception &error) {
-                  co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                     error.what ());
-              }
+          [application_mesh, actor_gateway_runtime, stream_runtime] (
+            const actor_ref_t &actor, std::uint64_t expected_binding_generation,
+            const detail::stream_header_t &header, const zlink::message_t &payload) {
+              return send_bound_session_from_app_task (
+                application_mesh, actor_gateway_runtime, stream_runtime, actor,
+                expected_binding_generation, header, payload.copy ());
           });
         auto deliver_relay =
           [application_mesh, actor_gateway_runtime] (

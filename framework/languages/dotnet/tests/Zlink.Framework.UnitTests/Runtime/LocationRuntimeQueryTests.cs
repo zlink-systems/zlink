@@ -17,6 +17,58 @@ public sealed class LocationRuntimeQueryTests
     private static readonly string[] RegisteredMeshes = ["play"];
 
     [Fact]
+    public async Task Descriptor_Queries_Use_The_Exact_Owner_Lease_Generation()
+    {
+        var time = new ManualTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var first = await store.ClaimLiveOwnerAsync(LiveOwner, ShortLease);
+        time.Advance(ShortLease + TimeSpan.FromSeconds(1));
+        var current = await store.ClaimLiveOwnerAsync(LiveOwner, ShortLease);
+        Assert.NotEqual(first.LeaseGeneration, current.LeaseGeneration);
+        var stale = InMemoryLocationStoreTests.MeshNode(LiveOwner) with
+        {
+            Rid = RoutingId.From("stale-node"),
+            LeaseGeneration = first.LeaseGeneration,
+        };
+        var valid = stale with
+        {
+            Rid = RoutingId.From("valid-node"),
+            LeaseGeneration = current.LeaseGeneration,
+        };
+        var descriptors = new ScriptedMeshNodeListStore(
+            [stale, valid],
+            [stale, valid],
+            [stale, valid]
+        );
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            descriptors,
+            RegisteredMeshes,
+            new ZLinkOwnerLeaseTracker(store, options, time),
+            new ZLinkLocationRuntime(options, store, time)
+        );
+
+        var listed = await query.ListMeshNodeDescriptorsAsync("play");
+        Assert.Equal(valid.Rid, Assert.Single(listed.Items).Rid);
+        var topology = await query.ListTopologyAsync(new ZLinkLocationTopologyFilter());
+        Assert.Equal(
+            ZLinkLocationTopologyState.Lost,
+            Assert.Single(topology.Items, row => row.NodeRid == stale.Rid).State
+        );
+        Assert.Equal(
+            ZLinkLocationTopologyState.Ready,
+            Assert.Single(topology.Items, row => row.NodeRid == valid.Rid).State
+        );
+        var summary = Assert.Single(
+            (await query.ListServiceSummariesAsync(new ZLinkLocationServiceSummaryFilter())).Items
+        );
+        Assert.Equal(2U, summary.TotalCount);
+        Assert.Equal(1U, summary.ReadyCount);
+        Assert.Equal(1U, summary.StoppedCount);
+    }
+
+    [Fact]
     public async Task Readiness_Preserves_Query_Failure()
     {
         var readiness = new ZLinkLocationReadiness(new FailingRuntimeQuery());

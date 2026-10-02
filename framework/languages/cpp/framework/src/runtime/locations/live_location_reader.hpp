@@ -7,12 +7,9 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
-#include <iostream>
+#include <cstdint>
 #include <map>
-#include <mutex>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -36,7 +33,9 @@ class live_location_reader_t final
     {
         const auto lease = _store->read_owner_lease (owner_id).result ().value ();
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
-        return admission_lifetime (found);
+        if (found == nullptr)
+            return std::nullopt;
+        return admission_lifetime (found->token, found);
     }
 
     std::optional<std::chrono::steady_clock::duration>
@@ -44,17 +43,20 @@ class live_location_reader_t final
     {
         const auto lease = _store->read_owner_lease (owner.owner_id).result ().value ();
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
-        if (found == nullptr || found->token.lease_generation != owner.lease_generation) {
-            return std::nullopt;
-        }
-        return admission_lifetime (found);
+        return admission_lifetime (owner, found);
     }
 
   private:
-    std::optional<std::chrono::steady_clock::duration>
-    admission_lifetime (const owner_lease_found_t *found) const
+    static bool owner_is_available (std::int64_t lease_generation, const owner_lease_found_t *found)
     {
-        if (found == nullptr || found->lease_expires_at <= found->store_now) {
+        return found != nullptr && found->token.lease_generation == lease_generation
+               && found->lease_expires_at > found->store_now;
+    }
+
+    std::optional<std::chrono::steady_clock::duration>
+    admission_lifetime (const location_owner_token_t &owner, const owner_lease_found_t *found) const
+    {
+        if (!owner_is_available (owner.lease_generation, found)) {
             return std::nullopt;
         }
         const auto remaining =
@@ -95,10 +97,7 @@ class live_location_reader_t final
               detail::propagate_failure<bool> (result, "owner lease lookup failed"));
         }
         const auto *found = std::get_if<owner_lease_found_t> (&result.value ());
-        const auto available = found != nullptr
-                               && found->token.lease_generation == owner.lease_generation
-                               && found->lease_expires_at > found->store_now;
-        return completed (available);
+        return completed (owner_is_available (owner.lease_generation, found));
     }
 
     task_t<authority_scan_result_t> list_authorities (std::string prefix,
@@ -114,34 +113,18 @@ class live_location_reader_t final
         return task_t<T> (result_t<T>::success (std::move (value)));
     }
 
-    std::set<std::string> live_owners (const std::set<std::string> &owner_ids)
-    {
-        std::set<std::string> owners;
-        for (const auto &owner_id : owner_ids) {
-            const auto lease = _store->read_owner_lease (owner_id).result ().value ();
-            const auto *found = std::get_if<owner_lease_found_t> (&lease);
-            if (found != nullptr && found->lease_expires_at > found->store_now)
-                owners.insert (owner_id);
-        }
-        return owners;
-    }
-
-    template <typename T> std::optional<T> live (std::optional<T> row)
-    {
-        if (!row) {
-            return std::nullopt;
-        }
-        const auto owners = live_owners ({row->owner_id});
-        return owners.contains (row->owner_id) ? std::move (row) : std::nullopt;
-    }
-
     template <typename T> void filter_live (std::vector<T> &rows)
     {
-        std::set<std::string> owner_ids;
-        for (const auto &row : rows)
-            owner_ids.insert (row.owner_id);
-        const auto owners = live_owners (owner_ids);
-        std::erase_if (rows, [&owners] (const T &row) { return !owners.contains (row.owner_id); });
+        std::map<std::string, owner_lease_read_result_t> leases;
+        for (const auto &row : rows) {
+            if (!leases.contains (row.owner_id))
+                leases.emplace (row.owner_id,
+                                _store->read_owner_lease (row.owner_id).result ().value ());
+        }
+        std::erase_if (rows, [&leases] (const T &row) {
+            const auto *found = std::get_if<owner_lease_found_t> (&leases.at (row.owner_id));
+            return !owner_is_available (row.lease_generation, found);
+        });
     }
 
     location_repository_t *_store;
