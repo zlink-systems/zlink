@@ -48,6 +48,29 @@ The five server packages and the HTTP client package share these 12 kinds. A per
 interface document defines only the enum name and the exception/result representation — it
 does not add a kind or a retry boolean.
 
+### 2.1 Wire Failure Codes and `ErrorKind`
+
+A typed Framework failure a remote node sends (`typedFrameworkFailure` of the
+[service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)) maps one failure code to one `ErrorKind`. The receiver classifies it
+with the table below, regardless of the command or path it arrived on. To send an `ErrorKind` on the
+wire, use the failure code in that kind's row that names the cause; if there is none, use the
+representative code. `ShuttingDown` is sent as terminal result `terminated`, and the representative of
+`InvalidOperation` as terminal result `invalidState`, both with no failure code. `NotConfigured` has no
+wire form and is sent as `requestFailed`.
+
+| ErrorKind | Representative code | Other codes received as the same kind |
+|---|---|---|
+| `NotFound` | `requestTargetNotFound` | `actorRouteNotFound`, `spotRouteNotFound`, `handlerNotFound`, `routeHandlerNotFound`, `actorDispatchHandlerNotFound` |
+| `AlreadyExists` | `actorAlreadyExists` | — |
+| `TypeMismatch` | `spotTypeMismatch` | `actorTypeMismatch` |
+| `Rejected` | `requestRejected` | `actorCreateRejected` |
+| `Unavailable` | `routeNotConnected` | `workerQueueFull`, `actorLocationStale`, `spotMoving` |
+| `DeadlineExceeded` | `workerTimedOut` | — |
+| `ProtocolError` | `requestProtocolError` | `payloadDecodeFailed` |
+| `InvalidOperation` | none (`invalidState`) | `actorSessionNotBound`, `spotGenerationStale` |
+| `DataLost` | `relocationDataLost` | — |
+| `InternalFailure` | `requestFailed` | `workerFailed`, `actorCreateFailed`, `spotCreateFailed` |
+
 ## 3. Errors Checkable Before the Call
 
 A problem that can be checked immediately at the call site — such as an invalid argument or an

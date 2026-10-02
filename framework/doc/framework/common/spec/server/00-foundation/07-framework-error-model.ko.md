@@ -46,6 +46,27 @@ log와 trace에 기록한다.
 문서는 enum 이름, exception과 result 표현만 정의하며 kind를 추가하거나 재시도 boolean을
 추가하지 않는다.
 
+### 2.1 Wire failure code와 ErrorKind
+
+Remote node가 보낸 typed Framework 실패([service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)의 `typedFrameworkFailure`)는
+failure code 하나가 `ErrorKind` 하나를 정한다. 수신자는 그 실패를 받은 command나 경로와 관계없이 아래 표로
+분류한다. `ErrorKind`를 wire로 보낼 때 원인을 나타내는 failure code가 그 kind의 행에 있으면 그 code를 쓰고,
+없으면 대표 code를 쓴다. `ShuttingDown`은 terminal result `terminated`, `InvalidOperation`의 대표는 terminal
+result `invalidState`로 failure code 없이 보낸다. `NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다.
+
+| ErrorKind | 대표 code | 같은 kind로 받는 다른 code |
+|---|---|---|
+| `NotFound` | `requestTargetNotFound` | `actorRouteNotFound`, `spotRouteNotFound`, `handlerNotFound`, `routeHandlerNotFound`, `actorDispatchHandlerNotFound` |
+| `AlreadyExists` | `actorAlreadyExists` | — |
+| `TypeMismatch` | `spotTypeMismatch` | `actorTypeMismatch` |
+| `Rejected` | `requestRejected` | `actorCreateRejected` |
+| `Unavailable` | `routeNotConnected` | `workerQueueFull`, `actorLocationStale`, `spotMoving` |
+| `DeadlineExceeded` | `workerTimedOut` | — |
+| `ProtocolError` | `requestProtocolError` | `payloadDecodeFailed` |
+| `InvalidOperation` | 없음(`invalidState`) | `actorSessionNotBound`, `spotGenerationStale` |
+| `DataLost` | `relocationDataLost` | — |
+| `InternalFailure` | `requestFailed` | `workerFailed`, `actorCreateFailed`, `spotCreateFailed` |
+
 ## 3. 호출 전에 확인할 수 있는 오류
 
 잘못된 인자와 이미 종료된 handle처럼 호출 위치에서 바로 확인할 수 있는 문제는 각 언어의
