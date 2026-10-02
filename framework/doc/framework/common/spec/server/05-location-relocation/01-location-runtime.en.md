@@ -43,8 +43,8 @@ The Framework guarantees the following results.
 
 - It finds the service and connection address that can handle the current request.
 - It recognizes only one current owner per Actor/Spot.
-- It secures the needed capacity in advance on the node that will create or move an
-  Actor/Spot.
+- It secures capacity on the node that will create an Actor/Spot before creating it, and when
+  moving one, the CAS that changes the owner moves the capacity.
 - It doesn't create the same Actor/Spot twice at once.
 - It prevents a previous owner from belatedly changing the location.
 - It restores application state and not-yet-executed work on another node during a host
@@ -172,7 +172,8 @@ restates, in §8–§9, the records and conditions the Location Store records am
 
 1. The Framework confirms the currently running node's information, the owner's expiry,
    and the location record.
-2. It secures the capacity the target node will use in the Location Store.
+2. It confirms that the target node offers the object's type and has capacity left. The capacity
+   moves in the CAS that changes the owner (`NewOwner` of §6.1).
 3. After finishing the current application turn, the source captures application state
    and not-yet-executed work and keeps them in memory. It records capture completion in
    the Location Store as `Captured`.
@@ -940,7 +941,7 @@ value, the following new work isn't accepted.
 | Descriptor publishing and automatic RID owner change |
 | Starting Actor/Spot/Instance messages and timer callbacks |
 | Work confirming factory/restore results in the Store |
-| Relocation source/target state changes and capacity reservation |
+| Relocation source/target state changes |
 
 Processing and cleanup of results from work already accepted into the local queue can
 proceed within a separate deadline. But no new Store change is made with expired owner
@@ -977,7 +978,7 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Commit` | That reservation's `Reserved → Active`. |
 | `Abort` | That reservation's `Reserved → Missing`. |
 | `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
-| `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
+| `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. In the same request, it decreases the source's in-use capacity and increases the target's (the capacity counter of [§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)). |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
 | `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 
@@ -987,7 +988,7 @@ a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
 one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
-verifies the target lease and the capacity that relocation pre-secured. If the record
+verifies the target lease and the capacity left on the target. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
@@ -1003,12 +1004,12 @@ repetition happens within the operation's deadline with no separate retry cap, e
 [§10](#10-when-a-store-response-isnt-received) decides when the repetition of a relocation target's
 `NewOwner` and a `SpotWide` whole-unit batch ends.
 
-A regular `Preserve` has no relocation reservation information. Only for a standalone
+A regular `Preserve` has no relocation progress information. Only for a standalone
 relocation, when updating the completion-record payload location or recording target
-readiness, can pre-secured reservation information be passed along. The Framework checks
-the authority key, first-read `StoreVersion`, source/target owner, and current capacity,
-all together. On success, the `StoreVersion` the reservation expects is also updated in
-the same request. Owner, capacity, and reservation state are kept. Relocation settlement uses this same `Preserve` operation. For a `SpotWide` unit, source `Preserve` and the target's whole-unit conditional batch both compare the `StoreVersion` of the Spot aggregate authority record and a successful request changes that version, so both cannot commit. For a single-row unit: if the source first commits it against the `StoreVersion` expected
+readiness, is relocation progress information written along. The Framework checks the
+authority key, first-read `StoreVersion`, and source/target owner. On success, the
+`StoreVersion` the target `NewOwner` expects is also updated in the same request. Owner
+and capacity are kept. Relocation settlement uses this same `Preserve` operation. For a `SpotWide` unit, source `Preserve` and the target's whole-unit conditional batch both compare the `StoreVersion` of the Spot aggregate authority record and a successful request changes that version, so both cannot commit. For a single-row unit: if the source first commits it against the `StoreVersion` expected
 by target `NewOwner`, owner and generation stay put while that version changes, so a late
 target CAS fails. The source verifies its current owner lease and clears target data for
 the same `RelocationId`. If target `NewOwner` committed first, source `Preserve` cannot
@@ -1356,7 +1357,6 @@ sequenceDiagram
 |---|---|
 | `RelocationId` | A non-zero 128-bit random number identifying one move. Used only by the runtime. |
 | `TargetAttemptGeneration` | A non-zero value distinguishing a duplicate or previous Restore request sent to the same target. Not used to select a different target. Always compared only for equality, never ordered numerically ([51 §9](../02-channel-transport/06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope)). Must not be derived from the target node's lifecycle generation — that value cannot distinguish a second attempt sent to the same target node from the first. |
-| [Reservation ID](../00-foundation/02-glossary.en.md#reservation-id) | A non-zero 128-bit value identifying the request that secured target capacity. Separate from the creation ID. |
 
 The Location Store's per-object location record is at most 1 MiB. Large lists are split
 into multiple records, and completion-record payloads are stored in the Relocation Store.
@@ -1373,20 +1373,14 @@ The application state, queue, and timers to restore exist only in source memory 
 aren't stored in either Store. The total entry count and list content checksum confirm that the
 relocation target list is complete and unchanged. §1.2 defines the source of truth for membership.
 
-Securing target space fixes together the object ID, `StoreVersion`, kind and stable type,
-source's and target's host run generation, owner information, and needed capacity.
+Checking the target confirms together the object ID, `StoreVersion`, kind and stable type,
+source's and target's host run generation, and owner information.
 
 | Check result | Handling |
 |---|---|
 | Current owner and space in use match the request | Continue target checking. |
 | Source descriptor is missing or its owner lease has expired | Doesn't automatically take over the relocation. Leaves remaining staging records and payload for cleanup. |
-| Target host run generation, owner lease, offered type, and remaining space are all valid | Secures target space in the same Store request. |
-| Same Reservation ID, same content | Returns the previously issued value. |
-| Same ID with different content, or the target's owner lease has expired | `Conflict` and nothing changes. |
-
-Securing space alone doesn't change the owner or allow new work on the source. Space
-isn't returned merely because time passed. Only after the running source and target
-confirm that record in the Location Store can they continue or cancel.
+| Target host run generation, owner lease, offered type, and remaining space are all valid | Continue the move. The capacity moves in the CAS that changes the owner (§6.1). |
 
 Moving a whole `SpotWide` User Spot allows only two kinds of Store change.
 
@@ -1497,7 +1491,7 @@ same binding values, the existing assembly state is neither reused nor overwritt
 ends as an explicit conflict failure.
 
 **The authority commit (the CAS in the "Owner change" row above) only fences the
-authority row's own identity — the reservation id and the generations
+authority row's own identity — the first-read `StoreVersion` and the generations
 (`AuthorityOwnerGeneration`, target attempt) that identify which move this CAS belongs
 to.** It doesn't validate target-node liveness or the target's lifecycle generation; that
 validation belongs to the admission/join path (§7) that ran before Restore, not to the
@@ -1604,7 +1598,7 @@ Explicit cancellation before the relay-ready reply is accepted follows this orde
    messages — is defined by
    [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
    All that matters here is that it doesn't wait for an apply reply.
-4. Cleans up secured target space and the target's in-progress chunk-assembly staging.
+4. Cleans up the target's in-progress chunk-assembly staging.
 5. Without reading or writing the Location Store, the Framework keeps source owner,
    generation, and space in use; it removes only the move's progress info.
 6. The source starts accepting new work again.

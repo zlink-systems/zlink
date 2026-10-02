@@ -26,7 +26,7 @@ other documents.
 - Message delivery: [Spot Messaging](02-spot-messaging.en.md)
 - Gates, turns, Yield, and Actor claims: [execution contract §2–§3](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)
 - The order of Actor callbacks: [Spot And Actor Membership](05-spot-actor-membership.en.md)
-- Entry Spot ID issuance/format/conflict rules, Object role, and factory registration: [MeshNode](03-mesh-node.en.md)
+- Entry Spot ID issuance/format rules, Object role, and factory registration: [MeshNode](03-mesh-node.en.md)
 - Creation and address contracts for User and Instance Spots: [Spot Address Messaging](06-spot-address-messaging.en.md)
 
 ## 2. The Three Spots Differ in When They're Prepared and Their Purpose
@@ -631,8 +631,8 @@ application observes).
 - A User Spot moves as an aggregate with member Actors; an Instance Spot
   moves as a single, Actor-less relocation unit.
 
-The verification requirements for the Entry Spot ID format, replacement
-lifecycle, and active conflict are owned by
+The verification requirements for the Entry Spot ID format and replacement
+lifecycle are owned by
 [MeshNode "Implementation And Contract Test Verification Requirements"](03-mesh-node.en.md).
 
 ---

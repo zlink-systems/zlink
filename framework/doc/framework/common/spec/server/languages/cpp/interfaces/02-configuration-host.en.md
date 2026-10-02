@@ -156,7 +156,7 @@ connection-bound work wasn't terminal drained within the pre-`Captured`
 [deadline](../../../00-foundation/02-glossary.en.md#deadline). A bound-session
 request is not drained; it follows the same frozen-journal and
 ingress-hold rules as any other Actor request. The Framework
-cleans up the relocation staging and reservation, releases the
+cleans up the relocation staging, releases the
 reversible seal, and restores host state and admission. If every
 target is `Prepared` and `Relocating` publication succeeds, it
 completes every relocation unit and switches to `relocated`.
@@ -519,8 +519,8 @@ options.add_stream_node(sample_names_t::stream_name)
  .register_session<client_session_t>()
 ```
 
-The Entry Spot's SpotId is issued by the Framework in the format
-`<prefix>-entry-<lowercase-canonical-uuid-v4>`. A public option for the
+The Entry Spot's SpotId is issued by the Framework, and
+[common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines its format. A public option for the
 application to set the Entry Spot's RoutingId or a fixed SpotId isn't
 provided.
 

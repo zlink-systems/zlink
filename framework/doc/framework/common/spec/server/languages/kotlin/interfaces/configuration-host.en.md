@@ -263,15 +263,9 @@ fails immediately with `RoutingIdConflict` instead of retrying with a
 new UUID. [Common MeshNode §3.3](../../../03-spot-actor/03-mesh-node.en.md#33-fixed-rid) defines where a fixed RID can be used and how its restart conflicts are handled. There's no slot
 count, allocation group, or public allocation provider.
 
-The Object Server's Entry Spot ID has the same-prefix format
-`<prefix>-entry-<lowercase-canonical-uuid-v4>`, using a UUID v4
-generated separately from the MeshNode. Java's
-`ZLinkMeshNodeDescriptor.entrySpotId()` provides the mapping for
-the same lifecycle. If the global Spot ID conflicts with an active
-owner, startup fails immediately with `SpotIdConflict` instead of
-retrying with a new UUID. If a caller-specified User/Instance Spot ID
-matches the reserved format, it's rejected as a startup configuration
-error before the Store and factory.
+Java's `ZLinkMeshNodeDescriptor.entrySpotId()` provides the Entry Spot ID
+mapping for the same lifecycle. [Common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id)
+defines how the Entry Spot ID is issued, its format, and the rejection of the reserved format.
 
 Every factory configures the Java builder with a Kotlin receiver
 callback. The callback calls exactly one of `disableRelocation()`,

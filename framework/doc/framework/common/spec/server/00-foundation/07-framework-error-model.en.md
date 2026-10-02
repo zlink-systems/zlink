@@ -58,6 +58,9 @@ wire, use the failure code in that kind's row that names the cause; if there is 
 representative code. In a reply that carries a terminal result, `ShuttingDown` is sent as `terminated` and
 the representative of `InvalidOperation` as `invalidState`, both with no failure code, and the combination
 follows the schema's `terminal-failure-integrity`. `NotConfigured` has no wire form and is sent as `requestFailed`.
+In a failure that carries only a code with no terminal result, such as a relocation failure (command 53),
+`ShuttingDown` is sent as `routeNotConnected` (to the receiver, an `Unavailable` node it can't use for this
+operation), and an `InvalidOperation` with no cause code is sent as `requestFailed`.
 
 | ErrorKind | Representative code | Other codes received as the same kind |
 |---|---|---|

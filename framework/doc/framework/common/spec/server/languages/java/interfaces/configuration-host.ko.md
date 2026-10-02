@@ -322,12 +322,9 @@ Type별 limit을 생략하면 node limit을 공유한다. 명시한 값은 1..`I
 weight보다 먼저 적용한다.
 `enableActorDispatch()`는 인자가 없으며 global ActorId가 Mesh를 resolve한다.
 
-Object Server의 Entry Spot ID는 MeshNode diagnostic prefix를 사용한
-`<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식이며 MeshNode와 별도로 생성한 UUID v4를 사용한다.
-Framework 내부 descriptor의 `entrySpotId`가 같은 lifecycle의 mapping을 제공한다. Global Spot ID가
-active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 configuration exception으로 startup을
-실패시킨다. Caller가 지정한 User·Instance Spot ID가 이 예약 형식과 일치하면 Store와 factory를 시작하기
-전에 `INVALID_OPERATION`으로 거부한다.
+Framework 내부 descriptor의 `entrySpotId`가 같은 lifecycle의 Entry Spot ID mapping을 제공한다. Entry Spot ID의
+발급·형식과 예약 형식의 거부는 [공통 Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정하며, Java에서
+그 거부의 오류는 `INVALID_OPERATION`이다.
 
 Location provider는 `ZLinkLocationStore`를 통해 Framework의 opaque record read, version 조건부 atomic
 batch와 bounded snapshot scan을 제공한다. 별도 domain별 Store instance를 host에 등록하지 않는다.
