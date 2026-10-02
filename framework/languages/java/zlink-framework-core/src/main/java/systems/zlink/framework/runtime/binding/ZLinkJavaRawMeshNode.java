@@ -1117,13 +1117,6 @@ final class ZLinkJavaRawMeshNode
                                         () -> {
                                             if (admitted.isDone()) return null;
                                             try {
-                                                if (timeout.toNanos()
-                                                                - (System.nanoTime() - started)
-                                                        <= 0) {
-                                                    admitted.completeExceptionally(
-                                                            new TimeoutException());
-                                                    return null;
-                                                }
                                                 if (!selectedIntent.isDone()) {
                                                     Long matching =
                                                             peerIntents.entrySet().stream()

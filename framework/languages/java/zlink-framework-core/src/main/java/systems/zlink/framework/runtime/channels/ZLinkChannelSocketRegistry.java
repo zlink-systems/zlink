@@ -341,14 +341,6 @@ final class ZLinkChannelSocketRegistry {
                                 .runNowOrQueue(
                                         () -> {
                                             if (admission.isDone()) return null;
-                                            if (sendTimeout.toNanos()
-                                                            - (System.nanoTime() - started)
-                                                    <= 0) {
-                                                admission.completeExceptionally(
-                                                        new java.util.concurrent
-                                                                .TimeoutException());
-                                                return null;
-                                            }
                                             try (var ignored =
                                                     flow == null
                                                             ? ZLinkFlowContext.suppress()
