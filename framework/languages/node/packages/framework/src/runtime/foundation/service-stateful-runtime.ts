@@ -27,6 +27,7 @@ import {
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
 import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
+import { OperationRegistry } from './operation-registry';
 import {
   MessageFollowSuppressionRegistry,
   type MessageFollowSuppressionFence
@@ -305,7 +306,8 @@ export interface ServiceInstanceActivationAuthority {
 export interface ServiceAsyncInstanceActivationAuthority {
   read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead>;
   reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve>;
   resume(
     target: ServiceInstanceActivationTarget,
@@ -314,7 +316,8 @@ export interface ServiceAsyncInstanceActivationAuthority {
   commit(
     target: ServiceInstanceActivationTarget,
     reservation: ServiceInstanceActivationReservation,
-    spot: ServiceSpotState
+    spot: ServiceSpotState,
+    deadlineUnixMs?: bigint
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }>;
   complete(
     target: ServiceInstanceActivationTarget,
@@ -371,7 +374,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations = new ServiceTerminalOperationRegistry<ServiceStatefulResult>();
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -435,8 +438,12 @@ export class ServiceStatefulRuntime {
   constructor(
     private readonly raw: RawServiceMeshRuntime,
     readonly nodeRid: string,
-    readonly nodeGeneration: bigint
+    readonly nodeGeneration: bigint,
+    onPendingOperationsChanged?: () => void
   ) {
+    this.operations = new ServiceTerminalOperationRegistry(
+      new OperationRegistry(undefined, onPendingOperationsChanged)
+    );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress((record) => this.ingress(record));
@@ -1276,11 +1283,11 @@ export class ServiceStatefulRuntime {
           reporter.report({
             surface: ZLinkDispatchErrorSurface.SpotRoute,
             messageKind: ZLinkDispatchMessageKind.Send,
-            reason: serviceSpotPublishFailureReason(
-              undefined,
-              this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
-              this.closed
-            ),
+            reason: this.closed
+              ? ZLinkDispatchErrorReason.Shutdown
+              : this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId)
+                ? ZLinkDispatchErrorReason.Backpressure
+                : ZLinkDispatchErrorReason.StaleTarget,
             action: ZLinkDispatchErrorAction.Drop,
             meshName: this.dispatchErrorMeshName,
             channelName,
@@ -1975,6 +1982,14 @@ export class ServiceStatefulRuntime {
       header,
       encodeApplicationPayload(payload)
     ]);
+  }
+
+  expireOperations(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
+  get pendingOperationCount(): number {
+    return this.operations.size;
   }
 
   close(): void {
@@ -3084,18 +3099,27 @@ export class ServiceStatefulRuntime {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
-    const reserved = await authority.reserve({
-      target,
-      sourceNodeRid: record.sourceNodeRid,
-      sourceNodeGeneration: record.sourceNodeGeneration,
-      ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-      operationKind: record.operationKind,
-      operation: record.operation,
-      ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
-      deadlineUnixMs: record.deadlineUnixMs,
-      ...(metadataFrame === undefined ? {} : { metadataFrame }),
-      applicationPayloadFrame: payloadFrame
-    });
+    const deadline = operationDeadline(record.deadlineUnixMs);
+    let reserved: ServiceInstanceAuthorityReserve;
+    try {
+      reserved = await authority.reserve(
+        {
+          target,
+          sourceNodeRid: record.sourceNodeRid,
+          sourceNodeGeneration: record.sourceNodeGeneration,
+          ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
+          operationKind: record.operationKind,
+          operation: record.operation,
+          ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
+          deadlineUnixMs: record.deadlineUnixMs,
+          ...(metadataFrame === undefined ? {} : { metadataFrame }),
+          applicationPayloadFrame: payloadFrame
+        },
+        deadline.signal
+      );
+    } finally {
+      deadline.close();
+    }
     if (reserved.kind === 'ready') {
       throw new ServiceInstanceActivationRedirectError(reserved.route);
     }
@@ -3120,7 +3144,12 @@ export class ServiceStatefulRuntime {
     }
     let committed: Awaited<ReturnType<ServiceAsyncInstanceActivationAuthority['commit']>>;
     try {
-      committed = await authority.commit(target, reserved.reservation, activation.spot);
+      committed = await authority.commit(
+        target,
+        reserved.reservation,
+        activation.spot,
+        record.deadlineUnixMs
+      );
     } catch (error) {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       await this.instanceApplicationLifecycle?.discard(target);
@@ -4078,7 +4107,7 @@ export class ServiceStatefulRuntime {
     handler: ServiceUserSpotOperationHandler,
     record: ServiceUserSpotCreateRecord | ServiceUserSpotCloseRecord | ServiceActorCreateRecord
   ): Promise<ServiceUserSpotOperationResult> {
-    const deadline = userSpotDeadline(record.deadlineUnixMs);
+    const deadline = operationDeadline(record.deadlineUnixMs);
     try {
       const result =
         record.kind === 'userSpotCreate'
@@ -5318,28 +5347,6 @@ export class ServiceStatefulRuntime {
   }
 }
 
-function serviceSpotPublishFailureReason(
-  result: number | undefined,
-  routeReady: boolean,
-  closed: boolean
-): 'stale_target' | 'backpressure' | 'shutdown' {
-  if (closed || result === SubmitResult.Terminated) return 'shutdown';
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return 'backpressure';
-    case SubmitResult.NotAdmitted:
-    case SubmitResult.NotConnected:
-    case SubmitResult.NotFound:
-    case SubmitResult.InvalidHandle:
-      return 'stale_target';
-    default:
-      // RawServiceMeshRuntime exposes failed Core submissions as false. A
-      // ready route therefore identifies queue admission failure; a route
-      // that became unready after selection is a stale target.
-      return routeReady ? 'backpressure' : 'stale_target';
-  }
-}
-
 function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   return (
     fence.spot.spotId === fence.targetNodeRid &&
@@ -5349,16 +5356,23 @@ function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   );
 }
 
-function userSpotDeadline(deadlineUnixMs: bigint): {
+function operationDeadline(deadlineUnixMs: bigint): {
   readonly signal: AbortSignal;
   close(): void;
 } {
   const controller = new AbortController();
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
-  const timeout = setTimeout(
-    () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, MAX_NODE_TIMER_DELAY_MS))
-  );
+  const expire = () =>
+    controller.abort(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        'Operation deadline exceeded.'
+      )
+    );
+  const timeout =
+    delay <= 0
+      ? (expire(), undefined)
+      : setTimeout(expire, Math.min(delay, MAX_NODE_TIMER_DELAY_MS));
   return {
     signal: controller.signal,
     close: () => clearTimeout(timeout)

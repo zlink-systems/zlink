@@ -360,8 +360,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                     while (cause instanceof CompletionException && cause.getCause() != null) {
                         cause = cause.getCause();
                     }
-                    if (cause instanceof IllegalArgumentException
-                            || cause instanceof ZLinkFrameworkException) {
+                    if (cause instanceof ZLinkFrameworkException) {
                         result.completeExceptionally(cause);
                     } else {
                         result.completeExceptionally(
@@ -569,7 +568,10 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
     private ZLinkPageRequest normalize(ZLinkPageRequest page) {
         ZLinkPageRequest safe = page == null ? ZLinkPageRequest.firstPage() : page;
-        return safe.pageSize() > 0 ? safe : new ZLinkPageRequest(1000, safe.continuationToken());
+        return safe.pageSize() > 0
+                ? safe
+                : new ZLinkPageRequest(
+                        ZLinkPageRequest.firstPage().pageSize(), safe.continuationToken());
     }
 
     private ZLinkPageRequest boundedPage(ZLinkPageRequest page) {
@@ -602,7 +604,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
         ZLinkLocationServiceSummary toSummary(String meshName) {
             return new ZLinkLocationServiceSummary(
-                    meshName, total, ready, total - ready, 0, updatedAt);
+                    meshName, total, ready, 0, total - ready, updatedAt);
         }
     }
 }

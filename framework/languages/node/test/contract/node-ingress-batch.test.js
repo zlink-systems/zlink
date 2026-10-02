@@ -161,7 +161,13 @@ test('a failed handler releases every record retained by its receive batch', asy
   const released = Array(64).fill(0);
   const failure = new Error('handler failed');
   let report;
-  const reported = new Promise(resolve => { report = resolve; });
+  const reported = new Promise((resolve) => {
+    report = resolve;
+  });
+  let releaseClaim;
+  const claimReleased = new Promise((resolve) => {
+    releaseClaim = resolve;
+  });
   let ready;
   let claimed = false;
   let consumed = false;
@@ -169,18 +175,46 @@ test('a failed handler releases every record retained by its receive batch', asy
     recvBatch() {
       if (consumed) return { ok: false, records: [] };
       consumed = true;
-      return { ok: true, records: closed.map((_, i) => ({
-        parts: [{ data() { return Buffer.alloc(0); }, close() { closed[i]++; } }],
-        applicationJobPermit: { releaseAfterInternalProcessing() {} },
-        releaseRetainedIngress() { released[i]++; }
-      })) };
+      return {
+        ok: true,
+        records: closed.map((_, i) => ({
+          parts: [
+            {
+              data() {
+                return Buffer.alloc(0);
+              },
+              close() {
+                closed[i]++;
+              }
+            }
+          ],
+          applicationJobPermit: { releaseAfterInternalProcessing() {} },
+          releaseRetainedIngress() {
+            released[i]++;
+          }
+        }))
+      };
     },
-    release() {}
+    release() {
+      releaseClaim();
+    }
   };
   const node = {
-    setReadyHandler(handler) { ready = handler; },
-    createReadyBatch() { return { reset() {}, takeClaim() { return claim; }, close() {} }; },
-    createReceiveBatch() { return { reset() {}, close() {} }; },
+    setReadyHandler(handler) {
+      ready = handler;
+    },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() {
+          return claim;
+        },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
     drainReady() {
       if (claimed) return { ok: false, records: [] };
       claimed = true;
@@ -189,15 +223,23 @@ test('a failed handler releases every record retained by its receive batch', asy
   };
   let dispatches = 0;
   const pump = new backend.ZLinkMeshDispatchPump(node, {
-    applicationJobQueue: { acquire() { throw new Error('already admitted'); } },
-    dispatch() { dispatches++; throw failure; },
+    applicationJobQueue: {
+      acquire() {
+        throw new Error('already admitted');
+      }
+    },
+    dispatch() {
+      dispatches++;
+      throw failure;
+    },
     reportError: report
   });
   try {
     pump.start();
     ready(ReadyDomain.Application);
     assert.equal(await reported, failure);
-    assert.equal(dispatches, 1);
+    await claimReleased;
+    assert.equal(dispatches, 64);
     assert.deepEqual(closed, Array(64).fill(1));
     assert.deepEqual(released, Array(64).fill(1));
   } finally {

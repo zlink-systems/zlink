@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
@@ -38,6 +39,205 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaStreamSocketAsyncTerminalTest {
+    @Test
+    void connectionReadyIsObservedBeforeFirstInboundFrame() throws Exception {
+        var ready = new CompletableFuture<RoutingId>();
+        try (var context = Zlink.createContext();
+                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
+            stream.onTransportError(
+                    (rid, event, nativeCode, message) -> {
+                        if (event == MonitorEventType.CONNECTION_READY) {
+                            ready.complete(rid);
+                        }
+                    });
+            stream.bind("tcp://127.0.0.1:0");
+            var endpoint = java.net.URI.create(stream.lastEndpoint());
+            try (var client = new java.net.Socket(endpoint.getHost(), endpoint.getPort())) {
+                assertTrue(ready.get(5, TimeUnit.SECONDS).size() > 0);
+            }
+        }
+    }
+
+    @Test
+    void countSnapshotDoesNotPublishConnectionButReadyEdgeDoes() throws Exception {
+        var events =
+                new java.util.ArrayDeque<
+                        systems.zlink.framework.runtime.internal.backend
+                                .ZLinkBackendSocketMonitorEvent>();
+        var rid = RoutingId.from("edge-peer");
+        events.add(
+                new systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent(
+                        MonitorEventType.CONNECTION_READY.name(), Optional.of(rid), "", "", 0));
+        events.add(
+                new systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent(
+                        MonitorEventType.CONNECTION_READY.name(),
+                        Optional.of(rid),
+                        "",
+                        "",
+                        systems.zlink.contracts.eventing.MonitorEventFlags.CONNECTION_READY_EDGE
+                                .mask()));
+        events.add(
+                new systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent(
+                        MonitorEventType.DISCONNECTED.name(), Optional.of(rid), "", "", 0));
+        var delivered = new java.util.ArrayList<MonitorEventType>();
+        var monitorType =
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor.class;
+        var eventMonitor =
+                java.lang.reflect.Proxy.newProxyInstance(
+                        monitorType.getClassLoader(),
+                        new Class<?>[] {monitorType},
+                        (proxy, method, args) ->
+                                switch (method.getName()) {
+                                    case "isClosed" -> events.isEmpty();
+                                    case "waitForReadable" -> true;
+                                    case "recvDontWait" -> events.remove();
+                                    default -> throw new AssertionError(method.getName());
+                                });
+        try (var context = Zlink.createContext();
+                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
+            var receiver =
+                    ZLinkJavaStreamSocket.class.getDeclaredMethod(
+                            "receiveMonitorEvents",
+                            monitorType,
+                            systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkBackendStreamErrorHandler.class);
+            receiver.setAccessible(true);
+            systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler
+                    callback = (peer, event, nativeCode, message) -> delivered.add(event);
+            receiver.invoke(stream, eventMonitor, callback);
+            assertEquals(
+                    List.of(MonitorEventType.CONNECTION_READY, MonitorEventType.DISCONNECTED),
+                    delivered);
+        }
+    }
+
+    @Test
+    void unexpectedMonitorReceiveFailureIsLogged() throws Exception {
+        var failure = new CompletableFuture<Throwable>();
+        var logger = java.util.logging.Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
+        var logHandler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getThrown() != null) {
+                            failure.complete(record.getThrown());
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(logHandler);
+        try (var context = Zlink.createContext();
+                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
+            var injected = new IllegalStateException("injected monitor wait failure");
+            var monitorType =
+                    systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor
+                            .class;
+            var eventMonitor =
+                    java.lang.reflect.Proxy.newProxyInstance(
+                            monitorType.getClassLoader(),
+                            new Class<?>[] {monitorType},
+                            (proxy, method, args) -> {
+                                if (method.getName().equals("isClosed")) {
+                                    return false;
+                                }
+                                throw injected;
+                            });
+            var receiver =
+                    ZLinkJavaStreamSocket.class.getDeclaredMethod(
+                            "receiveMonitorEvents",
+                            monitorType,
+                            systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkBackendStreamErrorHandler.class);
+            receiver.setAccessible(true);
+            systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler
+                    callback = (rid, event, nativeCode, message) -> {};
+            receiver.invoke(stream, eventMonitor, callback);
+            assertEquals(injected, failure.get(5, TimeUnit.SECONDS));
+        } finally {
+            logger.removeHandler(logHandler);
+        }
+    }
+
+    @Test
+    void failedConnectionCallbackDisconnectsOnlyThatPeerAndMonitorContinues() throws Exception {
+        var firstReady = new CompletableFuture<RoutingId>();
+        var secondReady = new CompletableFuture<RoutingId>();
+        var readyCount = new java.util.concurrent.atomic.AtomicInteger();
+        var secondDisconnected = new CompletableFuture<RoutingId>();
+        var callbackFailure = new IllegalStateException("injected Session creation failure");
+        var recordedFailure = new CompletableFuture<Throwable>();
+        var receiveFailure = new AtomicReference<String>();
+        var logger = java.util.logging.Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
+        var logHandler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getThrown()
+                                instanceof
+                                systems.zlink.contracts.errors.ZlinkRecvException recvFailure) {
+                            receiveFailure.set(
+                                    recvFailure.getResult()
+                                            + "/errno="
+                                            + recvFailure.getNativeErrno());
+                        }
+                        if (record.getThrown() == callbackFailure) {
+                            recordedFailure.complete(record.getThrown());
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(logHandler);
+        try (var context = Zlink.createContext();
+                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
+            stream.onTransportError(
+                    (rid, event, nativeCode, message) -> {
+                        if (event == MonitorEventType.CONNECTION_READY) {
+                            readyCount.incrementAndGet();
+                            if (firstReady.complete(rid)) {
+                                throw callbackFailure;
+                            }
+                            if (!rid.equals(firstReady.getNow(null))) {
+                                secondReady.complete(rid);
+                            }
+                        } else if (event == MonitorEventType.DISCONNECTED
+                                && secondReady.isDone()
+                                && rid.equals(secondReady.getNow(null))) {
+                            secondDisconnected.complete(rid);
+                        }
+                    });
+            stream.bind("tcp://127.0.0.1:0");
+            var endpoint = java.net.URI.create(stream.lastEndpoint());
+            try (var first = new java.net.Socket(endpoint.getHost(), endpoint.getPort())) {
+                firstReady.get(5, TimeUnit.SECONDS);
+                first.setSoTimeout((int) Duration.ofSeconds(5).toMillis());
+                assertEquals(-1, first.getInputStream().read());
+                assertEquals(callbackFailure, recordedFailure.get(5, TimeUnit.SECONDS));
+                try (var second = new java.net.Socket(endpoint.getHost(), endpoint.getPort())) {
+                    secondReady.get(5, TimeUnit.SECONDS);
+                }
+                try {
+                    assertEquals(secondReady.get(), secondDisconnected.get(5, TimeUnit.SECONDS));
+                } catch (TimeoutException failure) {
+                    throw new AssertionError(
+                            "monitor receiver failure: " + receiveFailure.get(), failure);
+                }
+                assertEquals(2, readyCount.get());
+            }
+        } finally {
+            logger.removeHandler(logHandler);
+        }
+    }
+
     @Test
     void asyncSendReturnsBeforeTheSocketStateLaneCanStartAdmission() throws Exception {
         CountDownLatch laneEntered = new CountDownLatch(1);

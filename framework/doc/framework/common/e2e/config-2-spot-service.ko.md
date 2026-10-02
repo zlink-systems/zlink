@@ -189,15 +189,14 @@ Entry Spot ID를 Node RID에서 문자열 조합으로 계산하면 restart와 i
 
 우선순위: `P0`
 
-Framework가 발급하는 Entry Spot namespace를 Application object ID로 사용하면 current Entry identity와
-충돌한다.
+Framework가 발급하는 Entry Spot ID의 예약 형식은 Application object ID로 쓸 수 없다.
 
 **검증 질문:** Reserved Entry-style ID의 User create와 Instance intent가 `InvalidOperation`인가.
 
 - 시작 조건: 유효한 reserved-format string을 준비한다.
 - 절차: 같은 ID로 User Spot GetOrCreate와 Instance Spot request를 각각 시도한다.
 - 검증: 두 calls는 `InvalidOperation`이고 factory callback과 application handler evidence가 없다.
-- 세부 동작: [Glossary의 Entry Spot](../spec/server/00-foundation/02-glossary.ko.md)을 검증한다.
+- 세부 동작: [Transport RID와 Spot ID 정책 §6.3](../spec/server/02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)을 검증한다.
 
 #### SM-A12 Automatic User Spot IDs가 concurrent creates에서 서로 다르다
 

@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -32,10 +33,14 @@ inline void validate_location_options (const location_options_t &options)
                                      "location lease, polling, failure-grace, fencing, and renewal "
                                      "durations must be greater than zero");
     }
-    if (options.owner_lease_renew_interval + options.owner_lease_renew_timeout
-        >= options.owner_lease_ttl - options.owner_lease_fencing_margin) {
+    const auto maximum_renewal_duration =
+      std::max (options.owner_lease_renew_interval, options.owner_lease_renew_timeout);
+    const auto fenced_lease_lifetime = options.owner_lease_ttl - options.owner_lease_fencing_margin;
+    if (maximum_renewal_duration >= fenced_lease_lifetime
+        || options.owner_lease_renew_timeout >= fenced_lease_lifetime - maximum_renewal_duration) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "owner lease renewal interval plus timeout must be shorter "
+                                     "maximum owner lease renewal interval or timeout plus timeout "
+                                     "must be shorter "
                                      "than the fenced lease lifetime");
     }
     if (options.route_cache_max_age < 0ms || options.message_follow_duration < 0ms) {

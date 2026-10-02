@@ -51,9 +51,18 @@ internal sealed class RequestPerformer(
                 current,
                 authorizationAllowed
             );
-            using var response = await httpClient
-                .SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false);
+            HttpResponseMessage received;
+            try
+            {
+                received = await httpClient
+                    .SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw HttpFailureMapper.Map(exception, HttpFailureStage.Transport);
+            }
+            using var response = received;
 
             var status = (int)response.StatusCode;
             if (

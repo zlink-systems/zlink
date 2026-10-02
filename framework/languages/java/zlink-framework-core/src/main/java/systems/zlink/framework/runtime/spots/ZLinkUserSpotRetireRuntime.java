@@ -344,43 +344,15 @@ public final class ZLinkUserSpotRetireRuntime {
         return true;
     }
 
-    public CompletionStage<Void> relocateAll(Instant deadline) {
-        return relocateAll(deadline, () -> false);
-    }
-
-    public CompletionStage<Void> relocateAll(Instant deadline, BooleanSupplier stopBeforeNextUnit) {
-        return relocateAll(
-                deadline,
-                stopBeforeNextUnit,
-                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                applicationVersion,
-                () -> {});
-    }
-
     public CompletionStage<Void> relocateAll(
             Instant deadline,
             BooleanSupplier stopBeforeNextUnit,
             ZLinkFrameworkRelocationMode mode,
             long targetApplicationVersion,
-            Runnable onPreflightPassed) {
-        return relocateAll(
-                deadline,
-                stopBeforeNextUnit,
-                mode,
-                targetApplicationVersion,
-                () -> {
-                    onPreflightPassed.run();
-                    return CompletableFuture.completedFuture(null);
-                });
-    }
-
-    public CompletionStage<Void> relocateAll(
-            Instant deadline,
-            BooleanSupplier stopBeforeNextUnit,
-            ZLinkFrameworkRelocationMode mode,
-            long targetApplicationVersion,
-            Supplier<CompletionStage<Void>> onPreflightPassed) {
+            Supplier<CompletionStage<Void>> onPreflightPassed,
+            CompletionStage<?> cancellationSignal) {
         Objects.requireNonNull(deadline, "deadline");
+        Objects.requireNonNull(cancellationSignal, "cancellationSignal");
         Objects.requireNonNull(stopBeforeNextUnit, "stopBeforeNextUnit");
         Objects.requireNonNull(onPreflightPassed, "onPreflightPassed");
         var targetPolicy =
@@ -413,7 +385,9 @@ public final class ZLinkUserSpotRetireRuntime {
                     return onPreflightPassed.get();
                 },
                 stopBeforeNextUnit,
-                spotId -> relocateOne(spotId, deadline, cancellation, targetPolicy),
+                spotId ->
+                        relocateOne(
+                                spotId, deadline, cancellation, targetPolicy, cancellationSignal),
                 actorId -> relocateActor(actorId, deadline, cancellation, targetPolicy));
     }
 
@@ -618,7 +592,8 @@ public final class ZLinkUserSpotRetireRuntime {
             String spotId,
             Instant deadline,
             ZLinkStoreCancellation cancellation,
-            ZLinkRelocationTargetPolicy targetPolicy) {
+            ZLinkRelocationTargetPolicy targetPolicy,
+            CompletionStage<?> cancellationSignal) {
         String meshName = spots.userSpotMeshName(spotId);
         Lane lane = lanes.get(meshName);
         if (lane == null) {
@@ -631,7 +606,14 @@ public final class ZLinkUserSpotRetireRuntime {
                     new java.util.concurrent.TimeoutException("User Spot Retire deadline elapsed"));
         }
         return lane.awaitUnitAdmission()
-                .thenCompose(admitted -> lane.source().prepare(spotId, targetPolicy, cancellation))
+                .thenCompose(
+                        admitted ->
+                                lane.source()
+                                        .prepare(
+                                                spotId,
+                                                targetPolicy,
+                                                cancellation,
+                                                cancellationSignal))
                 .thenCompose(
                         source -> {
                             requireExactCoreReady(

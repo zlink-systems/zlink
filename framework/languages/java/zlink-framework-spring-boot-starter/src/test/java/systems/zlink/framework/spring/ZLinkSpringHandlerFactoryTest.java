@@ -27,6 +27,27 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpringHandlerFactoryTest {
     @Test
+    void optionalServiceLookupPreservesCreationFailureAndReturnsNullOnlyForAbsence() {
+        var beans = new DefaultListableBeanFactory();
+        var factory = new ZLinkSpringHandlerFactory(beans);
+        org.junit.jupiter.api.Assertions.assertNull(factory.findService(FieldDependency.class));
+        var original = new IllegalStateException("service creation failed");
+        var definition =
+                new org.springframework.beans.factory.support.RootBeanDefinition(
+                        FieldDependency.class);
+        definition.setInstanceSupplier(
+                () -> {
+                    throw original;
+                });
+        beans.registerBeanDefinition("dependency", definition);
+        var failure =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.beans.factory.BeanCreationException.class,
+                        () -> factory.findService(FieldDependency.class));
+        assertSame(original, failure.getMostSpecificCause());
+    }
+
+    @Test
     void ignoresUnrelatedAutowiredAnnotationWithTheSameSimpleName() throws Exception {
         try (AnnotationConfigApplicationContext context =
                 new AnnotationConfigApplicationContext(ShortcutConfig.class)) {

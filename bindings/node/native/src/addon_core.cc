@@ -2437,6 +2437,8 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
         completion.struct_size = sizeof (completion);
         const int recv_result = zlink_completion_recv (
           socket, &completion, ZLINK_RECV_FLAGS_NONE);
+        if (recv_result == ZLINK_RECV_NO_DATA)
+            continue;
         if (recv_result != ZLINK_RECV_OK)
             return throw_result_error (env, "request completion recv failed", recv_result);
         found = completion.completion_id == completion_id;

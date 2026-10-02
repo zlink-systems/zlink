@@ -289,7 +289,7 @@ export interface ZLinkSpotManagerOptions {
     readonly ownerLeaseGeneration: bigint;
   }) => Promise<{ readonly actorType: string }>;
   readonly actorLifecycleResolver?: (actorId: string) => ZLinkActor | undefined;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
@@ -342,6 +342,9 @@ export class DefaultZLinkSpotManager {
     private readonly options: ZLinkSpotManagerOptions,
     timerClock?: import('./spot-timer').ZLinkTimerClock
   ) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException('Spot manager requires a detached task runner.');
+    }
     this.activations = new ZLinkSpotActivationRegistry(options.metrics);
     this.factories = new Set(options.spotFactories);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
@@ -899,13 +902,10 @@ export class DefaultZLinkSpotManager {
             throw error;
           }
         };
-        this.options.detachedTaskRunner?.runDetached(
+        this.options.detachedTaskRunner.runDetached(
           `instance idle eviction ${String(activation.spotId)}`,
           run
         );
-        if (this.options.detachedTaskRunner === undefined) {
-          void run().catch(() => undefined);
-        }
       }
     } finally {
       this.idleSweepRunning = false;
@@ -1873,10 +1873,7 @@ export class DefaultZLinkSpotManager {
         record.reply(
           this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Error, {
             message: error instanceof Error ? error.message : String(error),
-            kind:
-              error instanceof ZLinkFrameworkException
-                ? error.kind
-                : ZLinkFrameworkErrorKind.InternalFailure
+            kind: spotActorFailureKind(error)
           })
         )
       );
@@ -2531,10 +2528,7 @@ export class DefaultZLinkSpotManager {
                   {
                     ...completion,
                     status: 'failed',
-                    kind:
-                      error instanceof ZLinkFrameworkException
-                        ? error.kind
-                        : ZLinkFrameworkErrorKind.InternalFailure
+                    kind: spotActorFailureKind(error)
                   },
                   entryActor,
                   completion.actor,
@@ -2556,24 +2550,10 @@ export class DefaultZLinkSpotManager {
             }
             this.formalRemoteTransfers.delete(entryActor.context.actorId);
           };
-          this.options.detachedTaskRunner?.runDetached(
+          this.options.detachedTaskRunner.runDetached(
             `actor Entry Spot transfer ${entryActor.context.actorId}`,
             commitEntryTransfer
           );
-          if (this.options.detachedTaskRunner === undefined) {
-            void commitEntryTransfer().catch((error) =>
-              this.options.dispatchErrors?.report({
-                surface: ZLinkDispatchErrorSurface.SpotActor,
-                messageKind: ZLinkDispatchMessageKind.Control,
-                packetName: 'ActorJoin',
-                meshName,
-                actorId: entryActor.context.actorId,
-                reason: ZLinkDispatchErrorReason.HandlerException,
-                action: ZLinkDispatchErrorAction.FailCaller,
-                error
-              })
-            );
-          }
         }
       } else {
         if (!replyActorJoin()) return;
@@ -2620,11 +2600,10 @@ export class DefaultZLinkSpotManager {
         actorId !== undefined &&
         this.formalRemoteTransfers.get(actorId) !== undefined
       ) {
-        this.options.detachedTaskRunner?.runDetached(
+        this.options.detachedTaskRunner.runDetached(
           `actor transfer target commit ${actorId}`,
           async () => await operation
         );
-        if (this.options.detachedTaskRunner === undefined) void operation.catch(() => undefined);
         return;
       }
       await operation;
@@ -2792,7 +2771,7 @@ export class DefaultZLinkSpotManager {
           };
           // Session routing is an independent post-Ready branch. The Session
           // owner submits current-binding pushes while the route seal remains installed.
-          if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
+          if (pendingTransfer !== undefined) {
             this.options.detachedTaskRunner.runDetached(
               `actor transfer Session route ${actor.context.actorId}`,
               updateBoundSessionRoute
@@ -2826,13 +2805,10 @@ export class DefaultZLinkSpotManager {
           if (onDetachedTerminal !== undefined) {
             onDetachedTerminal(terminal);
           } else {
-            this.options.detachedTaskRunner?.runDetached(
+            this.options.detachedTaskRunner.runDetached(
               `actor transfer target commit ${actor.context.actorId}`,
               async () => await terminal
             );
-            if (this.options.detachedTaskRunner === undefined) {
-              void terminal.catch(() => undefined);
-            }
           }
           return;
         }
@@ -2899,16 +2875,29 @@ export class DefaultZLinkSpotManager {
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
     const targetsEntry =
       entrySpotId !== undefined && String(admission.admission.spotId) === String(entrySpotId);
-    if (targetsEntry) {
-      await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
-    } else {
-      const activation = this.activations.resolve(meshName, admission.admission.spotId);
-      if (activation === undefined) {
-        throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+    const activation = targetsEntry
+      ? undefined
+      : this.activations.resolve(meshName, admission.admission.spotId);
+    let lifecycleFailure: { readonly error: unknown } | undefined;
+    try {
+      if (targetsEntry) {
+        await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
+      } else {
+        if (activation === undefined) {
+          throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+        }
+        await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
       }
-      await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
+    } catch (error) {
+      lifecycleFailure = { error };
     }
-    await submitSourceLeave(admission.admission.actorRef.nodeRid);
+    if (lifecycleFailure === undefined) {
+      const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
+      this.options.detachedTaskRunner.runDetached(
+        `actor Join source leave ${actor.context.actorId}`,
+        () => sourceLeave
+      );
+    }
     if (
       outcome.deferredJoinCompletion !== undefined &&
       this.options.actorTransferRuntime !== undefined
@@ -2916,20 +2905,26 @@ export class DefaultZLinkSpotManager {
       const submitMailbox = targetsEntry
         ? <T>(operation: () => Promise<T>): Promise<T> => operation()
         : <T>(operation: () => Promise<T>): Promise<T> => {
-            const activation = this.activations.resolve(meshName, admission.admission.spotId);
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
             return activation.executeActor(actor.context.actorId, operation);
           };
       await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
-        outcome.deferredJoinCompletion,
+        lifecycleFailure === undefined
+          ? outcome.deferredJoinCompletion
+          : {
+              ...outcome.deferredJoinCompletion,
+              status: 'failed',
+              kind: spotActorFailureKind(lifecycleFailure.error)
+            },
         actor,
         actorRef,
         submitMailbox,
         signal
       );
     }
+    if (lifecycleFailure !== undefined) throw lifecycleFailure.error;
     this.formalRemoteActorAdmissions.markCommitted(relocationId, actor);
     return true;
   }
@@ -3163,6 +3158,12 @@ export class DefaultZLinkSpotManager {
       messageFollowOrigin
     );
   }
+}
+
+function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
+  return error instanceof ZLinkFrameworkException
+    ? error.kind
+    : ZLinkFrameworkErrorKind.InternalFailure;
 }
 
 function instanceDispatchErrorReason(error: unknown): ZLinkDispatchErrorReason {

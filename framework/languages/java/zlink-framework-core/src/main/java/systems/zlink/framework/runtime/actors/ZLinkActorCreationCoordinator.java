@@ -151,22 +151,6 @@ public final class ZLinkActorCreationCoordinator
             ZLinkMeshNodeDescriptor target,
             EntrySpot entry,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        if (!isExactReadyTarget(target, node.status(), node.peers())) {
-            if (System.currentTimeMillis() >= deadline) {
-                return admissionUnavailable("Actor placement target is no longer ready");
-            }
-            return awaitConflict()
-                    .thenCompose(
-                            ignored ->
-                                    resumeOrCreate(
-                                            operation,
-                                            actorId,
-                                            actorType,
-                                            requestEnvelope,
-                                            getOrCreate,
-                                            deadline,
-                                            excludedTargets));
-        }
         String key = ZLinkAuthorityKeyCodec.actor(actorId);
         byte[] creating =
                 authorities.encode(
@@ -195,7 +179,7 @@ public final class ZLinkActorCreationCoordinator
                         creating,
                         ZLinkPlacementCapacityBundle.actor(1));
         return locations
-                .reserve(request, OPEN)
+                .reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
@@ -501,7 +485,7 @@ public final class ZLinkActorCreationCoordinator
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
         return locations
-                .commit(reservation, ready, terminal, OPEN)
+                .commit(reservation, ready, terminal, request.intent().deadlineUnixMs())
                 .thenCompose(
                         status -> {
                             if (status == ZLinkObjectCommitResult.COMMITTED

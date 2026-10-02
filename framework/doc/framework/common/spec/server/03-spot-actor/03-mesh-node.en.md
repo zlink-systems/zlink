@@ -60,7 +60,7 @@ MeshNode automatic RID issuance, format, conflict, and lifecycle rules are defin
 
 ### 3.2 Entry Spot ID
 
-Entry Spot ID issuance, format, and conflict rules for an Object Server MeshNode are defined by
+Entry Spot ID issuance and format rules for an Object Server MeshNode are defined by
 [Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
 
 An Object Server MeshNode issues the Entry Spot ID and publishes it on its descriptor
@@ -328,6 +328,11 @@ attempts connect and reconnect only while the intent exists.
   that peer's lifecycle termination.** Transport loss or the mere absence of a peer is a
   transient state that reconnection can recover. How a durable operation consumes this
   fact is defined by [Actor Model §8.1](04-actor-model.en.md#81-failure).
+- **When the binding rejects a connect, only that attempt fails and the intent remains.**
+  The intent owner reports the binding's typed error as is through the runtime error
+  reporting path and calls connect again at the same intent's next reconcile. A rejection
+  neither removes the intent nor ends discovery of other peers or the host lifecycle. A
+  rejection is not turned into a success flag that discards its cause.
 
 The following diagram shows the order in which a physical connection is
 established — the identity exchanged in the handshake must pass admission
@@ -490,8 +495,7 @@ runtime snapshot and event).
 - The Entry Spot ID uses the same diagnostic prefix as the MeshNode and a
   separately generated UUID v4, and the descriptor publishes the
   lifecycle mapping.
-- A replacement lifecycle issues a new Entry Spot ID and fails immediately on
-  an Entry Spot authority conflict.
+- A replacement lifecycle issues a new Entry Spot ID.
 - Duplicate stable type and an omitted relocation policy fail at startup.
 - Placement weight allows `0`, default `100`, and the upper bound `10000`,
   and rejects `-1` and `10001` in both startup config and runtime change.

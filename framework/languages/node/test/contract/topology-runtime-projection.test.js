@@ -76,7 +76,10 @@ test('ClientServer runtime projects minimal status and emits complete status cha
   assert.equal('descriptorSource' in snapshot.targets[0], false);
 
   const events = runtime.observe('orders')[Symbol.asyncIterator]();
-  assert.equal((await events.next()).value.status.targets[0].weight, 100);
+  const initial = await Promise.race([events.next(), Promise.resolve(undefined)]);
+  assert.notEqual(initial, undefined, 'Observe must retain current status before topology changes');
+  assert.equal(initial.value.status.channelName, 'orders');
+  assert.equal(initial.value.status.targets[0].weight, 100);
   weight = 200;
   changed();
   const status = await events.next();
@@ -92,13 +95,14 @@ test('ClientServer runtime projects minimal status and emits complete status cha
 
 test('Fanout runtime projects minimal publisher status and emits complete status changes', async () => {
   let changed;
+  let publisherRoutingId = 'publisher-a';
   const manager = {
     fanoutTopology() {
       return {
         descriptors: [
           {
             channelName: 'events',
-            publisherRoutingId: 'publisher-a',
+            publisherRoutingId,
             lifecycleGeneration: 7n,
             descriptorRevision: 9n,
             advertisedEndpoint: 'tcp://127.0.0.1:10001',
@@ -124,10 +128,16 @@ test('Fanout runtime projects minimal publisher status and emits complete status
   assert.equal('endpoint' in snapshot.publishers[0], false);
 
   const events = runtime.observe('events')[Symbol.asyncIterator]();
+  const initial = await Promise.race([events.next(), Promise.resolve(undefined)]);
+  assert.notEqual(initial, undefined, 'Observe must retain current status before topology changes');
+  assert.equal(initial.value.status.channelName, 'events');
+  assert.equal(initial.value.status.publishers[0].nodeRid, 'publisher-a');
+  publisherRoutingId = 'publisher-b';
   changed();
   const status = await events.next();
   assert.equal(status.value.status.channelName, 'events');
-  assert.equal(status.value.status.publishers[0].nodeRid, 'publisher-a');
+  assert.equal(status.value.status.publishers[0].nodeRid, 'publisher-b');
+  assert.equal(status.value.status.sequence, initial.value.status.sequence + 1n);
   await events.return();
 });
 
@@ -349,7 +359,8 @@ test('Framework runtime shutdown surface emits status and Nest exports topology 
     registration: internal.createFrameworkRegistration()
   });
   const events = host.observe()[Symbol.asyncIterator]();
-  assert.equal((await events.next()).value.status.state, host.status.state);
+  const initial = await events.next();
+  assert.equal(initial.value.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
   const result = await host.shutdown({ deadlineMs: 1000 });
   const event = await events.next();
 
@@ -1196,6 +1207,74 @@ test('Shutdown deadline includes final owned resource cleanup', async (t) => {
   const result = await host.shutdown({ deadlineMs: 50 });
   assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
   assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.DeadlineExceeded);
+});
+
+test('Host Observe retains current status before lifecycle changes', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  const expected = host.status;
+  const events = host.observe()[Symbol.asyncIterator]();
+  try {
+    const initial = await Promise.race([events.next(), Promise.resolve(undefined)]);
+    assert.notEqual(initial, undefined, 'Host Observe must retain current status before lifecycle changes');
+    assert.equal(initial.value.status.state, expected.state);
+    assert.equal(initial.value.status.sequence, expected.sequence);
+    assert.equal(initial.value.status.isReady, expected.isReady);
+  } finally {
+    await events.return();
+  }
+});
+
+test('Host Observe coalesces an unread initial status with lifecycle changes', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  const events = host.observe()[Symbol.asyncIterator]();
+  try {
+    await host.shutdown({ deadlineMs: 1000 });
+    const terminal = await events.next();
+    assert.equal(terminal.value.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
+    assert.deepEqual(terminal.value.loss, {
+      coalescedCount: 2n,
+      discardedTerminalCount: 0n
+    });
+  } finally {
+    await events.return();
+  }
+});
+
+test('RouteMesh Observe retains current status before topology changes', async () => {
+  const runtime = new internal.ZLinkRouteMeshRuntimeCoordinator({
+    meshNames: ['game'],
+    meshOptions: new Map([['game', { meshChannels: {} }]]),
+    meshNode: () => ({
+      status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n,
+        descriptorRevision: 1n, state: 3, lastChangedMs: 1n }),
+      peers: () => [],
+      peerChannels: () => ({ names: [], weights: [] })
+    }),
+    admission: new internal.ZLinkRuntimeAdmissionGate(),
+    publishRetiring: async () => {},
+    rollbackRetiring: async () => {},
+    publishDraining: async () => {},
+    publishHostDraining: async () => {},
+    drainResources: async () => {},
+    cleanupHostResources: async () => {},
+    forceStopResources: async () => {}
+  });
+  runtime.markServing();
+  const expected = runtime.snapshot('game');
+  const events = runtime.observe('game')[Symbol.asyncIterator]();
+  try {
+    const initial = await Promise.race([events.next(), Promise.resolve(undefined)]);
+    assert.notEqual(initial, undefined, 'RouteMesh Observe must retain current status before topology changes');
+    assert.equal(initial.value.status.meshName, 'game');
+    assert.equal(initial.value.status.sequence, expected.sequence);
+    assert.equal(initial.value.status.state, expected.state);
+  } finally {
+    await events.return();
+  }
 });
 
 for (const kind of ['ClientServer', 'Fanout']) test(`${kind} query publishes changed payload without observers`, async () => {

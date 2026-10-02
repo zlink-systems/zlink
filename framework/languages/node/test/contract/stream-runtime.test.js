@@ -7,6 +7,10 @@ const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
@@ -71,6 +75,11 @@ const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.ZLinkStreamBindingRuntime, 'function');
@@ -707,20 +716,22 @@ test('managed stream delegates each call timeout to binding-owned admission', as
   assert.deepEqual(observed, [25, 4]);
 });
 
-test('managed stream classifies a disconnected STREAM peer as an unusable route, not a deadline', async () => {
+test('managed stream projects STREAM submit failures by admission phase', async () => {
   const { requireOneWayCompletion } = require('../../packages/framework/dist/runtime/messaging/submission-result');
   const { ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
-  const failures = new Map([
-    [SubmitResult.NotConnected, ZLinkSubmitStatus.RouteNotConnected],
-    [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured]
-  ]);
-  for (const [result, status] of failures) {
+  const failures = [
+    [SubmitResult.NotConnected, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
+    [SubmitResult.NotConnected, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
+    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.Backpressured, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable]
+  ];
+  for (const [result, phase, status, kind] of failures) {
     const socket = {
       sendTimeoutMs: 10,
       sendHighWaterMark: 16,
       onSendReady() {},
       send() { return true; },
-      async submit() { throw new ZLinkBackendResultError('submit', result); },
+      async submit() { throw new ZLinkBackendResultError('submit', result, undefined, { phase }); },
       disconnectPeer() {},
       recv() { return undefined; }
     };
@@ -729,14 +740,10 @@ test('managed stream classifies a disconnected STREAM peer as an unusable route,
     try {
       const submitted = await stream.submitRaw(message);
       assert.deepEqual(submitted, { status });
-      if (result === SubmitResult.NotConnected) {
-        assert.throws(
-          () => requireOneWayCompletion(submitted, 'STREAM session reply'),
-          (error) =>
-            error instanceof ZLinkFrameworkException &&
-            error.kind === ZLinkFrameworkErrorKind.Unavailable
-        );
-      }
+      assert.throws(
+        () => requireOneWayCompletion(submitted, 'STREAM session reply'),
+        (error) => error instanceof ZLinkFrameworkException && error.kind === kind
+      );
     } finally {
       message.close();
     }
@@ -2245,7 +2252,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
   });
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', PlayerFactory]])
-  });
+  }, detachedTaskRunner);
   host.setActorManager(manager);
   host.spotNodeRuntime = {
     primaryMeshNode: {
@@ -4566,6 +4573,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
     }
   }
   const callbackManager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CallbackSpot],
     entrySpotCallbacks: { async onLeaveActor() {} }
   });
@@ -5478,6 +5486,27 @@ test('actor packet target keeps a Ready snapshot across equivalent routing-id in
   assert.strictEqual(store.targetForState('actor-ready-fence'), target);
 });
 
+test('actor packet target does not fabricate a Ready hint from native membership', () => {
+  const store = new ZLinkRemoteActorPacketTargetStore({
+    actorManager: () => ({
+      getState() {
+        return {
+          nativeActorRef: { nodeRid: zlink.RoutingId.from('actor-node'), actorId: 'actor-no-ready', generation: 9n },
+          spotId: 'user-spot',
+          spotGeneration: 7n
+        };
+      }
+    }),
+    streamBindingRuntime: () => ({ find: () => undefined }),
+    meshRouters: {
+      defaultSpotRouterChannelId() { return 'game.route'; },
+      defaultRouterChannelId() { return 'game'; }
+    },
+    primaryNodeRid: () => zlink.RoutingId.from('actor-node')
+  });
+  assert.equal(store.targetForState('actor-no-ready'), undefined);
+});
+
 test('remote actor packet route failure is submitted once and stays Unavailable', async () => {
   const actorId = 'actor-incomplete-ready-fence';
   const routeFailure = framework.createInternalFrameworkException(
@@ -5588,7 +5617,7 @@ test('runtime host joined Spot route invalidates a stale entry target instead of
   assert.equal(target, undefined);
 });
 
-test('runtime host actor packet target uses spot mesh when route mesh also exists', () => {
+test('runtime host actor packet target requires a Ready spot mesh snapshot when route mesh also exists', () => {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'spot.control' }],
@@ -5605,21 +5634,26 @@ test('runtime host actor packet target uses spot mesh when route mesh also exist
       routingId: 'session-node'
     }
   };
+  const state = {
+    spotId: 'room-spot',
+    nativeActorRef: { nodeRid: 'play-node', actorId: 'actor-remote-room', generation: 1n }
+  };
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote-room');
-      return {
-        spotId: 'room-spot',
-        nativeActorRef: {
-          nodeRid: 'play-node',
-          actorId,
-          generation: 1n
-        }
-      };
+      return state;
     }
   });
 
+  assert.equal(host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room'), undefined);
+  state.remoteActorPacketTarget = {
+    routerChannelId: 'spot.service', targetNodeRid: 'play-node', spotId: 'room-spot',
+    spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 3n, targetNodeGeneration: 5n,
+    authorityOwnerGeneration: 7n, targetOwnerId: 'spot-owner', ownerLeaseGeneration: 11n,
+    authorityStoreVersion: 'spot-ready'
+  };
   const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
+  assert.strictEqual(target, state.remoteActorPacketTarget);
   assert.equal(target.routerChannelId, 'spot.service');
   assert.equal(String(target.targetNodeRid), 'play-node');
   assert.equal(String(target.spotId), 'room-spot');
@@ -6131,7 +6165,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
       return { routerChannelId: 'game.route', targetNodeRid: actorRid, spotId: roomRid, spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 9n };
     }
   });
-  host.streamBindingRuntime.commitActorRoute = async () => { events.push('bind'); };
+  host.streamBindingRuntime.commitActorRoute = async () => { assert.fail('Same-node Join must preserve the existing binding route.'); };
   const actor = { context: { actorId: 'actor-local-room', meshName: 'game' } };
   const state = new framework.ZLinkActorRuntimeState(actor.context.actorId);
   state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
@@ -6139,7 +6173,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
   state.setNativeActorRef(actorRef);
   const request = zlink.Message.from('hello');
   const result = await host.createActorManagerOptions().joinCoordinator.joinSpot(actor, state, 'room-1', request, undefined, undefined);
-  assert.deepEqual(events, ['admission', 'membership', 'joined', 'bind']);
+  assert.deepEqual(events, ['admission', 'membership', 'joined']);
   assert.equal(state.spotId.toHex(), roomRid.toHex());
   assert.equal(location.membershipEpoch, 3n);
   assert.equal(result.actor.nodeRid.toHex(), actorRid.toHex());

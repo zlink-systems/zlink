@@ -33,21 +33,31 @@ final class ZLinkWebSocketTransportConnection
             HttpClient client, URI endpoint, int maxReceivePayloadSize) {
         ZLinkWebSocketTransportConnection connection =
                 new ZLinkWebSocketTransportConnection(maxReceivePayloadSize);
-        client.newWebSocketBuilder()
-                .buildAsync(endpoint, connection)
-                .whenComplete(
-                        (socket, ex) -> {
-                            if (ex != null) {
-                                connection.fail(ex);
-                            }
-                        });
+        CompletableFuture<WebSocket> opening =
+                client.newWebSocketBuilder().buildAsync(endpoint, connection);
+        connection.opened.whenComplete(
+                (opened, failure) -> {
+                    if (failure != null) {
+                        opening.cancel(true);
+                        connection.close();
+                    }
+                });
+        opening.whenComplete(
+                (socket, ex) -> {
+                    if (ex != null) {
+                        connection.fail(ex);
+                    }
+                });
         return connection.opened;
     }
 
     @Override
     public void onOpen(WebSocket socket) {
         webSocket = socket;
-        opened.complete(this);
+        if (!opened.complete(this)) {
+            socket.abort();
+            return;
+        }
         WebSocket.Listener.super.onOpen(socket);
     }
 

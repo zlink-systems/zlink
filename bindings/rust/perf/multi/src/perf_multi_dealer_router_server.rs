@@ -18,11 +18,11 @@ fn main() {
     common::apply_multi_hwm(&router, &settings);
     router
         .common_options()
-        .set_send_timeout(Duration::from_millis(settings.send_timeout_ms))
+        .set_send_timeout(settings.send_timeout_ms)
         .expect("send timeout");
     router
         .common_options()
-        .set_receive_timeout(Duration::from_millis(settings.receive_timeout_ms))
+        .set_receive_timeout(settings.receive_timeout_ms)
         .expect("recv timeout");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
@@ -121,7 +121,7 @@ fn main() {
     // STOP is runner teardown, not part of the measured data path. Let already
     // submitted replies finish, but never let a dead route hold teardown past
     // the configured send timeout; dropping a remaining Future cancels it.
-    let drain_deadline = Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1));
+    let drain_deadline = Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64);
     while replies.any_pending() && Instant::now() < drain_deadline {
         replies.advance();
         if !replies.any_pending() {

@@ -133,7 +133,7 @@ Spot membership itself isn't a relocation blocker — that Actor unit or
 the `SpotWide` aggregate is only blocked when even one participant
 selected `disableRelocation()` or a compatible target can't be secured.
 A participant with relocation disabled gets `BLOCKED/RELOCATION_DISABLED`;
-absence of target/capacity/reservation gets
+absence of target/capacity gets
 `BLOCKED/TARGET_UNAVAILABLE`. The same result applies when no target satisfies the requested
 application version and registered factory/type/state-preservation-adapter eligibility. After
 target selection, an incompatible transferred state schema/type adapter gets

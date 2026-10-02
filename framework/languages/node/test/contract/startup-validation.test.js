@@ -91,12 +91,12 @@ test('Node module registration rejects mixed automatic and manual fanout subscri
   );
 });
 
-test('Node module registration rejects subscriber capability without matching handlers', () => {
-  assert.throws(
-    () => nestjs.ZLinkModule.forRoot(nestjs.zlinkFramework()
+test('Node module registration rejects subscriber capability without matching handlers', async () => {
+  await assertNestStartupRejects(
+    nestjs.zlinkFramework()
       .addFanoutChannel('events')
         .enableSubscriber('tcp://127.0.0.1:1')
-      .build()),
+      .build(),
     /subscriber must register at least one publish handler/
   );
 });

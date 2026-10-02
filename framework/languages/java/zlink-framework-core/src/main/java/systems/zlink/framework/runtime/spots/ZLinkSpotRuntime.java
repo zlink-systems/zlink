@@ -169,9 +169,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkChannelRuntime channels;
     private final List<ChannelRegistration> routeMeshChannels = new ArrayList<>();
     private final Set<RoutingId> manualRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
-    private final Map<RoutingId, ManualObjectPeerIntent> manualObjectPeerIntents =
-            new ConcurrentHashMap<>();
-    private final Set<RoutingId> autoConnectedRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
     private final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
             new ConcurrentHashMap<>();
 
@@ -1088,7 +1085,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         ZLinkPlacementCapacityBundle.spot(
                                 ZLinkPlacementObjectKind.USER_SPOT, stableType, 1));
         return locations
-                .reserve(reserve, () -> false)
+                .reserve(reserve, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
@@ -1234,73 +1231,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (!configured) {
             return CompletableFuture.completedFuture(null);
         }
-        ManualObjectPeerIntent current = manualObjectPeerIntents.get(target.rid());
-        try {
-            Optional<ManualObjectPeerIntent> ensured =
-                    ensureManualObjectPeerIntent(source, target, current);
-            if (ensured.isPresent()) {
-                ManualObjectPeerIntent intent = ensured.orElseThrow();
-                manualObjectPeerIntents.put(target.rid(), intent);
-                boolean admitted =
-                        source.peers().stream()
-                                .anyMatch(
-                                        peer ->
-                                                peer.connectionIntentId()
-                                                                == intent.connectionIntentId()
-                                                        && peer.state() == MeshPeerState.ADMITTED);
-                if (admitted) {
-                    return CompletableFuture.completedFuture(null);
-                }
-            }
-        } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
-        if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException(
-                            "manual object peer did not complete liveness close before the"
-                                    + " placement deadline"));
-        }
-        return CompletableFuture.supplyAsync(
-                        () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
-                .thenCompose(ignored -> ensureManualObjectPeer(meshName, source, target, deadline));
-    }
-
-    static Optional<ManualObjectPeerIntent> ensureManualObjectPeerIntent(
-            ZLinkInternalMeshNode source,
-            systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor target,
-            ManualObjectPeerIntent current) {
-        if (current != null
-                && current.matches(target)
-                && !source.isPeerConnectionClosing(current.connectionIntentId())
-                && source.peers().stream()
-                        .anyMatch(
-                                peer ->
-                                        peer.connectionIntentId() == current.connectionIntentId()
-                                                && (peer.state() == MeshPeerState.ADMITTED
-                                                        || peer.state() == MeshPeerState.CONNECTING
-                                                        || peer.state()
-                                                                == MeshPeerState.NOT_REQUIRED))) {
-            return Optional.of(current);
-        }
-        try {
-            long intent =
-                    source.replacePeerConnection(
-                            target.endpoint(),
-                            target.rid(),
-                            target.lifecycleGeneration(),
-                            target.securityIdentity());
-            return Optional.of(
-                    new ManualObjectPeerIntent(
-                            target.endpoint(),
-                            target.lifecycleGeneration(),
-                            target.securityIdentity(),
-                            intent));
-        } catch (IllegalStateException previousConnectionStillOpen) {
-            // Liveness must close the previous fixed-RID connection before
-            // this descriptor generation can replace its admission fence.
-            return Optional.empty();
-        }
+        return source.preparePeerConnectionAsync(
+                target.endpoint(),
+                target.rid(),
+                target.lifecycleGeneration(),
+                target.securityIdentity(),
+                Duration.ofMillis(Math.max(1L, deadline - System.currentTimeMillis())));
     }
 
     private CompletionStage<ZLinkSpotCreateResult> existingResult(
@@ -1828,7 +1764,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             : failure instanceof RuntimeException runtime
                                                     ? runtime
                                                     : new RuntimeException(failure);
-                            instanceSpotActivations.clear();
+                            if (!instanceSpotActivations.isEmpty()) {
+                                instanceSpotActivations.clear();
+                                signalCountChanged();
+                            }
                             firstFailure = closeRuntimeComponent(publishers::close, firstFailure);
                             for (ZLinkInternalSpotNode node : nodes) {
                                 firstFailure = closeRuntimeComponent(node::close, firstFailure);
@@ -1909,7 +1848,32 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     public CompletionStage<Void> continueDrain(ZLinkSpotCloseReason reason, Instant deadline) {
         return spotLifecycle
                 .releaseRecreatableSpots(reason, deadline)
+                .thenCompose(
+                        ignored ->
+                                CompletableFuture.allOf(
+                                        nodes.stream()
+                                                .map(
+                                                        ZLinkInternalSpotNode
+                                                                ::awaitPendingActorRequests)
+                                                .map(CompletionStage::toCompletableFuture)
+                                                .toArray(CompletableFuture[]::new)))
                 .thenRun(this::recordDrainedRoomsIfComplete);
+    }
+
+    private volatile Runnable countChanged = () -> {};
+
+    public void setCountChanged(Runnable callback) {
+        countChanged = Objects.requireNonNull(callback, "callback");
+        spotLifecycle.setCountChanged(this::signalCountChanged);
+    }
+
+    private void signalCountChanged() {
+        try {
+            countChanged.run();
+        } catch (RuntimeException failure) {
+            java.util.logging.Logger.getLogger(ZLinkSpotRuntime.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Spot count observer failed", failure);
+        }
     }
 
     public int activeUserSpotCount() {
@@ -2281,63 +2245,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return Map.copyOf(nodesByName);
     }
 
-    public boolean isSessionRelayRouteReady(RoutingId nodeRid) {
-        if (!hasRoutingId(nodeRid)) {
-            return true;
-        }
-        for (ZLinkInternalSpotNode node : nodes) {
-            if (nodeRid.equals(node.routingId())) {
-                return true;
-            }
-        }
-        for (ZLinkInternalMeshNode node : routeMeshNodes) {
-            try {
-                boolean admitted =
-                        node.peers().stream()
-                                .anyMatch(
-                                        peer ->
-                                                nodeRid.equals(peer.routingId())
-                                                        && peer.state() == MeshPeerState.ADMITTED);
-                if (admitted) {
-                    return true;
-                }
-            } catch (RuntimeException ignored) {
-                // A transient status read cannot prove relay readiness.
-            }
-        }
-        return manualRouterPeerNodeRids.contains(nodeRid)
-                || manualObjectPeerIntents.containsKey(nodeRid)
-                || autoConnectedRouterPeerNodeRids.contains(nodeRid);
-    }
-
-    public void markAutoConnectedRouterPeer(RoutingId nodeRid) {
-        if (hasRoutingId(nodeRid)) {
-            autoConnectedRouterPeerNodeRids.add(nodeRid);
-        }
-    }
-
-    public void unmarkAutoConnectedRouterPeer(RoutingId nodeRid) {
-        if (hasRoutingId(nodeRid)) {
-            autoConnectedRouterPeerNodeRids.remove(nodeRid);
-        }
-    }
-
-    private static boolean hasRoutingId(RoutingId routingId) {
-        return routingId != null && routingId.size() > 0;
-    }
-
-    static record ManualObjectPeerIntent(
-            String endpoint,
-            long lifecycleGeneration,
-            String securityIdentity,
-            long connectionIntentId) {
-        boolean matches(ZLinkMeshNodeDescriptor target) {
-            return endpoint.equals(target.endpoint())
-                    && lifecycleGeneration == target.lifecycleGeneration()
-                    && securityIdentity.equals(target.securityIdentity());
-        }
-    }
-
     public ZLinkSpotOutbound outbound() {
         return outboundScope.ambient();
     }
@@ -2682,7 +2589,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         .INSTANCE_SPOT,
                                 stableType,
                                 1));
-        return store.reserve(request, () -> false)
+        return store.reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             systems.zlink.framework.runtime.internal.locations
@@ -2923,8 +2830,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             route.leaseGeneration(),
                                                             route.authorityOwnerGeneration(),
                                                             route.targetNodeGeneration());
-                                                    instanceSpotActivations.put(
-                                                            route.targetSpotId(), activation);
+                                                    if (instanceSpotActivations.put(
+                                                                    route.targetSpotId(),
+                                                                    activation)
+                                                            == null) signalCountChanged();
                                                     activation.startIdleEviction(
                                                             instanceSpotIdleTimeouts.getOrDefault(
                                                                     meshName, Duration.ZERO));
@@ -3033,9 +2942,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .authorityOwnerGeneration(),
                                                                             route
                                                                                     .targetNodeGeneration());
-                                                                    instanceSpotActivations.put(
-                                                                            route.targetSpotId(),
-                                                                            activation);
+                                                                    if (instanceSpotActivations.put(
+                                                                                    route
+                                                                                            .targetSpotId(),
+                                                                                    activation)
+                                                                            == null)
+                                                                        signalCountChanged();
                                                                     activation.startIdleEviction(
                                                                             instanceSpotIdleTimeouts
                                                                                     .getOrDefault(
@@ -4175,21 +4087,31 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 actor, this::spotSurfaceFor, spotLifecycle::firstEntrySpot);
     }
 
-    private ZLinkActorDispatchTarget actorDispatchTargetFor(String actorId) {
-        Optional<ZLinkActor> actor = actorSessions.localActor(actorId);
-        if (actor.isEmpty()) {
-            return null;
-        }
-        Object surface = localActorSpotSurface(actor.orElseThrow());
-        if (surface instanceof ZLinkSpot<?> spot
-                && spot.context() instanceof DefaultSpotContext context) {
-            return context.actorDispatchTarget();
-        }
-        if (surface instanceof ZLinkEntrySpot<?> entry
-                && entry.context() instanceof DefaultEntrySpotContext context) {
-            return context.actorDispatchTarget();
-        }
-        return null;
+    private CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot> actorDispatchTargetFor(
+            String actorId) {
+        return actorSessions
+                .localActorAsync(actorId)
+                .thenApply(
+                        actor -> {
+                            if (actor.isEmpty()) {
+                                return new ZLinkActorDispatchTarget.ActivationSnapshot(null, null);
+                            }
+                            Object surface = localActorSpotSurface(actor.orElseThrow());
+                            if (surface instanceof ZLinkSpot<?> spot
+                                    && spot.context() instanceof DefaultSpotContext context) {
+                                return new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                        context.actorDispatchTarget(),
+                                        actor.orElseThrow().context());
+                            }
+                            if (surface instanceof ZLinkEntrySpot<?> entry
+                                    && entry.context() instanceof DefaultEntrySpotContext context) {
+                                return new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                        context.actorDispatchTarget(),
+                                        actor.orElseThrow().context());
+                            }
+                            return new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                    null, actor.orElseThrow().context());
+                        });
     }
 
     byte[] freezeActorTimerRelocationEnvelope(String actorId) {
@@ -4954,6 +4876,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (!instanceSpotActivations.remove(spotId, activation)) {
             throw new IllegalStateException("Instance Spot changed during Close cleanup");
         }
+        signalCountChanged();
         ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(activation.context.meshName());
         if (routeNode != null) {
             routeNode.forgetInstanceIntent(activation.authorityRouteFence());
@@ -4961,7 +4884,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
-        instanceSpotActivations.remove(activation.context.spotId(), activation);
+        if (instanceSpotActivations.remove(activation.context.spotId(), activation))
+            signalCountChanged();
         return activation
                 .closeResourcesAsync()
                 .whenComplete(

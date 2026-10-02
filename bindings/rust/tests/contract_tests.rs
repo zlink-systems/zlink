@@ -641,7 +641,7 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(5000)
         .unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")

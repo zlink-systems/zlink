@@ -111,8 +111,7 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_result<zlink::message_t> (
-                      "handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -140,8 +139,7 @@ class handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return detail::current_exception_result<zlink::message_t> (
-                    "handler threw an exception");
+                  co_return detail::current_exception_result<zlink::message_t> ();
               }
           });
     }
@@ -176,8 +174,7 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_result<zlink::message_t> (
-                      "handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -211,8 +208,7 @@ class handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return detail::current_exception_result<zlink::message_t> (
-                    "handler threw an exception");
+                  co_return detail::current_exception_result<zlink::message_t> ();
               }
           });
     }
@@ -419,8 +415,7 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_result<zlink::message_t> (
-                      "handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -447,8 +442,7 @@ class handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return detail::current_exception_result<zlink::message_t> (
-                    "handler threw an exception");
+                  co_return detail::current_exception_result<zlink::message_t> ();
               }
           });
     }
@@ -496,8 +490,7 @@ class handler_registry_t
               }
               catch (...) {
                   return task_t<zlink::message_t> (
-                    detail::current_exception_result<zlink::message_t> (
-                      "handler threw an exception"));
+                    detail::current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -531,8 +524,7 @@ class handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return detail::current_exception_result<zlink::message_t> (
-                    "handler threw an exception");
+                  co_return detail::current_exception_result<zlink::message_t> ();
               }
           });
     }

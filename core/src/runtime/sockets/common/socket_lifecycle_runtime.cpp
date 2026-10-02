@@ -26,8 +26,13 @@ const uint64_t public_api_complete_unit = UINT64_C (1) << 32;
 const uint64_t public_api_complete_mask =
   ((UINT64_C (1) << 29) - 1) * public_api_complete_unit;
 const uint64_t public_api_inflight_mask = UINT64_C (0xffffffff);
+//  Mailbox lifetime pins and the destroy request share one word. The single
+//  step that sees "no pin left and destruction requested" also seals the word,
+//  so exactly one caller finishes destruction and no caller reads the socket
+//  after giving up its pin.
 const uint32_t mailbox_ref_sealed_bit = UINT32_C (1) << 31;
-const uint32_t mailbox_ref_count_mask = mailbox_ref_sealed_bit - 1;
+const uint32_t mailbox_ref_destroy_pending_bit = UINT32_C (1) << 30;
+const uint32_t mailbox_ref_count_mask = mailbox_ref_destroy_pending_bit - 1;
 
 //  The sync bit is held for each socket-state turn. A blocking operation drops
 //  it before waiting, but a state transition may still be long enough that a
@@ -291,11 +296,6 @@ bool zlink::socket_lifecycle_coordinator_t::acquire_poller_registration ()
     inc_mailbox_ref ();
     leave_public_api ();
     return true;
-}
-
-bool zlink::socket_lifecycle_coordinator_t::release_poller_registration ()
-{
-    return dec_mailbox_ref ();
 }
 
 bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy ()
@@ -714,21 +714,6 @@ void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (
         mailbox_->clear_signalers ();
 }
 
-void zlink::socket_lifecycle_coordinator_t::mark_destroy_pending ()
-{
-    destroy_pending.store (true, std::memory_order_release);
-}
-
-void zlink::socket_lifecycle_coordinator_t::clear_destroy_pending ()
-{
-    destroy_pending.store (false, std::memory_order_release);
-}
-
-bool zlink::socket_lifecycle_coordinator_t::is_destroy_pending () const
-{
-    return destroy_pending.load (std::memory_order_acquire);
-}
-
 void zlink::socket_lifecycle_coordinator_t::set_reaper_poller (poller_t *poller_)
 {
     reaper_poller_value = poller_;
@@ -776,21 +761,36 @@ void zlink::socket_lifecycle_coordinator_t::inc_mailbox_ref ()
     zlink_assert (acquired);
 }
 
-bool zlink::socket_lifecycle_coordinator_t::dec_mailbox_ref ()
+bool zlink::socket_lifecycle_coordinator_t::release_mailbox_ref ()
 {
-    const uint32_t old =
-      mailbox_ref_state.fetch_sub (1, std::memory_order_acq_rel);
-    zlink_assert ((old & mailbox_ref_sealed_bit) == 0);
-    zlink_assert ((old & mailbox_ref_count_mask) != 0);
-    return ((old - 1) & mailbox_ref_count_mask) != 0;
+    uint32_t old = mailbox_ref_state.load (std::memory_order_acquire);
+    while (true) {
+        zlink_assert ((old & mailbox_ref_sealed_bit) == 0);
+        zlink_assert ((old & mailbox_ref_count_mask) != 0);
+        uint32_t desired = old - 1;
+        if ((desired & mailbox_ref_count_mask) == 0
+            && (desired & mailbox_ref_destroy_pending_bit) != 0)
+            desired |= mailbox_ref_sealed_bit;
+        if (mailbox_ref_state.compare_exchange_weak (
+              old, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire))
+            return (desired & mailbox_ref_sealed_bit) != 0;
+    }
 }
 
-bool zlink::socket_lifecycle_coordinator_t::seal_mailbox_refs_if_zero ()
+bool zlink::socket_lifecycle_coordinator_t::request_destroy ()
 {
-    uint32_t expected = 0;
-    return mailbox_ref_state.compare_exchange_strong (
-      expected, mailbox_ref_sealed_bit, std::memory_order_acq_rel,
-      std::memory_order_acquire);
+    uint32_t old = mailbox_ref_state.load (std::memory_order_acquire);
+    while ((old & mailbox_ref_sealed_bit) == 0) {
+        uint32_t desired = old | mailbox_ref_destroy_pending_bit;
+        if ((desired & mailbox_ref_count_mask) == 0)
+            desired |= mailbox_ref_sealed_bit;
+        if (mailbox_ref_state.compare_exchange_weak (
+              old, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire))
+            return (desired & mailbox_ref_sealed_bit) != 0;
+    }
+    return false;
 }
 
 bool zlink::socket_lifecycle_coordinator_t::mailbox_refs_sealed () const

@@ -188,15 +188,15 @@ class location_runtime_t
         static_cast<void> (node_rid);
         try {
             if (cancellation.stop_requested ())
-                throw detail::make_boundary_exception (detail::boundary_error_t::cancelled,
-                                                       "location runtime startup was cancelled");
+                std::rethrow_exception (
+                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
             const auto deadline_at =
               std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout;
             renew_owner_lease_once (deadline_at, cancellation);
             if (cancellation.stop_requested ()) {
                 release_cancelled_claim (deadline_at);
-                throw detail::make_boundary_exception (detail::boundary_error_t::cancelled,
-                                                       "location runtime startup was cancelled");
+                std::rethrow_exception (
+                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
             }
         }
         catch (...) {
@@ -214,43 +214,41 @@ class location_runtime_t
 
     void stop () noexcept
     {
-        if (!_started.exchange (false)) {
+        if (!_started.exchange (false))
             return;
-        }
         stop_heartbeat ();
-        try {
-            const auto token = current_owner_token_unchecked ();
-            if (token) {
-                _store->remove_all_by_owner (*token).result ().value ();
-                _store->release_owner_lease (*token).result ().value ();
-                _lane
-                  .run_checked ([this] {
-                      _owner_token.reset ();
-                      _owner_lease_admission_deadline.reset ();
-                  })
-                  .get ();
-            }
-        }
-        catch (const std::exception &error) {
-            record_store_error ();
-            record_failure (error.what ());
-        }
+        static_cast<void> (cleanup_owner ());
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
      * heartbeat, then removes this owner's lease and rows while the store
      * stays usable for the rest of teardown. Returns false when the store
      * rejects the cleanup (the drain worker maps it to OwnerCleanupFailed). */
-    bool cleanup_owner () noexcept
+    bool cleanup_owner (std::optional<std::chrono::steady_clock::time_point> requested_deadline_at =
+                          std::nullopt) noexcept
     {
+        const auto deadline_at = requested_deadline_at.value_or (
+          std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
         if (_started.exchange (false)) {
             stop_heartbeat ();
         }
         try {
             const auto token = current_owner_token_unchecked ();
             if (token) {
-                _store->remove_all_by_owner (*token).result ().value ();
-                _store->release_owner_lease (*token).result ().value ();
+                auto await_cleanup = [&] (auto request) {
+                    if (remaining_until (deadline_at) <= std::chrono::milliseconds::zero ())
+                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                                               "owner lease cleanup timed out");
+                    auto pending = request ();
+                    const auto completed = detail::observe_task_result_for (
+                      pending, remaining_until (deadline_at), std::stop_token{});
+                    if (!completed)
+                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                                               "owner lease cleanup timed out");
+                    completed->value ();
+                };
+                await_cleanup ([&] { return _store->remove_all_by_owner (*token); });
+                await_cleanup ([&] { return _store->release_owner_lease (*token); });
                 _lane
                   .run_checked ([this] {
                       _owner_token.reset ();
@@ -263,9 +261,6 @@ class location_runtime_t
         catch (const std::exception &error) {
             record_store_error ();
             record_failure (error.what ());
-            return false;
-        }
-        catch (...) {
             return false;
         }
     }
@@ -736,17 +731,26 @@ class location_runtime_t
 
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat)
     {
+        constexpr auto *wait_site = "location/heartbeat-input";
         while (!heartbeat->stop.load (std::memory_order_acquire)) {
             std::unique_lock lock (heartbeat->gate);
             if (!heartbeat->current) {
                 runtime::infrastructure_wait_guard::condition_wait_for (
                   heartbeat->wake, lock, _options.owner_lease_renew_interval,
-                  [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                  "location/heartbeat-input",
+                  [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
                   runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 if (heartbeat->stop.load (std::memory_order_acquire))
                     break;
             } else if (heartbeat->current->task && heartbeat->current->task->await_ready ()) {
+                const auto scheduled_at = heartbeat->current->deadline_at
+                                          - _options.owner_lease_renew_timeout
+                                          + _options.owner_lease_renew_interval;
+                runtime::infrastructure_wait_guard::condition_wait_for (
+                  heartbeat->wake, lock, remaining_until (scheduled_at),
+                  [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
+                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+                if (heartbeat->stop.load (std::memory_order_acquire))
+                    break;
                 heartbeat->current.reset ();
             } else {
                 auto attempt = heartbeat->current;
@@ -761,16 +765,18 @@ class location_runtime_t
                         runtime::infrastructure_wait_guard::condition_wait_for (
                           heartbeat->wake, lock, _options.owner_lease_renew_interval,
                           [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                          "location/heartbeat-input",
+                          wait_site,
                           runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                     }
                     continue;
                 }
                 runtime::infrastructure_wait_guard::condition_wait_for (
-                  heartbeat->wake, lock, std::min (_options.owner_lease_renew_interval, remaining),
-                  [&] { return heartbeat->stop.load (std::memory_order_acquire); },
-                  "location/heartbeat-input",
-                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+                  heartbeat->wake, lock, remaining,
+                  [&] {
+                      return heartbeat->stop.load (std::memory_order_acquire)
+                             || (attempt->task && attempt->task->await_ready ());
+                  },
+                  wait_site, runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 continue;
             }
             auto attempt = std::make_shared<heartbeat_attempt_t> (
@@ -779,6 +785,14 @@ class location_runtime_t
             heartbeat->current = attempt;
             lock.unlock ();
             attempt->task.emplace (heartbeat_renew_once_async (attempt));
+            detail::observe_task_completion (*attempt->task,
+                                             [weak_heartbeat = std::weak_ptr{heartbeat}] (
+                                               const result_t<lease_renew_outcome_t> &) {
+                                                 if (auto owner = weak_heartbeat.lock ()) {
+                                                     std::lock_guard lock (owner->gate);
+                                                     owner->wake.notify_all ();
+                                                 }
+                                             });
         }
     }
 

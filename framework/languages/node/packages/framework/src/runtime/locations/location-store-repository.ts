@@ -1,5 +1,6 @@
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkClientServerServerDescriptorKey,
@@ -14,11 +15,8 @@ import {
   type ZLinkStoreKey,
   type ZLinkStoreReadResult,
   type ZLinkStoreScanCursor,
-  type ZLinkStoreScanRequest,
-  type ZLinkStoreScanResult,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
-  type ZLinkStoreWriteResult,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole
 } from '../../contracts';
@@ -97,10 +95,6 @@ import {
   routingIdHexSegment
 } from './opaque-record-key';
 const LOCATION_STORE_WRITE_CONCURRENCY = 64;
-const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
-const MAX_REPOSITORY_RETRY_DELAY_MS = 100;
-const INITIAL_REPOSITORY_RETRY_DELAY_MS = 2;
-const MAX_REPOSITORY_RETRY_SHIFT = 5;
 
 const LOCATION_RECORD_VERSION = 1;
 
@@ -115,8 +109,6 @@ const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_U64 = UINT64_MAX;
 
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
-const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
-const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
 const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
 
 type StoredAuthoritySnapshot = Omit<ZLinkAuthoritySnapshot, 'kind' | 'storeVersion' | 'storeNow'>;
@@ -212,7 +204,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     private readonly nowProvider: () => Date = () => new Date()
   ) {
     super(nowProvider);
-    this.provider = new AmbiguousWriteReconcilingLocationStore(provider);
+    this.provider = provider;
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
   }
 
@@ -822,195 +814,190 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
     validateAggregateFence(fence);
-    return await this.commitAggregateCore(
-      fence,
-      0,
-      performance.now() + AGGREGATE_COMMIT_RETRY_WINDOW_MS,
-      signal
-    );
+    return await this.commitAggregateCore(fence, signal);
   }
 
   private async commitAggregateCore(
     fence: ZLinkAggregateFence,
-    retryAttempt: number,
-    retryDeadlineAtMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
-    const rowKey = aggregateKey(fence);
-    let aggregateRead = await this.provider.read(rowKey, signal);
-    if (aggregateRead.kind === 'missing') return { kind: 'stale' };
-    let aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    if (aggregate.state === 'aborted' || aggregate.state === 'staging') {
-      return { kind: 'stale' };
-    }
-    if (aggregate.state === 'committed') {
-      await this.normalizeCommittedAggregate(fence, aggregate, signal);
-      return { kind: 'alreadyCommitted' };
-    }
-    const entries = await this.aggregateInventory.read(
-      fence,
-      Buffer.from(aggregate.inventoryDigest),
-      signal
-    );
-    if (entries.length !== aggregate.participantCount) {
-      throw new Error('Aggregate inventory count differs from its authority record.');
-    }
-    const authorityRows = [];
-    for (let index = 0; index < entries.length; index++) {
-      const entry = entries[index]!;
-      const rowKeyForParticipant = authorityKey(entry.authorityKey);
-      const current = await this.provider.read(rowKeyForParticipant, signal);
-      if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeAuthorityRecord(current.value.bytes);
-      if (!sameAggregateMarkerEntry(record.aggregate, fence, index, entry)) {
-        // A competing committer may already have published the aggregate and
-        // normalized this participant before this reader reached it.  The
-        // committed aggregate is the terminal outcome to adopt, not a stale
-        // failure caused by observing the post-normalization row.
-        const latest = await this.provider.read(rowKey, signal);
-        if (latest.kind === 'found') {
-          const latestAggregate = decodeJson<AggregateRecord>(latest.value.bytes);
-          if (latestAggregate.state === 'committed') {
-            await this.normalizeCommittedAggregate(fence, latestAggregate, signal);
-            return { kind: 'alreadyCommitted' };
-          }
-        }
+    for (;;) {
+      signal?.throwIfAborted();
+      const rowKey = aggregateKey(fence);
+      let aggregateRead = await this.provider.read(rowKey, signal);
+      if (aggregateRead.kind === 'missing') return { kind: 'stale' };
+      let aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+      if (aggregate.state === 'aborted' || aggregate.state === 'staging') {
         return { kind: 'stale' };
       }
-      const [payload, membership] = await Promise.all([
-        requireProviderBytes(this.provider, aggregateParticipantPayloadKey(fence, index), signal),
-        requireProviderBytes(this.provider, aggregateParticipantMembershipKey(fence, index), signal)
+      if (aggregate.state === 'committed') {
+        await this.normalizeCommittedAggregate(fence, aggregate, signal);
+        return { kind: 'alreadyCommitted' };
+      }
+      const entries = await this.aggregateInventory.read(
+        fence,
+        Buffer.from(aggregate.inventoryDigest),
+        signal
+      );
+      if (entries.length !== aggregate.participantCount) {
+        throw new Error('Aggregate inventory count differs from its authority record.');
+      }
+      const authorityRows = [];
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]!;
+        const rowKeyForParticipant = authorityKey(entry.authorityKey);
+        const current = await this.provider.read(rowKeyForParticipant, signal);
+        if (current.kind === 'missing') return { kind: 'stale' };
+        const record = decodeAuthorityRecord(current.value.bytes);
+        if (!sameAggregateMarkerEntry(record.aggregate, fence, index, entry)) {
+          // A competing committer may already have published the aggregate and
+          // normalized this participant before this reader reached it.  The
+          // committed aggregate is the terminal outcome to adopt, not a stale
+          // failure caused by observing the post-normalization row.
+          const latest = await this.provider.read(rowKey, signal);
+          if (latest.kind === 'found') {
+            const latestAggregate = decodeJson<AggregateRecord>(latest.value.bytes);
+            if (latestAggregate.state === 'committed') {
+              await this.normalizeCommittedAggregate(fence, latestAggregate, signal);
+              return { kind: 'alreadyCommitted' };
+            }
+          }
+          return { kind: 'stale' };
+        }
+        const [payload, membership] = await Promise.all([
+          requireProviderBytes(this.provider, aggregateParticipantPayloadKey(fence, index), signal),
+          requireProviderBytes(
+            this.provider,
+            aggregateParticipantMembershipKey(fence, index),
+            signal
+          )
+        ]);
+        if (
+          sha256Hex(payload) !== entry.authorityPayloadSha256 ||
+          sha256Hex(membership) !== entry.membershipMutationSha256
+        ) {
+          throw new Error('Aggregate participant staging checksum does not match inventory.');
+        }
+        authorityRows.push({ key: rowKeyForParticipant, current, record, entry });
+      }
+
+      const targetDescriptorKey = meshKey(
+        aggregate.targetDescriptor.meshName,
+        aggregate.targetDescriptor.rid
+      );
+      const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
+      const targetCapacityKey = capacityKey(
+        aggregate.targetDescriptor.meshName,
+        String(aggregate.targetDescriptor.rid)
+      );
+      const [descriptorRead, leaseRead] = await Promise.all([
+        this.provider.read(targetDescriptorKey, signal),
+        this.provider.read(targetLeaseKey, signal)
       ]);
       if (
-        sha256Hex(payload) !== entry.authorityPayloadSha256 ||
-        sha256Hex(membership) !== entry.membershipMutationSha256
+        liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
+        undefined
       ) {
-        throw new Error('Aggregate participant staging checksum does not match inventory.');
+        return { kind: 'stale' };
       }
-      authorityRows.push({ key: rowKeyForParticipant, current, record, entry });
-    }
 
-    const targetDescriptorKey = meshKey(
-      aggregate.targetDescriptor.meshName,
-      aggregate.targetDescriptor.rid
-    );
-    const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
-    const targetCapacityKey = capacityKey(
-      aggregate.targetDescriptor.meshName,
-      String(aggregate.targetDescriptor.rid)
-    );
-    const [descriptorRead, leaseRead] = await Promise.all([
-      this.provider.read(targetDescriptorKey, signal),
-      this.provider.read(targetLeaseKey, signal)
-    ]);
-    if (
-      liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
-      undefined
-    ) {
-      return { kind: 'stale' };
-    }
-
-    const capacityDeltas = new Map<string, ZLinkCapacityVector>();
-    for (const row of authorityRows) {
-      if (row.entry.ownerTransition !== 'newOwner') continue;
-      const key = capacityKey(
-        row.record.snapshot.allocation.descriptor.meshName,
-        String(row.record.snapshot.allocation.descriptor.rid)
-      ).value;
-      capacityDeltas.set(
-        key,
-        addCapacityVector(
-          capacityDeltas.get(key) ?? { actors: 0, spots: 0 },
-          row.record.snapshot.allocation.capacity
-        )
+      const capacityDeltas = new Map<string, ZLinkCapacityVector>();
+      for (const row of authorityRows) {
+        if (row.entry.ownerTransition !== 'newOwner') continue;
+        const key = capacityKey(
+          row.record.snapshot.allocation.descriptor.meshName,
+          String(row.record.snapshot.allocation.descriptor.rid)
+        ).value;
+        capacityDeltas.set(
+          key,
+          addCapacityVector(
+            capacityDeltas.get(key) ?? { actors: 0, spots: 0 },
+            row.record.snapshot.allocation.capacity
+          )
+        );
+      }
+      const capacityKeys = new Map<string, ZLinkStoreKey>();
+      capacityKeys.set(targetCapacityKey.value, targetCapacityKey);
+      for (const value of capacityDeltas.keys()) capacityKeys.set(value, storeKey(value));
+      const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
+      for (const [value, key] of capacityKeys) {
+        const read = await this.provider.read(key, signal);
+        if (read.kind === 'missing') {
+          // Capacity rows are provider-private. A foreign source legitimately
+          // has no row under this provider's key encoding; its source runtime
+          // releases that capacity after observing the committed authority.
+          // The target row remains mandatory because this provider reserved it
+          // during prepare and must consume it atomically with commit.
+          if (value === targetCapacityKey.value) return { kind: 'stale' };
+          capacityKeys.delete(value);
+          continue;
+        }
+        capacityReads.set(value, read);
+      }
+      const capacityMutations = [];
+      for (const [value, key] of capacityKeys) {
+        const read = capacityReads.get(value)!;
+        let capacity = decodeJson<CapacityRecord>(read.value.bytes);
+        const sourceDelta = capacityDeltas.get(value);
+        if (sourceDelta !== undefined) {
+          capacity = {
+            active: subtractCapacity(capacity.active, sourceDelta),
+            pending: capacity.pending
+          };
+        }
+        if (value === targetCapacityKey.value) {
+          capacity = {
+            active: addCapacity(capacity.active, aggregate.capacity),
+            pending: subtractCapacity(capacity.pending, aggregate.capacity)
+          };
+        }
+        capacityMutations.push({
+          kind: 'put' as const,
+          key,
+          bytes: encodeJson(capacity)
+        });
+      }
+      const published = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+            versionCondition(targetDescriptorKey, descriptorRead),
+            leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
+            ...[...capacityReads.entries()].map(([value, read]) => ({
+              kind: 'version' as const,
+              key: capacityKeys.get(value)!,
+              expected: read.value.version
+            }))
+          ],
+          mutations: [
+            {
+              kind: 'put',
+              key: rowKey,
+              bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
+            },
+            ...capacityMutations
+          ]
+        },
+        signal
       );
-    }
-    const capacityKeys = new Map<string, ZLinkStoreKey>();
-    capacityKeys.set(targetCapacityKey.value, targetCapacityKey);
-    for (const value of capacityDeltas.keys()) capacityKeys.set(value, storeKey(value));
-    const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
-    for (const [value, key] of capacityKeys) {
-      const read = await this.provider.read(key, signal);
-      if (read.kind === 'missing') {
-        // Capacity rows are provider-private. A foreign source legitimately
-        // has no row under this provider's key encoding; its source runtime
-        // releases that capacity after observing the committed authority.
-        // The target row remains mandatory because this provider reserved it
-        // during prepare and must consume it atomically with commit.
-        if (value === targetCapacityKey.value) return { kind: 'stale' };
-        capacityKeys.delete(value);
-        continue;
+      if (published.kind === 'conflict') {
+        aggregateRead = await this.provider.read(rowKey, signal);
+        if (aggregateRead.kind === 'missing') return { kind: 'stale' };
+        aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+        if (aggregate.state === 'prepared') {
+          // The commit CAS also fences the target's live owner lease, descriptor,
+          // and capacity rows. Re-read the whole prepared fence after an
+          // auxiliary-row race; a changed aggregate or participant fence exits
+          // through the normal stale checks on the next attempt.
+          continue;
+        }
+        if (aggregate.state !== 'committed') return { kind: 'stale' };
+      } else {
+        aggregate = { ...aggregate, state: 'committed' };
       }
-      capacityReads.set(value, read);
+      await this.normalizeCommittedAggregate(fence, aggregate, signal);
+      return { kind: 'committed' };
     }
-    const capacityMutations = [];
-    for (const [value, key] of capacityKeys) {
-      const read = capacityReads.get(value)!;
-      let capacity = decodeJson<CapacityRecord>(read.value.bytes);
-      const sourceDelta = capacityDeltas.get(value);
-      if (sourceDelta !== undefined) {
-        capacity = {
-          active: subtractCapacity(capacity.active, sourceDelta),
-          pending: capacity.pending
-        };
-      }
-      if (value === targetCapacityKey.value) {
-        capacity = {
-          active: addCapacity(capacity.active, aggregate.capacity),
-          pending: subtractCapacity(capacity.pending, aggregate.capacity)
-        };
-      }
-      capacityMutations.push({
-        kind: 'put' as const,
-        key,
-        bytes: encodeJson(capacity)
-      });
-    }
-    const published = await this.provider.write(
-      {
-        conditions: [
-          { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-          versionCondition(targetDescriptorKey, descriptorRead),
-          leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
-          ...[...capacityReads.entries()].map(([value, read]) => ({
-            kind: 'version' as const,
-            key: capacityKeys.get(value)!,
-            expected: read.value.version
-          }))
-        ],
-        mutations: [
-          {
-            kind: 'put',
-            key: rowKey,
-            bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
-          },
-          ...capacityMutations
-        ]
-      },
-      signal
-    );
-    if (published.kind === 'conflict') {
-      aggregateRead = await this.provider.read(rowKey, signal);
-      if (aggregateRead.kind === 'missing') return { kind: 'stale' };
-      aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-      if (
-        aggregate.state === 'prepared' &&
-        retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES &&
-        performance.now() < retryDeadlineAtMs
-      ) {
-        // The commit CAS also fences the target's live owner lease, descriptor,
-        // and capacity rows. Re-read the whole prepared fence after an
-        // auxiliary-row race; a changed aggregate or participant fence exits
-        // through the normal stale checks on the next attempt.
-        await waitForAggregateCommitRetry(retryAttempt, retryDeadlineAtMs, signal);
-        return await this.commitAggregateCore(fence, retryAttempt + 1, retryDeadlineAtMs, signal);
-      }
-      if (aggregate.state !== 'committed') return { kind: 'stale' };
-    } else {
-      aggregate = { ...aggregate, state: 'committed' };
-    }
-    await this.normalizeCommittedAggregate(fence, aggregate, signal);
-    return { kind: 'committed' };
   }
 
   override async abortAggregate(
@@ -1073,11 +1060,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async reserve(
     request: ZLinkObjectReserveRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectReserveResult> {
     const encodedAuthorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
+    const reservationId = randomUUID();
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const rowKey = authorityKey(encodedAuthorityKey.value);
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
@@ -1191,7 +1180,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (generation >= MAX_GENERATION || authorityOwnerGeneration >= MAX_GENERATION) {
         return { kind: 'generationExhausted' };
       }
-      const reservationId = randomUUID();
       const allocation: ZLinkPlacementAllocation = {
         state: 'reserved',
         objectKind: request.key.kind,
@@ -1266,12 +1254,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async commit(
     request: ZLinkObjectCommitRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectCommitResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1351,12 +1340,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async abort(
     request: ZLinkObjectAbortRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectAbortResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1425,7 +1415,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = authorityKey(encodeAuthorityKey(request.key.kind, request.key.globalId).value);
     const terminalRowKey = creationTerminalKey(terminal.operation);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(
+        signal,
+        BigInt(request.completion.terminal.operationDeadline.getTime())
+      );
       const [current, existingTerminal] = await Promise.all([
         this.provider.read(rowKey, signal),
         this.provider.read(terminalRowKey, signal)
@@ -1755,7 +1748,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2475,7 +2468,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2618,7 +2611,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     matches: (value: T) => boolean,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
-    const requested = page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE;
+    const requested = page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize;
     let cursor =
       page.continuationToken === undefined
         ? undefined
@@ -2948,97 +2941,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 }
 
-const AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS = 5_000;
-
-/**
- * Keeps provider failures private while preserving the opaque Store contract.
- *
- * A write response can be lost after the provider applied the atomic batch.
- * The Framework confirms every mutation by an independent exact read. A put
- * must retain the requested bytes and a version different from the conditioned
- * version; a delete must remain absent. Any mismatch is a normal conflict, so
- * the domain repository can reread its authoritative record and classify the
- * operation without exposing a provider-specific retry API.
- */
-class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
-  constructor(private readonly inner: ZLinkLocationStore) {}
-
-  read(key: ZLinkStoreKey, signal?: AbortSignal): Promise<ZLinkStoreReadResult> {
-    return this.inner.read(key, signal);
-  }
-
-  scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
-    return this.inner.scan(request, signal);
-  }
-
-  async write(
-    request: ZLinkStoreWriteRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreWriteResult> {
-    try {
-      return await this.inner.write(request, signal);
-    } catch (failure) {
-      try {
-        return await this.reconcile(request);
-      } catch {
-        throw failure;
-      }
-    }
-  }
-
-  private async reconcile(request: ZLinkStoreWriteRequest): Promise<ZLinkStoreWriteResult> {
-    if (request.mutations.length === 0) {
-      throw new Error('Cannot reconcile an opaque Store write without mutations.');
-    }
-    const reconciliationSignal = AbortSignal.timeout(AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS);
-    const reads = await Promise.all(
-      request.mutations.map((mutation) => this.inner.read(mutation.key, reconciliationSignal))
-    );
-    const putVersions: Array<{
-      readonly key: ZLinkStoreKey;
-      readonly version: ZLinkStoreVersion;
-    }> = [];
-    let storeNow = new Date(0);
-
-    for (let index = 0; index < request.mutations.length; index += 1) {
-      const mutation = request.mutations[index];
-      const read = reads[index];
-      storeNow =
-        read.kind === 'found'
-          ? latestDate(storeNow, read.value.storeNow)
-          : latestDate(storeNow, read.storeNow);
-
-      if (mutation.kind === 'delete') {
-        if (read.kind !== 'missing') return { kind: 'conflict', storeNow };
-        continue;
-      }
-      if (
-        read.kind !== 'found' ||
-        !Buffer.from(read.value.bytes).equals(Buffer.from(mutation.bytes)) ||
-        !versionAdvanced(request.conditions, mutation.key, read.value.version)
-      ) {
-        return { kind: 'conflict', storeNow };
-      }
-      putVersions.push({ key: mutation.key, version: read.value.version });
-    }
-
-    return { kind: 'applied', putVersions, storeNow };
-  }
-}
-
-function versionAdvanced(
-  conditions: readonly ZLinkStoreCondition[],
-  key: ZLinkStoreKey,
-  current: ZLinkStoreVersion
-): boolean {
-  const condition = conditions.find((candidate) => candidate.key.value === key.value);
-  return condition?.kind !== 'version' || condition.expected.value !== current.value;
-}
-
-function latestDate(left: Date, right: Date): Date {
-  return left.getTime() >= right.getTime() ? left : right;
-}
-
 type OwnedDescriptor =
   ZLinkMeshNodeDescriptor | ZLinkClientServerServerDescriptor | ZLinkFanoutPublisherDescriptor;
 
@@ -3221,36 +3123,6 @@ async function parallelForEach<T>(
       }
     })
   );
-}
-
-async function waitForAggregateCommitRetry(
-  retryAttempt: number,
-  deadlineAtMs: number,
-  signal?: AbortSignal
-): Promise<void> {
-  signal?.throwIfAborted();
-  const remainingMs = deadlineAtMs - performance.now();
-  if (remainingMs <= 0) return;
-  const exponentialMs = Math.min(
-    MAX_REPOSITORY_RETRY_DELAY_MS,
-    INITIAL_REPOSITORY_RETRY_DELAY_MS << Math.min(retryAttempt, MAX_REPOSITORY_RETRY_SHIFT)
-  );
-  const delayMs = Math.min(
-    remainingMs,
-    exponentialMs + Math.floor(Math.random() * (exponentialMs + 1))
-  );
-  await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const aborted = () => {
-      if (timer !== undefined) clearTimeout(timer);
-      reject(signal?.reason ?? new Error('Aggregate commit was aborted.'));
-    };
-    signal?.addEventListener('abort', aborted, { once: true });
-    timer = setTimeout(() => {
-      signal?.removeEventListener('abort', aborted);
-      resolve();
-    }, delayMs);
-  });
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -3502,21 +3374,23 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+const GENERATION_KEYS = new Set([
+  'generation',
+  'leaseGeneration',
+  'ownerLeaseGeneration',
+  'objectGeneration',
+  'authorityOwnerGeneration',
+  'targetAuthorityOwnerGeneration',
+  'aggregateGeneration',
+  'lifecycleGeneration',
+  'descriptorRevision',
+  'nodeGeneration',
+  'applicationVersion',
+  'requestEncodedSize'
+]);
+
 function reviveCanonical(value: unknown, key = ''): unknown {
-  const generationKeys = new Set([
-    'generation',
-    'leaseGeneration',
-    'ownerLeaseGeneration',
-    'objectGeneration',
-    'authorityOwnerGeneration',
-    'aggregateGeneration',
-    'lifecycleGeneration',
-    'descriptorRevision',
-    'nodeGeneration',
-    'applicationVersion',
-    'requestEncodedSize'
-  ]);
-  if (typeof value === 'string' && generationKeys.has(key)) return BigInt(value);
+  if (typeof value === 'string' && GENERATION_KEYS.has(key)) return BigInt(value);
   if (Array.isArray(value)) return value.map((item) => reviveCanonical(item));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
@@ -4521,5 +4395,12 @@ function requireOwnerInput(ownerId: string, leaseTtlMs: number): void {
   }
   if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs < 1) {
     throw new RangeError('Owner lease TTL must be a positive safe integer.');
+  }
+}
+
+function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint): void {
+  signal?.throwIfAborted();
+  if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
+    throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
   }
 }

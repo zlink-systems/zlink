@@ -7,8 +7,6 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -26,10 +24,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 
 final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
@@ -43,7 +39,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private final ZLinkActorRuntime actorRuntime;
     private final ZLinkActor actor;
     private final ZLinkStreamCodec defaultCodec;
-    private final Predicate<RoutingId> routeReady;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
     private long bindingToken;
     private int actorSlot;
@@ -59,7 +54,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkActorRuntime actorRuntime,
             ZLinkActor actor,
             ZLinkStreamCodec defaultCodec,
-            Predicate<RoutingId> routeReady,
             ZLinkRelayMetadataPolicy metadataPolicy) {
         this.stream = stream;
         this.spotNode = spotNode;
@@ -69,7 +63,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         this.actorRuntime = actorRuntime;
         this.actor = actor;
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
-        this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.metadataPolicy =
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
@@ -120,29 +113,12 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                         REMOTE_BOUND_SESSION_BIND_PACKET_NAME,
                         Map.of());
         return ignoreMissingBinding(stream.unbindActor(sessionRid, actorId).submit(timeout))
-                .thenCompose(unbound -> awaitRouteReady(targetActor, timeout))
                 .thenCompose(
                         ignored ->
                                 bindActorWithRetry(
                                         stream, sessionRid, targetActor, actorSlot, timeout))
                 .thenCompose(ignored -> relayBoundSessionBind(header))
                 .thenRun(() -> rebindListener.accept(targetActor));
-    }
-
-    private CompletionStage<Void> awaitRouteReady(
-            ZLinkBackendActorRef targetActor, Duration timeout) {
-        return ZLinkActorRetryScheduler.waitUntilRelay(
-                timeout,
-                () -> routeReady.test(targetActor.nodeRid()),
-                () -> {},
-                () -> {
-                    String message =
-                            "remote bound session route was not ready before timeout: " + actorId;
-                    return new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            message,
-                            new TimeoutException(message));
-                });
     }
 
     private CompletionStage<Void> relayBoundSessionBind(ZLinkStreamHeader header) {

@@ -78,27 +78,9 @@ public final class ZLinkStateLane {
         throwIfClosed();
 
         CompletableFuture<T> result = new CompletableFuture<>();
-        WorkItem turn =
-                () -> {
-                    try {
-                        result.complete(callWithCurrent(this, work));
-                    } catch (RuntimeException | Error error) {
-                        result.completeExceptionally(
-                                error instanceof CompletionException
-                                        ? error
-                                        : new CompletionException(error));
-                    }
-                    return CompletableFuture.completedFuture(null);
-                };
-        if (runIdleTurnNow && scheduled.compareAndSet(0, 1)) {
-            try {
-                if (mailbox.isEmpty() && closed.get() == 0) {
-                    turn.run();
-                    return result;
-                }
-            } finally {
-                releaseInlineTurn();
-            }
+        WorkItem turn = completeWork(work, result);
+        if (runIdleTurnNow && tryRunInline(turn)) {
+            return result;
         }
         mailbox.add(turn);
         scheduleDrain();
@@ -109,6 +91,40 @@ public final class ZLinkStateLane {
             return result;
         }
         return result.handleAsync((value, error) -> result.join());
+    }
+
+    /** Returns null when the owner is busy; a returned stage has already run its turn. */
+    public <T> CompletionStage<T> tryRunNow(Supplier<T> work) {
+        Objects.requireNonNull(work, "work");
+        throwIfReentrant();
+        throwIfClosed();
+        CompletableFuture<T> result = new CompletableFuture<>();
+        return tryRunInline(completeWork(work, result)) ? result : null;
+    }
+
+    private <T> WorkItem completeWork(Supplier<T> work, CompletableFuture<T> result) {
+        return () -> {
+            try {
+                result.complete(callWithCurrent(this, work));
+            } catch (RuntimeException | Error error) {
+                result.completeExceptionally(
+                        error instanceof CompletionException
+                                ? error
+                                : new CompletionException(error));
+            }
+            return CompletableFuture.completedFuture(null);
+        };
+    }
+
+    private boolean tryRunInline(WorkItem turn) {
+        if (!scheduled.compareAndSet(0, 1)) return false;
+        try {
+            if (!mailbox.isEmpty() || closed.get() != 0) return false;
+            turn.run();
+            return true;
+        } finally {
+            releaseInlineTurn();
+        }
     }
 
     public CompletionStage<Void> runAsync(Runnable work) {

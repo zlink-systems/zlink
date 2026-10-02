@@ -6,7 +6,7 @@ import type { Readable } from 'node:stream';
 import type { DownloadSink } from '../types';
 import type { HttpClientOptions } from './options';
 import { CONTENT_ENCODING, gunzip, inflateDeflate } from './compression';
-import { responseBodySizeExceeded } from './http-client-errors';
+import { readResponseBody } from './bounded-response-body';
 
 /**
  * Reads and decodes undici response bodies for the wrapper: buffered read with the configured size
@@ -17,28 +17,16 @@ export class ResponseBodyReader {
   constructor(private readonly options: HttpClientOptions) {}
 
   async streamToSink(stream: Readable, sink: DownloadSink): Promise<void> {
-    let total = 0;
-    for await (const chunk of stream) {
-      const buffer = chunk as Buffer;
-      total += buffer.length;
-      if (total > this.options.maxResponseBodySize) {
-        throw responseBodySizeExceeded();
-      }
+    await readResponseBody<Buffer>(stream, this.options.maxResponseBodySize, (buffer) => {
       sink(new Uint8Array(buffer));
-    }
+    });
   }
 
   async readBuffered(stream: Readable): Promise<Buffer> {
     const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of stream) {
-      const buffer = chunk as Buffer;
-      total += buffer.length;
-      if (total > this.options.maxResponseBodySize) {
-        throw responseBodySizeExceeded();
-      }
+    await readResponseBody<Buffer>(stream, this.options.maxResponseBodySize, (buffer) => {
       chunks.push(buffer);
-    }
+    });
     return Buffer.concat(chunks);
   }
 

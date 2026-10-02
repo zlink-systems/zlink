@@ -309,14 +309,12 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 
 ## 7. Dispatch
 
-**This is a `.NET`-specific contract.**
+The behavior of the dispatch modes is defined by [common §7](../../32-stream-connector.en.md#7-dispatch-mode). The `.NET` surface follows.
 
 | Item | Contract |
 |---|---|
-| `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
-| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so the receives after it are delayed |
-| `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
-| Outbound send queue | An order-preserving queue **separate** from the dispatch bound. The frame write queue item above defines the result when it is full |
+| The pump of `Manual` (default) | `Dispatch.Async(...)`. Queued callbacks are processed in the execution context of this call |
+| Outbound send queue | An order-preserving queue **separate** from the dispatch queue. The frame write queue item above defines the result when it is full |
 
 - **A send accepted earlier is sent before a request started later.**
   A request waits for the response **only after its own frame's actual
@@ -466,12 +464,6 @@ requires is expressed as `null` on a nullable `int`.
 public int? MaxAttempts { get; init; } = 3; // null means unlimited
 ```
 
-**`.NET`-only option:**
-
-| Option | Default | Meaning |
-|---|---|---|
-| `MaxPendingDispatchCallbacks` | 1024 | The dispatch pending callback bound (§7) |
-
 **Validation contract:**
 
 The validation timing is owned by
@@ -485,9 +477,9 @@ instance and delivers the failure to the caller.
 | No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
 | Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
 | A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
-| An out-of-range individual timeout, heartbeat, or reconnect value, or dispatch queue size | `ZlinkStreamException`'s `ValidationFailed` |
+| An out-of-range individual timeout, heartbeat, or reconnect value | `ZlinkStreamException`'s `ValidationFailed` |
 
-Every timeout and dispatch queue size option must be **positive**, and the
+Every timeout option must be **positive**, and the
 preview length **can't be negative.** `MaxAttempts` must be `null` or
 positive.
 
@@ -500,7 +492,7 @@ positive.
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | Fixes the connector option's default value. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | The Manual callback runs on the dispatch caller. |
 | `StreamConnectorTests.ImmediateDispatchRunsHandlerWithoutManualDispatch` | The Immediate callback runs with no separate manual dispatch. |
-| `StreamConnectorTests.ManualRequestCallbackAdmission_Is_Bounded_And_Never_Falls_Back_To_A_Background_Thread` | Request callback admission is bounded and doesn't allow a background bypass. |
+| `StreamConnectorTests.ManualCallbackAdmissionDoesNotWaitForDispatchPump` | Registering a Manual callback doesn't wait for the pump, and registered callbacks run in registration order when pumped. |
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | Removes the pending request after timeout. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | Keeps typed request and response correlation. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | The typed default codec is JSON. |

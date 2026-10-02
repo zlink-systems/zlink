@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -137,10 +136,8 @@ final class RouteSendCall implements ZLinkSendCall {
                     null,
                     null,
                     (router, timeout) -> submitRouter(router),
-                    (node, timeout) -> submitNode(node));
-        } catch (RuntimeException | Error failure) {
-            payload.close();
-            throw failure;
+                    (node, timeout) -> submitNode(node),
+                    failure -> payload.close());
         }
     }
 
@@ -162,7 +159,7 @@ final class RouteSendCall implements ZLinkSendCall {
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);
-            throw failure;
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -178,17 +175,17 @@ final class RouteSendCall implements ZLinkSendCall {
                         payload,
                         contentType,
                         metadata.values());
-        if (node.routingId().equals(target)) {
-            return submitLocal(node, target, metadata.encode(), sendParts)
-                    .thenCompose(ZLinkOneWayCalls::oneWayStatus)
-                    .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
-        }
-        Optional<Integer> classified = node.classifyNodeSendTarget(target);
-        if (classified.isPresent()) {
-            sendParts.forEach(Message::close);
-            return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
-        }
         try {
+            if (node.routingId().equals(target)) {
+                return submitLocal(node, target, metadata.encode(), sendParts)
+                        .thenCompose(ZLinkOneWayCalls::oneWayStatus)
+                        .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
+            }
+            Optional<Integer> classified = node.classifyNodeSendTarget(target);
+            if (classified.isPresent()) {
+                sendParts.forEach(Message::close);
+                return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
+            }
             CompletionStage<Void> submission =
                     node.sendToNode(target, metadata.encode(), sendParts);
             if (ZLinkOneWayCalls.isImmediateAdmission(submission)) {
@@ -199,7 +196,7 @@ final class RouteSendCall implements ZLinkSendCall {
                     .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             sendParts.forEach(Message::close);
-            throw failure;
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -373,40 +370,21 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         : ZLinkRequestMetrics.NO_START;
         ZLinkRequestMetrics.start(metric);
         try (var flowScope = runtime.enterApplicationFlow()) {
-            try {
-                return ZLinkSerialExecutionQueue.manageCurrent(
-                        sockets.submitToNode(
-                                channelName,
-                                timeout,
-                                defaultTimeout,
-                                (router, effectiveTimeout) ->
-                                        submitRouter(
-                                                router,
-                                                effectiveTimeout,
-                                                replyType,
-                                                metric,
-                                                started),
-                                (node, effectiveTimeout) ->
-                                        submitNode(
-                                                node,
-                                                effectiveTimeout,
-                                                replyType,
-                                                metric,
-                                                started)));
-            } catch (ZLinkConfigurationException failure) {
-                payload.close();
-                completeMetric(metric, started, failure);
-                throw failure;
-            } catch (RuntimeException failure) {
-                payload.close();
-                CompletableFuture<TReply> result = requestResult(metric, started);
-                result.completeExceptionally(failure);
-                return ZLinkSerialExecutionQueue.manageCurrent(result);
-            } catch (Error failure) {
-                payload.close();
-                completeMetric(metric, started, failure);
-                throw failure;
-            }
+            return ZLinkSerialExecutionQueue.manageCurrent(
+                    sockets.submitToNode(
+                            channelName,
+                            timeout,
+                            defaultTimeout,
+                            (router, effectiveTimeout) ->
+                                    submitRouter(
+                                            router, effectiveTimeout, replyType, metric, started),
+                            (node, effectiveTimeout) ->
+                                    submitNode(node, effectiveTimeout, replyType, metric, started),
+                            failure -> {
+                                payload.close();
+                                this.<TReply>requestResult(metric, started)
+                                        .completeExceptionally(failure);
+                            }));
         }
     }
 
@@ -422,27 +400,32 @@ final class RouteRequestCall implements ZLinkRequestCall {
         CompletableFuture<TReply> result = requestResult(metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, Map.of());
-        runtime.requestRoute(operationId, router, target, requestParts, timeout)
-                .whenComplete(
-                        (reply, failure) -> {
-                            requestParts.forEach(Message::close);
-                            if (failure != null) {
-                                result.completeExceptionally(
-                                        ZLinkChannelCallRuntime.requestFailure(failure));
-                                return;
-                            }
-                            if (result.isDone()) {
-                                reply.close();
-                                return;
-                            }
-                            try {
-                                runtime.completeReply(reply, replyType, result);
-                            } catch (RuntimeException ex) {
-                                result.completeExceptionally(ex);
-                            } finally {
-                                reply.close();
-                            }
-                        });
+        try {
+            runtime.requestRoute(operationId, router, target, requestParts, timeout)
+                    .whenComplete(
+                            (reply, failure) -> {
+                                requestParts.forEach(Message::close);
+                                if (failure != null) {
+                                    result.completeExceptionally(
+                                            ZLinkChannelCallRuntime.requestFailure(failure));
+                                    return;
+                                }
+                                if (result.isDone()) {
+                                    reply.close();
+                                    return;
+                                }
+                                try {
+                                    runtime.completeReply(reply, replyType, result);
+                                } catch (RuntimeException ex) {
+                                    result.completeExceptionally(ex);
+                                } finally {
+                                    reply.close();
+                                }
+                            });
+        } catch (RuntimeException | Error failure) {
+            requestParts.forEach(Message::close);
+            result.completeExceptionally(failure);
+        }
         return result;
     }
 
@@ -497,7 +480,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
                                     reply.close();
                                 }
                             });
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | Error error) {
             result.completeExceptionally(error);
         } finally {
             requestParts.forEach(Message::close);
@@ -702,10 +685,8 @@ final class ChannelSendCall implements ZLinkSendCall {
                     null,
                     defaultTimeout,
                     (client, remaining) -> submitClient(client),
-                    (node, timeout) -> submitMesh(node));
-        } catch (RuntimeException | Error failure) {
-            payload.close();
-            throw failure;
+                    (node, timeout) -> submitMesh(node),
+                    failure -> payload.close());
         }
     }
 
@@ -739,7 +720,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);
-            throw failure;
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -760,7 +741,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);
-            throw failure;
+            return CompletableFuture.failedFuture(failure);
         }
     }
 }
@@ -917,36 +898,21 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         : ZLinkRequestMetrics.NO_START;
         ZLinkRequestMetrics.start(metric);
         try (var flowScope = runtime.enterApplicationFlow()) {
-            try {
-                return ZLinkSerialExecutionQueue.manageCurrent(
-                        sockets.submitToChannel(
-                                channelName,
-                                timeout,
-                                defaultTimeout,
-                                (client, remaining) ->
-                                        submitClient(client, remaining, replyType, metric, started),
-                                (node, effectiveTimeout) ->
-                                        submitMesh(
-                                                node,
-                                                effectiveTimeout,
-                                                replyType,
-                                                metric,
-                                                started)));
-            } catch (ZLinkConfigurationException failure) {
-                payload.close();
-                completeMetric(metric, started, failure);
-                throw failure;
-            } catch (RuntimeException failure) {
-                payload.close();
-                CompletableFuture<TReply> result =
-                        requestResult(ZLinkDispatchErrorSurface.CHANNEL, metric, started);
-                result.completeExceptionally(failure);
-                return ZLinkSerialExecutionQueue.manageCurrent(result);
-            } catch (Error failure) {
-                payload.close();
-                completeMetric(metric, started, failure);
-                throw failure;
-            }
+            return ZLinkSerialExecutionQueue.manageCurrent(
+                    sockets.submitToChannel(
+                            channelName,
+                            timeout,
+                            defaultTimeout,
+                            (client, remaining) ->
+                                    submitClient(client, remaining, replyType, metric, started),
+                            (node, effectiveTimeout) ->
+                                    submitMesh(node, effectiveTimeout, replyType, metric, started),
+                            failure -> {
+                                payload.close();
+                                this.<TReply>requestResult(
+                                                ZLinkDispatchErrorSurface.CHANNEL, metric, started)
+                                        .completeExceptionally(failure);
+                            }));
         }
     }
 
@@ -1013,7 +979,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                     reply.close();
                                 }
                             });
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             result.completeExceptionally(failure);
         }
         return result;
@@ -1039,23 +1005,29 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         contentType,
                         metadata.values(),
                         operationId);
-        runtime.requestChannel(operationId, node, channelName, metadata.encode(), parts, timeout)
-                .whenComplete(
-                        (reply, failure) -> {
-                            parts.forEach(Message::close);
-                            if (failure != null) {
-                                result.completeExceptionally(
-                                        ZLinkChannelCallRuntime.requestFailure(failure));
-                                return;
-                            }
-                            try {
-                                runtime.completeReply(reply, replyType, result);
-                            } catch (RuntimeException error) {
-                                result.completeExceptionally(error);
-                            } finally {
-                                reply.close();
-                            }
-                        });
+        try {
+            runtime.requestChannel(
+                            operationId, node, channelName, metadata.encode(), parts, timeout)
+                    .whenComplete(
+                            (reply, failure) -> {
+                                parts.forEach(Message::close);
+                                if (failure != null) {
+                                    result.completeExceptionally(
+                                            ZLinkChannelCallRuntime.requestFailure(failure));
+                                    return;
+                                }
+                                try {
+                                    runtime.completeReply(reply, replyType, result);
+                                } catch (RuntimeException error) {
+                                    result.completeExceptionally(error);
+                                } finally {
+                                    reply.close();
+                                }
+                            });
+        } catch (RuntimeException | Error failure) {
+            parts.forEach(Message::close);
+            result.completeExceptionally(failure);
+        }
         return result;
     }
 

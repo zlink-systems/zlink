@@ -623,7 +623,7 @@ Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units�
 
 우선순위: `P0`
 
-Target reservation 또는 restore가 source의 RelayReady reply acceptance 전에 명시 실패하면 frozen
+Target 확인 또는 restore가 source의 RelayReady reply acceptance 전에 명시 실패하면 frozen
 work와 seal 중 받은 work를 source에서 원래 순서로 다시 처리해야 한다. RelayReady accepted 뒤에는
 CUTOVER submit 결과와 무관하게 source를 복원하지 않는다.
 
@@ -633,7 +633,7 @@ CUTOVER submit 결과와 무관하게 source를 복원하지 않는다.
 - 시작 조건: Source User Spot에 frozen Q1·Q2가 있고 target adapter failure를 application marker로 선택할 수
   있다.
 - 절차: Relocate를 시작하고 seal 구간에 H1·H2를 보낸다. RelayReady reply 전에 명시되는 target
-  reservation failure와 restore failure variants를 fresh objects에서 실행한다.
+  확인 failure와 restore failure variants를 fresh objects에서 실행한다.
 - 검증: Relocate는 blocked 또는 failed terminal이고 public current location은 source다. Source handler
   evidence는 `Q1,Q2,H1,H2` 순서이며 중복이 없다. Follow-up timer도 source에서 정상 실행된다.
 - 세부 동작: [Host maintenance §9](../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)을

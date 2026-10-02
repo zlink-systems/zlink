@@ -35,7 +35,7 @@ internal fun <T> locationPages(
 
 fun ZLinkLocationRuntimeQuery.topology(
     filter: ZLinkLocationTopologyFilter,
-    pageSize: Int = 100,
+    pageSize: Int = ZLinkPageRequest.firstPage().pageSize(),
 ): Flow<ZLinkLocationTopologyEntry> =
     locationPages(ZLinkPageRequest(pageSize, null)) { page -> listTopology(filter, page) }
 

@@ -7,6 +7,10 @@ const telemetry = require('./helpers/telemetry-log-capture');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
@@ -30,6 +34,11 @@ const messageFollow = require(
 );
 const { ZLinkSpotActivationRegistry } = require(
   '../../packages/framework/dist/runtime/spots/spot-activation-registry'
+);
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
 );
 
 function closeUserSpot(manager, meshName, spotId, signal) {
@@ -245,7 +254,7 @@ test('spot runtime owner resolver converts backend actor generation to objectGen
     actorHandoff: {},
     dispatchErrorReporter: () => ({}),
     runtimeOrPreStartErrorSink: {},
-    detachedTaskRunner: {},
+    detachedTaskRunner,
     metrics: {},
     admission: {}
   });
@@ -264,6 +273,7 @@ test('Mesh actor ingress uses the current runtime owner for handoff capture', as
   let fallbackActorRef;
   const currentSpotId = zlink.RoutingId.from('current-spot');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     actorDispatchOwnerResolver: () => ({
       actorRef: {
@@ -301,6 +311,7 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
   const entryNodeRid = zlink.RoutingId.from('entry-node');
   let dispatched = false;
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
     async dispatchEntryActorPacket(actorId, parts, returnResponse, _boundTarget, fallback) {
@@ -536,7 +547,10 @@ test('ZLinkSpotManager creates lists finds and closes spots with lifecycle order
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const created = await manager.create('test.mesh', StageSpot, 'open');
   assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
   assert.equal(typeof created.spotId, 'string');
@@ -564,6 +578,7 @@ test('ZLinkSpotManager consumes MeshNode Spot send and request records', async (
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [MeshSpot],
     spotPacketHandlers: [{
       spotType: MeshSpot,
@@ -632,6 +647,7 @@ test('MeshNode User Spot request preserves a typed Rejected reply', async () => 
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [Spot],
     spotPacketHandlers: [{ spotType: Spot, handlerType: RejectingPacket, packetName: 'RejectingPacket' }]
   });
@@ -676,6 +692,7 @@ test('ZLinkSpotManager drain closes every local Spot in the selected mesh', asyn
     async onClosing() { closed.push('recreated'); }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [NaturalSpot, RecreatedSpot]
   });
   const natural = await manager.create('test.mesh', NaturalSpot);
@@ -708,6 +725,7 @@ test('ZLinkSpotManager reports HostShutdown only for shutdown-drained User and I
     onClosing = record('shutdown-instance');
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [ExplicitUserSpot, ShutdownUserSpot],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -772,6 +790,7 @@ test('ZLinkSpotManager waits for Instance close cleanup before rematerializing t
   }
   const spotId = zlink.RoutingId.from('reusable-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -811,6 +830,7 @@ test('ZLinkSpotManager does not merge pending Instance materialization generatio
   }
   const spotId = zlink.RoutingId.from('generation-aware-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -854,6 +874,7 @@ test('ZLinkSpotManager converges to a newer Instance generation observed during 
   }
   const spotId = zlink.RoutingId.from('generation-converge-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -902,6 +923,7 @@ test('ZLinkSpotManager waits for Instance application quiescence before remateri
   }
   const spotId = zlink.RoutingId.from('quiescence-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -935,6 +957,7 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
   }
   const spotId = zlink.RoutingId.from('explicit-durable-close');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -961,6 +984,7 @@ test('ZLinkSpotManager releases Instance authority when no newer application is 
   class RelocatedInstanceSpot {}
   const spotId = zlink.RoutingId.from('relocated-instance-close');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -988,6 +1012,7 @@ test('Instance context close returns after activation completion', async () => {
   class DeferredCloseInstanceSpot {}
   const spotId = zlink.RoutingId.from('deferred-activation-close');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1044,6 +1069,7 @@ test('Spot Close retains its lifecycle item until a failed authority decision se
   class Spot {}
   const spotId = zlink.RoutingId.from('failed-close-fifo');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
     beginInstanceClosingAuthority: async () => {
@@ -1078,6 +1104,7 @@ test('ZLinkSpotManager leaves an explicit Instance intact when the durable Closi
   }
   const spotId = zlink.RoutingId.from('explicit-durable-close-cas-loser');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1099,6 +1126,7 @@ test('Close holds admission until a pending authority CAS reports its outcome', 
   const spotId = zlink.RoutingId.from('pending-authority-decision');
   let storedState = 'ready';
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', class {}]])]]),
     async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
@@ -1131,6 +1159,7 @@ test('Close leaves admission Ready when authority CAS fails before commit', asyn
   let closingCalls = 0;
   class Spot { async onClosing() { closingCalls++; } }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
     beginInstanceClosingAuthority: async () => { throw new Error('CAS failed'); }
@@ -1155,6 +1184,7 @@ test('User Join membership settles before a later Close checks Ready authority',
     async onClosing() { closingCalls++; }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [Spot],
     entrySpotCallbacks: {
       async onLeaveActor() {
@@ -1208,7 +1238,10 @@ test('User Close commits before a later Join and rejects that Join', async () =>
   class Spot {
     async onActorJoin() { joinCalls++; return { accepted: true }; }
   }
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [Spot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [Spot]
+  });
   await manager.getOrCreate('test.mesh', Spot, spotId);
   const closing = manager.closeUserWithAuthority('test.mesh', spotId, async (onCommitted) => {
     authorityState = 'closing';
@@ -1257,6 +1290,7 @@ test('User Close seal rejects a formal remote Actor Join at Mesh ingress', async
   }
   const spotId = zlink.RoutingId.from('closing-remote-join');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, id) => formalNativeSpot(id)
   });
@@ -1312,6 +1346,7 @@ test('Relocation seal prevents Close CAS and preserves admission', async () => {
   const spotId = zlink.RoutingId.from('relocating-close-conflict');
   let authorityCalls = 0;
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', class {}]])]]),
     beginInstanceClosingAuthority: async () => { authorityCalls++; throw new Error('unexpected CAS'); }
@@ -1337,6 +1372,7 @@ test('Close invokes OnClosing after a yielded continuation finishes', async () =
   let closingCalls = 0;
   class Spot { async onClosing() { assert.equal(continued, true); closingCalls++; } }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
@@ -1377,6 +1413,7 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
@@ -1405,6 +1442,7 @@ test('OnClosing failure is diagnosed while Close finishes cleanup once', async (
   let releaseCalls = 0;
   class Spot { async onClosing() { closingCalls++; throw new Error('callback failed'); } }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
@@ -1432,6 +1470,7 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
   }
   const spotId = zlink.RoutingId.from('explicit-durable-close-pending');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1471,6 +1510,7 @@ test('ZLinkSpotManager evicts an idle Instance Spot with the contracted close re
   }
   const spotId = zlink.RoutingId.from('idle-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1501,6 +1541,7 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
   }
   const spotId = zlink.RoutingId.from('idle-instance-cas-loser');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1526,6 +1567,7 @@ test('ZLinkSpotManager cancels idle eviction before CAS when local occupancy app
   class OccupiedIdleInstanceSpot {}
   const spotId = zlink.RoutingId.from('idle-instance-occupied');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([[
       'test.mesh',
@@ -1560,7 +1602,10 @@ test('ZLinkSpotManager cancels idle eviction before CAS when local occupancy app
 
 test('ZLinkSpotManager rejects a public same-Spot operation instead of running it re-entrantly', async () => {
   class SerialSpot {}
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [SerialSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [SerialSpot]
+  });
   const created = await manager.create('test.mesh', SerialSpot);
 
   await manager.executeOnSpot(SerialSpot, created.spotId, async () => {
@@ -1586,6 +1631,7 @@ test('ZLinkSpotManager shares concurrent close and completes it after onClosing 
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [FailingCloseSpot],
     createNativeSpot: () => ({
       routingId: 'failing-close-room',
@@ -1645,6 +1691,7 @@ test('ZLinkSpotManager claims location before activation and releases on close',
   }
 
   const managerA = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     nodeRid: rid('node-a'),
     nodeGenerationProvider: () => 1n,
@@ -1652,6 +1699,7 @@ test('ZLinkSpotManager claims location before activation and releases on close',
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId, 11n)
   });
   const managerB = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [LosingSpot],
     nodeRid: rid('node-b'),
     nodeGenerationProvider: () => 1n,
@@ -1681,6 +1729,7 @@ test('ZLinkSpotManager scopes identical Spot RIDs and Core Spot creation by Mesh
 
   const createdNativeSpots = [];
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (meshName, spotId) => {
       createdNativeSpots.push(`${meshName}:${spotId}`);
@@ -1722,6 +1771,7 @@ test('ZLinkSpotManager rolls location claim back when activation fails or reject
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [FailingSpot, RejectingSpot],
     nodeRid: rid('node-a'),
     nodeGenerationProvider: () => 1n,
@@ -1750,6 +1800,7 @@ test('ZLinkSpotManager passes dotnet-shaped context into spot constructor', asyn
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     nodeRid: 'node-a'
   });
@@ -1780,6 +1831,7 @@ test('ZLinkSpotManager resolves context nodeRid from the provider once and freez
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     nodeRidProvider: () => nodeRid
   });
@@ -1801,7 +1853,10 @@ test('ZLinkSpotManager passes empty framework message to onCreate without payloa
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const created = await manager.create('test.mesh', StageSpot);
 
   assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
@@ -1823,7 +1878,10 @@ test('ZLinkSpotManager create request DTOs can be decoded with framework message
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [CodecSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [CodecSpot]
+  });
   for (const payload of payloads) {
     const created = await manager.create('test.mesh', CodecSpot, payload);
     assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
@@ -1847,6 +1905,7 @@ test('ZLinkSpotManager create request uses configured custom serializer without 
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CodecSpot],
     messageSerializers: new Map([['application/x-custom-text', customTextSerializer()]])
   });
@@ -1882,6 +1941,7 @@ test('ZLinkSpotManager create request decodes with a registered application/json
     codecs: { serializers: [{ contentType: 'application/json', serializer }] }
   });
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CodecSpot],
     messageSerializers: registration.messageSerializers
   });
@@ -1902,6 +1962,7 @@ test('ZLinkSpotManager preserves binary serializer content type through onCreate
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CodecSpot],
     messageSerializers: new Map([['application/x-custom-binary', customBinarySerializer()]])
   });
@@ -1928,6 +1989,7 @@ test('ZLinkSpotManager create request uses binary codec extensions without raw r
     }
 
     const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner: detachedTaskRunner,
       spotFactories: [CodecSpot],
       messageSerializers: new Map([[`application/x-test-${name}`, serializer]])
     });
@@ -1952,7 +2014,10 @@ test('spot handler registry records packet and subscribe registrations from conf
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   await manager.create('test.mesh', StageSpot);
 
   assert.deepEqual(registry.snapshot(), [
@@ -1971,6 +2036,7 @@ test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard
   const dispatchEvents = telemetry.records
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
@@ -2014,6 +2080,7 @@ test('ZLinkSpotManager serializes formal MeshNode subscription records that arri
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId, 1n, subscriptions),
     spotSubscriptionHandlers: [{
@@ -2079,7 +2146,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
       { reportRuntimeTaskException() {} },
       'normal'
     ),
-    detachedTaskRunner: { runDetached(_name, callback) { void callback(); } },
+    detachedTaskRunner,
     spotSubscriptionHandlers: [{
       spotType: StageSpot,
       handlerType: SubscribeHandler,
@@ -2112,6 +2179,7 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger
   const badPart = zlink.Message.from('bad-frame');
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
@@ -2150,6 +2218,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
   const requestParts = createActorRequestParts('MissingActorPacket', { value: 'payload' }, 1n);
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
@@ -2228,6 +2297,7 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     nativeSpotNodeProvider: () => nativeNode,
@@ -2301,6 +2371,7 @@ test('relocation materialization restores inherited User Spot handler registrati
   class PacketHandler {}
   class SubscriptionHandler {}
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RecoverySpot],
     spotActorSendHandlers: [{
       spotType: BaseSpot,
@@ -2378,6 +2449,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     nativeSpotNodeProvider: () => nativeNode,
@@ -2444,7 +2516,10 @@ test('ZLinkSpotManager awaits async configure before onInitialize', async () => 
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   await manager.create('test.mesh', StageSpot);
 
   assert.deepEqual(events, ['configure', 'initialize']);
@@ -2453,7 +2528,10 @@ test('ZLinkSpotManager awaits async configure before onInitialize', async () => 
 test('ZLinkSpotManager getOrCreate is keyed by spot type and spotId', async () => {
   class StageSpot {}
   class OtherSpot {}
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot, OtherSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot, OtherSpot]
+  });
 
   assert.deepEqual(await manager.getOrCreate('test.mesh', StageSpot, 'stage-1'), {
     spotId: 'stage-1',
@@ -2474,7 +2552,10 @@ test('ZLinkSpotManager getOrCreate is keyed by spot type and spotId', async () =
 
 test('ZLinkSpotManager list returns spot infos ordered by routing id', async () => {
   class StageSpot {}
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
 
   await manager.getOrCreate('test.mesh', StageSpot, 'stage-c');
   await manager.getOrCreate('test.mesh', StageSpot, 'stage-a');
@@ -2500,7 +2581,10 @@ test('ZLinkSpotManager concurrent getOrCreate initializes once with the first cr
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
 
   const first = manager.getOrCreate('test.mesh', StageSpot, 'payload-room', 'first-a');
   await entered.promise;
@@ -2529,6 +2613,7 @@ test('ZLinkSpotManager caller cancellation does not cancel shared getOrCreate ac
   class StageSpot {}
   const controller = new AbortController();
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     spotTimerHandlers: [{
       spotType: StageSpot,
@@ -2566,7 +2651,10 @@ test('ZLinkSpotManager reserves same-turn getOrCreate before activation yields',
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const first = manager.getOrCreate('test.mesh', StageSpot, 'same-turn-room');
   const second = manager.getOrCreate('test.mesh', StageSpot, 'same-turn-room');
   release.resolve();
@@ -2590,7 +2678,10 @@ test('ZLinkSpotManager concurrent getOrCreate returns rejected to waiters with i
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [RejectingConcurrentSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [RejectingConcurrentSpot]
+  });
 
   const first = manager.getOrCreate('test.mesh', RejectingConcurrentSpot, 'reject-room', 'first');
   await entered.promise;
@@ -2614,7 +2705,10 @@ test('ZLinkSpotManager create reject returns rejected state reply and does not r
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [RejectingSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [RejectingSpot]
+  });
   const rejected = await manager.create('test.mesh', RejectingSpot, 'closed');
 
   assert.equal(rejected.state, framework.ZLinkSpotCreateState.Rejected);
@@ -2650,6 +2744,7 @@ test('ZLinkSpotManager rejection disposes native Spot and releases its location 
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RejectingSpot],
     nodeRid: 'node-a',
     nodeGenerationProvider: () => 1n,
@@ -2679,7 +2774,10 @@ test('ZLinkSpotManager getOrCreate can retry same spotId after create rejection'
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [RetryCreateSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [RetryCreateSpot]
+  });
   const rejected = await manager.getOrCreate('test.mesh', RetryCreateSpot, 'retry-room', 'first');
   assert.equal(rejected.state, framework.ZLinkSpotCreateState.Rejected);
   assert.equal(rejected.reply, 'try-again');
@@ -2722,6 +2820,7 @@ test('ZLinkSpotManager getOrCreate can retry same spotId after create lifecycle 
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [FailingCreateSpot, FailingInitializeSpot]
   });
 
@@ -2753,7 +2852,10 @@ test('ZLinkSpotManager getOrCreate can retry same spotId after create lifecycle 
 
 test('ZLinkSpotManager rejects unregistered spot factories', async () => {
   class StageSpot {}
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: []
+  });
 
   await assert.rejects(
     () => manager.create('test.mesh', StageSpot),
@@ -2776,6 +2878,7 @@ test('spot manager local actor join commits and runs target lifecycle before one
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     entrySpotCallbacks: {
       onLeaveActor(actor) {
@@ -2826,6 +2929,7 @@ test('formal Entry Spot LEFT control invokes the Entry Spot lifecycle callback',
   const events = [];
   const actor = { actorId: 'alice' };
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRid: 'entry-a',
     actorResolver(actorId) {
@@ -2880,6 +2984,7 @@ test('source leave gate error is reported after target commit without blocking a
   }
   let manager;
   manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     dispatchErrors: { report(event) { errors.push(event.error); reportCompleted(); } },
     entrySpotCallbacks: {
@@ -2934,6 +3039,7 @@ test('spot manager retains committed membership when target joined callback fail
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     entrySpotCallbacks: {
       async onLeaveActor() { events.push('entry-left'); }
@@ -3183,6 +3289,7 @@ test('spot manager rejects one-phase native remote join without materializing a 
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
@@ -3235,6 +3342,7 @@ test('Mesh actor join skips the target callback after the source operation is te
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorResolver: () => actor
@@ -3284,6 +3392,7 @@ test('Mesh actor join drops a callback result when the source ends before target
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorResolver: () => actor
@@ -3327,6 +3436,7 @@ test('Mesh actor return to Entry Spot commits before the lifecycle callback', as
   const replies = [];
   const events = [];
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
     actorResolver(actorId) {
@@ -3374,6 +3484,7 @@ test('Mesh actor return to Entry Spot commits admission before a gated lifecycle
   });
   let lifecycleStarted = false;
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
     actorResolver(actorId) {
@@ -3422,6 +3533,7 @@ test('Mesh actor return to Entry Spot resolves a moving actor through the lifecy
   const replies = [];
   const events = [];
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
     actorResolver: () => undefined,
@@ -3598,6 +3710,7 @@ test('formal remote Actor transfer admits the target before reading referenced s
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
@@ -4005,6 +4118,7 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
@@ -4059,6 +4173,7 @@ test('spot outbound requestToChannel completion runs on the spot serial executor
     }
   };
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     channelClient
   });
@@ -4111,7 +4226,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     },
     async requestToSpot(address, request, options) {
       events.push(
-        `request:${address.routerChannelId}:${address.spotId}:${address.spotKind}:` +
+        `request:${address.routerChannelId}:${address.targetNodeRid}:${address.spotId}:${address.spotKind}:` +
         `${address.targetSpotGeneration}:${options.timeoutMs}:${request}`
       );
       resolveSendTarget(targetSpotRef);
@@ -4119,6 +4234,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     }
   };
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     routedTransport
   });
@@ -4128,23 +4244,23 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     outbound = spot.context.outbound;
   });
 
-  let finishFirst;
-  const firstCompletion = new Promise(resolve => { finishFirst = resolve; });
-  let firstEntered;
-  const firstEntry = new Promise(resolve => { firstEntered = resolve; });
+  let releaseFirst;
+  let firstStarted;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const firstStart = new Promise((resolve) => { firstStarted = resolve; });
   const first = manager.executeOnSpot(StageSpot, created.spotId, async () => {
     events.push('spot:start');
-    firstEntered();
-    await firstCompletion;
+    firstStarted();
+    await firstGate;
     events.push('spot:end');
   });
-  await firstEntry;
+  await firstStart;
   class Notice extends String {}
   class Ping extends String {}
   const send = outbound.sendToSpot(sendTargetSpot, new Notice('notice')).submit();
-  const pendingReply = outbound.requestToSpot(targetSpot, new Ping('ping')).timeout(250).submit();
-  finishFirst();
-  const reply = await pendingReply;
+  const request = outbound.requestToSpot(targetSpot, new Ping('ping')).timeout(250).submit();
+  releaseFirst();
+  const reply = await request;
   await send;
   await first;
 
@@ -4152,7 +4268,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
   assert.deepEqual(events, [
     'spot:start',
     'spot:end',
-    `request:play.route:stage-b:${framework.ZLinkSpotKind.User}:9:250:ping`,
+    `request:play.route:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:250:ping`,
     `send:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:Notice:notice`
   ]);
 });
@@ -4205,7 +4321,10 @@ test('spot outbound one-way admission does not hold the serial executor during t
 
 test('spot outbound routed calls require runtime transport', async () => {
   class StageSpot {}
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const created = await manager.create('test.mesh', StageSpot);
   let outbound;
   await manager.executeOnSpot(StageSpot, created.spotId, (spot) => {
@@ -4295,7 +4414,10 @@ test('spot timer dispatches handler on the spot serial executor with dotnet tick
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const created = await manager.create('test.mesh', StageSpot);
   const blockingTurn = manager.executeOnSpot(StageSpot, created.spotId, async () => {
     events.push('spot:start');
@@ -4344,6 +4466,7 @@ test('Instance Spot context close finishes after its timer callback returns', as
 
   const spotId = zlink.RoutingId.from('self-closing-instance');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['self-close', SelfClosingSpot]])]])
   });
@@ -4368,6 +4491,7 @@ test('ZLinkSpotManager close rejects user spot while joined actors remain', asyn
   }
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [OccupiedSpot],
     actorCountProvider: () => actorCount
   });
@@ -4390,6 +4514,7 @@ test('ZLinkSpotManager close rechecks actor occupancy after earlier serial work'
   class OccupiedSpot {}
 
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [OccupiedSpot],
     actorCountProvider: () => actorCount
   });
@@ -4418,7 +4543,10 @@ test('spot timer rejects invalid options', async () => {
   }
   class StageSpot {}
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [StageSpot] });
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [StageSpot]
+  });
   const created = await manager.create('test.mesh', StageSpot);
 
   await assert.rejects(
@@ -4460,7 +4588,10 @@ test('Spot timer callbacks advance nominal ticks when platform delays truncate f
         await this.context.addTimer('bot-tick', 500, BotTickHandler);
       }
     }
-    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [BotSpot] }, clock);
+    const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner: detachedTaskRunner,
+      spotFactories: [BotSpot]
+    }, clock);
     const created = await manager.create('test.mesh', BotSpot);
     try {
       await clock.runNext();
@@ -4622,6 +4753,7 @@ test('spot timer clock observes only its registry while an Instance Spot schedul
   class IdleInstanceSpot {}
   const spotId = zlink.RoutingId.from('timer-clock-isolation');
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['idle', IdleInstanceSpot]])]]),
     instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
@@ -4859,7 +4991,7 @@ test('spot timer handlers retain one instance for the Spot activation', async ()
   await registry.add('first', 60_000, undefined, TimerHandler, serial, spot, resolver);
   await registry.add('second', 60_000, undefined, TimerHandler, serial, spot, resolver);
   await registry.dispose();
-  await disposeLifecycleHandlers(spot);
+  await disposeLifecycleHandlers(spot, detachedTaskRunner);
 
   assert.equal(creates, 1);
   assert.equal(singletonGets, 0);
@@ -5105,6 +5237,7 @@ test('HostShutdown closes occupied User and Instance scopes with membership visi
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [OccupiedSpot],
     instanceSpotFactories: new Map([['test.mesh', new Map([['occupied', OccupiedSpot]])]]),
     actorCountProvider: () => 1
@@ -5138,6 +5271,7 @@ test('HostShutdown observes callback errors only after all Spot cleanup terminal
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [FailingSpot, PendingSpot]
   });
   await manager.create('test.mesh', FailingSpot);

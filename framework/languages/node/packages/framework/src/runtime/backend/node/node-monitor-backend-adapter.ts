@@ -32,6 +32,7 @@ export function wrapMonitorSocket(nativeInstance: {
 function toBackendMonitorEvent(event: MonitorEvent): ZLinkBackendSocketMonitorEvent {
   return {
     nativeEvent: event.event,
+    readyEdge: (event.flags & zlink.MonitorEventFlag.ConnectionReadyEdge) !== 0,
     routingId: event.routingId ?? undefined,
     localAddr: event.localAddr,
     remoteAddr: event.remoteAddr,

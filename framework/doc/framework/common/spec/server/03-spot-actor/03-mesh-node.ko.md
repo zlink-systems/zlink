@@ -56,7 +56,7 @@ MeshNode automatic RID의 발급·형식·충돌·lifecycle 규칙은
 
 ### 3.2 Entry Spot ID
 
-Object Server MeshNode의 Entry Spot ID 발급·형식·충돌 규칙은
+Object Server MeshNode의 Entry Spot ID 발급·형식 규칙은
 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 
 Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
@@ -301,6 +301,10 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 - **Intent 제거와 admitted peer 부재가 함께 성립한 상태가 그 peer의 lifecycle 종료다.** Transport
   단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태다. 이 사실을 durable operation이
   어떻게 소비하는지는 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)이 정한다.
+- **Binding이 connect를 거절하면 그 attempt만 실패하고 intent는 남는다.** Intent 소유자는
+  binding의 typed 오류를 runtime 오류 보고 경로에 그대로 남기고, 같은 intent의 다음 reconcile에서
+  connect를 다시 호출한다. 거절은 그 intent를 제거하지 않으며 다른 peer의 discovery나 host
+  lifecycle을 끝내지 않는다. 거절을 성공 여부 값으로 바꾸어 원인을 지우지 않는다.
 
 다음 그림은 물리 connection이 성립되는 순서를 보여준다 — handshake로 교환한
 identity가 admission 판단을 통과해야 physical pipe가 ready 상태가 된다. Application이
@@ -438,7 +442,7 @@ runtime snapshot과 event)만으로 다음을 확인한다.
   `Server`가 아닌 node의 descriptor에는 없다.
 - Entry Spot ID가 MeshNode와 같은 diagnostic prefix, 별도로 생성한 UUID v4를 사용하며 descriptor가
   lifecycle mapping을 공개한다.
-- Replacement lifecycle이 새 Entry Spot ID를 발급하고 Entry Spot authority 충돌에서 즉시 실패한다.
+- Replacement lifecycle이 새 Entry Spot ID를 발급한다.
 - Stable type 중복과 relocation policy 생략이 startup에서 실패한다.
 - Placement weight는 `0`, 기본값 `100`과 상한 `10000`을 허용하고 `-1`과 `10001`은
   startup 설정과 runtime 변경에서 거부한다.

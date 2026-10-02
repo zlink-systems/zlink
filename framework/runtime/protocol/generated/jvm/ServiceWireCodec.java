@@ -1069,8 +1069,11 @@ final class ServiceWireCodec {
   private static void encodeMessageFollowRouteV1(MessageFollowRouteV1 value, Writer w, DecoderContext c, int flags) throws IOException {int start=w.size(); encodeU8(new U8((int)(1L)),w,c,flags); Writer body=new Writer();
     encodeMessageFollowRoute(value.source(), body, c, flags);
     encodeMessageFollowRoute(value.target(), body, c, flags);
+    requireUnsigned(value.hopCount().value(), 1, "1", "8", "hopCount");
     encodeU8(value.hopCount(), body, c, flags);
+    requireUnsigned(value.queuedMessages().value(), 4, "0", null, "queuedMessages");
     encodeU32(value.queuedMessages(), body, c, flags);
+    requireUnsigned(value.queuedBytes().value(), 4, "0", null, "queuedBytes");
     encodeU32(value.queuedBytes(), body, c, flags);
     encodeOperationId(value.originalOperation(), body, c, flags);
     encodeU64(value.originalReplyRouteId(), body, c, flags);
@@ -1394,10 +1397,11 @@ final class ServiceWireCodec {
     Text8 channelName = decodeText8(r, c, flags);
     U32 weight = decodeU32(r, c, flags);
     requireUnsigned(weight.value(), 4, "0", null, "weight");
-    requireUnsigned(weight.value(), 4, null, "100", "weight");
+    requireUnsigned(weight.value(), 4, null, "10000", "weight");
       return new ChannelEntry(channelName, weight); }
   private static void encodeChannelEntry(ChannelEntry value, Writer w, DecoderContext c, int flags) throws IOException {
     encodeText8(value.channelName(), w, c, flags);
+    requireUnsigned(value.weight().value(), 4, "0", "10000", "weight");
     encodeU32(value.weight(), w, c, flags);
      }
   private static ChannelVector decodeChannelVector(Reader r, DecoderContext c, int flags) throws IOException {   int count=length(decodeU16(r,c,flags));  List<ChannelEntry> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(decodeChannelEntry(r, c, flags)); try{for(int i=1;i<values.size();i++){ChannelEntry previous=values.get(i-1),current=values.get(i);Writer left0=new Writer(),right0=new Writer();left0.bytes(strictBytes(previous.channelName().value()));right0.bytes(strictBytes(current.channelName().value()));int compared0=compareUnsigned(left0.result(),right0.result());require(compared0!=0,"channel-vector unique");require(compared0<=0,"channel-vector sorted");}}catch(OutOfMemoryError failure){throw capacityError("channel-vector constraint capacity");} return new ChannelVector(values); }
@@ -1436,8 +1440,8 @@ final class ServiceWireCodec {
     ObjectPendingCapacityLimit pendingCapacityLimit=null;
     U32 activeCapacityUsed=null;
     U32 pendingCapacityUsed=null;
-    int previous=0; while(!body.done()){int id=length(decodeU8(body,c,flags));require(id>previous,"descriptor-extension order");previous=id;Reader item=body.slice(length(decodeU32(body,c,flags)));switch(id){case 1 -> runtimeState=decodeRuntimeState(item, c, flags); case 2 -> applicationVersion=decodeApplicationVersion(item, c, flags); case 3 -> spotTypes=decodeSortedText8Vector(item, c, flags); case 4 -> statefulCapabilities=decodeStatefulCapabilityVector(item, c, flags); case 5 -> maintenanceWave=decodeOptionalText8(item, c, flags); case 6 -> protocolCapabilities=decodeSortedText8Vector(item, c, flags); case 7 -> objectRole=decodeObjectRole(item, c, flags); case 8 -> placementWeight=decodeU32(item, c, flags); case 9 -> activeCapacityLimit=decodeObjectCapacityLimit(item, c, flags); case 10 -> pendingCapacityLimit=decodeObjectPendingCapacityLimit(item, c, flags); case 11 -> activeCapacityUsed=decodeU32(item, c, flags); case 12 -> pendingCapacityUsed=decodeU32(item, c, flags); default -> item.skipRemaining(); }item.end("descriptor-extension field");} require(runtimeState!=null,"runtimeState required"); require(applicationVersion!=null,"applicationVersion required"); require(protocolCapabilities!=null,"protocolCapabilities required"); require(objectRole!=null,"objectRole required"); require(placementWeight!=null,"placementWeight required"); require(activeCapacityLimit!=null,"activeCapacityLimit required"); require(pendingCapacityLimit!=null,"pendingCapacityLimit required"); require(activeCapacityUsed!=null,"activeCapacityUsed required"); require(pendingCapacityUsed!=null,"pendingCapacityUsed required");  require(protocolCapabilities!=null&&protocolCapabilities.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(placementWeight!=null)requireUnsigned(placementWeight.value(),4,"0","100","placementWeight");require((long)(r.at-start)<=1048576L,"descriptor-extension encoded limit"); return new DescriptorExtension(runtimeState, applicationVersion, spotTypes, statefulCapabilities, maintenanceWave, protocolCapabilities, objectRole, placementWeight, activeCapacityLimit, pendingCapacityLimit, activeCapacityUsed, pendingCapacityUsed); }
-  private static void encodeDescriptorExtension(DescriptorExtension value, Writer w, DecoderContext c, int flags) throws IOException { int start=w.size();require(value.runtimeState()!=null,"runtimeState required"); require(value.applicationVersion()!=null,"applicationVersion required"); require(value.protocolCapabilities()!=null,"protocolCapabilities required"); require(value.objectRole()!=null,"objectRole required"); require(value.placementWeight()!=null,"placementWeight required"); require(value.activeCapacityLimit()!=null,"activeCapacityLimit required"); require(value.pendingCapacityLimit()!=null,"pendingCapacityLimit required"); require(value.activeCapacityUsed()!=null,"activeCapacityUsed required"); require(value.pendingCapacityUsed()!=null,"pendingCapacityUsed required");require(value.protocolCapabilities()!=null&&value.protocolCapabilities().items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(value.placementWeight()!=null)requireUnsigned(value.placementWeight().value(),4,"0","100","placementWeight"); Writer body=new Writer(); if(value.runtimeState()!=null){Writer item=new Writer(); encodeRuntimeState(value.runtimeState(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(1),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
+    int previous=0; while(!body.done()){int id=length(decodeU8(body,c,flags));require(id>previous,"descriptor-extension order");previous=id;Reader item=body.slice(length(decodeU32(body,c,flags)));switch(id){case 1 -> runtimeState=decodeRuntimeState(item, c, flags); case 2 -> applicationVersion=decodeApplicationVersion(item, c, flags); case 3 -> spotTypes=decodeSortedText8Vector(item, c, flags); case 4 -> statefulCapabilities=decodeStatefulCapabilityVector(item, c, flags); case 5 -> maintenanceWave=decodeOptionalText8(item, c, flags); case 6 -> protocolCapabilities=decodeSortedText8Vector(item, c, flags); case 7 -> objectRole=decodeObjectRole(item, c, flags); case 8 -> placementWeight=decodeU32(item, c, flags); case 9 -> activeCapacityLimit=decodeObjectCapacityLimit(item, c, flags); case 10 -> pendingCapacityLimit=decodeObjectPendingCapacityLimit(item, c, flags); case 11 -> activeCapacityUsed=decodeU32(item, c, flags); case 12 -> pendingCapacityUsed=decodeU32(item, c, flags); default -> item.skipRemaining(); }item.end("descriptor-extension field");} require(runtimeState!=null,"runtimeState required"); require(applicationVersion!=null,"applicationVersion required"); require(protocolCapabilities!=null,"protocolCapabilities required"); require(objectRole!=null,"objectRole required"); require(placementWeight!=null,"placementWeight required"); require(activeCapacityLimit!=null,"activeCapacityLimit required"); require(pendingCapacityLimit!=null,"pendingCapacityLimit required"); require(activeCapacityUsed!=null,"activeCapacityUsed required"); require(pendingCapacityUsed!=null,"pendingCapacityUsed required");  require(protocolCapabilities!=null&&protocolCapabilities.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(placementWeight!=null)requireUnsigned(placementWeight.value(),4,"0","10000","placementWeight");require((long)(r.at-start)<=1048576L,"descriptor-extension encoded limit"); return new DescriptorExtension(runtimeState, applicationVersion, spotTypes, statefulCapabilities, maintenanceWave, protocolCapabilities, objectRole, placementWeight, activeCapacityLimit, pendingCapacityLimit, activeCapacityUsed, pendingCapacityUsed); }
+  private static void encodeDescriptorExtension(DescriptorExtension value, Writer w, DecoderContext c, int flags) throws IOException { int start=w.size();require(value.runtimeState()!=null,"runtimeState required"); require(value.applicationVersion()!=null,"applicationVersion required"); require(value.protocolCapabilities()!=null,"protocolCapabilities required"); require(value.objectRole()!=null,"objectRole required"); require(value.placementWeight()!=null,"placementWeight required"); require(value.activeCapacityLimit()!=null,"activeCapacityLimit required"); require(value.pendingCapacityLimit()!=null,"pendingCapacityLimit required"); require(value.activeCapacityUsed()!=null,"activeCapacityUsed required"); require(value.pendingCapacityUsed()!=null,"pendingCapacityUsed required");require(value.protocolCapabilities()!=null&&value.protocolCapabilities().items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),"protocolCapabilities capability");if(value.placementWeight()!=null)requireUnsigned(value.placementWeight().value(),4,"0","10000","placementWeight"); Writer body=new Writer(); if(value.runtimeState()!=null){Writer item=new Writer(); encodeRuntimeState(value.runtimeState(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(1),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.applicationVersion()!=null){Writer item=new Writer(); encodeApplicationVersion(value.applicationVersion(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(2),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.spotTypes()!=null){Writer item=new Writer(); encodeSortedText8Vector(value.spotTypes(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(3),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
     if(value.statefulCapabilities()!=null){Writer item=new Writer(); encodeStatefulCapabilityVector(value.statefulCapabilities(), item, c, flags); byte[] bytes=item.result(); encodeU8(new U8(4),body,c,flags); encodeU32(new U32(bytes.length),body,c,flags); body.bytes(bytes);}
@@ -1487,7 +1491,7 @@ final class ServiceWireCodec {
       NonzeroU64 descriptorRevision = decodeNonzeroU64(selected, c, flags);
       U32 weight = decodeU32(selected, c, flags);
       requireUnsigned(weight.value(), 4, "0", null, "weight");
-      requireUnsigned(weight.value(), 4, null, "100", "weight");
+      requireUnsigned(weight.value(), 4, null, "10000", "weight");
       RuntimeState runtimeState = decodeRuntimeState(selected, c, flags);
       Text8 securityIdentity = decodeText8(selected, c, flags);
       NonzeroU32 normalizedEffectiveMaxMessageBytes = decodeNonzeroU32(selected, c, flags);
@@ -1517,6 +1521,7 @@ final class ServiceWireCodec {
       encodeRid(item.serverRid(), selected, c, flags);
       encodeNonzeroU64(item.lifecycleGeneration(), selected, c, flags);
       encodeNonzeroU64(item.descriptorRevision(), selected, c, flags);
+      requireUnsigned(item.weight().value(), 4, "0", "10000", "weight");
       encodeU32(item.weight(), selected, c, flags);
       encodeRuntimeState(item.runtimeState(), selected, c, flags);
       encodeText8(item.securityIdentity(), selected, c, flags);
@@ -2427,6 +2432,7 @@ final class ServiceWireCodec {
       encodeBool8(item.hasRelocation(), w, c, flags);
       Writer selected=new Writer();
       encodeRelocationId(item.relocation(), selected, c, flags);
+      requireUnsigned(item.aggregateGeneration().value(), 8, null, "9223372036854775806", "aggregateGeneration");
       encodeOrdinalOrZero(item.aggregateGeneration(), selected, c, flags);
       encodeOrdinalOrZero(item.targetAttemptGeneration(), selected, c, flags);
       encodeRelocationReference(item.relocationReference(), selected, c, flags);
@@ -3295,6 +3301,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());if(item.payload()!=null)frames.add(encodeApplicationPayloadEnvelopeV1(item.payload(),c));return frames;}
   private static List<byte[]> encodeSpotSendCommand(SpotSendCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~1)==0&&(item.flags()&0)==0,"spotSend flags");
         encodeOperationId(item.operation(), w, c, item.flags());
+        requireUnsigned(item.messageFollowHopCount().value(), 1, "0", "8", "messageFollowHopCount");
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeText8(item.sourceSpotId(), w, c, item.flags());
         encodeSpotRouteFence(item.targetSpot(), w, c, item.flags());
@@ -3302,6 +3309,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
   private static List<byte[]> encodeSpotRequestCommand(SpotRequestCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~1)==0&&(item.flags()&0)==0,"spotRequest flags");
         encodeNonzeroU64(item.correlation(), w, c, item.flags());
         encodeOperationId(item.operation(), w, c, item.flags());
+        requireUnsigned(item.messageFollowHopCount().value(), 1, "0", "8", "messageFollowHopCount");
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeText8(item.sourceSpotId(), w, c, item.flags());
         encodeSpotRouteFence(item.targetSpot(), w, c, item.flags());
@@ -3313,6 +3321,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
 List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)!=0){require(item.metadata()!=null,"logicalMulticast metadata");frames.add(encodeMetadataFrame(item.metadata(),c));}else require(item.metadata()==null,"logicalMulticast metadata");require(item.payload()!=null,"logicalMulticast payload");if(item.payload()!=null)frames.add(encodeApplicationPayloadEnvelopeV1(item.payload(),c));return frames;}
   private static List<byte[]> encodeActorSendCommand(ActorSendCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~7)==0&&(item.flags()&0)==0,"actorSend flags");require(((item.flags()&6)==0)||((item.flags()&6)==6),"actorSend flag constraint");
         encodeOperationId(item.operation(), w, c, item.flags());
+        requireUnsigned(item.messageFollowHopCount().value(), 1, "0", "8", "messageFollowHopCount");
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeOptionalActorRef(item.sourceActor(), w, c, item.flags());
         encodeActorRouteFence(item.targetActor(), w, c, item.flags());
@@ -3321,6 +3330,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
   private static List<byte[]> encodeActorRequestCommand(ActorRequestCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~7)==0&&(item.flags()&0)==0,"actorRequest flags");require(((item.flags()&6)==0)||((item.flags()&6)==6),"actorRequest flag constraint");
         encodeNonzeroU64(item.correlation(), w, c, item.flags());
         encodeOperationId(item.operation(), w, c, item.flags());
+        requireUnsigned(item.messageFollowHopCount().value(), 1, "0", "8", "messageFollowHopCount");
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeOptionalActorRef(item.sourceActor(), w, c, item.flags());
         encodeActorRouteFence(item.targetActor(), w, c, item.flags());

@@ -59,9 +59,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.12.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.13.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.12.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.13.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -959,6 +959,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_submit_result_contract
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_submit_result_contract.cpp
+    framework/src/runtime/backend/raw_dealer_port.cpp
+    framework/src/runtime/dispatch/provider_task_context.cpp
+    framework/src/runtime/messaging/request_failure_mapper.cpp)
+  target_compile_features(test_cpp_framework_submit_result_contract PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_submit_result_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE zlink::cpp Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_submit_result_contract
+    COMMAND test_cpp_framework_submit_result_contract
+    LABELS "framework-contract;framework-unit;framework-foundation;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
     framework/src/runtime/backend/raw_route_port.cpp)
@@ -2044,6 +2062,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_stream_liveness
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
+    "framework-unit;framework-contract;stream;liveness")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
+  add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
     "framework-unit;framework-regression")
@@ -2166,10 +2189,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_package)
   add_zlink_connector_test(
+    test_cpp_stream_heartbeat_disabled
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_heartbeat_disabled.cpp
+    "connector-unit;connector-contract;stream;liveness"
+    contract)
+  add_zlink_connector_test(
     test_cpp_stream_connector
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
     "connector-unit;connector-integration;connector-e2e;connector-contract;connector-protocol;connector-transport;connector-typed;connector-coroutine;connector-dispatch;connector-timeout"
     contract)
+  add_zlink_connector_test(
+    test_cpp_stream_revision
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
+    "connector-unit;connector-contract;connector-timeout;connector-protocol"
+    contract)
+  target_compile_definitions(test_cpp_stream_revision PRIVATE
+    ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_no_exceptions.cpp)
   target_compile_features(test_cpp_stream_connector_no_exceptions PRIVATE cxx_std_20)

@@ -16,6 +16,51 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotRetireRuntimePreflightTest {
     @Test
+    void deadlineFailureRemainsFailureWhileShutdownStopsBeforeNextUnit() {
+        var plan = new ZLinkUserSpotRetireRuntime.RelocationPlan(List.of("spot-a"), List.of());
+        var timeout = new java.util.concurrent.TimeoutException("original deadline");
+        var starts = new AtomicInteger();
+        var failed =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        plan,
+                        ignored -> CompletableFuture.completedFuture(null),
+                        ignored -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        ignored -> {
+                            starts.incrementAndGet();
+                            return CompletableFuture.failedFuture(timeout);
+                        },
+                        ignored -> CompletableFuture.completedFuture(null));
+        var failure =
+                assertThrows(CompletionException.class, () -> failed.toCompletableFuture().join());
+        org.junit.jupiter.api.Assertions.assertSame(timeout, failure.getCause());
+        assertEquals(1, starts.get());
+        // spec/server/05-location-relocation/05-host-relocation-flow.ko.md:763:
+        // Shutdown ends the relocation waiter as Blocked/ShutdownRequested.
+        var shutdown =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                                plan,
+                                ignored -> CompletableFuture.completedFuture(null),
+                                ignored -> CompletableFuture.completedFuture(null),
+                                () -> {},
+                                () -> true,
+                                ignored -> {
+                                    starts.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                ignored -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture();
+        var shutdownFailure = assertThrows(CompletionException.class, shutdown::join);
+        var blocked =
+                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                        ZLinkUserSpotRetireRuntime.RelocationBlockedException.class,
+                        shutdownFailure.getCause());
+        assertEquals(ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED, blocked.reason());
+        assertEquals(1, starts.get());
+    }
+
+    @Test
     void laterTargetFailurePreventsEveryRelocationUnitFromStarting() {
         var events = new ArrayList<String>();
         var stateTransitions = new AtomicInteger();

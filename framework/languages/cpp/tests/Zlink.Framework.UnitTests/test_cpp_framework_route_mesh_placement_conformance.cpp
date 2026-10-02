@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -79,6 +80,7 @@ class hold_t
 };
 
 hold_t hold;
+std::atomic<int> actor_factory_calls{0};
 // The User Spot an Actor joins right after its creation (fixture object `actorJoin`).
 std::optional<std::string> join_spot_id;
 std::string join_failure;
@@ -101,6 +103,7 @@ class placement_actor_factory_t final : public fw::actor_factory_t<placement_act
                                                            std::stop_token) override
     {
         hold.wait_if ("actor");
+        ++actor_factory_calls;
         co_return std::make_shared<placement_actor_t> (std::move (context));
     }
 };
@@ -267,10 +270,32 @@ std::string reason_name (const std::optional<fw::topology_reason_t> &reason)
 struct host_t
 {
     fw::app_t app = fw::app_t::create ();
-    std::shared_ptr<fw::runtime::in_memory_location_store_t> store =
+    std::shared_ptr<fw::location_store_t> store =
       std::make_shared<fw::runtime::in_memory_location_store_t> ();
     int exit_code = -1;
     std::thread thread;
+};
+
+class conflict_counting_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        const auto result = co_await inner.write (std::move (request));
+        if (std::holds_alternative<fw::store_write_conflict_t> (result))
+            ++conflicts;
+        co_return result;
+    }
+    fw::runtime::in_memory_location_store_t inner;
+    std::atomic<int> conflicts{0};
 };
 
 bool wait_for_host_ready (host_t &host, std::chrono::milliseconds timeout)
@@ -599,9 +624,69 @@ bool zero_weight_at_startup (const nlohmann::json &lease)
     return ok;
 }
 
+bool concurrent_actor_creation (const nlohmann::json &lease)
+{
+    constexpr int actor_count = 64;
+    hold.reset ({});
+    actor_factory_calls = 0;
+    const auto nodes = nlohmann::json::array ({{{"meshName", "conflict-recheck"},
+                                                {"actorLimit", actor_count},
+                                                {"spotLimit", 0},
+                                                {"activationConcurrency", 128},
+                                                {"actorFactory", true},
+                                                {"instanceSpotFactory", false}}});
+    host_t host;
+    const auto store = std::make_shared<conflict_counting_store_t> ();
+    host.store = store;
+    configure_host (host, lease, nodes, "1304-conflict-recheck");
+    start_host (host);
+    if (!wait_for_host_ready (host, std::chrono::seconds (5))) {
+        stop_host (host);
+        return false;
+    }
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &actors = services.get_required<fw::actor_manager_t> ();
+    auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
+    if (!wait_for_route_status (
+          routes, "conflict-recheck",
+          [&] { return routes.snapshot ("conflict-recheck").placement.is_available; },
+          std::chrono::seconds (5))) {
+        stop_host (host);
+        return false;
+    }
+    std::barrier start (actor_count);
+    std::atomic<int> created_count{0};
+    std::vector<std::thread> operations;
+    for (int index = 0; index < actor_count; ++index) {
+        operations.emplace_back ([&, index] {
+            start.arrive_and_wait ();
+            const auto created =
+              actors
+                .create (fw::actor_id_t ("1304-actor-" + std::to_string (index)), "placement-actor")
+                .in_mesh ("conflict-recheck")
+                .timeout (std::chrono::seconds (5))
+                .async ()
+                .result ();
+            if (created && std::holds_alternative<fw::actor_create_created_t> (created.value ()))
+                ++created_count;
+            else
+                std::cerr << "[1304] actor=" << index << " error="
+                          << (created.error () ? created.error ()->what () : "unexpected terminal")
+                          << '\n';
+        });
+    }
+    for (auto &operation : operations)
+        operation.join ();
+    std::cout << "[1304] concurrent Actor creation " << created_count << '/' << actor_count << '\n';
+    std::cout << "[1304] Store conflicts=" << store->conflicts
+              << " factory calls=" << actor_factory_calls << '\n';
+    stop_host (host);
+    return created_count == actor_count && actor_factory_calls == actor_count;
+}
+
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
     std::ifstream input (ZLINK_ROUTE_MESH_PLACEMENT_CONFORMANCE_PATH);
     if (!input) {
@@ -612,6 +697,8 @@ int main ()
     if (fixture.at ("fixture") != "zlink.framework.route-mesh-placement"
         || fixture.at ("version") != 1)
         return 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--1304-concurrent")
+        return concurrent_actor_creation (fixture.at ("ownerLease")) ? 0 : 1;
     int index = 0;
     int failures = 0;
     int scenarios = 0;
@@ -622,6 +709,8 @@ int main ()
     std::cout << "[placement] " << scenarios - failures << "/" << scenarios
               << " scenarios passed\n";
     if (!zero_weight_at_startup (fixture.at ("ownerLease")))
+        ++failures;
+    if (!concurrent_actor_creation (fixture.at ("ownerLease")))
         ++failures;
     return failures == 0 ? 0 : 1;
 }

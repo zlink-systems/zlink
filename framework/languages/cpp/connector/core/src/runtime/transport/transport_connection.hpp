@@ -101,8 +101,13 @@ class stream_connection_t : public std::enable_shared_from_this<stream_connectio
     virtual void set_read_message_limit (std::size_t) {}
     virtual void async_write (std::vector<std::uint8_t> bytes,
                               std::function<void (boost::system::error_code)> completion) = 0;
-    virtual void shutdown_and_close () = 0;
-    virtual void shutdown_and_close_async () { shutdown_and_close (); }
+    virtual boost::system::error_code shutdown_and_close () = 0;
+    virtual void
+    shutdown_and_close_async (std::function<void (boost::system::error_code)> completion)
+    {
+        auto error = shutdown_and_close ();
+        completion (error);
+    }
 };
 
 } // namespace zlink::stream_connector::detail

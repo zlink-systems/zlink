@@ -48,8 +48,7 @@ final class ZLinkStreamWireProtocol {
 
     static byte[] encodeHeader(Header header) {
         String wireName = isReply(header.kind()) ? "" : header.name();
-        validateHeader(header, wireName);
-        byte[] name = wireName.getBytes(StandardCharsets.UTF_8);
+        byte[] name = validateHeader(header, wireName);
         byte[] metadata =
                 header.metadata().isEmpty() ? new byte[0] : encodeMetadata(header.metadata());
         boolean hasCorrelationId =
@@ -323,12 +322,61 @@ final class ZLinkStreamWireProtocol {
         return Collections.unmodifiableMap(values);
     }
 
-    private static void validateHeader(Header header, String packetName) {
-        validateEnum(header.kind(), header.codec(), header.flags());
+    static byte[] validatePacketName(String packetName) {
+        if (packetName == null || isWhiteSpaceOnly(packetName)) {
+            throw new IllegalArgumentException("packetName is required");
+        }
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
-        if ((isReply(header.kind()) && name.length != 0)
-                || (!isReply(header.kind()) && name.length == 0)
-                || name.length > MAX_PACKET_NAME_BYTES) {
+        if (name.length > MAX_PACKET_NAME_BYTES) {
+            throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
+        }
+        return name;
+    }
+
+    // Spec 32 §4: Unicode White_Space defines the packet-name rejection set.
+    private static boolean isWhiteSpaceOnly(String name) {
+        for (int index = 0; index < name.length(); index++) {
+            switch (name.charAt(index)) {
+                case '\u0009',
+                '\n',
+                '\u000B',
+                '\u000C',
+                '\r',
+                '\u0020',
+                '\u0085',
+                '\u00A0',
+                '\u1680',
+                '\u2000',
+                '\u2001',
+                '\u2002',
+                '\u2003',
+                '\u2004',
+                '\u2005',
+                '\u2006',
+                '\u2007',
+                '\u2008',
+                '\u2009',
+                '\u200A',
+                '\u2028',
+                '\u2029',
+                '\u202F',
+                '\u205F',
+                '\u3000':
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static byte[] validateHeader(Header header, String packetName) {
+        validateEnum(header.kind(), header.codec(), header.flags());
+        byte[] name =
+                isReply(header.kind())
+                        ? packetName.getBytes(StandardCharsets.UTF_8)
+                        : validatePacketName(packetName);
+        if (isReply(header.kind()) && name.length != 0) {
             throw new IllegalArgumentException("packet name is invalid");
         }
         boolean hasRequestSeq =
@@ -368,6 +416,7 @@ final class ZLinkStreamWireProtocol {
             throw new IllegalArgumentException(
                     "control packet must use raw codec and must not contain flags");
         }
+        return name;
     }
 
     private static boolean isReply(int kind) {

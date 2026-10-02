@@ -677,20 +677,9 @@ task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler
 
 // The one conversion of the exception being handled into a task failure.
 // Call only inside a catch handler.
-template <typename T> result_t<T> current_exception_result (const char *fallback_message)
+template <typename T> result_t<T> current_exception_result ()
 {
-    try {
-        throw;
-    }
-    catch (const framework_exception_t &error) {
-        return result_access_t::failure<T> (error);
-    }
-    catch (const std::exception &error) {
-        return result_t<T>::failure (framework_error_kind_t::internal_failure, error.what ());
-    }
-    catch (...) {
-        return result_t<T>::failure (framework_error_kind_t::internal_failure, fallback_message);
-    }
+    return result_access_t::failure<T> (std::current_exception ());
 }
 
 template <typename T> class coroutine_promise_t
@@ -707,10 +696,7 @@ template <typename T> class coroutine_promise_t
         completion->complete (std::move (*_return_result));
         return {};
     }
-    void unhandled_exception ()
-    {
-        store_return (current_exception_result<T> ("unhandled coroutine exception"));
-    }
+    void unhandled_exception () { store_return (current_exception_result<T> ()); }
 
   protected:
     void store_return (result_t<T> result) { _return_result.emplace (std::move (result)); }

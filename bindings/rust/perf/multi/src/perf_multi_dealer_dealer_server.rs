@@ -17,7 +17,7 @@ fn main() {
     common::apply_multi_hwm(&server, &settings);
     server
         .common_options()
-        .set_receive_timeout(Duration::from_millis(settings.receive_timeout_ms))
+        .set_receive_timeout(settings.receive_timeout_ms)
         .expect("rcvtimeo");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");

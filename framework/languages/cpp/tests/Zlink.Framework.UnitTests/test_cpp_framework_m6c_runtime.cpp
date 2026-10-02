@@ -14,6 +14,8 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -722,6 +724,134 @@ void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
                   "the held timer turn must resume after relocation readiness completion");
 }
 
+void test_remote_actor_leave_commits_before_source_callback (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    const auto owner = zlink::framework::node_rid_t::from_string ("remote-leave-owner");
+    const auto actor_ref = detail::actor_ref_access_t::make (owner, "remote_actor", "actor-1", 1);
+    const auto committed_actor_ref = detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("remote-leave-committed-owner"), "remote_actor",
+      "actor-1", 1);
+    detail::actor_gateway_runtime_t gateway;
+    struct test_actor_t : zlink::framework::actor_t
+    {
+        explicit test_actor_t (zlink::framework::actor_context_t context) :
+            state (std::move (context))
+        {
+        }
+        zlink::framework::actor_context_t &context () noexcept override { return state; }
+        const zlink::framework::actor_context_t &context () const noexcept override
+        {
+            return state;
+        }
+        void set_actor_ref (const zlink::framework::actor_ref_t &ref) { committed_ref = ref; }
+        zlink::framework::actor_context_t state;
+        std::optional<zlink::framework::actor_ref_t> committed_ref;
+    } actor (gateway.actor_context (actor_ref));
+    auto node = std::make_shared<detail::spot_node_builder_state_t> ("remote-leave-source");
+    node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::logging_builder_t logging;
+    logging.use_provider ("remote-leave-test", [] (const zlink::framework::log_record_t &record) {
+        std::clog << "remote-leave-flow ";
+        for (const auto &field : record.fields)
+            std::clog << field.key << '=' << field.value << ' ';
+        std::clog << '\n';
+    });
+    detail::dispatch_options_access_t::set_logger (node->dispatch,
+                                                   logging.create_logger ("remote-leave-test"));
+    auto source = std::make_shared<detail::spot_context_state_t> ();
+    source->node = node;
+    source->node_rid = zlink::framework::node_rid_t::from_string ("remote-leave-source");
+    source->spot_id = "source";
+    source->spot_instance = std::make_shared<int> (1);
+    source->serial_executor = std::make_shared<runtime::offload_executor_t> (2, "remote-leave");
+    source->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *source->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    std::atomic_bool committed{false};
+    std::atomic_bool callback_after_commit{false};
+    std::atomic_int callbacks{0};
+    auto join_completion =
+      std::make_shared<zlink::framework::task_completion_source_t<detail::actor_join_reply_t>> ();
+    source->actor_admissions[std::type_index (typeid (test_actor_t))].on_leave_actor =
+      [&] (void *, void *) {
+          callback_after_commit.store (committed.load ());
+          callbacks.fetch_add (1);
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+            zlink::framework::framework_error_kind_t::internal_failure,
+            "remote source leave callback failed after membership commit"));
+      };
+    node->lane
+      .run_checked ([&] {
+          node->actor_spot_ids.emplace ("remote_actor:actor-1", source->spot_id);
+          node->actor_generations.emplace ("remote_actor:actor-1", 1);
+          source->actor_count = 1;
+          node->actor_instances.emplace ("remote_actor:actor-1",
+                                         std::shared_ptr<void> (&actor, [] (void *) {}));
+      })
+      .get ();
+    gateway.on_join_entry_spot (
+      [&] (const auto &, const auto &, auto) { return join_completion->task (); });
+    auto context = detail::spot_context_access_t::create (source);
+    auto leaving = context.leave_actor (actor);
+    const auto source_retained = node->lane
+                                   .run ([&] {
+                                       return node->actor_spot_ids.contains ("remote_actor:actor-1")
+                                              && source->actor_count == 1;
+                                   })
+                                   .get ();
+    test.require (!leaving.await_ready () && source_retained && callbacks.load () == 0
+                    && !actor.committed_ref,
+                  "remote leave must retain source membership and callback until entry commit");
+    committed.store (true);
+    join_completion->complete (zlink::framework::result_t<detail::actor_join_reply_t>::success (
+      detail::actor_join_reply_t{.actor = committed_actor_ref}));
+    const auto left = leaving.result ();
+    const auto completed =
+      wait_until_bounded ([&] { return callbacks.load () == 1; }, std::chrono::seconds (1));
+    const auto source_removed = node->lane
+                                  .run ([&] {
+                                      return !node->actor_spot_ids.contains ("remote_actor:actor-1")
+                                             && source->actor_count == 0;
+                                  })
+                                  .get ();
+    test.require (left && completed && callback_after_commit.load () && source_removed
+                    && actor.context ().actor_ref ().node_rid ().value ()
+                         == committed_actor_ref.node_rid ().value ()
+                    && actor.committed_ref
+                    && actor.committed_ref->node_rid ().value ()
+                         == committed_actor_ref.node_rid ().value (),
+                  "remote source leave callback must run after entry membership commit");
+
+    callbacks.store (0);
+    join_completion =
+      std::make_shared<zlink::framework::task_completion_source_t<detail::actor_join_reply_t>> ();
+    node->lane
+      .run_checked ([&] {
+          node->actor_spot_ids.emplace ("remote_actor:actor-1", source->spot_id);
+          node->actor_generations.emplace ("remote_actor:actor-1", 1);
+          source->actor_count = 1;
+      })
+      .get ();
+    auto failed_leave = context.leave_actor (actor);
+    join_completion->complete (zlink::framework::result_t<detail::actor_join_reply_t>::failure (
+      zlink::framework::framework_error_kind_t::internal_failure, "entry commit failed"));
+    const auto failed = failed_leave.result ();
+    const auto failure_retained_source =
+      node->lane
+        .run ([&] {
+            return node->actor_spot_ids.contains ("remote_actor:actor-1")
+                   && source->actor_count == 1;
+        })
+        .get ();
+    test.require (
+      !failed && failed.error_kind () == zlink::framework::framework_error_kind_t::internal_failure
+        && failure_retained_source && callbacks.load () == 0,
+      "failed remote entry commit must retain source membership and skip leave callback");
+}
+
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -735,6 +865,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 
     struct test_actor_t
     {
+        std::optional<zlink::framework::actor_context_t> state;
+        zlink::framework::actor_context_t &context () noexcept { return *state; }
     } actor;
 
     const auto node =
@@ -774,10 +906,21 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     const auto entry = make_state (entry_id, "entry", true);
     std::atomic_int leave_callbacks{0};
     std::atomic_int joined_callbacks{0};
+    std::atomic_bool leave_saw_committed_entry{false};
     source->on_leave_actor_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
+        leave_saw_committed_entry.store (
+          node->lane
+            .run ([&] {
+                const auto found = node->actor_spot_ids.find ("test_actor:actor-1");
+                return found != node->actor_spot_ids.end () && found->second == entry_id;
+            })
+            .get (),
+          std::memory_order_release);
         leave_callbacks.fetch_add (1, std::memory_order_acq_rel);
-        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "source leave callback failed after membership commit"));
     };
     entry->on_actor_joined_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
@@ -788,6 +931,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 
     const auto actor_ref =
       ::zlink::framework::detail::actor_ref_access_t::make (node_rid, "test_actor", "actor-1", 1);
+    detail::actor_gateway_runtime_t gateway;
+    actor.state.emplace (gateway.actor_context (actor_ref));
     const std::string key = "test_actor:actor-1";
     node->lane
       .run_checked ([&] {
@@ -805,7 +950,7 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
       .get ();
 
     const auto submitted = source->run_serial_sync ("actor-leave-with-relocation-fence", [&] {
-        const auto left = context.leave_actor (actor_ref, actor).result ();
+        const auto left = context.leave_actor (actor).result ();
         if (!left) {
             throw std::runtime_error ("actor leave was not accepted from the handler turn");
         }
@@ -832,9 +977,10 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
       })
       .get ();
     test.require (submitted && completed && current_location == entry_id && source_actor_count == 0
-                    && entry_actor_count == 1,
-                  "actor leave deferred by a relocation-ready handler must run source and entry "
-                  "lifecycle callbacks before the next relocation turn");
+                    && entry_actor_count == 1
+                    && leave_saw_committed_entry.load (std::memory_order_acquire),
+                  "source leave callback failure must not prevent the committed entry membership "
+                  "or its joined callback");
     node->lane
       .run_checked ([&] {
           node->spot_contexts_by_id.clear ();
@@ -850,7 +996,7 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 }
 
 void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
-  test_context_t &test)
+  test_context_t &test, const std::shared_ptr<authority_relocation_port_t> &authority)
 {
     namespace detail = zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
@@ -863,7 +1009,9 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
     {
     };
 
-    const auto run_case = [&] (bool remote) {
+    const auto run_case = [&] (bool remote, bool decline_source = false, bool cancel_source = false,
+                               bool cleanup_before_cancel = false) {
+        std::atomic_int failed_leave_diagnostics{0};
         const std::string case_name = remote ? "remote" : "same-node";
         const auto node =
           std::make_shared<detail::spot_node_builder_state_t> ("entry-return-" + case_name);
@@ -944,6 +1092,113 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
         source->actor_count = 1;
 
         detail::spot_node_runtime_t spot_runtime (node);
+        if (decline_source) {
+            constexpr auto transfer_id = "entry-return-declined-leave";
+            node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+            detail::dispatch_options_access_t::set_observer_for_tests (
+              node->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+                  if (event.packet_name == "spot_actor_leave"
+                      && event.result == zlink::framework::message_flow_result_t::failed
+                      && event.exception) {
+                      ++failed_leave_diagnostics;
+                      test.require (event.correlation_id == transfer_id,
+                                    "source leave failure must retain its transfer correlation");
+                      if (cleanup_before_cancel)
+                          test.require (
+                            !event.spot_id && !event.actor_id,
+                            "removed source record must diagnose without borrowed context");
+                  }
+              });
+            const auto native_source = std::make_shared<detail::service::spot_t> (
+              nullptr, object_ref_t{object_kind_t::user_spot,
+                                    std::string (source_id),
+                                    source->object_generation,
+                                    0,
+                                    {},
+                                    local_node_name});
+            source->native_spot = native_source;
+            const object_ref_t source_ref{object_kind_t::actor, "actor-1", 1, 1, {},
+                                          local_node_name};
+            auto target_ref = source_ref;
+            target_ref.node_id = "entry-return-next-owner";
+            ++target_ref.authority_owner_generation;
+            const auto target_id = spot_id_t ("entry-return-next-spot");
+            const auto target_fence = runtime::protocol::actor_route_fence_t{
+              source_ref.key,
+              source_ref.object_generation,
+              zlink::routing_id_t::from (target_ref.node_id).to_bytes (),
+              source->object_generation,
+              target_ref.authority_owner_generation,
+              1};
+            authority->publish (source_ref, target_ref, {"entry-return-next-owner", 1}, {},
+                                transfer_id, 0, {});
+            node->relocation_authority = authority;
+            const auto cleanup_boundary = std::chrono::steady_clock::now ();
+            node->pending_remote_source_cleanups.push_back (
+              detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
+                .source_actor = actor_ref,
+                .transfer_id = transfer_id,
+                .source_spot_id = source_id,
+                .source_spot_generation = source->object_generation,
+                .target_spot_id = target_id,
+                .target_fence = target_fence,
+                .not_before = cleanup_boundary,
+                .leave_deadline = cleanup_boundary + node->message_follow_duration});
+            std::optional<runtime::serial_execution_queue_t::async_completion_t> blocker;
+            if (cancel_source) {
+                std::promise<runtime::serial_execution_queue_t::async_completion_t> entered;
+                auto started = entered.get_future ();
+                const bool accepted = source->serial_queue->try_post_async (
+                  "source-leave-cancellation-boundary",
+                  [&] (auto complete) { entered.set_value (std::move (complete)); });
+                test.require (accepted, "source cancellation fixture must hold an actual turn");
+                if (!accepted)
+                    return;
+                blocker = started.get ();
+            } else {
+                source->admission_sealed = true;
+            }
+            const auto submitted = spot_runtime.submit_remote_actor_leave (
+              transfer_id, actor_ref, source_id, source->object_generation, target_id,
+              target_fence);
+            if (cancel_source) {
+                if (cleanup_before_cancel) {
+                    spot_runtime.cleanup_expired_actor_admissions_at (
+                      node->pending_remote_source_cleanups.front ().leave_deadline);
+                    test.require (!node->actor_instances.contains (key)
+                                    && node->pending_remote_source_cleanups.empty (),
+                                  "fixture must remove the source record at its existing deadline");
+                }
+                source->serial_queue->cancel_pending ();
+                (*blocker) ([] {});
+                source->serial_queue->drain ();
+            }
+            test.require (submitted
+                            && (cleanup_before_cancel
+                                  ? node->pending_remote_source_cleanups.empty ()
+                                  : node->pending_remote_source_cleanups.front ().leave_completed),
+                          cancel_source
+                            ? "source leave canceled before activation must finish retirement"
+                            : "source leave declined before activation must finish retirement");
+            spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            test.require (!node->actor_instances.contains (key)
+                            && node->pending_remote_source_cleanups.empty ()
+                            && leave_callbacks.load (std::memory_order_acquire) == 0
+                            && failed_leave_diagnostics == 1,
+                          "terminal source leave failure must remove registry and diagnose once");
+            spot_runtime.submit_remote_actor_leave (transfer_id, actor_ref, source_id,
+                                                    source->object_generation, target_id,
+                                                    target_fence);
+            spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            test.require (leave_callbacks.load (std::memory_order_acquire) == 0
+                            && failed_leave_diagnostics == 1,
+                          "terminal source leave failure must not rerun callback or diagnostics");
+            spot_runtime.request_stop ();
+            spot_runtime.cancel_pending_dispatch ();
+            spot_runtime.cancel_pending_work ();
+            spot_runtime.release_native_handles ();
+            return;
+        }
         const auto joined =
           remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
                                                                   zlink::message_t{})
@@ -969,6 +1224,9 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
 
     run_case (false);
     run_case (true);
+    run_case (false, true);
+    run_case (false, true, true);
+    run_case (false, true, true, true);
 }
 
 void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
@@ -1383,8 +1641,8 @@ class public_memory_authority_store_t final
                   ? zlink::framework::authority_read_result_t{*snapshot}
                   : zlink::framework::authority_read_result_t{
                       zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}}});
-        if (remaining_auxiliary_conflicts != 0) {
-            --remaining_auxiliary_conflicts;
+        if (remaining_authority_conflicts != 0) {
+            --remaining_authority_conflicts;
             snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
             snapshot->store_now = std::chrono::system_clock::now ();
             return completed (zlink::framework::authority_compare_exchange_result_t{
@@ -1420,7 +1678,7 @@ class public_memory_authority_store_t final
     std::optional<zlink::framework::location_owner_token_t> observed_target_owner;
     std::optional<zlink::framework::object_creation_target_t> observed_target_placement;
     std::vector<std::string> observed_keys;
-    int remaining_auxiliary_conflicts = 0;
+    int remaining_authority_conflicts = 0;
     std::uint64_t retarget_authority_generation_advance = 1;
 
   private:
@@ -1434,8 +1692,11 @@ class public_memory_authority_store_t final
 class public_memory_relocation_repository_t final : public zlink::framework::relocation_repository_t
 {
   public:
-    zlink::framework::task_t<zlink::framework::relocation_stored_t> put_relocation (
-      std::vector<std::byte> payload, std::chrono::hours retention, std::stop_token) override
+    zlink::framework::task_t<zlink::framework::relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point,
+                    std::stop_token) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1494,7 +1755,8 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 {
   public:
     relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                             std::chrono::hours retention) override
+                             std::chrono::hours retention,
+                             std::chrono::steady_clock::time_point) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1553,7 +1815,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -2665,7 +2929,8 @@ void test_public_relocation_store_adapter (test_context_t &test)
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
     public_relocation_store_adapter_t adapter (public_store);
     const std::vector<std::uint8_t> payload{0, 1, 127, 255};
-    const auto stored = adapter.put (payload, std::chrono::hours (24));
+    const auto stored = adapter.put (payload, std::chrono::hours (24),
+                                     std::chrono::steady_clock::now () + std::chrono::minutes (1));
     test.require (stored.reference == "public-root"
                     && stored.checksum_crc32c == maintenance_runtime_t::crc32c (payload),
                   "public relocation adapter must preserve reference and CRC32C");
@@ -2717,11 +2982,109 @@ void test_public_authority_store_adapter (test_context_t &test)
          .mesh_name = "mesh-b",
          .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
          .node_generation = 17});
-    /* A foreign source can preserve its relocating envelope between the
-     * target's read and owner-changing CAS.  That advances only storeVersion,
-     * not either logical fence, so the target must refresh through the same
-     * bounded retry window used by the other runtime implementations. */
-    store.remaining_auxiliary_conflicts = 7;
+    public_memory_authority_store_t conflicting_store;
+    conflicting_store.snapshot = store.snapshot;
+    conflicting_store.remaining_authority_conflicts = 1;
+    public_authority_store_adapter_t conflicting_adapter (conflicting_store);
+    const auto conflicted =
+      conflicting_adapter.publish (source, target, target_owner, target_placement, "root-public",
+                                   42, digest_with (9), relocated_application_payload);
+    test.require (
+      conflicted.status == authority_publish_status_t::conflict && conflicted.current
+        && conflicting_store.remaining_authority_conflicts == 0
+        && conflicting_store.snapshot->store_version != store.snapshot->store_version
+        && conflicting_store.snapshot->authority_owner_generation
+             == source.authority_owner_generation
+        && conflicting_store.snapshot->payload == source_application_payload,
+      "public authority adapter must preserve a changed initial authority version as conflict");
+    namespace actor_wire = zlink::framework::runtime::actor_authority_detail;
+    const auto source_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (source_application_payload);
+    constexpr std::uint64_t relocation_id_high = 1;
+    constexpr std::uint64_t relocation_id_low = 2;
+    constexpr std::uint8_t absent_wire_field = 0;
+    constexpr std::uint8_t present_wire_slot = 1;
+    constexpr std::size_t optional_authority_slot_count = 2;
+    std::vector<std::byte> captured_slot;
+    actor_wire::append_u64be (captured_slot, relocation_id_high);
+    actor_wire::append_u64be (captured_slot, relocation_id_low);
+    actor_wire::append_u64be (captured_slot, source.object_generation);
+    actor_wire::append_u64be (captured_slot,
+                              absent_wire_field); // Source capture has no target attempt.
+    actor_wire::append_text16be (captured_slot, "root-public");
+    actor_wire::append_u32be (captured_slot, 42);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target node is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target owner is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->store_version);
+    constexpr std::uint8_t captured_phase = 2;
+    actor_wire::append_u8 (captured_slot, captured_phase);
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field);
+    auto captured_payload =
+      zlink::framework::runtime::decode_canonical_authority_payload (source_application_payload);
+    constexpr auto absent_slot_size = sizeof (std::uint8_t) + sizeof (std::uint32_t);
+    captured_payload->body.resize (captured_payload->body.size ()
+                                   - optional_authority_slot_count * absent_slot_size);
+    actor_wire::append_u8 (captured_payload->body, present_wire_slot);
+    actor_wire::append_u32be (captured_payload->body,
+                              static_cast<std::uint32_t> (captured_slot.size ()));
+    actor_wire::append_bytes (captured_payload->body, captured_slot);
+    actor_wire::append_u8 (captured_payload->body, absent_wire_field); // Activation slot is absent.
+    actor_wire::append_u32be (captured_payload->body, absent_wire_field);
+    public_memory_authority_store_t captured_store;
+    captured_store.snapshot = store.snapshot;
+    captured_store.snapshot->store_version = "2";
+    captured_store.snapshot->payload =
+      zlink::framework::runtime::encode_canonical_authority_payload (*captured_payload);
+    const auto captured_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (
+        captured_store.snapshot->payload);
+    test.require (captured_projection && captured_projection->relocation_phase == captured_phase
+                    && captured_projection->relocation_expected_store_version
+                         == store.snapshot->store_version,
+                  "captured authority fixture must retain the original coordinator version");
+    public_authority_store_adapter_t captured_adapter (captured_store);
+    const auto captured_conflict = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version);
+    test.require (captured_conflict.status == authority_publish_status_t::conflict
+                    && captured_store.snapshot->authority_owner_generation
+                         == source.authority_owner_generation
+                    && !captured_store.observed_target_owner,
+                  "captured source metadata must not replace the initial authority version fence");
+    const relocation_authority_fence_t captured_fence{
+      source.kind,           source.key,   store.snapshot->store_version,
+      store.snapshot->owner, target_owner, {relocation_id_high, relocation_id_low}};
+    test.require (captured_adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::unsettled,
+                  "matching Captured source must keep target staging eligible");
+    auto other_relocation = captured_fence;
+    ++other_relocation.relocation.low;
+    test.require (captured_adapter.observe_relocation (other_relocation)
+                    == relocation_authority_t::source_preserved,
+                  "another relocation must not inherit the captured source fence");
+    auto other_owner = captured_fence;
+    other_owner.source_owner.lease_generation++;
+    test.require (captured_adapter.observe_relocation (other_owner)
+                    == relocation_authority_t::source_preserved,
+                  "another source lease must not inherit the captured source fence");
+    const auto captured_published = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version,
+      {relocation_id_high, relocation_id_low}, store.snapshot->owner);
+    test.require (captured_published.status == authority_publish_status_t::published
+                    && captured_store.observed_target_owner,
+                  "matching Captured source must use its current provider version for target CAS");
     store.retarget_authority_generation_advance = 9;
     const auto published =
       adapter.publish (source, target, target_owner, target_placement, "root-public", 42,
@@ -2733,8 +3096,8 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->target.node_id == "node-b"
         && published.current->target.authority_owner_generation == 20
         && published.current->application_payload == relocated_application_payload
-        && store.remaining_auxiliary_conflicts == 0,
-      "public authority adapter must refresh through bounded auxiliary store-version conflicts");
+        && store.remaining_authority_conflicts == 0,
+      "public authority adapter must publish with an unchanged initial authority fence");
     const auto stored_projection = store.snapshot
                                      ? zlink::framework::runtime::decode_actor_authority_payload (
                                          store.snapshot->payload, store.snapshot->object_generation)
@@ -3136,7 +3499,9 @@ class settlement_authority_t final : public authority_relocation_port_t
                                         std::uint32_t,
                                         inventory_digest_t,
                                         std::vector<std::byte> = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         return {};
     }
@@ -3632,8 +3997,14 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
     std::atomic<std::uint64_t> observed_session_sequence{0};
+    framework::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
+      first_route_resolution;
+    std::promise<void> first_route_started;
+    auto route_started = first_route_started.get_future ();
+    bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
-      [&bound_session_route, &observed_session_sequence,
+      [&bound_session_route, &observed_session_sequence, &first_route_resolution,
+       &first_route_started, &resolve_first_route,
        resolver_failure] (const object_ref_t &candidate)
         -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
           using route_t = std::optional<detail::bound_session_relocation_route_t>;
@@ -3643,6 +4014,10 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                 framework::result_t<route_t>::success (std::nullopt));
           if (resolver_failure)
               throw std::runtime_error ("production Session owner lookup failed");
+          if (std::exchange (resolve_first_route, false)) {
+              first_route_started.set_value ();
+              return first_route_resolution.task ();
+          }
           auto resolved = *bound_session_route;
           resolved.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
           return framework::task_t<route_t> (
@@ -3793,16 +4168,31 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     }
     relocation_result_t result;
     const std::string flow_id = "01930000-0000-7000-8000-000000000001";
+    std::promise<bool> relocation_submitted;
+    auto submitted = relocation_submitted.get_future ();
     std::thread relocation_thread ([&] {
         framework::runtime::install_host_context_hooks ();
         framework::runtime::flow_context_t::scope_t flow (
           framework::runtime::flow_value_t{flow_id, framework::flow_origin_t::application,
                                            framework::message_flow_log_mode_t::errors});
-        result = await_task (source.relocate_application_actor (actor, target_descriptor, snapshot,
-                                                                std::chrono::steady_clock::now ()
-                                                                  + std::chrono::seconds (5)));
+        auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
+                                                             std::chrono::steady_clock::now ()
+                                                               + std::chrono::seconds (5));
+        relocation_submitted.set_value (!relocation.await_ready ());
+        result = await_task (std::move (relocation));
     });
-    std::this_thread::sleep_for (10ms);
+    const bool relocation_suspended = submitted.get ();
+    if (!resolver_failure) {
+        test.require (relocation_suspended,
+                      "production relocation must suspend while Session route resolution is pending");
+        route_started.get ();
+        auto resolved_route = *bound_session_route;
+        resolved_route.observed_sequence =
+          observed_session_sequence.load (std::memory_order_acquire);
+        first_route_resolution.complete (
+          framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+            std::move (resolved_route)));
+    }
     std::thread source_dispatch ([&] { dispatch (source); });
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });
@@ -4622,7 +5012,7 @@ class entry_relocation_test_actor_factory_t final
  * target node). This fixture proves the target-local Entry Spot is resolved
  * during materialize_relocation_state, the relocated Actor is joined into
  * it, and the Actor immediately serves an application message through it. */
-class entry_relocation_test_entry_spot_t final
+class entry_relocation_test_entry_spot_t
     : public zlink::framework::entry_spot_t<entry_relocation_test_actor_t>
 {
   public:
@@ -4673,6 +5063,19 @@ class entry_relocation_test_entry_spot_t final
 
   private:
     zlink::framework::entry_spot_context_t _context;
+};
+
+class failing_source_leave_entry_spot_t final : public entry_relocation_test_entry_spot_t
+{
+  public:
+    using entry_relocation_test_entry_spot_t::entry_relocation_test_entry_spot_t;
+
+    zlink::framework::task_t<void> on_leave_actor (entry_relocation_test_actor_t &) override
+    {
+        ++leave_count;
+        throw std::runtime_error ("source leave failed");
+        co_return;
+    }
 };
 
 /* checklist B: cpp's standalone Entry Spot Actor direct-relocation restore
@@ -4774,8 +5177,10 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
  * the local instance is the departed source remnant; a newer Store-confirmed
  * target authority may replace it, while the old leave is sealed so it cannot
  * run against the newly materialized Actor. */
-void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test)
+void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test,
+                                                                   bool source_leave_fails = false)
 {
+    std::atomic_int failed_leave_diagnostics{0};
     entry_relocation_test_actor_t::create_count = 0;
     entry_relocation_test_entry_spot_t::joined_count = 0;
     entry_relocation_test_entry_spot_t::leave_count = 0;
@@ -4785,7 +5190,10 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     zlink::framework::zlink_builder_t builder;
     auto mesh = builder.add_route_mesh ("return-relocation-remnant-mesh");
     mesh.add_entry_spot<entry_relocation_test_entry_spot_t> (
-      [] (zlink::framework::entry_spot_context_t context) {
+      [source_leave_fails] (zlink::framework::entry_spot_context_t context)
+        -> std::shared_ptr<entry_relocation_test_entry_spot_t> {
+          if (source_leave_fails)
+              return std::make_shared<failing_source_leave_entry_spot_t> (std::move (context));
           return std::make_shared<entry_relocation_test_entry_spot_t> (std::move (context));
       });
     mesh.add_actor_factory<entry_relocation_test_actor_t, entry_relocation_test_actor_factory_t> (
@@ -4806,6 +5214,13 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     test.require (state != nullptr, "return relocation fixture must retain its runtime state");
     if (!state)
         return;
+    state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      state->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+          if (event.packet_name == "spot_actor_leave"
+              && event.result == zlink::framework::message_flow_result_t::failed && event.exception)
+              ++failed_leave_diagnostics;
+      });
     auto authority = std::make_shared<memory_authority_store_t> ();
     runtime.bind_relocation_authority (authority);
 
@@ -4898,6 +5313,18 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
                     && cleanup->leave_submitted && cleanup->leave_completed,
                   "a newer exact-fenced return must retire the old source lifecycle, "
                   "suppress its late leave, and install a fresh local Actor");
+    test.require (
+      failed_leave_diagnostics == (source_leave_fails ? 1 : 0),
+      "source OnLeave failure must be diagnosed once while return restores a fresh Actor");
+    test.require (state->actor_generations.at (key) == first_source.object_generation,
+                  "fresh return instance must retain ObjectGeneration");
+    if (cleanup == state->pending_remote_source_cleanups.end ())
+        return;
+    runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
+    test.require (entry_relocation_test_entry_spot_t::leave_count == 1
+                    && failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
+                    && state->actor_instances.contains (key),
+                  "retired source cleanup must not rerun leave or erase newer local authority");
 
     // The ordinary source cleanup may have already erased the instance and
     // its cleanup record while the longer-lived remote Message Follow route
@@ -5941,7 +6368,9 @@ int main ()
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
     test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
-    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
+    test_remote_actor_leave_commits_before_source_callback (test);
+    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
+      test, std::make_shared<memory_authority_store_t> ());
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);
@@ -5968,6 +6397,7 @@ int main ()
     test_relocation_adapter_single_capture_restore_path (test);
     test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test);
+    test_return_actor_relocation_replaces_departed_spot_instance (test, true);
     test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_queue_accepts_active_backlog (test);

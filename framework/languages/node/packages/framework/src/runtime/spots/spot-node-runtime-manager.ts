@@ -86,7 +86,11 @@ import {
   type ZLinkLocationEventSink,
   type ZLinkLocationRuntimeStores
 } from '../locations';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  classifySubmitResult,
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkEntrySpotActivation } from './spot-entry-activation';
@@ -112,6 +116,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
@@ -132,7 +137,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly applicationJobQueue?: ApplicationJobQueue;
   readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
   readonly peerAdmissionSealed?: (meshName: string) => boolean;
@@ -173,6 +178,9 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly applicationJobQueue: ApplicationJobQueue;
 
   constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException('Spot node runtime requires a detached task runner.');
+    }
     this.applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
@@ -216,7 +224,8 @@ export class ZLinkSpotNodeRuntimeManager {
           peerResolver: location.resolver,
           executor: capability.executor,
           events: location.events,
-          options: location.options
+          options: location.options,
+          errorSink: this.options.errorSink
         });
         const loop = new ZLinkAutoConnectLoop({
           reconciler,
@@ -735,14 +744,10 @@ export class ZLinkSpotNodeRuntimeManager {
         await this.publishMeshNodeState(state, undefined, meshName);
       });
     this.runtimeWeightPublication = publish;
-    if (this.options.detachedTaskRunner !== undefined) {
-      this.options.detachedTaskRunner.runDetached(
-        `RouteMesh '${meshName}' runtime weight publication`,
-        async () => await publish
-      );
-    } else {
-      void publish.catch(() => undefined);
-    }
+    this.options.detachedTaskRunner.runDetached(
+      `RouteMesh '${meshName}' runtime weight publication`,
+      async () => await publish
+    );
   }
 
   get primaryMeshCompletions(): ZLinkMeshCompletionTable | undefined {
@@ -1235,26 +1240,12 @@ export function createFrameworkEntrySpotId(prefix: string): string {
 }
 
 function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {
-  switch (result) {
-    case SubmitResult.Ok:
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return ZLinkSubmitStatus.Backpressured;
-    case SubmitResult.NotFound:
-      // A publish with no matching subscriber is a successful zero-recipient
-      // operation, not an operation-specific not-found failure.
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.NotConnected:
-      return ZLinkSubmitStatus.RouteNotConnected;
-    case SubmitResult.Terminated:
-    case SubmitResult.InvalidHandle:
-      return ZLinkSubmitStatus.Shutdown;
-    default:
-      throw new ZLinkConfigurationException(
-        `Logical Multicast failed with submit result '${result}'.`
-      );
-  }
+  // Source publication preserves its local admission status before commit.
+  if (result === SubmitResult.NotAdmitted || result === SubmitResult.Backpressured)
+    return ZLinkSubmitStatus.Backpressured;
+  // A publish with no matching subscriber succeeds with zero recipients.
+  if (result === SubmitResult.NotFound) return ZLinkSubmitStatus.Submitted;
+  return classifySubmitResult(result, 'Logical Multicast').status;
 }
 
 function requireEntrySpotReply(result: number): void {

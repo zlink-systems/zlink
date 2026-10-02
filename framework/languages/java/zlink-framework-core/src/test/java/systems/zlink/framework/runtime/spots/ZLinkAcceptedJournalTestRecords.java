@@ -81,13 +81,25 @@ final class ZLinkAcceptedJournalTestRecords {
             String packetName,
             Map<String, String> metadata,
             byte[] payload) {
+        return spot(sourceSpotId, targetSpotId, replyRouteId, packetName, metadata, payload, 2);
+    }
+
+    static byte[] spot(
+            String sourceSpotId,
+            String targetSpotId,
+            long replyRouteId,
+            String packetName,
+            Map<String, String> metadata,
+            byte[] payload,
+            long operationLow) {
         return spot(
                 sourceSpotId,
                 targetSpotId,
                 replyRouteId,
                 metadata,
                 new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                        packetName, "application/zlink-framework-json-v1", payload));
+                        packetName, "application/zlink-framework-json-v1", payload),
+                operationLow);
     }
 
     static byte[] spotMultipart(
@@ -100,7 +112,8 @@ final class ZLinkAcceptedJournalTestRecords {
                 targetSpotId,
                 replyRouteId,
                 Map.of(),
-                ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(parts));
+                ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(parts),
+                2);
     }
 
     private static byte[] spot(
@@ -108,7 +121,8 @@ final class ZLinkAcceptedJournalTestRecords {
             String targetSpotId,
             long replyRouteId,
             Map<String, String> metadata,
-            ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload) {
+            ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload,
+            long operationLow) {
         RoutingId nodeRid = RoutingId.from("journal-node");
         var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(nodeRid, 1, "journal-owner", 1);
         var operation =
@@ -117,7 +131,7 @@ final class ZLinkAcceptedJournalTestRecords {
                         metadata.isEmpty() ? 0 : 1,
                         replyRouteId == 0 ? null : replyRouteId,
                         1,
-                        2,
+                        operationLow,
                         0,
                         sourceSpotId,
                         new ZLinkServiceM6BWireCodec.SpotRouteFence(

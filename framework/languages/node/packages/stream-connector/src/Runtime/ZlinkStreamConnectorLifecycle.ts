@@ -54,7 +54,6 @@ export class ZlinkStreamConnectorLifecycle {
   private closeRequested = false;
   private disconnectedPublished = false;
   private closeReasonValue?: ZlinkStreamCloseReason;
-  private lateConnectCleanupError: unknown;
 
   constructor(
     private readonly options: RequiredZlinkStreamConnectorOptions,
@@ -111,12 +110,7 @@ export class ZlinkStreamConnectorLifecycle {
     try {
       const connection = await this.connectWithReconnect(attempts.signal);
       if (this.closeRequested) {
-        try {
-          await connection.close(signal);
-        } catch (error) {
-          this.lateConnectCleanupError = error;
-          throw error;
-        }
+        await this.closeTransport(connection, undefined, signal);
         throw connectorError(
           ZlinkStreamErrorCode.Disconnected,
           'Connector closed while connecting.'
@@ -217,23 +211,10 @@ export class ZlinkStreamConnectorLifecycle {
     this.connectAbort?.abort();
     await this.connectTask?.catch(() => undefined);
     await this.disconnectTask?.catch(() => undefined);
-    const errors: unknown[] = [];
-    if (this.lateConnectCleanupError !== undefined) {
-      errors.push(this.lateConnectCleanupError);
-      this.lateConnectCleanupError = undefined;
-    }
-    try {
-      await this.tearDownConnection(
-        { code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' },
-        signal
-      );
-    } catch (error) {
-      errors.push(error);
-    }
-    this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
-    this.publishDisconnected(signal);
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
+    await this.tearDownConnection(
+      { code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' },
+      signal
+    );
   }
 
   /**
@@ -491,20 +472,21 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.disconnectTask !== undefined) {
       return await this.disconnectTask;
     }
-    // `disconnectTask` covers the transport teardown and nothing else, because
-    // `connect` waits on it. Everything application code can hold open — the
-    // state handler, the disconnect handler — stays outside it: a disconnect
-    // handler that calls `connect` would otherwise wait for the task its own
-    // caller has not yet left.
-    this.disconnectTask = this.tearDownConnection(error)
-      .catch(() => {
-        // The original transport failure remains the connector-visible error.
-      })
-      .finally(() => {
-        this.disconnectTask = undefined;
-      });
-    await this.disconnectTask;
-    await this.announceDisconnect(error);
+    // 종료 작업을 실행하기 전에 선점한다. callback을 기다리지 않으므로 handler의
+    // connect 재진입은 transport 종료만 기다린다.
+    let resolve!: () => void;
+    let reject!: (reason: unknown) => void;
+    const pending = new Promise<void>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
+    });
+    const task = pending.finally(() => {
+      if (this.disconnectTask === task) this.disconnectTask = undefined;
+    });
+    this.disconnectTask = task;
+    void this.tearDownConnection(error).then(resolve, reject);
+    await task;
+    this.announceDisconnect();
   }
 
   private isCurrentConnection(
@@ -520,7 +502,7 @@ export class ZlinkStreamConnectorLifecycle {
 
   /**
    * Ends the current connection, for close and for transport loss alike. No
-   * application callback runs from here. Spec stream-connector 32 §7 and §9:
+   * application callback runs before terminal operations settle. Spec stream-connector 32 §7 and §9:
    * every operation the ending connection fails (the frames it has not
    * written, the one it is writing and the pending requests) fails with
    * `Disconnected`, whatever ended it; the cause stays in the close reason.
@@ -544,7 +526,38 @@ export class ZlinkStreamConnectorLifecycle {
     // follow establishes the next one.
     this.receivedMessages.connectionEnded();
     this.actors.closeAll(signal);
-    await connection?.close(signal);
+    await this.closeTransport(connection, error, signal);
+  }
+
+  private async closeTransport(
+    connection: ZlinkStreamConnection | undefined,
+    error?: ZlinkStreamError,
+    signal?: AbortSignal
+  ): Promise<void> {
+    try {
+      try {
+        await connection?.close(signal);
+      } finally {
+        this.setState(
+          this.closeRequested
+            ? ZlinkStreamConnectionState.Closed
+            : ZlinkStreamConnectionState.Disconnected,
+          this.closeRequested ? undefined : error,
+          signal
+        );
+      }
+    } catch (cause) {
+      this.events.publishError(
+        {
+          code: ZlinkStreamErrorCode.Disconnected,
+          message: `Transport close failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          cause
+        },
+        signal
+      );
+    } finally {
+      this.publishDisconnected(signal);
+    }
   }
 
   /**
@@ -555,10 +568,7 @@ export class ZlinkStreamConnectorLifecycle {
    * handler that is slow — or whose promise never settles at all — must not
    * cost the connector the attempt.
    */
-  private async announceDisconnect(error: ZlinkStreamError): Promise<void> {
-    if (this.closeRequested) return;
-    this.setState(ZlinkStreamConnectionState.Disconnected, error);
-    this.publishDisconnected();
+  private announceDisconnect(): void {
     if (this.shouldReconnect()) {
       queueMicrotask(() => {
         void this.connect().catch(() => undefined);

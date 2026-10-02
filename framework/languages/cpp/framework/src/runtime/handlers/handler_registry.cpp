@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -351,8 +352,7 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
             return terminal ();
         }
         catch (...) {
-            return task_t<zlink::message_t> (
-              detail::current_exception_result<zlink::message_t> ("handler threw an exception"));
+            return task_t<zlink::message_t> (detail::current_exception_result<zlink::message_t> ());
         }
     }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
@@ -424,9 +424,15 @@ handler_registry_t::invoke (std::string_view channel_name,
                     return entry->invoker (services, serializers, *owned_message, owned_inbound);
                 })
                 .result ();
+            if (!result)
+                result.value ();
         }
         catch (const framework_exception_t &error) {
             result = detail::result_access_t::failure<zlink::message_t> (error);
+        }
+        catch (const std::exception &error) {
+            result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                          error.what ());
         }
         catch (...) {
             result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,

@@ -657,7 +657,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .ReadAuthorityAsync(authorityKey, token)
                     .ConfigureAwait(false);
             }
-            catch (Exception) when (!token.IsCancellationRequested)
+            catch (Exception error) when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
             {
                 //  Indeterminate: keep every copy and read again.
             }
@@ -718,7 +718,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             )
                             .ConfigureAwait(false);
                     }
-                    catch (Exception)
+                    catch (Exception error)
+                        when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
                     {
                         //  Indeterminate Preserve: the next read decides.
                     }
@@ -4073,13 +4074,20 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (actorState.LiveActivation is { } sourceActivation)
-            sourceActivation.DetachRelocatedPerActorMember(actor, actorState);
-        actorState.BindNativeActorRef(targetActorRef);
-        actorState.InvalidateContext();
         await _actorSessionManager
-            .FinalizeMigratedSourceAsync(actorState, sourceActorRef)
+            .FinalizeMigratedSourceAsync(
+                actorState,
+                sourceActorRef,
+                cancellationToken,
+                () =>
+                {
+                    if (actorState.LiveActivation is { } sourceActivation)
+                        sourceActivation.DetachRelocatedPerActorMember(actor, actorState);
+                    actorState.BindNativeActorRef(targetActorRef);
+                    actorState.FenceRuntimeGeneration();
+                    return ValueTask.CompletedTask;
+                }
+            )
             .ConfigureAwait(false);
     }
 

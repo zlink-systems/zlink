@@ -269,7 +269,7 @@ export interface ZLinkBackendMeshNode {
     stableType: string,
     generation: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: string,
+    spotId: string | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint
   ): ZLinkBackendActorRef;
@@ -444,6 +444,7 @@ export interface ZLinkBackendSpotDispatchInfo {
 
 export interface ZLinkBackendSocketMonitorEvent {
   readonly nativeEvent: MonitorEventType;
+  readonly readyEdge: boolean;
   readonly routingId?: unknown;
   readonly localAddr: string;
   readonly remoteAddr: string;

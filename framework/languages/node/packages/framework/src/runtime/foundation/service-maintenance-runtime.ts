@@ -252,13 +252,3 @@ export class ServiceMaintenanceRuntime {
 function startOutsideStateLane<T>(work: () => T): T {
   return detachedStateLaneResource.runInAsyncScope(work);
 }
-
-export function classifyRelocationRecovery(
-  publishedReference: boolean,
-  payloadPresent: boolean,
-  checksumMatches: boolean,
-  inventoryMatches: boolean
-): 'resume' | 'orphan' | 'relocationDataLost' {
-  if (!publishedReference) return payloadPresent ? 'orphan' : 'resume';
-  return payloadPresent && checksumMatches && inventoryMatches ? 'resume' : 'relocationDataLost';
-}

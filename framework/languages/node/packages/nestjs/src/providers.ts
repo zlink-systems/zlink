@@ -246,12 +246,14 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
   }
 ];
 
-export function conditionalClientProvidersForFactory(): Provider[] {
-  return CONDITIONAL_CLIENT_PROVIDER_SPECS.map(createConditionalClientProviderForFactory);
-}
-
-function createConditionalClientProviderForFactory(spec: ConditionalClientProviderSpec): Provider {
-  return createConditionalClientProviderFromSpec(spec, { checkEnabled: true });
+export function conditionalClientProvidersForFactory(
+  registration?: ZLinkFrameworkRegistration
+): Provider[] {
+  return CONDITIONAL_CLIENT_PROVIDER_SPECS.filter(
+    (spec) => registration === undefined || spec.isEnabled(registration)
+  ).map((spec) =>
+    createConditionalClientProviderFromSpec(spec, { checkEnabled: registration === undefined })
+  );
 }
 
 function createConditionalClientProvider(
@@ -370,7 +372,7 @@ function createProviderResolver(
 ): ZLinkProviderResolver {
   const resolver: ZLinkProviderResolver = {
     get<T>(type: Type<T>): T | undefined {
-      const discovered = findDiscoveredProviderInstance<T>(discovery, type);
+      const discovered = findDiscoveredProvider(discovery, type)?.instance as T | undefined;
       if (discovered !== undefined) {
         return discovered;
       }
@@ -381,19 +383,9 @@ function createProviderResolver(
       }
     },
     async create<T>(type: Type<T>): Promise<T> {
-      try {
-        // Spot and actor lifecycles request a fresh application object for
-        // each activation. ModuleRef.resolve() returns the registered
-        // singleton when the application also lists that class as a Nest
-        // provider, which would make later Spot contexts overwrite earlier
-        // activations. ModuleRef.create() preserves dependency injection
-        // while creating an independent object.
-        return await moduleRef.create(type as unknown as import('@nestjs/common').Type<T>);
-      } catch {
-        // Fall back to direct construction through Nest for classes that are
-        // not registered as providers.
-      }
-      return await moduleRef.resolve(type, undefined, { strict: false });
+      const owner = findDiscoveredProvider(discovery, type)?.host;
+      const creationModuleRef = owner?.getProviderByKey<ModuleRef>(ModuleRef).instance ?? moduleRef;
+      return await creationModuleRef.create(type as unknown as import('@nestjs/common').Type<T>);
     }
   };
   Object.defineProperty(
@@ -421,7 +413,7 @@ function createProviderResolver(
                 instance = createNestHandlerInstance(moduleRef, contextId, dependencies, type).then(
                   async (created) => {
                     if (disposed) {
-                      await disposeNestOwnedHandler(created);
+                      await framework.disposeIntegrationHandler(created);
                       throw new Error('Handler instance scope was disposed during activation.');
                     }
                     owned.push(created);
@@ -437,12 +429,13 @@ function createProviderResolver(
               disposed = true;
               const pending = [...instances.values()];
               await Promise.allSettled(pending);
-              for (let index = owned.length - 1; index >= 0; index -= 1) {
-                await disposeNestOwnedHandler(owned[index]);
+              try {
+                await framework.disposeIntegrationHandlers(owned);
+              } finally {
+                owned.length = 0;
+                instances.clear();
+                dependencies.clear();
               }
-              owned.length = 0;
-              instances.clear();
-              dependencies.clear();
             }
           };
         }
@@ -469,29 +462,11 @@ function createProviderResolver(
           }
         });
       } finally {
-        for (let index = owned.length - 1; index >= 0; index -= 1) {
-          await disposeNestOwnedHandler(owned[index]);
-        }
+        await framework.disposeIntegrationHandlers(owned);
       }
     })
   );
   return resolver;
-}
-
-export async function disposeNestOwnedHandler(instance: unknown): Promise<void> {
-  if (instance === null || instance === undefined) return;
-  const value = instance as {
-    dispose?: () => unknown;
-    close?: () => unknown;
-    onModuleDestroy?: () => unknown;
-  };
-  if (typeof value.dispose === 'function') {
-    await value.dispose();
-  } else if (typeof value.close === 'function') {
-    await value.close();
-  } else if (typeof value.onModuleDestroy === 'function') {
-    await value.onModuleDestroy();
-  }
 }
 
 export async function createNestHandlerInstance<T>(
@@ -570,17 +545,14 @@ async function resolveNestHandlerDependency(
   }
 }
 
-function findDiscoveredProviderInstance<T>(
-  discovery: DiscoveryService | undefined,
-  type: Type<T>
-): T | undefined {
+function findDiscoveredProvider<T>(discovery: DiscoveryService | undefined, type: Type<T>) {
   for (const wrapper of discovery?.getProviders() ?? []) {
     if (
-      wrapper.instance !== undefined &&
-      wrapper.instance !== null &&
-      (wrapper.token === type || wrapper.metatype === type || wrapper.instance.constructor === type)
+      wrapper.token === type ||
+      wrapper.metatype === type ||
+      wrapper.instance?.constructor === type
     ) {
-      return wrapper.instance as T;
+      return wrapper;
     }
   }
   return undefined;

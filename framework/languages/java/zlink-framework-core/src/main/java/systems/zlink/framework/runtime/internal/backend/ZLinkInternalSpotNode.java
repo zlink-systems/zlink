@@ -254,6 +254,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return false;
     }
 
+    default CompletionStage<Void> awaitPendingActorRequests() {
+        if (hasPendingActorRequests()) {
+            return CompletableFuture.failedFuture(
+                    new UnsupportedOperationException(
+                            "backend must expose pending Actor request terminals"));
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     default long localAuthorityLeaseGeneration() {
         return 0L;
     }

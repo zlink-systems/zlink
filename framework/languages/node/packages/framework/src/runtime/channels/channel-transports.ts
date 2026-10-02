@@ -12,7 +12,6 @@ import {
 import { ZLinkBufferMessage } from '../backend/runtime-message';
 import {
   RequestResult,
-  SubmitResult,
   isZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
@@ -30,10 +29,16 @@ import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
   internalFrameworkErrorKindFromWireReply,
-  isCanonicalWireReplyTerminal
+  isCanonicalWireReplyTerminal,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  classifySubmitResult,
+  submitToRequestResult,
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import {
@@ -1023,7 +1028,7 @@ function directSpotRouteFence(
     target.authorityStoreVersion === undefined
   ) {
     throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+      ZLinkFrameworkInternalErrorKind.RouteNotConnected,
       `Spot '${String(target.spotId)}' has no complete Ready authority fence.`
     );
   }
@@ -1067,24 +1072,7 @@ function instanceSpotRouteFence(target: ZLinkSpotRouteTarget): ServiceInstanceRo
 }
 
 function mapMeshSubmitResult(result: number): ZLinkSubmitResult {
-  switch (result) {
-    case SubmitResult.Ok:
-      return { status: ZLinkSubmitStatus.Submitted };
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return { status: ZLinkSubmitStatus.Backpressured };
-    case SubmitResult.NotFound:
-      return { status: ZLinkSubmitStatus.TargetNotFound };
-    case SubmitResult.NotConnected:
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
-    case SubmitResult.Terminated:
-      return { status: ZLinkSubmitStatus.Shutdown };
-    default:
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        `Mesh submission failed with result ${result}.`
-      );
-  }
+  return classifySubmitResult(result, 'Mesh submission');
 }
 
 function mapMeshSubmissionError(error: unknown, operation: string): Error {
@@ -1105,19 +1093,21 @@ function mapMeshSubmissionError(error: unknown, operation: string): Error {
     );
   }
   if (isZLinkBackendResultError(error)) {
-    const notFound =
-      error.result === SubmitResult.NotFound || error.result === RequestResult.NotFound;
-    const retriable =
-      error.result === SubmitResult.Backpressured ||
-      error.result === SubmitResult.NotConnected ||
-      error.result === RequestResult.NotConnected ||
-      error.result === RequestResult.Backpressured;
-    return createInternalFrameworkException(
-      notFound
-        ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-        : ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+    const terminal =
+      error.operation === 'request'
+        ? error.result
+        : submitToRequestResult(error.result, error.phase);
+    if (terminal === RequestResult.NotFound) {
+      return createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+        `${operation} failed with result ${error.result}.`,
+        false,
+        error
+      );
+    }
+    return new ZLinkFrameworkException(
+      requestResultToPublicErrorKind(terminal),
       `${operation} failed with result ${error.result}.`,
-      retriable,
       error
     );
   }

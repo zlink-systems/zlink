@@ -54,7 +54,6 @@ public sealed class test_tokenless_backpressure
     private static void AssertBackpressure(ZlinkSubmitException error)
     {
         Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, error.Result);
-        Assert.True(error.NativeErrno is 11 or 35 or 10035,
-            $"Expected EAGAIN, got {error.NativeErrno}.");
+        Assert.Equal(CompletionOwnerTestAccess.Errno("EAgain"), error.NativeErrno);
     }
 }

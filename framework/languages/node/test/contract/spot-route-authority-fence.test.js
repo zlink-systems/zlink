@@ -123,3 +123,25 @@ test('raw stale authority submission becomes a retryable Spot generation error',
     request.close();
   }
 });
+
+test('incomplete Spot authority fence reports route Unavailable without an Actor error name', async () => {
+  const transport = capturingTransport(() => assert.fail('An incomplete fence must not be submitted.'));
+  const request = zlink.Message.from(Buffer.from(JSON.stringify({ packetName: 'Packet' })));
+  try {
+    await assert.rejects(
+      transport.requestRawToSpot({
+        routerChannelId: 'mesh',
+        targetNodeRid: 'node-b',
+        spotId: 'room-1',
+        spotKind: framework.ZLinkSpotKind.User
+      }, request, {}),
+      error => {
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+        assert.equal(internalFrameworkErrorKind(error), ZLinkFrameworkInternalErrorKind.RouteNotConnected);
+        return true;
+      }
+    );
+  } finally {
+    request.close();
+  }
+});

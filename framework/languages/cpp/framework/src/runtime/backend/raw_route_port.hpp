@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/messaging/submit_result_mapper.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -40,16 +42,6 @@ struct raw_received_t
     std::uint64_t route_generation = 0;
 };
 
-enum class raw_request_result_t
-{
-    ok,
-    timed_out,
-    not_connected,
-    route_unavailable,
-    terminated,
-    failed
-};
-
 enum class raw_request_failure_phase_t
 {
     initial_admission,
@@ -60,13 +52,12 @@ struct raw_request_failure_t
 {
     raw_request_failure_phase_t phase;
     std::optional<zlink::submit_result_t> submit_result;
-    std::optional<zlink::request_result_t> request_result;
     int internal_errno = 0;
 };
 
 struct raw_request_completion_t
 {
-    raw_request_result_t result = raw_request_result_t::failed;
+    zlink::request_result_t terminal = zlink::request_result_t::internal_error;
     raw_message_t parts;
     std::optional<raw_request_failure_t> failure;
 };

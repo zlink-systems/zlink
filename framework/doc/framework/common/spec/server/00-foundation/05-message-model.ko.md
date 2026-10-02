@@ -47,8 +47,8 @@ metadata를 reply matching key로 사용하지 않는다. Reply는 성공 payloa
 
 Object creation request는 일반 Send·Request와 다른 manager operation 입력이다.
 
-Framework는 typed codec으로 encode한 최대 1 MiB payload의 immutable content reference와 hash를
-placement reservation 전에 durable creation intent에 기록한다.
+Framework는 typed codec으로 [크기 한도](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 안에서 payload를 encode한다. 그 content reference·hash와 저장 시점은
+[Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다.
 
 Factory는 logical key, ObjectGeneration과 creation attempt를 함께 받아 같은 attempt의
 at-least-once 실행에도 같은 결과로 수렴해야 한다.
@@ -57,8 +57,8 @@ at-least-once 실행에도 같은 결과로 수렴해야 한다.
 [Spot](02-glossary.ko.md#spot)의 생성과 초기화가 끝나 application message를 받을 수 있는
 상태를 [Ready](02-glossary.ko.md#ready)라고 한다.
 
-CAS loser는 creation request를 일반 message로 보내지 않는다. Ready commit 또는 fenced failure
-cleanup이 끝날 때까지 content reference를 유지한다.
+CAS loser는 creation request를 일반 message로 보내지 않는다. Content reference의 수명은
+[Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다.
 
 [ObjectGeneration](02-glossary.ko.md#objectgeneration), 같은 object incarnation에서 authority
 owner가 바뀐 순서를 나타내는 [AuthorityOwnerGeneration](02-glossary.ko.md#authorityownergeneration),

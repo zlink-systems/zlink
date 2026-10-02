@@ -10,6 +10,11 @@
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include <zlink/Contracts/Eventing/events.hpp>
+
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -28,6 +33,13 @@ class mesh_node_runtime_t;
 
 namespace zlink::framework::runtime
 {
+
+inline bool stream_host_connection_ready (const zlink::monitor_event_t &event) noexcept
+{
+    return event.event == zlink::monitor_event::connection_ready
+           && zlink::has_flag (event.flags, zlink::monitor_event_flag_t::connection_ready_edge)
+           && event.routing_id.has_value ();
+}
 
 /* Test-only fault injection for the Core STREAM host. Production code never
  * sets these flags; unit tests use them to force the rare failure shapes
@@ -92,6 +104,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
 
   private:
     class listener_t;
+    void refresh_heartbeat_deadline ();
 
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
@@ -107,6 +120,8 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::atomic_bool _stop{false};
     std::vector<std::unique_ptr<listener_t>> _listeners;
     std::vector<std::thread> _threads;
+    boost::asio::io_context _liveness_io;
+    boost::asio::steady_timer _heartbeat_deadline{_liveness_io};
     std::thread _liveness_thread;
 };
 

@@ -400,8 +400,8 @@ class app_state_t
 
         void cancel ()
         {
-            completion.complete (detail::boundary_failure<TResult> (
-              detail::boundary_error_t::cancelled, "lifecycle waiter was cancelled"));
+            completion.complete (detail::result_access_t::failure<TResult> (
+              detail::make_cancellation_exception ("lifecycle waiter was cancelled")));
         }
     };
 
@@ -3940,8 +3940,10 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         try {
             auto provider = state.services.build_provider ();
             if (auto location_runtime = provider.get<runtime::location_runtime_t> ()) {
-                if (!location_runtime->get ().cleanup_owner ()) {
-                    force (shutdown_force_reason_t::teardown_failed);
+                if (!location_runtime->get ().cleanup_owner (deadline_at)) {
+                    force (std::chrono::steady_clock::now () >= deadline_at
+                             ? shutdown_force_reason_t::deadline_exceeded
+                             : shutdown_force_reason_t::teardown_failed);
                 }
             }
         }

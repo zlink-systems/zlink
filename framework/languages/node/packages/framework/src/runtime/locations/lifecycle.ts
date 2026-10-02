@@ -18,9 +18,6 @@ import {
   type ZLinkTrackedInstanceAuthority,
   ZLinkSpotLocationClaims
 } from './spot-location-claims';
-const INITIAL_LOCATION_RETRY_DELAY_MS = 50;
-const LOCATION_RETRY_BACKOFF_MULTIPLIER = 2;
-const MAX_LOCATION_RETRY_DELAY_MS = 1_000;
 export {
   ZLinkActorClaimStatus,
   type ZLinkActorClaimActivation,
@@ -30,10 +27,8 @@ export type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './
 
 export class ZLinkLocationLifecycle {
   private readonly actorClaims: ZLinkActorLocationClaims;
-  private readonly actorCleanupTasks = new Map<string, Promise<void>>();
   private readonly spotClaims: ZLinkSpotLocationClaims;
   private readonly actorSessionRoutes: ZLinkActorSessionRouteClaims;
-  private disposed = false;
   private readonly ownershipLostHandler = (event: ZLinkOwnershipLostEvent) =>
     this.onOwnershipLost(event);
 
@@ -62,7 +57,6 @@ export class ZLinkLocationLifecycle {
   }
 
   dispose(): void {
-    this.disposed = true;
     this.runtime.removeOwnershipLostHandler(this.ownershipLostHandler);
   }
 
@@ -166,41 +160,12 @@ export class ZLinkLocationLifecycle {
     await this.actorClaims.release(actorType, actorId, actorRef);
   }
 
-  releaseActorEventually(actorType: string, actorId: string): Promise<void> {
-    const existing = this.actorCleanupTasks.get(actorId);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const cleanup = this.retryActorRelease(actorType, actorId).finally(() =>
-      this.actorCleanupTasks.delete(actorId)
-    );
-    this.actorCleanupTasks.set(actorId, cleanup);
-    return cleanup;
-  }
-
   ownsActor(actorType: string, actorId: string): boolean {
     return this.actorClaims.owns(actorType, actorId);
   }
 
   actorLocationSnapshot(actorId: string): ZLinkActorLocation | undefined {
     return this.actorClaims.snapshot(actorId);
-  }
-
-  private async retryActorRelease(actorType: string, actorId: string): Promise<void> {
-    let retryDelayMs = INITIAL_LOCATION_RETRY_DELAY_MS;
-    while (!this.disposed) {
-      try {
-        await this.actorClaims.release(actorType, actorId);
-        return;
-      } catch {
-        await waitForRetry(retryDelayMs);
-        retryDelayMs = Math.min(
-          retryDelayMs * LOCATION_RETRY_BACKOFF_MULTIPLIER,
-          MAX_LOCATION_RETRY_DELAY_MS
-        );
-      }
-    }
-    return;
   }
 
   async claimSpot(
@@ -280,8 +245,4 @@ function inferSpotStore(actorStore: ZLinkActorLocationStore): ZLinkSpotLocationS
     return actorStore as unknown as ZLinkSpotLocationStore;
   }
   return undefined;
-}
-
-function waitForRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }

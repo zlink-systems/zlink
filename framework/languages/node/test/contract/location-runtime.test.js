@@ -471,18 +471,97 @@ test('location runtime records a stop-race claim release failure', async () => {
   const started = new Promise(resolve => { claimStarted = resolve; });
   const starting = runtime.start(rid('node-stop-race-release-failure'));
   await started;
-  await runtime.stop();
-  completeClaim({
-    kind: 'claimed',
-    token: { ownerId: 'owner-stop-race-release-failure', leaseGeneration: 1n },
-    leaseExpiresAt: new Date(30_000),
-    storeNow: new Date(0)
-  });
+  const stopping = runtime.stop();
+  completeClaim(await store.claimOwnerLease('owner-stop-race-release-failure', 30_000));
   await starting;
+  await assert.rejects(stopping, error => error instanceof internal.ZLinkOwnerCleanupError);
 
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.match(runtime.lastError, /release transport unavailable/u);
 });
+
+test('late startup claim release uses the stop shutdown signal', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const shutdown = new AbortController();
+  let claimStarted;
+  let completeClaim;
+  let releaseStarted;
+  let completeRelease;
+  let releaseSignal;
+  const releasing = new Promise(resolve => { releaseStarted = resolve; });
+  const leaseStore = {
+    async claimOwnerLease() {
+      claimStarted();
+      return await new Promise(resolve => { completeClaim = resolve; });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease(token, signal) {
+      releaseSignal = signal;
+      releaseStarted();
+      await new Promise(resolve => { completeRelease = resolve; });
+      return await store.releaseOwnerLease(token, signal);
+    }
+  };
+  const runtime = runtimeFor(store, { ownerId: 'late-startup-stop', ownerLeaseStore: leaseStore });
+  const started = new Promise(resolve => { claimStarted = resolve; });
+  const starting = runtime.start(rid('late-startup-stop'));
+  await started;
+  const stopping = runtime.stop(shutdown.signal);
+  const observedStop = stopping.then(() => undefined, error => error);
+  completeClaim(await store.claimOwnerLease('late-startup-stop', 15_000));
+  try {
+    await releasing;
+    assert.equal(releaseSignal, shutdown.signal);
+    await starting;
+    assert.equal(runtime.isStarted, false);
+    shutdown.abort(new Error('Host shutdown deadline exceeded.'));
+    assert.match((await observedStop).message, /Host shutdown deadline exceeded/u);
+  } finally {
+    completeRelease?.();
+    await starting;
+    await observedStop;
+  }
+});
+
+for (const failedPhase of ['confirmation', 'release']) {
+  test(`startup cancellation preserves ${failedPhase} failure for stop without retry`, async () => {
+    const store = new internal.ZLinkInMemoryLocationStore();
+    const cancellation = new AbortController();
+    const shutdown = new AbortController();
+    let claimStarted;
+    let readCalls = 0;
+    let releaseCalls = 0;
+    const leaseStore = {
+      async claimOwnerLease(ownerId, ttl, signal) {
+        claimStarted();
+        return await new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', async () => {
+            await store.claimOwnerLease(ownerId, ttl);
+            reject(signal.reason);
+          }, { once: true });
+        });
+      },
+      async readOwnerLease(ownerId, signal) {
+        readCalls += 1;
+        if (failedPhase === 'confirmation') throw new Error('confirmation unavailable');
+        return await store.readOwnerLease(ownerId, signal);
+      },
+      renewOwnerLease: store.renewOwnerLease.bind(store),
+      async releaseOwnerLease() { releaseCalls += 1; throw new Error('release unavailable'); }
+    };
+    const runtime = runtimeFor(store, { ownerId: `cancel-failed-${failedPhase}`, ownerLeaseStore: leaseStore });
+    const started = new Promise(resolve => { claimStarted = resolve; });
+    const starting = runtime.start(rid(`cancel-failed-${failedPhase}`), cancellation.signal, () => shutdown.signal);
+    await started;
+    cancellation.abort();
+    await assert.rejects(starting, error => error?.name === 'AbortError');
+    await assert.rejects(runtime.stop(shutdown.signal), error => error instanceof internal.ZLinkOwnerCleanupError);
+    assert.equal(readCalls, 1);
+    assert.equal(releaseCalls, failedPhase === 'release' ? 1 : 0);
+    assert.equal((await store.readOwnerLease(`cancel-failed-${failedPhase}`)).kind, 'found');
+  });
+}
 
 test('location runtime reclaims immediately after the Store rejects a stale owner token', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
@@ -707,7 +786,7 @@ test('location runtime bounds fixed routing-id owner lease renewal by the config
   await runtime.stop();
 });
 
-test('location runtime schedules heartbeats from a monotonic fixed cadence after a late renewal', async () => {
+test('location runtime schedules heartbeats from the actual monotonic start after a late renewal', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   let wallClockMs = 0;
@@ -742,7 +821,7 @@ test('location runtime schedules heartbeats from a monotonic fixed cadence after
   monotonicMs = 150;
   timers.shift().callback();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(timers[0].delayMs, 50);
+  assert.equal(timers[0].delayMs, 100);
 
   await runtime.stop();
 });
@@ -891,12 +970,7 @@ test('location runtime does not install a reclaimed lease after stop races with 
 
   const stopping = runtime.stop();
   await new Promise((resolve) => setImmediate(resolve));
-  completeFreshClaim({
-    kind: 'claimed',
-    token: { ownerId: 'owner-a', leaseGeneration: 2n },
-    leaseExpiresAt: new Date(30_000),
-    storeNow: new Date(0)
-  });
+  completeFreshClaim(await store.claimOwnerLease('owner-a', 30_000));
   await stopping;
 
   assert.equal(runtime.isStarted, false);
@@ -989,6 +1063,22 @@ test('location runtime emits row events and resolvers emit resolve misses', asyn
   assert.equal(events[2][1].actorId, 'missing');
 });
 
+test('location runtime uses the contract default page size when no override is supplied', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const pages = [];
+  for (const methodName of ['listSpots', 'listActors', 'listRoutes']) {
+    store[methodName] = async (_filter, page) => {
+      pages.push(page.pageSize);
+      return { items: [] };
+    };
+  }
+  const runtime = runtimeFor(store);
+  await runtime.listSpotLocations({});
+  await runtime.listActorLocations({});
+  await runtime.listRouteLocations({});
+  assert.deepEqual(pages, [100, 100, 100]);
+});
+
 test('location runtime applies listPageSize when callers omit a page size', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const pages = [];
@@ -1003,13 +1093,15 @@ test('location runtime applies listPageSize when callers omit a page size', asyn
 
   await runtime.listSpotLocations({});
   await runtime.listActorLocations({}, { continuationToken: 'next' });
-  await runtime.listRouteLocations({}, { pageSize: 5 });
+  const explicitPage = { pageSize: 5 };
+  await runtime.listRouteLocations({}, explicitPage);
 
   assert.deepEqual(pages, [
     { methodName: 'listSpots', page: { pageSize: 37 } },
     { methodName: 'listActors', page: { continuationToken: 'next', pageSize: 37 } },
     { methodName: 'listRoutes', page: { pageSize: 5 } }
   ]);
+  assert.equal(pages[2].page, explicitPage);
 });
 
 test('location resolver filters exact actor capacity before weighted placement', async () => {
@@ -1384,23 +1476,22 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
   assert.equal(row.ownerId, 'owner-b');
 });
 
-test('location lifecycle retries source actor cleanup without losing the tracked generation', async () => {
+test('location lifecycle reports source actor cleanup failure without resubmitting release', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
   await node.lifecycle.claimActor('player', 'actor-retry', rid('node-a'));
-  const removeActor = node.runtime.removeActor.bind(node.runtime);
+  const failure = new Error('store release failure');
   let attempts = 0;
-  node.runtime.removeActor = async (...args) => {
+  node.runtime.removeActor = async () => {
     attempts += 1;
-    if (attempts === 1) throw new Error('temporary store failure');
-    return await removeActor(...args);
+    throw failure;
   };
 
-  await node.lifecycle.releaseActorEventually('player', 'actor-retry');
+  await assert.rejects(node.lifecycle.releaseActor('player', 'actor-retry'), (error) => error === failure);
 
-  assert.equal(attempts, 2);
-  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), false);
-  assert.equal(await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' }), undefined);
+  assert.equal(attempts, 1);
+  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), true);
+  assert.equal((await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' })).ownerId, 'owner-a');
 });
 
 test('location lifecycle releases placement Actor authority for the exact native ref', async () => {
@@ -2840,6 +2931,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
 test('production repository does not delete a row after its owner lease is replaced', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const leaseRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
   let ownerToken;
   let replaced = false;
   const provider = {
@@ -2848,8 +2940,8 @@ test('production repository does not delete a row after its owner lease is repla
     async write(request, signal) {
       if (!replaced && request.mutations.some(mutation => mutation.kind === 'delete')) {
         replaced = true;
-        assert.equal(await inner.releaseOwnerLease(ownerToken), 'released');
-        assert.equal((await inner.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
+        assert.equal(await leaseRepository.releaseOwnerLease(ownerToken), 'released');
+        assert.equal((await leaseRepository.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
       }
       return await inner.write(request, signal);
     }
@@ -2868,29 +2960,57 @@ test('production repository does not delete a row after its owner lease is repla
   assert.equal((await repository.listMeshNodes('play')).items.length, 1);
 });
 
-test('production repository reconciles an opaque write applied before its response is lost', async () => {
+test('location runtime reconciles an opaque write applied before its response is lost', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
   const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, {
+    ownerId: 'owner-ambiguous',
+    locationOptions: { ownerLeaseTtlMs: 30_000 }
+  });
 
   provider.loseNextResponse = true;
-  const claimed = await repository.claimOwnerLease('owner-ambiguous', 30_000);
+  await runtime.start(rid('node-ambiguous'));
 
-  assert.equal(claimed.kind, 'claimed');
+  assert.equal((await runtime.getStatus()).ownerLeaseHealthy, true);
   assert.equal(provider.observedWrites, 1);
   assert.deepEqual(
     await repository.readOwnerLease('owner-ambiguous'),
     {
       kind: 'found',
-      token: claimed.token,
+      token: { ownerId: 'owner-ambiguous', leaseGeneration: 1n },
       leaseExpiresAt: new Date(now.getTime() + 30_000),
       storeNow: now
     }
   );
+  await runtime.stop();
 });
 
-test('production repository classifies a changed ambiguous write as conflict', async () => {
+test('location runtime preserves a corrupt owner lease error during claim confirmation', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const provider = new ReplyLossLocationStore(inner);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, { ownerId: 'owner-corrupt' });
+
+  provider.loseNextResponse = true;
+  provider.replaceFirstMutationBeforeFailure = true;
+  await runtime.start(rid('node-corrupt'));
+
+  const status = await runtime.getStatus();
+  assert.equal(status.ownerLeaseHealthy, false);
+  assert.match(status.lastError, /Location Store owner lease record is invalid/);
+  assert.equal(provider.observedWrites, 2);
+  await assert.rejects(repository.readOwnerLease('owner-corrupt'), /invalid/);
+  await assert.rejects(runtime.stop(), (error) => {
+    assert.equal(error.name, 'ZLinkOwnerCleanupError');
+    assert.match(error.cause.message, /Location Store owner lease record is invalid/);
+    return true;
+  });
+});
+
+test('production repository rejects an ambiguous owner lease without an expiry as corrupt', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
@@ -2898,10 +3018,35 @@ test('production repository classifies a changed ambiguous write as conflict', a
 
   provider.loseNextResponse = true;
   provider.replaceFirstMutationBeforeFailure = true;
+  await assert.rejects(
+    repository.claimOwnerLease('owner-conflict', 30_000),
+    { name: 'TimeoutError' }
+  );
+
+  await assert.rejects(repository.readOwnerLease('owner-conflict'), /invalid/);
+  assert.equal(provider.observedWrites, 2);
+});
+
+test('production repository reports conflict for a live owner lease with an expiry', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-conflict', 30_000);
 
-  assert.deepEqual(claimed, { kind: 'conflict' });
-  assert.equal(provider.observedWrites, 2);
+  assert.equal(claimed.kind, 'claimed');
+  assert.deepEqual(
+    await repository.readOwnerLease('owner-conflict'),
+    {
+      kind: 'found',
+      token: claimed.token,
+      leaseExpiresAt: new Date(now.getTime() + 30_000),
+      storeNow: now
+    }
+  );
+  assert.deepEqual(
+    await repository.claimOwnerLease('owner-conflict', 30_000),
+    { kind: 'conflict' }
+  );
 });
 
 test('production repository shares ClientServer and fanout discovery through only opaque Store primitives', async () => {
@@ -3014,7 +3159,7 @@ class ReplyLossLocationStore {
       assert.notEqual(version, undefined);
       await this.inner.write({
         conditions: [{ kind: 'version', key: mutation.key, expected: version }],
-        mutations: [{ kind: 'put', key: mutation.key, bytes: Buffer.from('changed') }]
+        mutations: [{ kind: 'put', key: mutation.key, bytes: mutation.bytes }]
       });
       this.observedWrites += 1;
     }

@@ -4,12 +4,40 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { OperationKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const {
   ZLinkBufferMessage
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+
+test('target rollback reports the original location release failure after one submission', async () => {
+  const failure = new Error('location release provider failure');
+  let releases = 0;
+  let rollbacks = 0;
+  const state = {
+    actorType: 'player', ownsLocation: true,
+    markLocationReleased() { throw new Error('failed release must retain ownership'); }
+  };
+  const lifecycle = {
+    async releaseActor() { releases++; throw failure; },
+    async releaseActorEventually() { releases++; }
+  };
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => state,
+      async rollbackTransferredActor() { rollbacks++; }
+    }),
+    locationLifecycle: () => lifecycle
+  });
+  await assert.rejects(
+    runtime.rollbackRoutedActor({ context: { actorId: 'rollback-release' } }),
+    (error) => error === failure
+  );
+  assert.equal(releases, 1);
+  assert.equal(rollbacks, 1);
+});
 const {
   ZLinkEntryActorRuntimeService
 } = require('../../packages/framework/dist/runtime/host/entry-actor-runtime');
@@ -72,9 +100,12 @@ function relocationSpotNodes(stableType, implementation, adapterType) {
   }]]);
 }
 
+const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = require('../../packages/framework/dist/runtime/execution');
+const actorTaskRunner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeTaskErrorSink(), new AbortController().signal);
+
 function createActorManager(options = {}) {
   options.actorMeshNameProvider ??= () => 'play';
-  return new framework.DefaultZLinkActorManager(options);
+  return new framework.DefaultZLinkActorManager(options, actorTaskRunner);
 }
 
 function lifecycleContext(actorId, actorType = 'player', membershipEpoch = 1n) {
@@ -197,7 +228,7 @@ test('ZLinkActorManager create find and getOrCreate follow dotnet actor semantic
   assert.deepEqual(events, ['create:alice', 'configure:alice']);
 });
 
-test('actor relocation terminal awaits handler cleanup and preserves state on cleanup failure', async () => {
+test('source retirement removes the registry after handler cleanup failure and restores a fresh instance', async () => {
   class PlayerActor {
     constructor(context) {
       this.context = context;
@@ -232,12 +263,16 @@ test('actor relocation terminal awaits handler cleanup and preserves state on cl
   await completion;
   assert.equal(manager.getState('alice'), undefined);
 
+  let disposeCalls = 0;
   class FailingHandler {
     dispose() {
+      disposeCalls++;
       throw new Error('handler cleanup failed');
     }
   }
-  const failedActor = await manager.getOrCreateActor('bob', 'player');
+  const sourceRef = { nodeRid: rid('source'), actorId: 'bob', generation: 9n, meshName: 'play' };
+  const failedActor = await manager.getOrCreateWithNativeRef('bob', 'player', sourceRef);
+  assert.equal(failedActor.context.objectGeneration, 9n);
   await resolveLifecycleHandler(failedActor, FailingHandler, {
     create: (type) => new type()
   });
@@ -246,9 +281,47 @@ test('actor relocation terminal awaits handler cleanup and preserves state on cl
     () => manager.completeCoreRelocationSource('bob'),
     /handler cleanup failed/
   );
-  assert.notEqual(manager.getState('bob'), undefined);
+  assert.equal(manager.getState('bob'), undefined);
   await manager.completeCoreRelocationSource('bob');
   assert.equal(manager.getState('bob'), undefined);
+  assert.equal(disposeCalls, 1);
+  const restored = await manager.getOrCreateWithNativeRef('bob', 'player', sourceRef);
+  assert.notStrictEqual(restored, failedActor);
+  assert.equal(restored.context.objectGeneration, 9n);
+  assert.strictEqual(await manager.getOrCreateActor('bob', 'player'), restored);
+});
+
+test('source retirement continues application cleanup after native discard fails', async () => {
+  const nativeFailure = new Error('native discard failed');
+  const disposeFailure = new Error('handler dispose failed');
+  let nativeCalls = 0;
+  let disposeCalls = 0;
+  class PlayerFactory {
+    async create(context) { return { context }; }
+  }
+  class FailingHandler {
+    dispose() { disposeCalls++; throw disposeFailure; }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    nativeActorNode: {
+      discardRelocatedActor() { nativeCalls++; throw nativeFailure; }
+    }
+  });
+  const sourceRef = { nodeRid: rid('source'), actorId: 'native-failure', generation: 9n, meshName: 'play' };
+  const actor = await manager.getOrCreateWithNativeRef('native-failure', 'player', sourceRef);
+  await resolveLifecycleHandler(actor, FailingHandler, { create: (type) => new type() });
+  await assert.rejects(manager.completeRelocationSource('native-failure'), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [nativeFailure, disposeFailure]);
+    return true;
+  });
+  assert.equal(manager.getState('native-failure'), undefined);
+  assert.equal(nativeCalls, 1);
+  assert.equal(disposeCalls, 1);
+  const restored = await manager.getOrCreateWithNativeRef('native-failure', 'player', sourceRef);
+  assert.notStrictEqual(restored, actor);
+  assert.equal(restored.context.objectGeneration, 9n);
 });
 
 test('actor transfer registry uses custom state adapters and defaults missing adapters to empty state', async () => {
@@ -292,6 +365,83 @@ test('actor transfer registry uses custom state adapters and defaults missing ad
   assert.equal(empty.adapterKey, undefined);
   assert.equal(empty.state.toEncodedPayload().data().length, 0);
   assert.deepEqual(events, ['out:alice:41', 'in:alice:41']);
+});
+
+test('public Actor destroy completes terminal cleanup after route cleanup failure', async () => {
+  const events = [];
+  const changes = [];
+  class Actor {
+    constructor(context) {
+      this.context = context;
+    }
+  }
+  class Factory {
+    create(context) {
+      return new Actor(context);
+    }
+  }
+  class Handler {
+    handle() {}
+    dispose() {
+      events.push('handler');
+    }
+  }
+  const node = createMockSpotNode({
+    createActor(actorId) {
+      return { nodeRid: rid('node-a'), actorId, generation: 1n };
+    },
+    destroyActor() {
+      events.push('native');
+      return { high: 0n, low: 1n };
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['scope-actor', Factory]]),
+    metrics: {
+      change(name, value) {
+        changes.push([name, value]);
+      }
+    },
+    nativeActorNode: node,
+    nativeActorCompletionTableProvider: () => ({
+      async submit(operation) {
+        operation();
+        return {
+          terminalResult: RequestResult.Ok,
+          failureErrno: 0,
+          operationKind: OperationKind.ActorDestroy,
+          kindData: null,
+          parts: []
+        };
+      }
+    }),
+    actorDestroyedCleanup() {
+      events.push('route');
+      throw new Error('node-scope route failure');
+    }
+  });
+  const actor = await manager.getOrCreateActor('node-scope-terminal', 'scope-actor');
+  const dispatcher = new framework.ZLinkSpotActorDispatcher({
+    registry: new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+      kind: framework.ZLinkActorPacketKind.Send,
+      packetName: 'ScopeTerminal',
+      actorType: Actor,
+      handlerType: Handler
+    }),
+    spot: {}
+  });
+  await dispatcher.dispatchSend(actor, 'ScopeTerminal', {});
+  const reference = await manager.find('node-scope-terminal');
+  await assert.rejects(manager.destroy(reference), /node-scope route failure/);
+  assert.equal(await manager.find('node-scope-terminal'), undefined);
+  assert.deepEqual(events, ['native', 'route', 'handler']);
+  const {
+    METRIC_NAMES
+  } = require('../../packages/framework/dist/runtime/diagnostics/runtime-metrics');
+  assert.equal(
+    changes.filter(([name, value]) => name === METRIC_NAMES.ActorCount && value === -1).length,
+    1
+  );
 });
 
 test('transferred actor materialization creates a fresh actor before restoring state', async () => {
@@ -363,6 +513,25 @@ test('transferred actor materialization creates a fresh actor before restoring s
       )
     )
   );
+  const scopeEvents = [];
+  class TransferHandler {
+    handle() {
+      scopeEvents.push('handled');
+    }
+    dispose() {
+      scopeEvents.push('disposed');
+    }
+  }
+  const dispatcher = new framework.ZLinkSpotActorDispatcher({
+    registry: new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+      kind: framework.ZLinkActorPacketKind.Send,
+      packetName: 'TransferScope',
+      actorType: TransferActor,
+      handlerType: TransferHandler
+    }),
+    spot: {}
+  });
+  await dispatcher.dispatchSend(result.actor, 'TransferScope', {});
   assert.equal(result.actor.value, 77);
   assert.equal(result.actor.context, manager.getState('alice').actor.context);
   assert.equal(String(result.actorRef.nodeRid), 'target-node');
@@ -380,8 +549,32 @@ test('transferred actor materialization creates a fresh actor before restoring s
     bindingGeneration: 1n
   });
   await manager.rollbackTransferredActor(result.actor);
+  assert.deepEqual(scopeEvents, ['handled', 'disposed']);
   assert.equal(manager.getState('alice'), undefined);
   assert.deepEqual(lifecycle, ['factory', 'destroy:alice:2', 'cleanup:alice']);
+});
+
+test('Entry relocation staging preserves absent joined Spot membership', async () => {
+  class PlayerActor {
+    constructor(context) { this.context = context; }
+  }
+  const node = createMockSpotNode({
+    restoreActorAuthority(actorId, _type, generation, _owner, spotId) {
+      assert.equal(spotId, undefined);
+      return { nodeRid: 'target-node', actorId, generation };
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['player', { create: context => new PlayerActor(context) }]]),
+    nativeActorNode: node
+  });
+  try {
+    const actor = await manager.prepareRelocationActor('entry-actor', 'player', 7n, 11n, undefined, 13n, 3n);
+    assert.equal(actor.context.spotId, undefined);
+    assert.equal(manager.getState('entry-actor').spotId, undefined);
+  } finally {
+    await manager.abortRelocationActor('entry-actor');
+  }
 });
 
 test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
@@ -439,7 +632,7 @@ test('relocation Actor materialization bypasses the new-Actor Entry Spot callbac
   ]);
 });
 
-test('transferred actor rollback keeps a dispatch-disabled tombstone until native destroy retry succeeds', async () => {
+test('transferred actor rollback reports native destroy failure once and retains its dispatch-disabled tombstone', async () => {
   class TransferActor {
     constructor(actorId, context) {
       this.actorId = actorId;
@@ -492,10 +685,129 @@ test('transferred actor rollback keeps a dispatch-disabled tombstone until nativ
   await assert.rejects(() => manager.rollbackTransferredActor(actor), /temporary native destroy failure/);
   assert.equal(manager.getState('rollback-retry').isMoving, true);
   assert.equal(cleanupCount, 0);
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.equal(destroyAttempts, 2);
-  assert.equal(manager.getState('rollback-retry'), undefined);
-  assert.equal(cleanupCount, 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(destroyAttempts, 1);
+  assert.equal(manager.getState('rollback-retry').isMoving, true);
+  assert.equal(cleanupCount, 0);
+});
+
+for (const trace of ['absent', 'disabled']) {
+  test(`rollback cleanup failure reaches its caller with message flow ${trace}`, async () => {
+    const failure = new Error('rollback cleanup failed');
+    let releases = 0;
+    class Actor { constructor(context) { this.context = context; } }
+    class Factory { create(context) { return new Actor(context); } }
+    class Handler { dispose() { releases += 1; throw failure; } }
+    const manager = createActorManager({
+      actorFactories: new Map([['rollback-owner', Factory]]),
+      joinCoordinator: trace === 'absent' ? undefined : { messageFlow: () => ({ begin: () => undefined }) },
+      nativeActorNode: createMockSpotNode({
+        createActor(actorId) { return { nodeRid: rid('node-a'), actorId, generation: 1n }; },
+        destroyActor() { return { high: 0n, low: 1n }; }
+      }),
+      nativeActorCompletionTableProvider: () => ({
+        async submit(operation) {
+          operation();
+          return { terminalResult: RequestResult.Ok, failureErrno: 0, operationKind: OperationKind.ActorDestroy, kindData: null, parts: [] };
+        }
+      })
+    });
+    const { actor } = await manager.materializeTransferredActor(
+      'rollback-owner', 'rollback-owner', undefined,
+      framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.from(Buffer.alloc(0)))
+    );
+    await resolveLifecycleHandler(actor, Handler);
+    await assert.rejects(manager.rollbackTransferredActor(actor), error => error === failure);
+    assert.equal(releases, 1);
+  });
+}
+test('concurrent transferred rollbacks share the existing Actor terminal completion', async () => {
+  let disposed = 0;
+  let release;
+  let entered;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const changes = [];
+  class Actor {
+    constructor(context) {
+      this.context = context;
+    }
+  }
+  class Factory {
+    create(context) {
+      return new Actor(context);
+    }
+  }
+  class Handler {
+    handle() {}
+    async dispose() {
+      disposed += 1;
+      entered();
+      await pending;
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['scope-concurrent', Factory]]),
+    metrics: {
+      change(name, value) {
+        changes.push([name, value]);
+      }
+    },
+    nativeActorNode: createMockSpotNode({
+      createActor(actorId) {
+        return { nodeRid: rid('node-a'), actorId, generation: 1n };
+      },
+      destroyActor() {
+        return { high: 0n, low: 1n };
+      }
+    }),
+    nativeActorCompletionTableProvider: () => ({
+      async submit(operation) {
+        operation();
+        return {
+          terminalResult: RequestResult.Ok,
+          failureErrno: 0,
+          operationKind: OperationKind.ActorDestroy,
+          kindData: null,
+          parts: []
+        };
+      }
+    })
+  });
+  const { actor } = await manager.materializeTransferredActor(
+    'scope-concurrent',
+    'scope-concurrent',
+    undefined,
+    framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.from(Buffer.alloc(0)))
+  );
+  const dispatcher = new framework.ZLinkSpotActorDispatcher({
+    registry: new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+      kind: framework.ZLinkActorPacketKind.Send,
+      packetName: 'ScopeConcurrent',
+      actorType: Actor,
+      handlerType: Handler
+    }),
+    spot: {}
+  });
+  await dispatcher.dispatchSend(actor, 'ScopeConcurrent', {});
+  const first = manager.rollbackTransferredActor(actor);
+  await started;
+  const second = manager.rollbackTransferredActor(actor);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(disposed, 1);
+  const {
+    METRIC_NAMES
+  } = require('../../packages/framework/dist/runtime/diagnostics/runtime-metrics');
+  assert.equal(
+    changes.filter(([name, value]) => name === METRIC_NAMES.ActorCount && value === -1).length,
+    1
+  );
+  assert.equal(await manager.find('scope-concurrent'), undefined);
 });
 
 test('ZLinkActorManager create notifies Entry Spot after native actor creation', async () => {
@@ -1252,7 +1564,10 @@ test('ZLinkSpotSerialExecutor serializes same actor and allows different actors 
   assert.deepEqual(events, ['alice:first:start', 'bob:first', 'alice:first:end', 'alice:second']);
 });
 
-test('ZLinkActorContext delegates join calls to coordinator with timeout', async () => {
+test('ZLinkActorContext delegates join calls to coordinator with timeout', async (t) => {
+  let monotonicNow = 0;
+  let clockStep = 1;
+  t.mock.method(performance, 'now', () => { monotonicNow += clockStep; return monotonicNow; });
   const calls = [];
   // Deferred Join은 절대 deadline을 유지하므로 coordinator는 남은 시간을 받는다.
   // 네 언어 runtime이 모두 같은 의미라 정확한 ms 대신 상한만 검증한다.
@@ -1315,9 +1630,15 @@ test('ZLinkActorContext delegates join calls to coordinator with timeout', async
   ]);
   assert.equal(timeouts.length, 3);
   for (const [index, configured] of [25, 10, 5].entries()) {
-    assert.ok(timeouts[index] > 0 && timeouts[index] <= configured,
-      `join timeout ${timeouts[index]} must be within (0, ${configured}]`);
+    assert.ok(timeouts[index] > 0 && timeouts[index] < configured,
+      `join timeout ${timeouts[index]} must be within (0, ${configured})`);
   }
+  clockStep = 10;
+  await assert.rejects(
+    submitDeferredActorJoin(actor, actor.context.joinEntrySpot().timeout(5)),
+    /Deferred Actor Join failed/
+  );
+  assert.equal(calls.length, 3, 'expired admission must not submit to the coordinator');
   // Deferred completion은 raw reply를 runtime이 닫고 framework message만 넘긴다.
   replyMessage.close();
 });
@@ -3216,8 +3537,7 @@ test('one-way command 44 shutdown failure preserves the committed target without
       assert.equal(ownerNodeGeneration, 4n);
       return { status: 'claimed', generation: 17n, claimed: { leaseGeneration: 23n } };
     },
-    async releaseActor() { released++; },
-    async releaseActorEventually() { throw new Error('not used'); }
+    async releaseActor() { released++; }
   };
   const targetAuthority = {
     kind: 'snapshot',
@@ -3857,6 +4177,7 @@ test('ZLinkEntrySpotActivation destroyActor does not invoke Entry Spot lifecycle
     async dispose() {}
   };
   const activation = new framework.ZLinkEntrySpotActivation({
+    detachedTaskRunner: actorTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot,
     nativeNode: { routingId: 'node-a' },
@@ -3889,6 +4210,7 @@ test('ZLinkEntrySpotActivation disposes native resources when onClosing fails', 
     }
   }
   const activation = new framework.ZLinkEntrySpotActivation({
+    detachedTaskRunner: actorTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot: {
       routingId: 'entry-stage',
@@ -4815,7 +5137,13 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
     },
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
-      location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };
+      const entry = spotId === undefined ? this.entrySpot() : undefined;
+      location = {
+        actor: actorRef,
+        spotId: entry?.routingId ?? spotId,
+        spotGeneration: entry?.status().lifecycleGeneration ?? spotGeneration,
+        membershipEpoch
+      };
       return actorRef;
     }
   });

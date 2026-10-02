@@ -192,7 +192,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         List<String> order = new ArrayList<>();
 
         serials.runTurn(
-                        "actor-a",
+                        serials.prepareAsync("actor-a").toCompletableFuture().join(),
                         () -> {
                             order.add("handler");
                             ZLinkDeferredActorJoinScope.register(
@@ -219,7 +219,7 @@ final class ZLinkDeferredActorJoinScopeTest {
 
         CompletableFuture<Void> turn =
                 serials.runTurn(
-                                "actor-a",
+                                serials.prepareAsync("actor-a").toCompletableFuture().join(),
                                 () ->
                                         awaited.thenRunAsync(
                                                 () -> {
@@ -251,7 +251,9 @@ final class ZLinkDeferredActorJoinScopeTest {
                         CompletionException.class,
                         () ->
                                 serials.runTurn(
-                                                "actor-a",
+                                                serials.prepareAsync("actor-a")
+                                                        .toCompletableFuture()
+                                                        .join(),
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
@@ -272,7 +274,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         assertTrue(order.isEmpty());
 
         serials.runTurn(
-                        "actor-a",
+                        serials.prepareAsync("actor-a").toCompletableFuture().join(),
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
@@ -487,7 +489,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         // not: a turn enqueued after the barrier still runs.
         List<String> followUp = new ArrayList<>();
         serials.enqueue(
-                        serials.prepare("actor-b"),
+                        serials.prepareAsync("actor-b").toCompletableFuture().join(),
                         () -> {
                             followUp.add("actor-b-next-turn");
                             return CompletableFuture.completedFuture(null);
@@ -508,7 +510,7 @@ final class ZLinkDeferredActorJoinScopeTest {
 
         CompletionStage<Void> handler =
                 serials.enqueue(
-                        serials.prepare("actor-a"),
+                        serials.prepareAsync("actor-a").toCompletableFuture().join(),
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
@@ -524,7 +526,7 @@ final class ZLinkDeferredActorJoinScopeTest {
                         });
         CompletionStage<Void> queuedApplication =
                 serials.enqueue(
-                        serials.prepare("actor-a"),
+                        serials.prepareAsync("actor-a").toCompletableFuture().join(),
                         () -> {
                             order.add("queued-application");
                             return CompletableFuture.completedFuture(null);

@@ -113,9 +113,7 @@ concept has_destroy_actor =
 
 template <typename TContext>
 concept has_leave_actor =
-  requires (TContext &context,
-            const zlink::framework::actor_ref_t &actor_ref,
-            contract_actor_t &actor) { context.leave_actor (actor_ref, actor); };
+  requires (TContext &context, contract_actor_t &actor) { context.leave_actor (actor); };
 
 template <typename TContext>
 concept has_run_worker = requires (TContext &context) { context.run_worker ([] { return 1; }); };
@@ -1300,11 +1298,9 @@ static_assert (has_async<zlink::framework::worker_call_t<int>>);
 static_assert (has_yield<zlink::framework::worker_call_t<int>>);
 static_assert (!has_callback_submit<zlink::framework::worker_call_t<int>>);
 static_assert (has_leave_actor<zlink::framework::spot_context_t>);
-static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::spot_context_t &> ().leave_actor (
-                   std::declval<const zlink::framework::actor_ref_t &> (),
-                   std::declval<contract_actor_t &> ())),
-                 zlink::framework::task_t<zlink::framework::actor_ref_t>>);
+static_assert (std::is_same_v<decltype (std::declval<zlink::framework::spot_context_t &> ()
+                                          .leave_actor (std::declval<contract_actor_t &> ())),
+                              zlink::framework::task_t<void>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::session_actor_manager_t &> ()
                              .bind_or_get (std::declval<zlink::framework::actor_ref_t> ())),

@@ -203,13 +203,15 @@ export class ZLinkLocationRuntimeOwner {
   async startForRuntime(
     primaryMeshName: string | undefined,
     spotNodeRuntime: ZLinkSpotNodeRuntimeManager,
-    channelRuntime: ZLinkChannelRuntimeManager
+    channelRuntime: ZLinkChannelRuntimeManager,
+    signal: AbortSignal,
+    shutdownSignal: () => AbortSignal
   ): Promise<ZLinkLocationRuntime | undefined> {
     const runtime = this.ensureRuntime(primaryMeshName);
     if (runtime === undefined) {
       return undefined;
     }
-    await runtime.start(this.ownerNodeRid(spotNodeRuntime));
+    await runtime.start(this.ownerNodeRid(spotNodeRuntime), signal, shutdownSignal);
     const stores = this.currentStores;
     if (stores === undefined) {
       return runtime;

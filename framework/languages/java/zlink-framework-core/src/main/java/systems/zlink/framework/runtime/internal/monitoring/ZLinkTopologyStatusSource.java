@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Flow;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
@@ -48,6 +49,15 @@ public final class ZLinkTopologyStatusSource<T> {
         }
         Source source = source(sourceKey);
         return subscriber -> source.publisher.subscribe(subscriber, capacity);
+    }
+
+    public void onActiveSubscriptions(String sourceKey, Consumer<Boolean> listener) {
+        source(sourceKey).publisher.onActiveSubscriptions(listener);
+    }
+
+    public void fail(String sourceKey, Throwable cause) {
+        Source source = sources.get(sourceKey);
+        if (source != null) source.publisher.fail(cause);
     }
 
     /** Signals the existing dispatcher; it never queries a runtime lane on the signaling thread. */

@@ -685,6 +685,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         switch (monitorEvent.NativeEvent)
         {
             case ZLinkSocketNativeEventType.ConnectionReady:
+                if ((monitorEvent.Flags & MonitorEventFlags.ConnectionReadyEdge) == 0)
+                    break;
                 if (monitorEvent.RoutingId is RoutingId readyRoutingId)
                 {
                     await ClearDisconnectedRoutingIdAsync(readyRoutingId).ConfigureAwait(false);

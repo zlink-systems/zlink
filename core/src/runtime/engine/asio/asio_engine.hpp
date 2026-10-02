@@ -71,6 +71,7 @@ class asio_engine_t : public i_engine
     //  Function to handle network disconnections.
     virtual void error (error_reason_t reason_,
                         const boost::system::error_code &handshake_error_ = boost::system::error_code ());
+    void emit_disconnected (uint64_t reason_);
 
     int pull_msg_from_session (msg_t *msg_);
     int push_msg_to_session (msg_t *msg_);

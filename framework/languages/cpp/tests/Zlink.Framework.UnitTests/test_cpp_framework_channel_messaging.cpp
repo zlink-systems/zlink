@@ -1253,6 +1253,41 @@ int main ()
         return 413;
     }
 
+    const auto cancellation =
+      zlink::framework::detail::make_cancellation_exception ("channel transport cancelled");
+    constexpr auto cancellation_channel = "cancelled-client";
+    zlink::framework::zlink_builder_t cancellation_client_builder;
+    cancellation_client_builder.channel (cancellation_channel)
+      .enable_client ()
+      .connect ("tcp://127.0.0.1:1");
+    auto cancellation_client_runtime = zlink::framework::detail::channel_runtime_t::from (
+      cancellation_client_builder.message_bus ());
+    cancellation_client_runtime.bind_serializers (protobuf_serializers);
+    cancellation_client_runtime.bind_client_server_transport (
+      cancellation_channel,
+      [cancellation] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+                      std::map<std::string, std::string>) {
+          return zlink::framework::task_t<void> (
+            zlink::framework::detail::result_access_t::failure<void> (cancellation));
+      },
+      [cancellation] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+                      std::map<std::string, std::string>) {
+          return zlink::framework::task_t<zlink::message_t> (
+            zlink::framework::detail::result_access_t::failure<zlink::message_t> (cancellation));
+      });
+    const auto cancelled_request = cancellation_client_builder.message_bus ()
+                                     .request (cancellation_channel, protobuf_request)
+                                     .async<google::protobuf::StringValue> ()
+                                     .result ();
+    const auto cancelled_send = cancellation_client_builder.message_bus ()
+                                  .send (cancellation_channel, protobuf_request)
+                                  .async ()
+                                  .result ();
+    assert (!cancelled_request && !cancelled_send);
+    assert (cancelled_request.error () == nullptr && cancelled_send.error () == nullptr);
+    assert (cancelled_request.exception () == cancellation);
+    assert (cancelled_send.exception () == cancellation);
+
     zlink::framework::detail::channel_runtime_t::from (outbound_only.message_bus ())
       .bind_serializers (serializers);
     zlink::framework::zlink_builder_t shutdown_outbound;

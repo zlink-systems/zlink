@@ -33,12 +33,22 @@ class provider_relocation_repository_t final : public relocation_repository_t
     {
     }
 
-    task_t<relocation_stored_t> put_relocation (std::vector<std::byte> payload,
-                                                std::chrono::hours retention,
-                                                std::stop_token cancellation = {}) override
+    task_t<relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point operation_deadline,
+                    std::stop_token cancellation = {}) override
     {
-        if (cancellation.stop_requested ())
-            return cancelled<relocation_stored_t> ();
+        const auto check_operation = [&] () -> std::optional<task_t<relocation_stored_t>> {
+            if (cancellation.stop_requested ())
+                return cancelled<relocation_stored_t> ();
+            if (std::chrono::steady_clock::now () >= operation_deadline)
+                return failed<relocation_stored_t> (framework_error_kind_t::deadline_exceeded,
+                                                    "relocation Store operation deadline elapsed");
+            return std::nullopt;
+        };
+        if (auto terminal = check_operation ())
+            return std::move (*terminal);
         if (retention <= std::chrono::hours::zero ())
             return failed<relocation_stored_t> (framework_error_kind_t::protocol_error,
                                                 "relocation retention must be positive");
@@ -46,51 +56,61 @@ class provider_relocation_repository_t final : public relocation_repository_t
         const auto retention_ms = std::chrono::duration_cast<std::chrono::milliseconds> (retention);
         const auto checksum =
           zlink::framework::detail::crc32c (std::span<const std::byte> (payload));
-        for (unsigned attempt = 0; attempt != reference_collision_attempt_limit; ++attempt) {
-            const auto reference = make_reference ();
-            for (unsigned retry = 0; retry != ambiguous_put_attempt_limit; ++retry) {
-                auto result =
-                  _store
-                    ->put (blob_reference_t{reference},
-                           std::span<const std::byte> (payload.data (), payload.size ()),
-                           retention_ms)
-                    .result ();
-                if (result) {
-                    const auto &written = result.value ();
-                    if (const auto *stored = std::get_if<blob_stored_t> (&written))
-                        return completed (relocation_stored_t{
-                          reference, checksum, stored->expires_at, stored->store_now});
-                    if (std::holds_alternative<blob_conflict_t> (written))
-                        break;
-                }
-
-                auto read = _store->read (blob_reference_t{reference}).result ();
-                if (read) {
-                    if (const auto *found = std::get_if<blob_found_t> (&read.value ())) {
-                        if (found->bytes != payload)
-                            break;
-                        return completed (relocation_stored_t{reference, checksum,
-                                                              found->expires_at, found->store_now});
-                    }
-                }
-
-                if (result || result.error () == nullptr
-                    || !detail::is_transient_error (result.error ()->kind ()) || retry != 0) {
-                    if (!result)
-                        return task_t<relocation_stored_t> (
-                          detail::propagate_failure<relocation_stored_t> (
-                            result, "relocation Store put failed"));
-                    if (!read)
-                        return task_t<relocation_stored_t> (
-                          detail::propagate_failure<relocation_stored_t> (
-                            read, "relocation Store read-back failed"));
-                }
+        auto reference = make_reference ();
+        for (;;) {
+            if (auto terminal = check_operation ())
+                return std::move (*terminal);
+            auto pending_put = _store->put (
+              blob_reference_t{reference},
+              std::span<const std::byte> (payload.data (), payload.size ()), retention_ms);
+            auto response = detail::observe_task_result_for (
+              pending_put,
+              std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
+                                                            - std::chrono::steady_clock::now ()),
+              cancellation);
+            if (auto terminal = check_operation ()) {
+                detail::observe_task_terminal (pending_put, [payload = std::move (payload)] (
+                                                              const result_t<blob_put_result_t> &) {
+                    static_cast<void> (payload);
+                });
+                return std::move (*terminal);
             }
-            // A generated reference collided with different immutable bytes.
-            // Retry with a fresh Framework-issued reference.
+            auto result = std::move (*response);
+            if (result) {
+                const auto &written = result.value ();
+                if (const auto *stored = std::get_if<blob_stored_t> (&written))
+                    return completed (relocation_stored_t{reference, checksum, stored->expires_at,
+                                                          stored->store_now});
+                if (const auto *stored = std::get_if<blob_already_stored_t> (&written))
+                    return completed (relocation_stored_t{reference, checksum, stored->expires_at,
+                                                          stored->store_now});
+                reference = make_reference ();
+                continue;
+            }
+
+            if (auto terminal = check_operation ())
+                return std::move (*terminal);
+            auto pending_read = _store->read (blob_reference_t{reference});
+            auto read_response = detail::observe_task_result_for (
+              pending_read,
+              std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
+                                                            - std::chrono::steady_clock::now ()),
+              cancellation);
+            if (auto terminal = check_operation ())
+                return std::move (*terminal);
+            auto read = std::move (*read_response);
+            if (!read)
+                return task_t<relocation_stored_t> (detail::propagate_failure<relocation_stored_t> (
+                  read, "relocation Store read-back failed"));
+            if (const auto *found = std::get_if<blob_found_t> (&read.value ())) {
+                if (found->bytes != payload) {
+                    reference = make_reference ();
+                    continue;
+                }
+                return completed (
+                  relocation_stored_t{reference, checksum, found->expires_at, found->store_now});
+            }
         }
-        return failed<relocation_stored_t> (framework_error_kind_t::internal_failure,
-                                            "could not allocate a unique relocation reference");
     }
 
     task_t<relocation_read_result_t> get_relocation (std::string reference,
@@ -145,8 +165,6 @@ class provider_relocation_repository_t final : public relocation_repository_t
     }
 
   private:
-    static constexpr unsigned reference_collision_attempt_limit = 4;
-    static constexpr unsigned ambiguous_put_attempt_limit = 2;
     static constexpr std::string_view reference_prefix = "zlr-";
 
     template <typename T> static task_t<T> completed (T value)
@@ -161,8 +179,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "relocation Store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("relocation Store operation was cancelled")));
     }
 
     static std::string make_reference ()

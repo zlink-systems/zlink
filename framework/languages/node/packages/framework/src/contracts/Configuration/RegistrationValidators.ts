@@ -135,11 +135,12 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     }
   }
   if (
-    options.ownerLeaseRenewIntervalMs + options.ownerLeaseRenewTimeoutMs >=
+    Math.max(options.ownerLeaseRenewIntervalMs, options.ownerLeaseRenewTimeoutMs) +
+      options.ownerLeaseRenewTimeoutMs >=
     options.ownerLeaseTtlMs - options.ownerLeaseFencingMarginMs
   ) {
     throw new ZLinkConfigurationException(
-      'ownerLeaseRenewIntervalMs + ownerLeaseRenewTimeoutMs must be less than ownerLeaseTtlMs - ownerLeaseFencingMarginMs.'
+      'max(ownerLeaseRenewIntervalMs, ownerLeaseRenewTimeoutMs) + ownerLeaseRenewTimeoutMs must be less than ownerLeaseTtlMs - ownerLeaseFencingMarginMs.'
     );
   }
   for (const [name, value] of Object.entries({
