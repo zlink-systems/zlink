@@ -577,7 +577,6 @@ final class ZLinkActorDispatchSerialsTest {
             AtomicReference<ZLinkActorDispatchTarget> owner) {
         return new ZLinkActorDispatchSerials(
                 new Object(),
-                actorId -> actorId,
                 Runnable::run,
                 actorId ->
                         CompletableFuture.completedFuture(

@@ -777,7 +777,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         this.dispatches =
                 new ZLinkActorDispatchSerials(
                         this,
-                        actorId -> actorId,
                         serialExecutor,
                         actorId -> actorDispatchTargetResolver.apply(actorId));
         this.meshName = spotNode.routingId().toString();

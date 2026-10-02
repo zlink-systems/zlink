@@ -43,33 +43,22 @@ final class ZLinkActorDispatchSerials {
     private final Map<String, CompletableFuture<Void>> lifecycleBarriers = new HashMap<>();
 
     ZLinkActorDispatchSerials() {
-        this(ZLinkDeferredActorJoinScope.legacyRuntimeScope(), actorId -> actorId, null, null);
-    }
-
-    ZLinkActorDispatchSerials(Object runtimeScope, Function<String, Object> incarnationResolver) {
-        this(runtimeScope, incarnationResolver, null, null);
-    }
-
-    ZLinkActorDispatchSerials(
-            Object runtimeScope, Function<String, Object> incarnationResolver, Executor executor) {
-        this(runtimeScope, incarnationResolver, executor, null);
+        this(ZLinkDeferredActorJoinScope.legacyRuntimeScope(), null, null);
     }
 
     ZLinkActorDispatchSerials(
             Object runtimeScope,
-            Function<String, Object> incarnationResolver,
             Executor executor,
             Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
                     targetResolver) {
         this.runtimeScope = Objects.requireNonNull(runtimeScope, "runtimeScope");
-        Objects.requireNonNull(incarnationResolver, "incarnationResolver");
         this.legacyTarget = createLegacyTarget(executor);
         this.targetResolver =
                 targetResolver == null
-                        ? ignored ->
+                        ? actorId ->
                                 CompletableFuture.completedFuture(
                                         new ZLinkActorDispatchTarget.ActivationSnapshot(
-                                                legacyTarget, incarnationResolver.apply(ignored)))
+                                                legacyTarget, actorId))
                         : targetResolver;
     }
 
