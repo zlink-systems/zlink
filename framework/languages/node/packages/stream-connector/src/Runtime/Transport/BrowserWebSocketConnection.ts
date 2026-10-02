@@ -216,9 +216,9 @@ async function waitForOpen(
     );
     const onOpen = () => finish();
     const onClose = () =>
-      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect closed before opening.'));
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect closed before opening.'));
     const onError = () =>
-      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.'));
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect failed.'));
     const onAbort = () =>
       finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect canceled.'));
     const finish = (error?: unknown) => {

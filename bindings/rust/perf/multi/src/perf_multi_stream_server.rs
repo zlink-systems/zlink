@@ -30,13 +30,11 @@ fn main() {
     common::apply_multi_hwm(&stream, &settings);
     stream
         .common_options()
-        .set_send_timeout(std::time::Duration::from_millis(settings.send_timeout_ms))
+        .set_send_timeout(settings.send_timeout_ms)
         .expect("sndtimeo");
     stream
         .common_options()
-        .set_receive_timeout(std::time::Duration::from_millis(
-            settings.receive_timeout_ms,
-        ))
+        .set_receive_timeout(settings.receive_timeout_ms)
         .expect("rcvtimeo");
     stream
         .common_options()
@@ -103,7 +101,7 @@ fn main() {
     loop {
         if stopping.load(Ordering::Acquire) && drain_deadline.is_none() {
             drain_deadline =
-                Some(Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1)));
+                Some(Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64));
         }
 
         let received_packet = match stream.recv_packet(&mut packet, RecvFlags::DONT_WAIT) {
@@ -151,7 +149,7 @@ fn main() {
 
         if stopping.load(Ordering::Acquire) {
             let deadline = drain_deadline.get_or_insert_with(|| {
-                Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1))
+                Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64)
             });
             if !tasks.any_pending() || Instant::now() >= *deadline {
                 break;

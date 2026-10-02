@@ -89,14 +89,17 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertEquals(
                     rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
                             ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
-                            : systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                    .DEADLINE_EXCEEDED,
+                            : rejected == SubmitResult.NOT_ADMITTED
+                                    ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                            .REJECTED
+                                    : systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                            .DEADLINE_EXCEEDED,
                     framework.kind());
         }
     }
 
     @Test
-    void oneWayAdapterDistinguishesRouteLossFromAdmissionTimeout() {
+    void oneWayAdapterPreservesTypedRejectionAcrossErrnos() {
         var routeLoss =
                 assertThrows(
                         ExecutionException.class,
@@ -109,7 +112,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                         .toCompletableFuture()
                                         .get());
         assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
                 ((systems.zlink.framework.errors.ZLinkFrameworkException) routeLoss.getCause())
                         .kind());
 
@@ -125,7 +128,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                         .toCompletableFuture()
                                         .get());
         assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
                 ((systems.zlink.framework.errors.ZLinkFrameworkException)
                                 admissionTimeout.getCause())
                         .kind());

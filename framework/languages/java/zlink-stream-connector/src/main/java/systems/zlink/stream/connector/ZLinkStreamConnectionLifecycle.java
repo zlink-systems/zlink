@@ -8,6 +8,8 @@ import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.channels.CompletionHandler;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.security.cert.CertPathValidatorException;
+import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
@@ -16,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -275,21 +278,76 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private CompletionStage<Void> connectOnceStage() {
-        return switch (configuration.transport().kind()) {
-            case WEB_SOCKET, WEB_SOCKET_SECURE -> connectWebSocketStage();
-            case TLS ->
-                    ZLinkTlsTransportConnection.connectStage(
-                                    configuration.endpoint(),
-                                    configuration.timeouts().connect(),
-                                    configuration.limits().receivePayload(),
-                                    configuration.transport().skipServerCertificateValidation())
-                            .thenAccept(this::activateConnection);
-            case TCP -> connectTcpStage();
-        };
+        CompletableFuture<ZLinkStreamTransportConnection> attempt = new CompletableFuture<>();
+        var deadline =
+                timeouts.schedule(
+                        () ->
+                                attempt.completeExceptionally(
+                                        new TimeoutException("connect timed out")),
+                        configuration.timeouts().connect().toMillis(),
+                        TimeUnit.MILLISECONDS);
+        attempt.whenComplete((transport, failure) -> deadline.cancel(false));
+        try {
+            CompletionStage<? extends ZLinkStreamTransportConnection> opening =
+                    switch (configuration.transport().kind()) {
+                        case WEB_SOCKET, WEB_SOCKET_SECURE -> connectWebSocketStage();
+                        case TLS ->
+                                ZLinkTlsTransportConnection.connectStage(
+                                        configuration.endpoint(),
+                                        configuration.limits().receivePayload(),
+                                        configuration
+                                                .transport()
+                                                .skipServerCertificateValidation());
+                        case TCP -> connectTcpStage();
+                    };
+            attempt.whenComplete(
+                    (transport, failure) -> {
+                        if (failure != null) opening.toCompletableFuture().cancel(true);
+                    });
+            opening.whenComplete(
+                    (transport, failure) -> {
+                        if (failure != null) {
+                            attempt.completeExceptionally(failure);
+                        } else if (!attempt.complete(transport)) {
+                            publishCloseFailure(closeQuietly(transport));
+                        }
+                    });
+        } catch (RuntimeException failure) {
+            attempt.completeExceptionally(failure);
+        }
+        return attempt.handle(
+                        (transport, failure) -> {
+                            if (failure != null) throw connectFailure(failure);
+                            return transport;
+                        })
+                .thenAccept(this::activateConnection);
     }
 
-    private CompletionStage<Void> connectTcpStage() {
-        CompletableFuture<Void> result = new CompletableFuture<>();
+    private static ZLinkStreamException connectFailure(Throwable failure) {
+        Throwable cause = failure;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        if (cause instanceof ZLinkStreamException coded) return coded;
+        for (Throwable nested = cause; nested != null; nested = nested.getCause()) {
+            if (nested instanceof CertificateException
+                    || nested instanceof CertPathValidatorException) {
+                return ZLinkStreamException.of(
+                        ZLinkStreamErrorCode.TLS_VALIDATION_FAILED,
+                        "TLS validation failed.",
+                        cause);
+            }
+        }
+        if (cause instanceof TimeoutException) {
+            return ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.CONNECT_TIMEOUT, "Connect timed out.", cause);
+        }
+        return ZLinkStreamException.of(ZLinkStreamErrorCode.DISCONNECTED, "Connect failed.", cause);
+    }
+
+    private CompletionStage<ZLinkStreamTransportConnection> connectTcpStage() {
+        CompletableFuture<ZLinkStreamTransportConnection> result = new CompletableFuture<>();
         AsynchronousSocketChannel channel;
         try {
             channel = AsynchronousSocketChannel.open();
@@ -297,22 +355,6 @@ final class ZLinkStreamConnectionLifecycle {
         } catch (IOException ex) {
             return CompletableFuture.failedFuture(ex);
         }
-
-        var timeout =
-                timeouts.schedule(
-                        () ->
-                                result.completeExceptionally(
-                                        ZLinkStreamException.of(
-                                                ZLinkStreamErrorCode.CONNECT_TIMEOUT,
-                                                "connect timed out after "
-                                                        + configuration.timeouts().connect(),
-                                                new TimeoutException(
-                                                        "connect timed out after "
-                                                                + configuration
-                                                                        .timeouts()
-                                                                        .connect()))),
-                        configuration.timeouts().connect().toMillis(),
-                        TimeUnit.MILLISECONDS);
 
         InetSocketAddress address =
                 new InetSocketAddress(
@@ -330,26 +372,18 @@ final class ZLinkStreamConnectionLifecycle {
                 new CompletionHandler<Void, Void>() {
                     @Override
                     public void completed(Void ignored, Void attachment) {
-                        timeout.cancel(false);
-                        if (state == ZLinkStreamConnectionState.CLOSED) {
-                            result.completeExceptionally(
-                                    ZLinkStreamException.disconnected("connector is closed"));
-                            return;
-                        }
                         ZLinkTcpTransportConnection tcp =
                                 new ZLinkTcpTransportConnection(
                                         channel, configuration.limits().receivePayload());
-                        activateConnection(tcp);
                         DefaultZLinkStreamConnector.trace(
                                 () ->
                                         "connector connect-complete endpoint="
                                                 + configuration.endpoint());
-                        result.complete(null);
+                        if (!result.complete(tcp)) publishCloseFailure(closeQuietly(tcp));
                     }
 
                     @Override
                     public void failed(Throwable exc, Void attachment) {
-                        timeout.cancel(false);
                         DefaultZLinkStreamConnector.trace(
                                 () ->
                                         "connector connect-failed endpoint="
@@ -368,28 +402,15 @@ final class ZLinkStreamConnectionLifecycle {
         return result;
     }
 
-    private CompletionStage<Void> connectWebSocketStage() {
-        HttpClient.Builder clientBuilder =
-                HttpClient.newBuilder().connectTimeout(configuration.timeouts().connect());
+    private CompletionStage<ZLinkWebSocketTransportConnection> connectWebSocketStage() {
+        HttpClient.Builder clientBuilder = HttpClient.newBuilder();
         if (configuration.transport().skipServerCertificateValidation()) {
             clientBuilder.sslContext(insecureSslContext());
         }
         return ZLinkWebSocketTransportConnection.connectStage(
-                        clientBuilder.build(),
-                        configuration.endpoint(),
-                        configuration.limits().receivePayload())
-                .thenAccept(
-                        ws -> {
-                            if (state == ZLinkStreamConnectionState.CLOSED) {
-                                publishCloseFailure(closeQuietly(ws));
-                                throw ZLinkStreamException.disconnected("connector is closed");
-                            }
-                            activateConnection(ws);
-                            DefaultZLinkStreamConnector.trace(
-                                    () ->
-                                            "connector connect-complete endpoint="
-                                                    + configuration.endpoint());
-                        });
+                clientBuilder.build(),
+                configuration.endpoint(),
+                configuration.limits().receivePayload());
     }
 
     private void activateConnection(ZLinkStreamTransportConnection transport) {
@@ -592,7 +613,7 @@ final class ZLinkStreamConnectionLifecycle {
             if (attemptFailed) {
                 connectFailureRecorder.run();
             }
-            result.completeExceptionally(error);
+            result.completeExceptionally(connectFailure(error));
         }
         return result;
     }

@@ -3,6 +3,7 @@ package systems.zlink.stream.connector;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1326,10 +1327,134 @@ final class ZLinkStreamConnectorTest {
                             false);
             ZLinkStreamConnector connector = createConnector(strict);
 
-            assertThrows(
-                    SSLHandshakeException.class,
-                    () -> ConnectorTestAwait.await(connector.connect()));
+            var failure =
+                    assertThrows(
+                            ZLinkStreamException.class,
+                            () -> ConnectorTestAwait.await(connector.connect()));
+            assertEquals(ZLinkStreamErrorCode.TLS_VALIDATION_FAILED, failure.errorCode());
+            assertInstanceOf(SSLHandshakeException.class, failure.getCause());
             assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        }
+    }
+
+    @Test
+    void transportConnectFailureExposesDisconnectedCode() throws Exception {
+        int port;
+        try (var listener = new java.net.ServerSocket(0)) {
+            port = listener.getLocalPort();
+        }
+        for (String scheme : List.of("tcp", "tls", "ws", "wss")) {
+            var connector =
+                    createConnector(
+                            options(
+                                    URI.create(scheme + "://127.0.0.1:" + port),
+                                    ZLinkStreamDispatchMode.MANUAL,
+                                    64 * 1024,
+                                    1,
+                                    false,
+                                    false,
+                                    ZLinkStreamCompression.NONE));
+            var failure =
+                    assertThrows(
+                            ZLinkStreamException.class,
+                            () -> ConnectorTestAwait.await(connector.connect()));
+            assertEquals(ZLinkStreamErrorCode.DISCONNECTED, failure.errorCode());
+            assertTrue(failure.getCause() != null);
+            assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        }
+    }
+
+    @Test
+    void wssConnectRejectsSelfSignedCertificateWithPublicCode() throws Exception {
+        try (SecureWebSocketStreamConnectorTestServer server =
+                new SecureWebSocketStreamConnectorTestServer()) {
+            var connector =
+                    createConnector(
+                            options(
+                                    server.endpoint(),
+                                    ZLinkStreamDispatchMode.MANUAL,
+                                    64 * 1024,
+                                    1,
+                                    false,
+                                    false,
+                                    ZLinkStreamCompression.NONE));
+            var failure =
+                    assertThrows(
+                            ZLinkStreamException.class,
+                            () -> ConnectorTestAwait.await(connector.connect()));
+            assertEquals(ZLinkStreamErrorCode.TLS_VALIDATION_FAILED, failure.errorCode());
+            assertInstanceOf(SSLHandshakeException.class, failure.getCause());
+            assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        }
+    }
+
+    @Test
+    void stalledTlsAndWebSocketHandshakeRespectConnectTimeout() throws Exception {
+        for (String scheme : List.of("tls", "ws")) {
+            try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+                var connector =
+                        createConnector(
+                                new ZLinkStreamConnectorOptions(
+                                        URI.create(
+                                                server.endpoint()
+                                                        .toString()
+                                                        .replace("tcp:", scheme + ":")),
+                                        ZLinkStreamDispatchMode.MANUAL,
+                                        Duration.ofSeconds(1),
+                                        Duration.ofSeconds(5),
+                                        1,
+                                        Duration.ofMillis(100),
+                                        64 * 1024,
+                                        64 * 1024,
+                                        false,
+                                        Duration.ofMillis(25),
+                                        Duration.ofMillis(500),
+                                        false,
+                                        Duration.ofMillis(250),
+                                        Duration.ofSeconds(5),
+                                        2.0,
+                                        false,
+                                        ZLinkStreamCompression.NONE,
+                                        null,
+                                        ZLinkStreamPacketNameResolver.defaultResolver(),
+                                        null));
+                var stage = connector.connect().submit().toCompletableFuture();
+                var failure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () -> stage.get(1, TimeUnit.SECONDS));
+                var coded = assertInstanceOf(ZLinkStreamException.class, failure.getCause());
+                assertEquals(ZLinkStreamErrorCode.CONNECT_TIMEOUT, coded.errorCode());
+                assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+            }
+        }
+    }
+
+    @Test
+    void tlsProtocolFailureIsDisconnectedRatherThanCertificateValidation() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            var connector =
+                    createConnector(
+                            options(
+                                    URI.create(
+                                            server.endpoint().toString().replace("tcp:", "tls:")),
+                                    ZLinkStreamDispatchMode.MANUAL,
+                                    64 * 1024,
+                                    1,
+                                    false,
+                                    false,
+                                    ZLinkStreamCompression.NONE));
+            var connect = connector.connect().submit().toCompletableFuture();
+            server.sendBytesAsync(
+                            "HTTP/1.1 400 Bad Request\r\n\r\n".getBytes(StandardCharsets.US_ASCII))
+                    .join();
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> connect.get(1, TimeUnit.SECONDS));
+            var coded = assertInstanceOf(ZLinkStreamException.class, failure.getCause());
+            assertEquals(ZLinkStreamErrorCode.DISCONNECTED, coded.errorCode());
+            assertTrue(coded.getCause() != null);
         }
     }
 

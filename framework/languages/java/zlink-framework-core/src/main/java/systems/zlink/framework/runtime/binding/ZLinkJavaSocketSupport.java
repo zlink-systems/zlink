@@ -108,7 +108,7 @@ final class ZLinkJavaSocketSupport {
                                     RequestResult terminal =
                                             ZLinkJavaRawMeshNode.requestResult(failure, false);
                                     throw new CompletionException(
-                                            terminal == RequestResult.INTERNAL_ERROR
+                                            terminal == null
                                                     ? failure
                                                     : new ZLinkFrameworkException(
                                                             ZLinkJavaRawMeshNode.backendResult(
@@ -131,7 +131,7 @@ final class ZLinkJavaSocketSupport {
         } catch (RuntimeException failure) {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(
-                    terminal == RequestResult.INTERNAL_ERROR
+                    terminal == null
                             ? failure
                             : new ZLinkFrameworkException(
                                     ZLinkJavaRawMeshNode.backendResult(terminal)

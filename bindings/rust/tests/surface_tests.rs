@@ -176,7 +176,7 @@ fn common_typed_options() {
     assert_eq!(options.receive_high_water_mark().unwrap(), 2000);
 
     options
-        .set_linger(std::time::Duration::from_millis(100))
+        .set_linger(100)
         .unwrap();
     assert_eq!(options.submit_retry_mode().unwrap(), SubmitRetryMode::Off);
     assert_eq!(
@@ -216,7 +216,7 @@ fn router_typed_options() {
     sock.set_routing_id(&RoutingId::from(b"router-surface"))
         .unwrap();
     common
-        .set_linger(std::time::Duration::from_millis(1))
+        .set_linger(1)
         .unwrap();
     common
         .set_rid_duplicate_policy(RidDuplicatePolicy::Reject)
@@ -233,7 +233,7 @@ fn pub_typed_options() {
     pub_options.set_verboser(false).unwrap();
     pub_options.set_no_drop(false).unwrap();
     common
-        .set_receive_timeout(std::time::Duration::from_millis(1))
+        .set_receive_timeout(1)
         .unwrap();
 }
 
