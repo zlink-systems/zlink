@@ -490,7 +490,7 @@ opaque-record 행으로 저장한다. `objectGeneration`은 Store 전역 단조 
 이 방식은 identity별 단조성도 보장한다. 이 sequence의 counter key와 발급 계약은
 [02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)이 정한다.
 
-Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `payload`를 제외한 정수
+Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `recordVersion`과 `payload`를 제외한 정수
 field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌 JSON string으로 사용한다
 (64-bit 값이 JSON number 정밀도를 넘을 수 있으므로).
 
@@ -607,7 +607,7 @@ write 하나다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batc
 
 | 단계 | 내용과 조건 |
 |---|---|
-| Claim | 같은 fence의 aggregate가 있으면 그것으로 끝난다: terminal이면 그 결과를 돌려주고, 같은 `requestFingerprint`이면 `staging`은 이어서 준비하고 `prepared`는 `AlreadyPrepared`(§8.1)이며, 그 밖은 `Conflict`다. 없으면 marker를 넣은 authority, committed 투영과 정리 뒤의 authority, participant record, page와 `inventory`를 넣은 aggregate의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 아직 발급되지 않은 `StoreVersion`은 provider token 최대 길이의 모든 byte를 `\u00xx` escape로 쓴 크기로 계산한다. 한도 안이면 aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. |
+| Claim | 같은 fence의 aggregate가 있으면 그것으로 끝난다: terminal이면 그 결과를 돌려주고, 같은 `requestFingerprint`이면 `staging`은 이어서 준비하고 `prepared`는 `AlreadyPrepared`(§8.1)이며, 그 밖은 `Conflict`다. 없으면 marker를 넣은 authority, committed 투영과 정리 뒤의 authority, participant record, page와 `inventory`를 넣은 aggregate의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 아직 발급되지 않은 `StoreVersion`은 provider token 최대 길이의 모든 byte를 `\u00xx` escape로 쓴 크기로 계산한다. 한도 안이면 aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. 한도를 넘으면 aggregate를 쓰지 않고 준비를 실패로 끝낸다. 이동의 실패 처리와 공개 결과는 [Relocation 흐름 §9](04-relocation-flow.ko.md#9-timeout-failure와-cancellation)와 [Host relocation §13](05-host-relocation-flow.ko.md#13-relocate-완료와-실패)을 따른다. |
 | 목록 기록 | Aggregate가 `staging`인 version을 조건으로 participant record와 page를 각각 없을 때 쓰고, 마지막에 aggregate의 `inventory`를 쓴다. 같은 bytes가 이미 있으면 완료로 보고 다른 bytes면 `Conflict`다. |
 | Marker 설치 | Aggregate에 `inventory`가 있고 모든 목록 record를 확인한 뒤 시작한다. Participant마다 aggregate가 `staging`인 version과 participant 물리 version을 조건으로, 공개 `StoreVersion`이 entry의 `expectedStoreVersion`과 같을 때 marker를 쓰고 `visibleStoreVersion`을 지운다. Payload와 owner는 바꾸지 않는다. 같은 canonical marker bytes가 이미 있으면 완료이고, 다른 marker가 있으면 `Conflict`다. Inventory 순서로 첫 `newOwner` entry의 write에만 `AuthorityOwnerGeneration` counter 갱신과 aggregate의 구간 기록을 함께 넣는다([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 구간이 이미 기록돼 있으면 다시 발급하지 않는다. |
 | Prepare | 모든 marker를 확인한 뒤 `staging → prepared`와 target host capacity counter의 reserved 증가를 쓴다. Aggregate version, target descriptor의 `lifecycleGeneration`, target owner lease와 capacity record가 조건이다. Reserved 증가는 일반 host capacity counter의 점유이며 relocation 전용 reservation record가 아니다. |
