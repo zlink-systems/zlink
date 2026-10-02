@@ -770,10 +770,21 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     const auto entry = make_state (entry_id, "entry", true);
     std::atomic_int leave_callbacks{0};
     std::atomic_int joined_callbacks{0};
+    std::atomic_bool leave_saw_committed_entry{false};
     source->on_leave_actor_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
+        leave_saw_committed_entry.store (
+          node->lane
+            .run ([&] {
+                const auto found = node->actor_spot_ids.find ("test_actor:actor-1");
+                return found != node->actor_spot_ids.end () && found->second == entry_id;
+            })
+            .get (),
+          std::memory_order_release);
         leave_callbacks.fetch_add (1, std::memory_order_acq_rel);
-        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "source leave callback failed after membership commit"));
     };
     entry->on_actor_joined_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
@@ -828,9 +839,10 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
       })
       .get ();
     test.require (submitted && completed && current_location == entry_id && source_actor_count == 0
-                    && entry_actor_count == 1,
-                  "actor leave deferred by a relocation-ready handler must run source and entry "
-                  "lifecycle callbacks before the next relocation turn");
+                    && entry_actor_count == 1
+                    && leave_saw_committed_entry.load (std::memory_order_acquire),
+                  "source leave callback failure must not prevent the committed entry membership "
+                  "or its joined callback");
     node->lane
       .run_checked ([&] {
           node->spot_contexts_by_id.clear ();

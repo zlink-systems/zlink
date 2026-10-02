@@ -3400,6 +3400,7 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
         std::shared_ptr<detail::spot_context_state_t> source_state;
         std::shared_ptr<detail::spot_context_state_t> entry_state;
         std::shared_ptr<void> source_spot_instance;
+        std::shared_ptr<void> actor_instance;
         std::function<task_t<void> (void *, void *)> source_leave;
         entry_join_callback_t entry_join;
     };
@@ -3467,6 +3468,11 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
                     plan.source_spot_instance = source_state.spot_instance;
                 }
             }
+            if (!remote_entry && plan.source_leave) {
+                const auto actor_instance = node->actor_instances.find (key);
+                if (actor_instance != node->actor_instances.end ())
+                    plan.actor_instance = actor_instance->second;
+            }
             return result_t<leave_plan_t>::success (std::move (plan));
         })
         .get ();
@@ -3491,6 +3497,24 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
             "spot-lifecycle-leave",
             [&] { return plan.source_leave (plan.source_spot_instance.get (), actor); })
           .result ();
+    };
+    const auto submit_source_leave = [&] {
+        if (!plan.source_leave)
+            return;
+        plan.source_state->run_serial_task_async (
+          "spot-lifecycle-leave",
+          [callback = plan.source_leave, spot = plan.source_spot_instance,
+           actor_instance = plan.actor_instance, actor] {
+              return callback (spot.get (), actor_instance ? actor_instance.get () : actor);
+          },
+          [node, spot_id = plan.source_state->spot_id] (result_t<void> left) {
+              if (!left) {
+                  report_spot_dispatch_trace (
+                    node, message_flow_outcome_t::completed, dispatch_error_surface_t::spot_actor,
+                    dispatch_message_kind_t::control, "spot_actor_leave", {}, spot_id, {}, {},
+                    message_flow_result_t::failed, std::nullopt, "leave_failed", left.exception ());
+              }
+          });
     };
 
     if (plan.destination == leave_plan_t::destination_t::remote_entry) {
@@ -3557,14 +3581,6 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
     }
 
     try {
-        const auto completed = run_source_leave ();
-        if (!completed) {
-            return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-              completed.error_kind (), completed.error () != nullptr
-                                         ? completed.error ()->what ()
-                                         : "spot actor leave callback failed"));
-        }
-
         struct location_update_plan_t
         {
             actor_ref_t committed;
@@ -3675,6 +3691,7 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
                 return selected;
             })
             .get ();
+        auto result = result_t<actor_ref_t>::success (location_plan.committed);
         if (joined_plan.callback) {
             const auto joined =
               plan.entry_state
@@ -3683,13 +3700,14 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
                   [&] { return joined_plan.callback (joined_plan.spot_instance.get (), actor); })
                 .result ();
             if (!joined) {
-                return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-                  joined.error_kind (), joined.error () != nullptr
-                                          ? joined.error ()->what ()
-                                          : "spot actor joined callback failed"));
+                result = result_t<actor_ref_t>::failure (joined.error_kind (),
+                                                         joined.error () != nullptr
+                                                           ? joined.error ()->what ()
+                                                           : "spot actor joined callback failed");
             }
         }
-        return task_t<actor_ref_t> (result_t<actor_ref_t>::success (location_plan.committed));
+        submit_source_leave ();
+        return task_t<actor_ref_t> (std::move (result));
     }
     catch (const framework_exception_t &error) {
         return task_t<actor_ref_t> (detail::result_access_t::failure<actor_ref_t> (error));
