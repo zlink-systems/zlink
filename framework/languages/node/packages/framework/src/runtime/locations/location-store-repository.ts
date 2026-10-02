@@ -3374,21 +3374,23 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+const GENERATION_KEYS = new Set([
+  'generation',
+  'leaseGeneration',
+  'ownerLeaseGeneration',
+  'objectGeneration',
+  'authorityOwnerGeneration',
+  'targetAuthorityOwnerGeneration',
+  'aggregateGeneration',
+  'lifecycleGeneration',
+  'descriptorRevision',
+  'nodeGeneration',
+  'applicationVersion',
+  'requestEncodedSize'
+]);
+
 function reviveCanonical(value: unknown, key = ''): unknown {
-  const generationKeys = new Set([
-    'generation',
-    'leaseGeneration',
-    'ownerLeaseGeneration',
-    'objectGeneration',
-    'authorityOwnerGeneration',
-    'aggregateGeneration',
-    'lifecycleGeneration',
-    'descriptorRevision',
-    'nodeGeneration',
-    'applicationVersion',
-    'requestEncodedSize'
-  ]);
-  if (typeof value === 'string' && generationKeys.has(key)) return BigInt(value);
+  if (typeof value === 'string' && GENERATION_KEYS.has(key)) return BigInt(value);
   if (Array.isArray(value)) return value.map((item) => reviveCanonical(item));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
