@@ -529,7 +529,8 @@ SHA-256이 `requestSha256`과 같은지 확인한다. Record가 없거나 어느
 하나다. 생성의 예약·완료·취소, object 삭제와 relocation이 사용량을
 바꾸면, 그 변경을 담는 Store write가 바뀌는 host의 capacity counter를 함께 쓴다. 조건은 읽은 version이며,
 record가 없으면 없음을 조건으로 하고 사용량을 0으로 읽는다. Descriptor의 `capacity`(§4)는 이 record의
-복사본이다. Value는 아래 field를 이 순서로 담은 canonical JSON이다.
+복사본이다. Value는 아래 field를 이 순서로 담으며, byte 표현은 [§3.5](#35-spotwide-이동의-진행-record)의
+Canonical JSON 규칙을 따른다.
 
 | Field | 의미 |
 |---|---|
@@ -625,11 +626,10 @@ write 하나다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batc
 | Marker 설치 | Aggregate에 `inventory`가 있고 모든 목록 record를 확인한 뒤 시작한다. Participant마다 aggregate가 `staging`인 version과 participant 물리 version을 조건으로, 공개 `StoreVersion`이 entry의 `expectedStoreVersion`과 같을 때 marker를 쓰고 `visibleStoreVersion`을 지운다. Payload와 owner는 바꾸지 않는다. 같은 canonical marker bytes가 이미 있으면 완료이고, 다른 marker가 있으면 `Conflict`다. Inventory 순서로 첫 `newOwner` entry의 write에만 `AuthorityOwnerGeneration` counter 갱신과 aggregate의 구간 기록을 함께 넣는다([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 구간이 이미 기록돼 있으면 다시 발급하지 않는다. |
 | Prepare | 모든 marker를 확인한 뒤 `staging → prepared`와 target host capacity counter의 reserved 증가를 쓴다. Aggregate version, target descriptor의 `lifecycleGeneration`, target owner lease([§3.1](#31-host-process가-다시-시작됐는지-구분한다)의 `Value` 조건)와 target capacity counter가 조건이다. Reserved 증가는 일반 host capacity counter의 점유이며 relocation 전용 reservation record가 아니다. |
 | Commit | `prepared → committed`, target capacity의 reserved → active 전환과 source active 감소, Spot participant authority에 아래 committed 공개 값을 marker 없이 쓰는 Put을 담는다. Aggregate version, Spot participant authority의 물리 version과 source·target capacity counter가 조건이다. Target의 lease·liveness·lifecycle은 다시 검사하지 않는다([§9.1](#91-복원-데이터가-공식-데이터가-되는-시점)). |
-| Source fence | [§6.1](#61-read와-cas)의 source `Preserve`다. `staging·prepared → aborted`, `prepared`였으면 reserved 해제, Spot participant authority에 이동 전 값을 marker 없이 쓰는 Put을 담는다. Aggregate version과 Spot participant authority의 물리 version이 조건이다. Commit과 같은 두 조건을 쓰고 둘 다 바꾸므로 둘 중 하나만 성공한다. |
-| Abort | `staging·prepared → aborted`와, `prepared`였으면 reserved 해제를 쓴다. Aggregate version이 조건이다. |
+| Source fence | [§6.1](#61-read와-cas)의 source `Preserve`다. `staging·prepared → aborted`, `prepared`였으면 reserved 해제, Spot participant authority에 이동 전 값을 marker 없이 쓰는 Put을 담는다. Aggregate version과 Spot participant authority의 물리 version이 조건이고, `prepared`였으면 target capacity counter도 조건이다. Commit과 같은 두 조건을 쓰고 둘 다 바꾸므로 둘 중 하나만 성공한다. |
+| Abort | `staging·prepared → aborted`와, `prepared`였으면 reserved 해제를 쓴다. Aggregate version이 조건이고, `prepared`였으면 target capacity counter도 조건이다. |
 
-Prepare·Commit·Source fence·Abort write의 key는 aggregate, Spot authority, (Prepare만) target owner
-lease와 사용량이 바뀌는 host의 capacity counter(Commit은 source와 target, 나머지는 target)이며 participant 수와 무관하다. Commit과 Source fence가
+Prepare·Commit·Source fence·Abort write의 key는 위 표의 조건과 변경이 정하며 participant 수와 무관하다. Commit과 Source fence가
 쓴 Spot authority에는 `visibleStoreVersion`을 두지 않으므로 새 물리 version이 공개 version이 된다.
 
 **공개 값.** Repository는 participant authority를 읽을 때 다음 값을 공개한다.

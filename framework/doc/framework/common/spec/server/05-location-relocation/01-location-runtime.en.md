@@ -576,8 +576,9 @@ capacity usage (§3.3). When a creation's reserve, completion, or cancellation, 
 relocation changes the usage, the Store write that
 carries that change also writes the capacity counter of each host whose usage changes. The condition is
 the version that was read; if the record is missing, the condition is its absence and the usage reads
-as 0. The descriptor's `capacity` (§4) is a copy of this record. The value is a canonical JSON that
-carries the fields below in this order.
+as 0. The descriptor's `capacity` (§4) is a copy of this record. The value carries the fields below in
+this order, and its bytes follow the Canonical JSON rule of
+[§3.5](#35-progress-records-of-a-spotwide-relocation).
 
 | Field | Meaning |
 |---|---|
@@ -681,12 +682,11 @@ is one Store write ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-
 | Marker installation | Starts after the aggregate has its `inventory` and every list record is confirmed. For each participant, conditioned on the aggregate's `staging` version and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. Identical existing canonical marker bytes count as done; any other marker is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. |
 | Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity counter's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease (the `Value` condition of [§3.1](#31-distinguishing-whether-the-host-process-restarted)), and the target capacity counter. The reserved increase occupies the ordinary host capacity counter and is not a relocation-specific reservation record. |
 | Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, and the source and target capacity counters. The target's lease, liveness, and lifecycle are not checked again ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
-| Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Carries `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and a Put that writes the pre-move values to the Spot participant's authority without a marker, conditioned on the aggregate version and the physical version of the Spot participant's authority. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
-| Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the reserved count, conditioned on the aggregate version. |
+| Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Carries `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and a Put that writes the pre-move values to the Spot participant's authority without a marker, conditioned on the aggregate version and the physical version of the Spot participant's authority, and also on the target capacity counter if the record was `prepared`. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
+| Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the reserved count, conditioned on the aggregate version, and also on the target capacity counter if the record was `prepared`. |
 
-The keys of the Prepare, Commit, Source fence, and Abort writes are the aggregate, the Spot
-authority, the target owner lease (Prepare only), and the capacity counter of each host whose usage changes (source and
-target for Commit, the target otherwise), regardless of the number of participants. The Spot authority written by Commit or Source fence carries no
+The keys of the Prepare, Commit, Source fence, and Abort writes are those of the conditions and changes in
+the table above, regardless of the number of participants. The Spot authority written by Commit or Source fence carries no
 `visibleStoreVersion`, so its new physical version becomes its public version.
 
 **Public values.** When the repository reads a participant authority it exposes the following.
