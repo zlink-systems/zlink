@@ -5137,7 +5137,13 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
     },
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
-      location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };
+      const entry = spotId === undefined ? this.entrySpot() : undefined;
+      location = {
+        actor: actorRef,
+        spotId: entry?.routingId ?? spotId,
+        spotGeneration: entry?.status().lifecycleGeneration ?? spotGeneration,
+        membershipEpoch
+      };
       return actorRef;
     }
   });
