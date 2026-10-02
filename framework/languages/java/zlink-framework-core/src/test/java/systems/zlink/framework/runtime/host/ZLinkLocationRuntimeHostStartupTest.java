@@ -47,6 +47,40 @@ import java.util.function.BooleanSupplier;
 
 final class ZLinkLocationRuntimeHostStartupTest {
     @Test
+    void shutdownObservesPendingStartupClaimBeforeCompleting() throws Exception {
+        PendingStartupStore store = new PendingStartupStore();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh("game")
+                .listen("inproc://pending-startup-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("pending-startup"));
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(store.claimStarted.await(1, TimeUnit.SECONDS));
+            assertFalse(
+                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                            .toCompletableFuture()
+                            .isDone(),
+                    "fixture must keep host startup pending before shutdown");
+            assertEquals(
+                    0, store.renewals.get(), "fixture must not have entered degraded heartbeat");
+            int renewalsBeforeShutdown = store.renewals.get();
+            var stopping = runtime.shutdown(Duration.ofSeconds(3)).toCompletableFuture();
+            assertFalse(stopping.isDone(), "host must observe the pending startup claim");
+            store.commitClaim();
+            stopping.get(3, TimeUnit.SECONDS);
+            assertTrue(store.released.await(1, TimeUnit.SECONDS));
+            assertTrue(store.confirmationReads.get() > 0);
+            assertEquals(renewalsBeforeShutdown, store.renewals.get());
+            assertTrue(
+                    store.inner.read(store.ownerKey, () -> false).toCompletableFuture().join()
+                            instanceof
+                            systems.zlink.framework.locationprovider.ZLinkStoreReadMissing);
+        }
+    }
+
+    @Test
     void degradedHostCompletesStartupBeforeOwnerLeaseRecovery() throws Exception {
         RecoveringLocationStore store = new RecoveringLocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -199,6 +233,67 @@ final class ZLinkLocationRuntimeHostStartupTest {
             Thread.sleep(1);
         }
         assertTrue(condition.getAsBoolean());
+    }
+
+    private static final class PendingStartupStore implements ZLinkLocationStore {
+        private final ZLinkInMemoryProviderLocationStore inner =
+                new ZLinkInMemoryProviderLocationStore();
+        private final CountDownLatch claimStarted = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+        private final AtomicInteger confirmationReads = new AtomicInteger();
+        private final AtomicInteger renewals = new AtomicInteger();
+        private final CompletableFuture<ZLinkStoreWriteResult> claim = new CompletableFuture<>();
+        private ZLinkStoreWriteRequest claimRequest;
+        private ZLinkStoreKey ownerKey;
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            if (key.equals(ownerKey) && claim.isDone()) confirmationReads.incrementAndGet();
+            return inner.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            if (claimRequest == null) {
+                claimRequest = request;
+                ownerKey =
+                        ((systems.zlink.framework.locationprovider.ZLinkStorePut)
+                                        request.mutations().getFirst())
+                                .key();
+                claimStarted.countDown();
+                return claim;
+            }
+            if (request.mutations().getFirst()
+                    instanceof systems.zlink.framework.locationprovider.ZLinkStoreDelete) {
+                return inner.write(request, cancellation)
+                        .thenApply(
+                                result -> {
+                                    released.countDown();
+                                    return result;
+                                });
+            }
+            if (request.mutations().getFirst()
+                            instanceof systems.zlink.framework.locationprovider.ZLinkStorePut put
+                    && put.key().equals(ownerKey)) renewals.incrementAndGet();
+            return inner.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return inner.scan(request, cancellation);
+        }
+
+        void commitClaim() {
+            inner.write(claimRequest, () -> false)
+                    .whenComplete(
+                            (result, failure) -> {
+                                if (failure == null) claim.complete(result);
+                                else claim.completeExceptionally(failure);
+                            });
+        }
     }
 
     private static final class RecoveringLocationStore implements ZLinkLocationStore {

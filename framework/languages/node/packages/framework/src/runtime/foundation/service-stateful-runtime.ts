@@ -306,7 +306,8 @@ export interface ServiceInstanceActivationAuthority {
 export interface ServiceAsyncInstanceActivationAuthority {
   read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead>;
   reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve>;
   resume(
     target: ServiceInstanceActivationTarget,
@@ -3098,18 +3099,27 @@ export class ServiceStatefulRuntime {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
-    const reserved = await authority.reserve({
-      target,
-      sourceNodeRid: record.sourceNodeRid,
-      sourceNodeGeneration: record.sourceNodeGeneration,
-      ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-      operationKind: record.operationKind,
-      operation: record.operation,
-      ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
-      deadlineUnixMs: record.deadlineUnixMs,
-      ...(metadataFrame === undefined ? {} : { metadataFrame }),
-      applicationPayloadFrame: payloadFrame
-    });
+    const deadline = operationDeadline(record.deadlineUnixMs);
+    let reserved: ServiceInstanceAuthorityReserve;
+    try {
+      reserved = await authority.reserve(
+        {
+          target,
+          sourceNodeRid: record.sourceNodeRid,
+          sourceNodeGeneration: record.sourceNodeGeneration,
+          ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
+          operationKind: record.operationKind,
+          operation: record.operation,
+          ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
+          deadlineUnixMs: record.deadlineUnixMs,
+          ...(metadataFrame === undefined ? {} : { metadataFrame }),
+          applicationPayloadFrame: payloadFrame
+        },
+        deadline.signal
+      );
+    } finally {
+      deadline.close();
+    }
     if (reserved.kind === 'ready') {
       throw new ServiceInstanceActivationRedirectError(reserved.route);
     }
@@ -4097,7 +4107,7 @@ export class ServiceStatefulRuntime {
     handler: ServiceUserSpotOperationHandler,
     record: ServiceUserSpotCreateRecord | ServiceUserSpotCloseRecord | ServiceActorCreateRecord
   ): Promise<ServiceUserSpotOperationResult> {
-    const deadline = userSpotDeadline(record.deadlineUnixMs);
+    const deadline = operationDeadline(record.deadlineUnixMs);
     try {
       const result =
         record.kind === 'userSpotCreate'
@@ -5346,16 +5356,23 @@ function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   );
 }
 
-function userSpotDeadline(deadlineUnixMs: bigint): {
+function operationDeadline(deadlineUnixMs: bigint): {
   readonly signal: AbortSignal;
   close(): void;
 } {
   const controller = new AbortController();
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
-  const timeout = setTimeout(
-    () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, MAX_NODE_TIMER_DELAY_MS))
-  );
+  const expire = () =>
+    controller.abort(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        'Operation deadline exceeded.'
+      )
+    );
+  const timeout =
+    delay <= 0
+      ? (expire(), undefined)
+      : setTimeout(expire, Math.min(delay, MAX_NODE_TIMER_DELAY_MS));
   return {
     signal: controller.signal,
     close: () => clearTimeout(timeout)

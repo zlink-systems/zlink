@@ -44,7 +44,8 @@ class relocation_store_port_t
   public:
     virtual ~relocation_store_port_t () = default;
     virtual relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                                     std::chrono::hours retention) = 0;
+                                     std::chrono::hours retention,
+                                     std::chrono::steady_clock::time_point operation_deadline) = 0;
     virtual std::optional<std::vector<std::uint8_t>> get (const std::string &reference) = 0;
     virtual void remove (const std::string &reference) = 0;
 };
@@ -76,7 +77,9 @@ class durable_session_journal_store_t
   public:
     explicit durable_session_journal_store_t (std::shared_ptr<relocation_store_port_t> store);
 
-    durable_session_journal_root_t prepare (const durable_session_journal_record_t &record);
+    durable_session_journal_root_t
+    prepare (const durable_session_journal_record_t &record,
+             std::chrono::steady_clock::time_point operation_deadline);
     std::optional<durable_session_journal_record_t>
     recover (const durable_session_journal_root_t &root) const;
     void cleanup (const durable_session_journal_root_t &root);

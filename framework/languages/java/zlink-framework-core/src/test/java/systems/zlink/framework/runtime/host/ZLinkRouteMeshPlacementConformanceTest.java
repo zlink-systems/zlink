@@ -127,6 +127,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
             List<CompletableFuture<?>> held = new ArrayList<>();
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
             String lastActorId = null;
             String lastSpotId = null;
             int objectIndex = 0;

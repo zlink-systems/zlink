@@ -36,7 +36,6 @@ import type {
 } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import { crc32c } from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob, relocationBlobReference } from '../locations/relocation-blob';
 
 import {
@@ -80,7 +79,8 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   }
 
   async reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve> {
     const target = activation.target;
     const owner = this.requireOwner();
@@ -99,15 +99,15 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     const stored = await putNewRelocationBlob(
       relocationStore,
       requestBytes,
-      CREATION_REQUEST_RETENTION_MS
+      CREATION_REQUEST_RETENTION_MS,
+      signal
     );
-    const storedRead = await relocationStore.read(stored.reference);
+    const storedRead = await relocationStore.read(stored.reference, signal);
     if (
       stored.reference.value.length === 0 ||
       stored.expiresAt.getTime() <= stored.storeNow.getTime() ||
       storedRead.kind !== 'found' ||
-      crc32c(storedRead.bytes) !== crc32c(requestBytes) ||
-      !Buffer.from(storedRead.bytes).equals(requestBytes)
+      Buffer.compare(storedRead.bytes, requestBytes) !== 0
     ) {
       await this.deleteOrphan(stored.reference);
       throw new Error('Relocation Store returned an invalid creation request receipt.');

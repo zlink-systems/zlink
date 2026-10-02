@@ -5192,7 +5192,7 @@ final class ZLinkJavaRawMeshNode
                 ZLinkApplicationJobContext.transferToQueuedJob();
         try {
             resolveAcceptedAuthorities(inbound)
-                    .whenComplete(
+                    .whenCompleteAsync(
                             (authorities, failure) -> {
                                 try (ZLinkApplicationJobContext.Scope ignored =
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
@@ -5308,7 +5308,8 @@ final class ZLinkJavaRawMeshNode
                                         applicationJob.close();
                                     }
                                 }
-                            });
+                            },
+                            applicationDispatch);
         } catch (RuntimeException rejected) {
             if (applicationJob != null) {
                 applicationJob.close();
@@ -6136,7 +6137,7 @@ final class ZLinkJavaRawMeshNode
                 ZLinkApplicationJobContext.transferToQueuedJob();
         try {
             resolveAcceptedAuthorities(inbound)
-                    .whenComplete(
+                    .whenCompleteAsync(
                             (authorities, failure) -> {
                                 try (ZLinkApplicationJobContext.Scope ignored =
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
@@ -6231,7 +6232,8 @@ final class ZLinkJavaRawMeshNode
                                         applicationJob.close();
                                     }
                                 }
-                            });
+                            },
+                            applicationDispatch);
         } catch (RuntimeException rejected) {
             if (applicationJob != null) {
                 applicationJob.close();

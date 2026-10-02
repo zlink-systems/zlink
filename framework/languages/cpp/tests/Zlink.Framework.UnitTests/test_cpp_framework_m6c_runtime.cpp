@@ -1688,8 +1688,11 @@ class public_memory_authority_store_t final
 class public_memory_relocation_repository_t final : public zlink::framework::relocation_repository_t
 {
   public:
-    zlink::framework::task_t<zlink::framework::relocation_stored_t> put_relocation (
-      std::vector<std::byte> payload, std::chrono::hours retention, std::stop_token) override
+    zlink::framework::task_t<zlink::framework::relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point,
+                    std::stop_token) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1748,7 +1751,8 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 {
   public:
     relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                             std::chrono::hours retention) override
+                             std::chrono::hours retention,
+                             std::chrono::steady_clock::time_point) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -2921,7 +2925,8 @@ void test_public_relocation_store_adapter (test_context_t &test)
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
     public_relocation_store_adapter_t adapter (public_store);
     const std::vector<std::uint8_t> payload{0, 1, 127, 255};
-    const auto stored = adapter.put (payload, std::chrono::hours (24));
+    const auto stored = adapter.put (payload, std::chrono::hours (24),
+                                     std::chrono::steady_clock::now () + std::chrono::minutes (1));
     test.require (stored.reference == "public-root"
                     && stored.checksum_crc32c == maintenance_runtime_t::crc32c (payload),
                   "public relocation adapter must preserve reference and CRC32C");
@@ -3979,15 +3984,29 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
     std::atomic<std::uint64_t> observed_session_sequence{0};
+    framework::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
+      first_route_resolution;
+    std::promise<void> first_route_started;
+    auto route_started = first_route_started.get_future ();
+    bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
-      [&bound_session_route, &observed_session_sequence] (
-        const object_ref_t &candidate) -> std::optional<detail::bound_session_relocation_route_t> {
+      [&bound_session_route, &observed_session_sequence, &first_route_resolution,
+       &first_route_started, &resolve_first_route] (const object_ref_t &candidate)
+        -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
           if (!bound_session_route || candidate.key != "production-remote-actor"
               || candidate.object_generation != 1 || candidate.authority_owner_generation != 1)
-              return std::nullopt;
+              return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
+                framework::result_t<
+                  std::optional<detail::bound_session_relocation_route_t>>::success (std::nullopt));
+          if (std::exchange (resolve_first_route, false)) {
+              first_route_started.set_value ();
+              return first_route_resolution.task ();
+          }
           auto resolved = *bound_session_route;
           resolved.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
-          return resolved;
+          return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
+            framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+              std::move (resolved)));
       });
     source.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
@@ -4133,12 +4152,23 @@ void test_application_relocation_remote_production_path (test_context_t &test)
           *bound_source_object, "production.actor", std::nullopt}};
     }
     relocation_result_t result;
+    std::promise<bool> relocation_submitted;
+    auto submitted = relocation_submitted.get_future ();
     std::thread relocation_thread ([&] {
-        result = await_task (source.relocate_application_actor (actor, target_descriptor, snapshot,
-                                                                std::chrono::steady_clock::now ()
-                                                                  + std::chrono::seconds (5)));
+        auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
+                                                             std::chrono::steady_clock::now ()
+                                                               + std::chrono::seconds (5));
+        relocation_submitted.set_value (!relocation.await_ready ());
+        result = await_task (std::move (relocation));
     });
-    std::this_thread::sleep_for (10ms);
+    test.require (submitted.get (),
+                  "production relocation must suspend while Session route resolution is pending");
+    route_started.get ();
+    auto resolved_route = *bound_session_route;
+    resolved_route.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
+    first_route_resolution.complete (
+      framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+        std::move (resolved_route)));
     std::thread source_dispatch ([&] { dispatch (source); });
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });

@@ -1233,6 +1233,35 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         Assert.Equal(TimeSpan.FromSeconds(30), options.MessageFollowDuration);
     }
 
+    [Fact]
+    public void LocationPolicy_RejectsRenewalTimeoutBeyondTheRepresentableStartupSum()
+    {
+        Assert.Throws<ZLinkConfigurationException>(() =>
+            new ServiceCollection().AddZLinkFramework(options =>
+            {
+                var locations = options.ConfigureLocations();
+                locations.OwnerLeaseRenewInterval = TimeSpan.FromTicks(1);
+                locations.OwnerLeaseRenewTimeout = TimeSpan.FromTicks(
+                    TimeSpan.MaxValue.Ticks / 2 + 1
+                );
+            })
+        );
+    }
+
+    [Fact]
+    public void LocationPolicy_RejectsTwoTimeoutsExceedingTheLeaseEligibilityWindow()
+    {
+        Assert.Throws<ZLinkConfigurationException>(() =>
+            new ServiceCollection().AddZLinkFramework(options =>
+            {
+                var locations = options.ConfigureLocations();
+                locations.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
+                locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(8);
+            })
+        );
+        new ServiceCollection().AddZLinkFramework(_ => { });
+    }
+
     [Theory]
     [InlineData(-1, 30)]
     [InlineData(15, -1)]

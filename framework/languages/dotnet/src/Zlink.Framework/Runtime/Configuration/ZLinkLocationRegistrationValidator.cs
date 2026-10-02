@@ -39,12 +39,17 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                     + "must all be greater than zero."
             );
 
+        var maximumRenewalTime =
+            options.OwnerLeaseRenewInterval > options.OwnerLeaseRenewTimeout
+                ? options.OwnerLeaseRenewInterval
+                : options.OwnerLeaseRenewTimeout;
+        var fencedLifetime = options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin;
         if (
-            options.OwnerLeaseRenewInterval + options.OwnerLeaseRenewTimeout
-            >= options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin
+            maximumRenewalTime >= fencedLifetime
+            || options.OwnerLeaseRenewTimeout >= fencedLifetime - maximumRenewalTime
         )
             throw new ZLinkConfigurationException(
-                "OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout must be "
+                "max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout must be "
                     + "less than OwnerLeaseTtl - OwnerLeaseFencingMargin."
             );
     }

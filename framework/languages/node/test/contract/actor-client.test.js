@@ -6,6 +6,7 @@ const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const { Message, RequestResult } = require('@zlink-systems/zlink');
+const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { ZLinkAbortError } = require('../../packages/framework/dist/runtime/abort');
 const { createHook } = require('node:async_hooks');
 const { waitActorReply } = require('../../packages/framework/dist/runtime/actors/actor-request-deadline');
@@ -178,6 +179,21 @@ test('actor client submit completes without exposing an admission result', async
     return true;
   });
   assert.equal(sends.length, 1);
+});
+
+test('actor one-way NOT_ADMITTED completes with Rejected for returned and thrown binding results', async () => {
+  const { ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  for (const sendToActor of [
+    () => SubmitResult.NotAdmitted,
+    () => { throw new ZLinkBackendResultError('submit', SubmitResult.NotAdmitted, 0); }
+  ]) {
+    const client = createActorClient({
+      nodeProvider: () => ({ sendToActor }),
+      locationResolver: () => createResolver()
+    });
+    await assert.rejects(client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected);
+  }
 });
 
 test('actor client writes the selected serializer into the packet codec header', async () => {
@@ -453,9 +469,11 @@ test('actor client invalidates a stale resolved route without retrying the opera
 
 test('actor client submit maps native terminal outcomes to operation-specific errors', async () => {
   const results = [
-    [2, framework.ZLinkFrameworkErrorKind.Unavailable],
-    [3, framework.ZLinkFrameworkErrorKind.NotFound],
-    [4, framework.ZLinkFrameworkErrorKind.ShuttingDown]
+    [SubmitResult.NotConnected, framework.ZLinkFrameworkErrorKind.Unavailable],
+    [SubmitResult.NotFound, framework.ZLinkFrameworkErrorKind.NotFound],
+    [SubmitResult.Terminated, framework.ZLinkFrameworkErrorKind.ShuttingDown],
+    [SubmitResult.Backpressured, framework.ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.NotAdmitted, framework.ZLinkFrameworkErrorKind.Rejected]
   ];
   const accepted = createActorClient({
     nodeProvider: () => ({ sendToActor: () => 0 }),
@@ -480,18 +498,6 @@ test('actor client submit maps native terminal outcomes to operation-specific er
     await assert.rejects(
       () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
       (error) => error.kind === expectedKind
-    );
-  }
-
-  for (const nativeResult of [1, 13]) {
-    const client = createActorClient({
-      nodeProvider: () => ({ sendToActor: () => nativeResult }),
-      completionTableProvider: () => undefined,
-      locationResolver: () => createResolver()
-    });
-    await assert.rejects(
-      () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
-      (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
     );
   }
 

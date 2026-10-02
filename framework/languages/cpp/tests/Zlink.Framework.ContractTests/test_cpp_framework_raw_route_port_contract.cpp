@@ -9,6 +9,7 @@
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 
 #include <zlink.hpp>
+#include <zlink/framework/contracts/errors/result.hpp>
 
 #include <algorithm>
 #include <cassert>

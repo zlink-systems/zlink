@@ -1477,8 +1477,11 @@ void verify_client_server_independent_raw_path ()
       server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (request_claim->records.front ().reply_token);
-    assert (server.reply (request_claim->records.front (),
-                          {"ClientServerReply", "application/json", bytes ("reply")}));
+    assert (server
+              .reply (request_claim->records.front (),
+                      {"ClientServerReply", "application/json", bytes ("reply")})
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*request_claim));
     while (!request_task.await_ready () && std::chrono::steady_clock::now () < deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -1503,10 +1506,13 @@ void verify_client_server_independent_raw_path ()
     request_claim =
       server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
-    assert (server.reply (
-      request_claim->records.front (),
-      zlink::framework::framework_exception_t (zlink::framework::framework_error_kind_t::rejected,
-                                               "ClientServer request was rejected.")));
+    assert (server
+              .reply (request_claim->records.front (),
+                      zlink::framework::framework_exception_t (
+                        zlink::framework::framework_error_kind_t::rejected,
+                        "ClientServer request was rejected."))
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*request_claim));
     while (!rejected_task.await_ready () && std::chrono::steady_clock::now () < deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -1537,8 +1543,11 @@ void verify_client_server_independent_raw_path ()
     }
     assert (large_claim && large_claim->records.size () == 1);
     const auto large_reply = bytes ("large payload accepted");
-    assert (server.reply (large_claim->records.front (),
-                          {"LargePayloadReply", "application/json", large_reply}));
+    assert (server
+              .reply (large_claim->records.front (),
+                      {"LargePayloadReply", "application/json", large_reply})
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*large_claim));
     while (!large_task.await_ready () && std::chrono::steady_clock::now () < large_deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();

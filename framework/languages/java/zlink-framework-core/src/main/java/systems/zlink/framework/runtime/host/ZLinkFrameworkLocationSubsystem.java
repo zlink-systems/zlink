@@ -21,9 +21,11 @@ import systems.zlink.framework.spots.ActorSpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkStoreSpotHandleResolver;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 final class ZLinkFrameworkLocationSubsystem {
@@ -57,7 +59,8 @@ final class ZLinkFrameworkLocationSubsystem {
 
     static ZLinkFrameworkLocationSubsystem create(
             ZLinkFrameworkRegistration registration,
-            ZLinkHandlerActivator.MutableServices runtimeHandlers) {
+            ZLinkHandlerActivator.MutableServices runtimeHandlers,
+            Supplier<Instant> cleanupDeadline) {
         ZLinkRegisteredLocationStores locationStores =
                 ZLinkLocationStoreResolver.resolve(registration.locations(), runtimeHandlers);
         if (locationStores == null) {
@@ -73,7 +76,7 @@ final class ZLinkFrameworkLocationSubsystem {
                         registration.locations().options().ownerLeaseRenewTimeout(),
                         registration.locations().options().ownerLeaseFencingMargin());
         CompletionStage<Void> startup =
-                locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
+                locationRuntime.start(RoutingId.from(locationRuntime.ownerId()), cleanupDeadline);
 
         ZLinkLiveLocationRows liveLocationRows =
                 ZLinkLiveLocationRows.create(locationStores, registration.locations().options());

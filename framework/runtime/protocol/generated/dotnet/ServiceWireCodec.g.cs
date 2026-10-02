@@ -3445,7 +3445,7 @@ internal static class ServiceWireCodec
         var ChannelName = ReadText8(reader, context);
         var Weight = ReadU32(reader, context);
         if (Weight.Value < 0U) throw Error("weight: minimum");
-        if (Weight.Value > 100U) throw Error("weight: maximum");
+        if (Weight.Value > 10000U) throw Error("weight: maximum");
         var value = new ChannelEntry(ChannelName, Weight);
         return value;
     }
@@ -3453,7 +3453,7 @@ internal static class ServiceWireCodec
     {
         WriteText8(writer, value.ChannelName, context);
         if (value.Weight.Value < 0U) throw Error("weight: minimum");
-        if (value.Weight.Value > 100U) throw Error("weight: maximum");
+        if (value.Weight.Value > 10000U) throw Error("weight: maximum");
         WriteU32(writer, value.Weight, context);
     }
 
@@ -3615,7 +3615,7 @@ internal static class ServiceWireCodec
             case 8:
                 PlacementWeight = ReadU32(item, context);
                 if (PlacementWeight!.Value < 0U) throw Error("placementWeight: minimum");
-                if (PlacementWeight!.Value > 100U) throw Error("placementWeight: maximum");
+                if (PlacementWeight!.Value > 10000U) throw Error("placementWeight: maximum");
                 item.End("placementWeight");
                 break;
             case 9:
@@ -3720,7 +3720,7 @@ internal static class ServiceWireCodec
         if (value.PlacementWeight is not null)
         {
             if (value.PlacementWeight!.Value < 0U) throw Error("placementWeight: minimum");
-            if (value.PlacementWeight!.Value > 100U) throw Error("placementWeight: maximum");
+            if (value.PlacementWeight!.Value > 10000U) throw Error("placementWeight: maximum");
             var item = new Writer();
             WriteU32(item, value.PlacementWeight!, context);
             WriteU8(body, new U8(8), context);
@@ -3821,7 +3821,7 @@ internal static class ServiceWireCodec
             var DescriptorRevision = ReadNonzeroU64(selected, context);
             var Weight = ReadU32(selected, context);
             if (Weight.Value < 0U) throw Error("weight: minimum");
-            if (Weight.Value > 100U) throw Error("weight: maximum");
+            if (Weight.Value > 10000U) throw Error("weight: maximum");
             var RuntimeState = ReadRuntimeState(selected, context);
             var SecurityIdentity = ReadText8(selected, context);
             var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(selected, context);
@@ -3863,7 +3863,7 @@ internal static class ServiceWireCodec
             WriteNonzeroU64(body, item.LifecycleGeneration, context);
             WriteNonzeroU64(body, item.DescriptorRevision, context);
             if (item.Weight.Value < 0U) throw Error("weight: minimum");
-            if (item.Weight.Value > 100U) throw Error("weight: maximum");
+            if (item.Weight.Value > 10000U) throw Error("weight: maximum");
             WriteU32(body, item.Weight, context);
             WriteRuntimeState(body, item.RuntimeState, context);
             WriteText8(body, item.SecurityIdentity, context);

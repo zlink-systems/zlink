@@ -31,6 +31,57 @@ final class ZLinkStoreLocationResolversTest {
     private static final RoutingId NODE = RoutingId.from("node-a");
 
     @Test
+    void firstPageUsesTheQueryDefaultSize() {
+        assertEquals(100, ZLinkPageRequest.firstPage().pageSize());
+    }
+
+    @Test
+    void unspecifiedQueryPageSizeReturnsOneHundredObjects() {
+        var reads = new AtomicInteger();
+        ZLinkLocationRepository store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "list" -> {
+                                        int index = reads.getAndIncrement();
+                                        yield CompletableFuture.completedFuture(
+                                                new ZLinkAuthorityPage(
+                                                        List.of(
+                                                                new ZLinkAuthorityEntry(
+                                                                        ZLinkAuthorityKeyCodec.spot(
+                                                                                "room-" + index),
+                                                                        readySpotSnapshot())),
+                                                        index < 100
+                                                                ? Optional.of(
+                                                                        new ZLinkAuthorityScanCursor(
+                                                                                "cursor-" + index))
+                                                                : Optional.empty()));
+                                    }
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseMissing());
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var page =
+                    query.listObjectLocations(
+                                    ZLinkLocationObjectFilter.of(
+                                            ZLinkPlacementObjectKind.USER_SPOT),
+                                    new ZLinkPageRequest(0, null))
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(100, page.items().size());
+            assertNotNull(page.continuationToken());
+            assertEquals(100, reads.get());
+        }
+    }
+
+    @Test
     void positiveReadyAuthorityIsCachedButMissingAuthorityIsNot() {
         AtomicInteger reads = new AtomicInteger();
         AtomicReference<Object> current = new AtomicReference<>(readySpotSnapshot());

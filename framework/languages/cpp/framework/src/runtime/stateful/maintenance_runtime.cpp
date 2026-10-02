@@ -232,11 +232,12 @@ durable_session_journal_store_t::durable_session_journal_store_t (
 }
 
 durable_session_journal_root_t
-durable_session_journal_store_t::prepare (const durable_session_journal_record_t &record)
+durable_session_journal_store_t::prepare (const durable_session_journal_record_t &record,
+                                          std::chrono::steady_clock::time_point operation_deadline)
 {
     const auto payload = encode_session_journal (record);
     const auto checksum = maintenance_runtime_t::crc32c (payload);
-    const auto stored = _store->put (payload, relocation_retention);
+    const auto stored = _store->put (payload, relocation_retention, operation_deadline);
     if (stored.reference.empty () || stored.checksum_crc32c != checksum)
         throw std::runtime_error ("durable Session journal store write failed");
     return {stored.reference, checksum};

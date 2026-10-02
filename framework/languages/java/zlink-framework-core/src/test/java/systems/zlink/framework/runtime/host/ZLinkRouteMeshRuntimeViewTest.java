@@ -187,6 +187,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
             sourceNode.objects().client();
             sourceNode.peerConnections().connect(targetRid, endpoint(targetRuntime));
             try (var sourceRuntime = start(source)) {
+                ZLinkFrameworkRuntimeTestAccess.startupCompletion(sourceRuntime)
+                        .toCompletableFuture()
+                        .join();
                 var snapshot =
                         awaitSnapshot(
                                 sourceRuntime,
@@ -216,6 +219,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
         sourceNode.objects().server();
         sourceNode.peerConnections().connect(missingRid, "tcp://127.0.0.1:" + unusedPort());
         try (var sourceRuntime = start(source)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(sourceRuntime)
+                    .toCompletableFuture()
+                    .join();
             var snapshot =
                     awaitSnapshot(
                             sourceRuntime,
@@ -300,6 +306,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
             sourceNode.channelName("work").server().setWeight(0);
             sourceNode.peerConnections().connect(targetRid, endpoint(targetRuntime));
             try (var sourceRuntime = start(source)) {
+                ZLinkFrameworkRuntimeTestAccess.startupCompletion(sourceRuntime)
+                        .toCompletableFuture()
+                        .join();
                 var snapshot =
                         awaitSnapshot(
                                 sourceRuntime,

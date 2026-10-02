@@ -548,9 +548,11 @@ class relocation_repository_t
 {
   public:
     virtual ~relocation_repository_t () = default;
-    virtual task_t<relocation_stored_t> put_relocation (std::vector<std::byte> payload,
-                                                        std::chrono::hours retention,
-                                                        std::stop_token cancellation = {}) = 0;
+    virtual task_t<relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point operation_deadline,
+                    std::stop_token cancellation = {}) = 0;
     virtual task_t<relocation_read_result_t> get_relocation (std::string reference,
                                                              std::stop_token cancellation = {}) = 0;
     virtual task_t<relocation_renew_result_t> renew_relocation (
