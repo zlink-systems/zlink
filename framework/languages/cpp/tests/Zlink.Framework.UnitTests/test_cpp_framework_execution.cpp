@@ -3905,6 +3905,88 @@ bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
                                             "authority-released"};
 }
 
+// §7 pending intent는 Release 뒤 재배치하지 않고 원 terminal에서 끝난다.
+bool verify_close_terminal_for_operational_boundary ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace host = zlink::framework::runtime::host;
+    for (int boundary = 0; boundary != 3; ++boundary) {
+        auto node = std::make_shared<spot_node_builder_state_t> ("close-terminal-node");
+        node->drain_flag = std::make_shared<std::atomic_bool> (false);
+        auto state = std::make_shared<spot_context_state_t> ();
+        state->node = node;
+        auto executor = std::make_shared<runtime::offload_executor_t> (1);
+        state->serial_executor = executor;
+        state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+          *executor, runtime::serial_execution_queue_options_t{});
+        state->spot_id = "close-terminal-spot";
+        state->spot_name = "close-terminal-type";
+        state->lifecycle_domain = spot_lifecycle_domain_t::instance ();
+        state->object_generation = 1;
+        state->authority_owner_generation = 1;
+        state->spot_instance = std::make_shared<int> (1);
+        int releases = 0;
+        int reincarnations = 0;
+        state->lifecycle.on_closing = [&, state] (void *, const spot_closing_context_t &,
+                                                  std::stop_token) {
+            node->drain_flag->store (boundary == 0);
+            state->relocation_boundary_active = boundary != 0;
+            state->admission_sealed = boundary == 2;
+            return task_t<void> (result_t<void>::success ());
+        };
+        node->begin_instance_spot_close = [&] (const spot_id_t &, std::string_view, std::uint64_t,
+                                               std::uint64_t) {
+            return task_t<host::spot_close_commit_t> (
+              result_t<host::spot_close_commit_t>::success (host::spot_close_commit_t{
+                result_t<bool>::success (true),
+                [&] {
+                    ++releases;
+                    return task_t<bool> (result_t<bool>::success (true));
+                },
+                [&] {
+                    ++reincarnations;
+                    return task_t<authority_snapshot_t> (result_t<authority_snapshot_t>::failure (
+                      framework_error_kind_t::internal_failure, "unexpected Reincarnate"));
+                }}));
+        };
+        node->spot_contexts_by_id.emplace (state->spot_id, spot_context_access_t::create (state));
+        using terminal_t = runtime::serial_execution_queue_t::async_completion_t;
+        std::promise<terminal_t> entered;
+        auto active = entered.get_future ();
+        if (!state->serial_queue->try_post_async ("active-before-close", [&] (terminal_t terminal) {
+                entered.set_value (std::move (terminal));
+            }))
+            return false;
+        auto finish_active = active.get ();
+        auto close = spot_context_access_t::create (state).close ();
+        auto record = std::make_shared<instance_spot_retained_message_t> ();
+        record->completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+        runtime::serial_work_options_t options;
+        options.retained_message = record;
+        bool terminal_observed = false;
+        const auto expected = boundary == 0 ? framework_error_kind_t::shutting_down
+                                            : framework_error_kind_t::unavailable;
+        if (!state->serial_queue->try_post_async (
+              "pending-intent",
+              [&, record] (terminal_t terminal) {
+                  auto result = record->completion->task ();
+                  terminal_observed = result.await_ready () && !result.result ()
+                                      && result.result ().error_kind () == expected;
+                  terminal ([] {});
+              },
+              std::move (options)))
+            return false;
+        finish_active ([] {});
+        state->drain_serial ();
+        const auto result = close.result ();
+        if (!result || !result.value () || !terminal_observed || releases != 1
+            || reincarnations != 0 || !node->spot_contexts_by_id.empty ())
+            return false;
+    }
+    return true;
+}
+
 // Store 대기 동안 turn을 반환하며, 미실행 application은 Close의 lifecycle
 // operation 뒤에서 실행된다(Spot address messaging §7·§9).
 bool verify_spot_close_returns_turn_while_store_step_is_pending ()
@@ -7411,6 +7493,8 @@ int main ()
     if (!verify_explicit_instance_spot_close_releases_authority_after_callback ()) {
         return 91;
     }
+    if (!verify_close_terminal_for_operational_boundary ())
+        return 140;
     if (!verify_spot_close_returns_turn_while_store_step_is_pending ()) {
         std::cerr << "Spot Close kept its lifecycle turn while a Store step was pending\n";
         return 137;

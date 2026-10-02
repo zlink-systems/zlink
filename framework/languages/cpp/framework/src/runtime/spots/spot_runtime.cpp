@@ -2591,11 +2591,19 @@ void spot_context_state_t::run_local_close_steps (
               })
               .get ();
         };
-        const auto serving =
-          owner->lane
-            .run ([&] { return !owner->host_draining () && !self->relocation_boundary_active; })
-            .get ();
-        if (original && serving && reincarnate) {
+        // Spot address messaging §7 step 3: drain or relocation forbids
+        // Reincarnate, and its kind ends the Instance intent messages left after
+        // the release. Accepted messages are never placed again.
+        const auto boundary = owner->lane
+                                .run ([&] {
+                                    return owner->host_draining ()
+                                             ? std::optional{framework_error_kind_t::shutting_down}
+                                           : self->relocation_boundary_active
+                                             ? std::optional{framework_error_kind_t::unavailable}
+                                             : std::optional<framework_error_kind_t>{};
+                                })
+                                .get ();
+        if (original && !boundary && reincarnate) {
             service::after_close_step (
               run_close_step<authority_snapshot_t> (reincarnate, resume), resume,
               [self, owner, done, resume, original, discard_reincarnation,
@@ -2659,7 +2667,15 @@ void spot_context_state_t::run_local_close_steps (
         }
         service::after_close_step (
           run_close_step<bool> (release, resume), resume,
-          [done, owner, self] (result_t<bool> result) mutable {
+          [done, owner, self, original, boundary, fail_pending] (result_t<bool> result) mutable {
+              if (original && boundary) {
+                  fail_pending (result_t<bool>::failure (
+                    *boundary, *boundary == framework_error_kind_t::shutting_down
+                                 ? "Spot Close released its authority during host drain"
+                                 : "Spot Close released its authority during relocation"));
+                  done (result);
+                  return;
+              }
               owner->lane
                 .run ([&] {
                     const auto found =

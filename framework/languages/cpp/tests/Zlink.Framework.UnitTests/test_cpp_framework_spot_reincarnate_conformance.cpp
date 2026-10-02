@@ -432,6 +432,8 @@ zf::task_t<reply_t> count_completion (zf::task_t<reply_t> task,
                  || packet == followup_intent_request_t::packet_name)
                 && initializer_fails (evidence->branch))
                 evidence->order.push_back ("pendingMessagesTypedFailure");
+            if (packet == intent_request_t::packet_name && evidence->branch == branch_t::draining)
+                evidence->order.push_back ("pendingMessagesTerminated");
         }
         co_return zf::result_t<reply_t>::failure (error.kind (), error.what ());
     }
@@ -850,6 +852,15 @@ void check_branch (branch_t kind, const char *name)
             != expect.at ("order").end ())
             seen.push_back (event);
     EXPECT_EQ (expect.at ("order").get<std::vector<std::string>> (), seen);
+    if (kind == branch_t::draining) {
+        EXPECT_FALSE (*exercise->intent_result);
+        EXPECT_EQ (zf::framework_error_kind_t::shutting_down,
+                   exercise->intent_result->error_kind ());
+        EXPECT_EQ ("ShuttingDown", expect.at ("messageTerminalByHost").at ("Draining"));
+        EXPECT_EQ (
+          expect.at ("missingPlacementCalls").get<long> (),
+          std::count (evidence->order.begin (), evidence->order.end (), "missingPlacement"));
+    }
     if (kind == branch_t::draining) {
         EXPECT_FALSE (exercise->final_authority);
         EXPECT_EQ ("Missing", expect.at ("authority"));
