@@ -590,7 +590,7 @@ The close procedure proceeds in the following order.
    arrival order. If initialization or restoration fails, that generation is `Delete`d and the
    waiting messages end with a typed failure. Otherwise (this host is draining or relocating) the
    authority is released with the same fence; a waiting Instance-intent request ends with
-   `ShuttingDown` when draining or `Unavailable` when sealed for a move, and a send is recorded in
+   `ShuttingDown` when draining or `Unavailable` when relocating (before or after the seal), and a send is recorded in
    diagnostics. An already accepted message is not placed again
    ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
