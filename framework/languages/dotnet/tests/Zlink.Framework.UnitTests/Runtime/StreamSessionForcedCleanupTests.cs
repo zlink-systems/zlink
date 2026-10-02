@@ -11,6 +11,101 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamSessionForcedCleanupTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData(ZlinkStreamMessageKind.Send)]
+    [InlineData(ZlinkStreamMessageKind.Control)]
+    public async Task Stream_inbound_deadline_contract(ZlinkStreamMessageKind? inboundKind)
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var time = new ManualTimeProvider();
+        await using var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            socket,
+            RoutingId.From("heartbeat-contract"),
+            typeof(DrainRaceSession),
+            static _ => { },
+            "test",
+            time,
+            requireConnectionReady: true
+        );
+
+        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout);
+        session.CheckLiveness();
+        Assert.Equal(0, socket.DisconnectCount);
+        Assert.False(socket.SendAsyncStarted.Task.IsCompleted);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            session.EnqueueConnected("local", "remote")
+        );
+
+        if (inboundKind is { } kind)
+        {
+            for (var cycle = 0; cycle < 3; cycle++)
+            {
+                time.Advance(
+                    ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1)
+                );
+                var header = new ZlinkStreamHeader(
+                    kind,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    kind == ZlinkStreamMessageKind.Control
+                        ? Systems
+                            .Zlink
+                            .Stream
+                            .Connector
+                            .Runtime
+                            .Protocol
+                            .ZlinkStreamControlProtocol
+                            .HeartbeatPongName
+                        : "heartbeat-data",
+                    ZlinkStreamMetadata.Empty
+                );
+                var admission =
+                    kind == ZlinkStreamMessageKind.Control
+                        ? session.TryEnqueueControlPacket(
+                            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                            Message.From([])
+                        )
+                        : session.TryEnqueuePacket(
+                            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                            Message.From([])
+                        );
+                Assert.Equal(ZLinkSerialPostAdmission.Accepted, admission);
+                session.CheckLiveness();
+                Assert.Equal(0, socket.DisconnectCount);
+            }
+        }
+
+        time.Advance(
+            ZLinkStreamSessionLiveness.HeartbeatTimeout
+                - ZLinkStreamSessionLiveness.HeartbeatInterval
+        );
+        session.EnqueueConnected("duplicate-local", "duplicate-remote");
+        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        session.CheckLiveness();
+        await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        AssertHeartbeatTimeoutFrame(socket.SentFrames.Last());
+    }
+
+    private static void AssertHeartbeatTimeoutFrame(byte[] frame)
+    {
+        Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out _, out var payload));
+        Assert.Equal(
+            Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout(),
+            payload.ToArray()
+        );
+    }
+
     [Fact]
     public async Task CloseAfterPhysicalPeerDisconnect_CompletesAndCleansBindingOnce()
     {
@@ -2519,6 +2614,8 @@ public sealed class StreamSessionForcedCleanupTests
         public TaskCompletionSource<byte[]> SentFrame { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public System.Collections.Concurrent.ConcurrentQueue<byte[]> SentFrames { get; } = new();
+
         public bool BlockSendAsync { get; init; }
 
         public Exception? SendAsyncFailure { get; init; }
@@ -2608,7 +2705,9 @@ public sealed class StreamSessionForcedCleanupTests
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                SentFrame.TrySetResult(payload.ToArray());
+                var frame = payload.ToArray();
+                SentFrames.Enqueue(frame);
+                SentFrame.TrySetResult(frame);
                 SendAsyncStarted.TrySetResult();
                 if (BlockSendAsync)
                     await AllowSendAsync.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
