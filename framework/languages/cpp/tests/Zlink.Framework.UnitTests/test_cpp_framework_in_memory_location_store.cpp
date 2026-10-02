@@ -652,6 +652,32 @@ TEST (ZLinkFrameworkInMemoryLocationStore, MaintainsOwnerLeasesAndUsesPollingWit
       store.read_owner_lease ("owner-a").result ().value ()));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, LiveMeshNodesExcludePreviousOwnerLeaseGeneration)
+{
+    in_memory_location_repository_t store;
+    const auto previous = claim_owner (store, "descriptor-owner");
+    publish_mesh_node (store, "previous-node", previous);
+    ASSERT_TRUE (std::holds_alternative<zlink::framework::owner_lease_released_t> (
+      store.release_owner_lease (previous).result ().value ()));
+
+    const auto current = claim_owner (store, previous.owner_id);
+    ASSERT_NE (previous.lease_generation, current.lease_generation);
+    publish_mesh_node (store, "current-node", current);
+
+    // Raw Store enumeration retains descriptors; Framework validates their owner token.
+    const auto stored = store.list_mesh_nodes ("play").result ().value ();
+    ASSERT_EQ (2u, stored.items.size ());
+    live_location_reader_t reader (store);
+    EXPECT_FALSE (reader.owner_available (previous).result ().value ());
+    EXPECT_TRUE (reader.owner_available (current).result ().value ());
+
+    const auto live = reader.list_mesh_nodes ("play").result ().value ();
+    ASSERT_EQ (1u, live.items.size ());
+    EXPECT_EQ (zlink::routing_id_t::from ("current-node"), live.items.front ().rid);
+    EXPECT_EQ (current.owner_id, live.items.front ().owner_id);
+    EXPECT_EQ (current.lease_generation, live.items.front ().lease_generation);
+}
+
 
 TEST (ZLinkFrameworkInMemoryLocationStore, FanoutPublisherRowsFenceIdentityRevisionAndCleanup)
 {

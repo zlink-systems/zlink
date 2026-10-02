@@ -144,6 +144,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly clearTimer: (handle: unknown) => void;
   private readonly monotonicNowMs: () => number;
   private readonly liveRows: ZLinkLiveRowFilter;
+  private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
   private readonly ownerLeaseRenewedHandlers = new Set<(renewal: ZLinkOwnerLeaseRenewed) => void>();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
@@ -191,14 +192,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       runtimeOptions.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.clearTimer =
       runtimeOptions.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
-    const leaseTracker =
+    this.leaseTracker =
       runtimeOptions.leaseTracker ??
       new ZLinkOwnerLeaseTracker({
         store: this.stores.ownerLeaseStore,
         options: this.options,
         monotonicNowMs: this.monotonicNowMs
       });
-    this.liveRows = new ZLinkLiveRowFilter(leaseTracker);
+    this.liveRows = new ZLinkLiveRowFilter();
   }
 
   get isStarted(): boolean {
@@ -858,7 +859,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal
   ): Promise<readonly ZLinkPeerLocation[]> {
     const rows = await this.stores.peerStore.listPeers(filter, signal);
-    const live = await this.filterLive(rows, (row) => row.ownerId, signal);
+    const live = await this.liveRows.filter(
+      rows,
+      (row, signal) => this.leaseTracker.isOwnerLive(row.ownerId, signal),
+      signal
+    );
     // Location Store rows may have been written before this process adopted
     // the endpoint-notation policy, or by another language/version's writer.
     // Normalize on read so every comparison downstream sees the canonical
@@ -871,7 +876,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal
   ): Promise<readonly ZLinkMeshNodeDescriptor[]> {
     const rows = (await this.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items;
-    const live = await this.filterLive(rows, (row) => row.ownerId, signal);
+    const live = await this.liveRows.filter(
+      rows,
+      (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
+      signal
+    );
     return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
   }
 
@@ -885,7 +894,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.pageRequest(page),
       signal
     );
-    const live = await this.filterLive(rows.items, (row) => row.ownerId, signal);
+    const live = await this.liveRows.filter(
+      rows.items,
+      (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
+      signal
+    );
     return {
       items: live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) })),
       continuationToken: rows.continuationToken
@@ -906,7 +919,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     const rows = await queryStore.listSpots(filter, this.pageRequest(page), signal);
     return {
-      items: await this.filterLive(rows.items, (row) => row.ownerId, signal),
+      items: await this.liveRows.filter(
+        rows.items,
+        (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
+        signal
+      ),
       continuationToken: rows.continuationToken
     };
   }
@@ -925,7 +942,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     const rows = await queryStore.listActors(filter, this.pageRequest(page), signal);
     return {
-      items: await this.filterLive(rows.items, (row) => row.ownerId, signal),
+      items: await this.liveRows.filter(
+        rows.items,
+        (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
+        signal
+      ),
       continuationToken: rows.continuationToken
     };
   }
@@ -960,7 +981,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         const live =
           (await this.liveRows.resolve(
             entry,
-            (candidate) => candidate.snapshot.ownerId,
+            (candidate, signal) =>
+              this.leaseTracker.isOwnerTokenLive(
+                {
+                  ownerId: candidate.snapshot.ownerId,
+                  leaseGeneration: candidate.snapshot.ownerLeaseGeneration
+                },
+                signal
+              ),
             signal
           )) !== undefined;
         items.push(this.objectLocationEntry(identity.globalId, entry.snapshot, live));
@@ -994,7 +1022,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     );
     if (found.kind === 'missing' || found.allocation.objectKind === 'actor') return undefined;
     const live =
-      (await this.liveRows.resolve(found, (snapshot) => snapshot.ownerId, signal)) !== undefined;
+      (await this.liveRows.resolve(
+        found,
+        (snapshot, signal) =>
+          this.leaseTracker.isOwnerTokenLive(
+            { ownerId: snapshot.ownerId, leaseGeneration: snapshot.ownerLeaseGeneration },
+            signal
+          ),
+        signal
+      )) !== undefined;
     return this.objectLocationEntry(String(spotId), found, live);
   }
 
@@ -1009,7 +1045,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     );
     if (found.kind === 'missing' || found.allocation.objectKind !== kind) return undefined;
     const live =
-      (await this.liveRows.resolve(found, (snapshot) => snapshot.ownerId, signal)) !== undefined;
+      (await this.liveRows.resolve(
+        found,
+        (snapshot, signal) =>
+          this.leaseTracker.isOwnerTokenLive(
+            { ownerId: snapshot.ownerId, leaseGeneration: snapshot.ownerLeaseGeneration },
+            signal
+          ),
+        signal
+      )) !== undefined;
     return this.objectLocationEntry(globalId, found, live);
   }
 
@@ -1036,7 +1080,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationPage<ZLinkRouteLocation>> {
     const rows = await this.stores.routeStore.listRoutes(filter, this.pageRequest(page), signal);
     return {
-      items: await this.filterLive(rows.items, (row) => row.ownerId, signal),
+      items: await this.liveRows.filter(
+        rows.items,
+        (row, signal) => this.leaseTracker.isOwnerLive(row.ownerId, signal),
+        signal
+      ),
       continuationToken: rows.continuationToken
     };
   }
@@ -1049,7 +1097,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const entries: ZLinkLocationTopologyEntry[] = [];
     for (const meshName of this.meshNamesOf(filter.meshName)) {
       for (const descriptor of await this.listAllMeshNodeDescriptors(meshName, signal)) {
-        const live = (await this.filterLive([descriptor], (row) => row.ownerId, signal)).length > 0;
+        const live = await this.leaseTracker.isOwnerTokenLive(descriptor, signal);
         const entry: ZLinkLocationTopologyEntry = {
           meshName: descriptor.meshName,
           nodeRid: descriptor.rid,
@@ -1089,14 +1137,17 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     for (const meshName of this.meshNamesOf(filter.meshName)) {
       const descriptors = await this.listAllMeshNodeDescriptors(meshName, signal);
       if (descriptors.length === 0) continue;
-      const live = await this.filterLive(descriptors, (row) => row.ownerId, signal);
-      const liveOwners = new Set(live.map((row) => row.ownerId));
+      const live = await this.liveRows.filter(
+        descriptors,
+        (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
+        signal
+      );
       summaries.push({
         meshName,
         totalCount: descriptors.length,
-        readyCount: descriptors.filter((row) => liveOwners.has(row.ownerId)).length,
+        readyCount: live.length,
         errorCount: 0,
-        stoppedCount: descriptors.filter((row) => !liveOwners.has(row.ownerId)).length,
+        stoppedCount: descriptors.length - live.length,
         lastUpdatedAt: descriptors.reduce(
           (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
           descriptors[0].updatedAt
@@ -1142,14 +1193,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       items,
       continuationToken: nextOffset < entries.length ? String(nextOffset) : undefined
     };
-  }
-
-  private async filterLive<TRow>(
-    rows: readonly TRow[],
-    ownerIdOf: (row: TRow) => string,
-    signal?: AbortSignal
-  ): Promise<TRow[]> {
-    return await this.liveRows.filter(rows, ownerIdOf, signal);
   }
 
   private scheduleHeartbeat(): void {

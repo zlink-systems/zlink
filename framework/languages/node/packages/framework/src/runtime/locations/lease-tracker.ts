@@ -79,6 +79,10 @@ export class ZLinkOwnerLeaseTracker {
     );
   }
 
+  async isOwnerTokenLive(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<boolean> {
+    return (await this.remainingOwnerTokenLeaseMs(owner, signal)) > 0;
+  }
+
   async getLiveOwnerSetVersion(signal?: AbortSignal): Promise<number> {
     const owners = await this.lane.run(() => [...this.snapshots.keys()]);
     const refreshed = await Promise.all(owners.map((ownerId) => this.getSnapshot(ownerId, signal)));
@@ -187,17 +191,15 @@ export class ZLinkOwnerLeaseTracker {
 }
 
 export class ZLinkLiveRowFilter {
-  constructor(private readonly leaseTracker: ZLinkOwnerLeaseTracker) {}
-
   async filter<TRow>(
     rows: readonly TRow[],
-    ownerIdOf: (row: TRow) => string,
+    isLive: (row: TRow, signal?: AbortSignal) => Promise<boolean>,
     signal?: AbortSignal,
     include?: (row: TRow) => boolean
   ): Promise<TRow[]> {
     const live: TRow[] = [];
     for (const row of rows) {
-      if ((include === undefined || include(row)) && (await this.isLive(row, ownerIdOf, signal))) {
+      if ((include === undefined || include(row)) && (await isLive(row, signal))) {
         live.push(row);
       }
     }
@@ -206,22 +208,14 @@ export class ZLinkLiveRowFilter {
 
   async resolve<TRow>(
     row: TRow | undefined,
-    ownerIdOf: (row: TRow) => string,
+    isLive: (row: TRow, signal?: AbortSignal) => Promise<boolean>,
     signal?: AbortSignal,
     include?: (row: TRow) => boolean
   ): Promise<TRow | undefined> {
     if (row === undefined || (include !== undefined && !include(row))) {
       return undefined;
     }
-    return (await this.isLive(row, ownerIdOf, signal)) ? row : undefined;
-  }
-
-  private async isLive<TRow>(
-    row: TRow,
-    ownerIdOf: (row: TRow) => string,
-    signal?: AbortSignal
-  ): Promise<boolean> {
-    return await this.leaseTracker.isOwnerLive(ownerIdOf(row), signal);
+    return (await isLive(row, signal)) ? row : undefined;
   }
 }
 

@@ -2138,13 +2138,14 @@ async function createThroughLiveDescriptor(
   spotId: string,
   ownerLeaseStore: ZLinkOwnerLeaseStore = store
 ) {
-  const liveRows = new ZLinkLiveRowFilter(new ZLinkOwnerLeaseTracker({ store: ownerLeaseStore }));
+  const tracker = new ZLinkOwnerLeaseTracker({ store: ownerLeaseStore });
+  const liveRows = new ZLinkLiveRowFilter();
   const coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
     target: async () => {
       const descriptors = await liveRows.filter(
         (await store.listMeshNodes('mesh')).items,
-        (descriptor) => descriptor.ownerId
+        (descriptor, signal) => tracker.isOwnerTokenLive(descriptor, signal)
       );
       const descriptor = descriptors[0];
       return descriptor === undefined

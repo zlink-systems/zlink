@@ -74,7 +74,12 @@ internal sealed class ZLinkLocationRuntimeQueryService
         var rows = await ReadMeshNodeDescriptorsAsync(meshName, cancellationToken)
             .ConfigureAwait(false);
         var live = await _liveRows
-            .FilterAsync(rows, static row => row.OwnerId, cancellationToken)
+            .FilterAsync(
+                rows,
+                static row => row.OwnerId,
+                cancellationToken,
+                static row => row.LeaseGeneration
+            )
             .ConfigureAwait(false);
         return PageInMemory(live, Normalize(page));
     }
@@ -97,7 +102,10 @@ internal sealed class ZLinkLocationRuntimeQueryService
             foreach (var row in rows)
             {
                 var live = await _leaseTracker
-                    .IsOwnerLiveAsync(row.OwnerId, cancellationToken)
+                    .IsOwnerTokenLiveAsync(
+                        new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 //  Spec 13 §365는 relocate가 unit seal을 마치면 source가 draining으로
                 //  넘어간다고 정하고, §409는 draining node가 새 placement target이
@@ -144,7 +152,10 @@ internal sealed class ZLinkLocationRuntimeQueryService
                 accumulator.Total++;
                 if (
                     await _leaseTracker
-                        .IsOwnerLiveAsync(row.OwnerId, cancellationToken)
+                        .IsOwnerTokenLiveAsync(
+                            new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
+                            cancellationToken
+                        )
                         .ConfigureAwait(false)
                 )
                 {

@@ -1153,6 +1153,48 @@ function placementDescriptor(nodeRid, stableType, placementWeight, active, reser
   };
 }
 
+test('descriptor queries require the exact owner lease generation', async () => {
+  let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
+  const store = new internal.ZLinkLocationStoreRepository(
+    new internal.ZLinkInMemoryProviderLocationStore(() => new Date(nowMs)),
+    () => new Date(nowMs)
+  );
+  const first = await store.claimOwnerLease('owner-query-generation', 30_000);
+  assert.equal(first.kind, 'claimed');
+  nowMs += 30_001;
+  const current = await store.claimOwnerLease('owner-query-generation', 30_000);
+  assert.equal(current.kind, 'claimed');
+  assert.notEqual(first.token.leaseGeneration, current.token.leaseGeneration);
+  const stale = {
+    ...placementDescriptor('stale-node', 'Player', 100, 0, 0),
+    ownerId: current.token.ownerId,
+    leaseGeneration: first.token.leaseGeneration
+  };
+  const valid = {
+    ...stale,
+    rid: rid('valid-node'),
+    leaseGeneration: current.token.leaseGeneration
+  };
+  const runtime = runtimeFor(store, {
+    locationStore: { async listMeshNodes() { return { items: [stale, valid] }; } },
+    monotonicNowMs: () => nowMs
+  });
+
+  assert.deepEqual((await runtime.listLiveMeshNodes('play')).map(row => row.rid), [valid.rid]);
+  assert.deepEqual(
+    (await runtime.listMeshNodeDescriptors('play')).items.map(row => row.rid), [valid.rid]
+  );
+  const topology = await runtime.listTopology({ meshName: 'play' });
+  assert.equal(topology.items.find(row => row.nodeRid === stale.rid).state,
+    framework.ZLinkLocationTopologyState.Lost);
+  assert.equal(topology.items.find(row => row.nodeRid === valid.rid).state,
+    framework.ZLinkLocationTopologyState.Ready);
+  const summary = (await runtime.listServiceSummaries({ meshName: 'play' })).items[0];
+  assert.equal(summary.totalCount, 2);
+  assert.equal(summary.readyCount, 1);
+  assert.equal(summary.stoppedCount, 1);
+});
+
 test('location readiness returns false when ready state is missing or query fails', async () => {
   const ready = new internal.DefaultZLinkLocationReadiness({
     async listTopology(filter) {
