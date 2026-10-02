@@ -708,11 +708,12 @@ uint64_t zlink::pipe_t::get_transport_connection_id () const
              : _endpoint_pair.connection_id.load ();
 }
 
-bool zlink::pipe_t::try_claim_transport_disconnected_event ()
+bool zlink::pipe_t::try_claim_transport_disconnected_event (uint64_t connection_id_)
 {
     // A raw connector can reuse this pipe across reconnects. Claim the
     // physical connection, so replacing it does not inherit the old claim.
-    const uint64_t connection_id = get_transport_connection_id ();
+    const uint64_t connection_id =
+      connection_id_ != 0 ? connection_id_ : get_transport_connection_id ();
     return connection_id != 0
            && _transport_disconnected_event_connection_id.exchange (
                 connection_id, std::memory_order_acq_rel) != connection_id;

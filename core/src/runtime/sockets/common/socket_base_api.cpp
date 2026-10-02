@@ -1833,10 +1833,11 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
         // preamble retain the RID and reject every subsequent reconnect.
         defer_socket_msg_pipe_termination (pipe_);
     }
-    // The claim is shared with the transport-error producer and final release.
+    // Network session pipes report physical termination through their engine.
     // Keep the inproc registration until release: close also uses it to find
     // pending peers that still need an owner for their termination handshake.
-    if (!pipe_->try_claim_transport_disconnected_event ())
+    if (pipe_->is_session_pipe ()
+        || !pipe_->try_claim_transport_disconnected_event ())
         return;
     endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
     endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
@@ -1849,8 +1850,7 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
       && endpoint_runtime ().inprocs.endpoint_for_pipe (
         pipe_, &inproc_reconnect_endpoint);
     // Physical termination is observable before inbound records are drained.
-    // Keep the existing claim shared with the transport-error producer so
-    // final pipe release cannot publish a second edge.
+    // The inproc pipe claim prevents final release from publishing a second edge.
     event_disconnected (
       endpoint_pair, ZLINK_DISCONNECT_UNKNOWN, routing_id_data,
       routing_id_size, pipe_->get_transport_lane (), pair_id,
