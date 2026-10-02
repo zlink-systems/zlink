@@ -789,24 +789,27 @@ public sealed class SerialExecutorTests
         errorSink.UnhandledCallbackException += exceptions.Enqueue;
         try
         {
-            await using var executor = new ZLinkSpotSerialExecutor(
-                null!,
-                static () => false,
-                CancellationToken.None,
-                errorSink
-            );
+            await using (
+                var executor = new ZLinkSpotSerialExecutor(
+                    null!,
+                    static () => false,
+                    CancellationToken.None,
+                    errorSink
+                )
+            )
+            {
+                var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    executor
+                        .ExecuteAsync(
+                            static (_, _) =>
+                                throw new InvalidOperationException("spot execute failure"),
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                );
 
-            var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                executor
-                    .ExecuteAsync(
-                        static (_, _) =>
-                            throw new InvalidOperationException("spot execute failure"),
-                        CancellationToken.None
-                    )
-                    .AsTask()
-            );
-
-            Assert.Equal("spot execute failure", thrown.Message);
+                Assert.Equal("spot execute failure", thrown.Message);
+            }
             Assert.Contains(exceptions, static ex => ex.Message == "spot execute failure");
         }
         finally
