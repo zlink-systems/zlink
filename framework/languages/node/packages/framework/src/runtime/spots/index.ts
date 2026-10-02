@@ -66,7 +66,6 @@ import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/ap
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind,
   internalFrameworkWireReply
 } from '../framework-errors-internal';
 import type { ZLinkBackendSpot, ZLinkBackendSpotNode } from '../backend/contracts';
@@ -1837,9 +1836,7 @@ export class DefaultZLinkSpotManager {
         );
       } catch (error) {
         this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, error);
-        const reason = request
-          ? dispatchReasonFromError(error)
-          : instanceDispatchErrorReason(error);
+        const reason = dispatchReasonFromError(error);
         if (!request) {
           this.traceInstanceMessage(
             ZLinkMessageFlowOutcome.Dropped,
@@ -3321,21 +3318,6 @@ function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
   return error instanceof ZLinkFrameworkException
     ? error.kind
     : ZLinkFrameworkErrorKind.InternalFailure;
-}
-
-function instanceDispatchErrorReason(error: unknown): ZLinkDispatchErrorReason {
-  if (error instanceof ZLinkFrameworkException) {
-    const kind = internalFrameworkErrorKind(error);
-    if (
-      kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
-      kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
-      kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
-      kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-    ) {
-      return ZLinkDispatchErrorReason.StaleTarget;
-    }
-  }
-  return ZLinkDispatchErrorReason.HandlerException;
 }
 
 interface ZLinkFormalRemoteTransferRequest {
