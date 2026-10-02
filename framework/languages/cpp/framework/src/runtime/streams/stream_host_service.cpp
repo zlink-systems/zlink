@@ -2511,7 +2511,14 @@ class stream_host_service_t::listener_t
                           session_liveness_t::clock_t::time_point received_at)
     {
         std::shared_ptr<core_session_t> current;
-        current = get_or_create_core_session (rid, received_at);
+        try {
+            current = get_or_create_core_session (rid, received_at);
+        }
+        catch (...) {
+            report_control_failure ([] { return std::current_exception (); });
+            disconnect_core_peer (rid, "protocol_error");
+            return false;
+        }
 
         current->liveness->record_inbound (received_at,
                                            header.kind () != stream_message_kind_t::control);
