@@ -460,18 +460,97 @@ test('location runtime records a stop-race claim release failure', async () => {
   const started = new Promise(resolve => { claimStarted = resolve; });
   const starting = runtime.start(rid('node-stop-race-release-failure'));
   await started;
-  await runtime.stop();
-  completeClaim({
-    kind: 'claimed',
-    token: { ownerId: 'owner-stop-race-release-failure', leaseGeneration: 1n },
-    leaseExpiresAt: new Date(30_000),
-    storeNow: new Date(0)
-  });
+  const stopping = runtime.stop();
+  completeClaim(await store.claimOwnerLease('owner-stop-race-release-failure', 30_000));
   await starting;
+  await assert.rejects(stopping, error => error instanceof internal.ZLinkOwnerCleanupError);
 
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.match(runtime.lastError, /release transport unavailable/u);
 });
+
+test('late startup claim release uses the stop shutdown signal', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const shutdown = new AbortController();
+  let claimStarted;
+  let completeClaim;
+  let releaseStarted;
+  let completeRelease;
+  let releaseSignal;
+  const releasing = new Promise(resolve => { releaseStarted = resolve; });
+  const leaseStore = {
+    async claimOwnerLease() {
+      claimStarted();
+      return await new Promise(resolve => { completeClaim = resolve; });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease(token, signal) {
+      releaseSignal = signal;
+      releaseStarted();
+      await new Promise(resolve => { completeRelease = resolve; });
+      return await store.releaseOwnerLease(token, signal);
+    }
+  };
+  const runtime = runtimeFor(store, { ownerId: 'late-startup-stop', ownerLeaseStore: leaseStore });
+  const started = new Promise(resolve => { claimStarted = resolve; });
+  const starting = runtime.start(rid('late-startup-stop'));
+  await started;
+  const stopping = runtime.stop(shutdown.signal);
+  const observedStop = stopping.then(() => undefined, error => error);
+  completeClaim(await store.claimOwnerLease('late-startup-stop', 15_000));
+  try {
+    await releasing;
+    assert.equal(releaseSignal, shutdown.signal);
+    await starting;
+    assert.equal(runtime.isStarted, false);
+    shutdown.abort(new Error('Host shutdown deadline exceeded.'));
+    assert.match((await observedStop).message, /Host shutdown deadline exceeded/u);
+  } finally {
+    completeRelease?.();
+    await starting;
+    await observedStop;
+  }
+});
+
+for (const failedPhase of ['confirmation', 'release']) {
+  test(`startup cancellation preserves ${failedPhase} failure for stop without retry`, async () => {
+    const store = new internal.ZLinkInMemoryLocationStore();
+    const cancellation = new AbortController();
+    const shutdown = new AbortController();
+    let claimStarted;
+    let readCalls = 0;
+    let releaseCalls = 0;
+    const leaseStore = {
+      async claimOwnerLease(ownerId, ttl, signal) {
+        claimStarted();
+        return await new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', async () => {
+            await store.claimOwnerLease(ownerId, ttl);
+            reject(signal.reason);
+          }, { once: true });
+        });
+      },
+      async readOwnerLease(ownerId, signal) {
+        readCalls += 1;
+        if (failedPhase === 'confirmation') throw new Error('confirmation unavailable');
+        return await store.readOwnerLease(ownerId, signal);
+      },
+      renewOwnerLease: store.renewOwnerLease.bind(store),
+      async releaseOwnerLease() { releaseCalls += 1; throw new Error('release unavailable'); }
+    };
+    const runtime = runtimeFor(store, { ownerId: `cancel-failed-${failedPhase}`, ownerLeaseStore: leaseStore });
+    const started = new Promise(resolve => { claimStarted = resolve; });
+    const starting = runtime.start(rid(`cancel-failed-${failedPhase}`), cancellation.signal, () => shutdown.signal);
+    await started;
+    cancellation.abort();
+    await assert.rejects(starting, error => error?.name === 'AbortError');
+    await assert.rejects(runtime.stop(shutdown.signal), error => error instanceof internal.ZLinkOwnerCleanupError);
+    assert.equal(readCalls, 1);
+    assert.equal(releaseCalls, failedPhase === 'release' ? 1 : 0);
+    assert.equal((await store.readOwnerLease(`cancel-failed-${failedPhase}`)).kind, 'found');
+  });
+}
 
 test('location runtime reclaims immediately after the Store rejects a stale owner token', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
@@ -880,12 +959,7 @@ test('location runtime does not install a reclaimed lease after stop races with 
 
   const stopping = runtime.stop();
   await new Promise((resolve) => setImmediate(resolve));
-  completeFreshClaim({
-    kind: 'claimed',
-    token: { ownerId: 'owner-a', leaseGeneration: 2n },
-    leaseExpiresAt: new Date(30_000),
-    storeNow: new Date(0)
-  });
+  completeFreshClaim(await store.claimOwnerLease('owner-a', 30_000));
   await stopping;
 
   assert.equal(runtime.isStarted, false);
@@ -2805,6 +2879,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
 test('production repository does not delete a row after its owner lease is replaced', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const ownerRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
   let ownerToken;
   let replaced = false;
   const provider = {
@@ -2813,8 +2888,8 @@ test('production repository does not delete a row after its owner lease is repla
     async write(request, signal) {
       if (!replaced && request.mutations.some(mutation => mutation.kind === 'delete')) {
         replaced = true;
-        assert.equal(await inner.releaseOwnerLease(ownerToken), 'released');
-        assert.equal((await inner.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
+        assert.equal(await ownerRepository.releaseOwnerLease(ownerToken), 'released');
+        assert.equal((await ownerRepository.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
       }
       return await inner.write(request, signal);
     }

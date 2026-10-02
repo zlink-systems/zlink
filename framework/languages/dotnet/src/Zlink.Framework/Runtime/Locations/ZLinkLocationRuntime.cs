@@ -13,6 +13,16 @@ internal sealed record ZLinkOwnerAdmissionDeadline(long LeaseOperationStartedAt,
 internal sealed class ZLinkOwnerLeaseClaimRejectedException(ZLinkOwnerLeaseClaimResult result)
     : InvalidOperationException($"Owner lease claim failed with '{result.GetType().Name}'.");
 
+internal sealed class ZLinkOwnerLeaseCancellationCleanupException(
+    OperationCanceledException cancellation,
+    Exception cleanupFailure
+)
+    : OperationCanceledException(
+        cancellation.Message,
+        cleanupFailure,
+        cancellation.CancellationToken
+    );
+
 /// <summary>
 /// Owns this runtime instance's location identity and lifecycle writes.
 /// One owner lease heartbeat per interval keeps every row of this owner
@@ -107,7 +117,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
     internal async ValueTask StartAsync(
         RoutingId nodeRid,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        CancellationToken? cancellationCleanupToken = null
     )
     {
         ThrowIfDisposingOrDisposed();
@@ -137,7 +148,11 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             // against the lease never see this owner's rows as stale on start.
             // An unavailable store leaves this generation without an admission
             // deadline; the shared heartbeat path will claim it after recovery.
-            _ = await RenewOwnerLeaseOnceAsync(cancellationToken, ownerLeaseDeadline.Token)
+            _ = await RenewOwnerLeaseOnceAsync(
+                    cancellationToken,
+                    ownerLeaseDeadline.Token,
+                    cancellationCleanupToken
+                )
                 .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -150,7 +165,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 .ConfigureAwait(false);
             heartbeatStarted.TrySetResult();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException cancellation)
+            when (cancellationToken.IsCancellationRequested)
         {
             var ownerToken = await _lane
                 .RunAsync(() =>
@@ -162,14 +178,20 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 })
                 .ConfigureAwait(false);
             if (ownerToken is { } token)
-                await RecordCancellationCleanupFailureAsync(async () =>
-                    {
-                        _ = await _store
-                            .ReleaseOwnerLeaseAsync(token, ownerLeaseDeadline.Token)
-                            .AsTask()
-                            .WaitAsync(ownerLeaseDeadline.Token)
-                            .ConfigureAwait(false);
-                    })
+                await RecordCancellationCleanupFailureAsync(
+                        async () =>
+                        {
+                            _ = await _store
+                                .ReleaseOwnerLeaseAsync(
+                                    token,
+                                    cancellationCleanupToken ?? ownerLeaseDeadline.Token
+                                )
+                                .AsTask()
+                                .WaitAsync(cancellationCleanupToken ?? ownerLeaseDeadline.Token)
+                                .ConfigureAwait(false);
+                        },
+                        cancellation
+                    )
                     .ConfigureAwait(false);
             throw;
         }
@@ -514,7 +536,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
     private async ValueTask<bool> RenewOwnerLeaseOnceAsync(
         CancellationToken cancellationToken,
-        CancellationToken deadlineToken
+        CancellationToken deadlineToken,
+        CancellationToken? cancellationCleanupToken = null
     )
     {
         var leaseOperationStartedAt = _time.GetTimestamp();
@@ -522,6 +545,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         var claimStarted = false;
         Exception? claimFailure = null;
         ZLinkOwnerLeaseClaimResult? rejectedClaim = null;
+        Task<ZLinkOwnerLeaseClaimResult>? pendingClaim = null;
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadlineToken
@@ -555,11 +579,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     }
 
                     claimStarted = true;
-                    var claim = await _store
+                    pendingClaim = _store
                         .ClaimOwnerLeaseAsync(owner.Id, _options.OwnerLeaseTtl, operation.Token)
-                        .AsTask()
-                        .WaitAsync(operation.Token)
-                        .ConfigureAwait(false);
+                        .AsTask();
+                    var claim = await pendingClaim.WaitAsync(operation.Token).ConfigureAwait(false);
                     if (claim is ZLinkOwnerLeaseClaimResult.Claimed claimed)
                     {
                         result = await InstallConfirmedClaimAsync(
@@ -599,15 +622,19 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             {
                 throw;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException cancellation)
+                when (cancellationToken.IsCancellationRequested)
             {
                 if (claimStarted && owner.Token is null)
-                    await RecordCancellationCleanupFailureAsync(async () =>
-                            await ReleaseClaimIfConfirmedAfterCancellationAsync(
-                                    owner.Id,
-                                    deadlineToken
-                                )
-                                .ConfigureAwait(false)
+                    await RecordCancellationCleanupFailureAsync(
+                            async () =>
+                                await ReleaseClaimIfConfirmedAfterCancellationAsync(
+                                        owner.Id,
+                                        cancellationCleanupToken ?? deadlineToken,
+                                        cancellationCleanupToken.HasValue ? pendingClaim : null
+                                    )
+                                    .ConfigureAwait(false),
+                            cancellation
                         )
                         .ConfigureAwait(false);
                 throw;
@@ -727,10 +754,22 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
     private async ValueTask ReleaseClaimIfConfirmedAfterCancellationAsync(
         string ownerId,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Task<ZLinkOwnerLeaseClaimResult>? pendingClaim
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (pendingClaim is not null)
+        {
+            try
+            {
+                _ = await pendingClaim.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                RecordLeaseFailure(exception.Message);
+            }
+        }
         var owner = await _store
             .ReadOwnerLeaseAsync(ownerId, cancellationToken)
             .AsTask()
@@ -744,7 +783,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 .ConfigureAwait(false);
     }
 
-    private async ValueTask RecordCancellationCleanupFailureAsync(Func<ValueTask> cleanup)
+    private async ValueTask RecordCancellationCleanupFailureAsync(
+        Func<ValueTask> cleanup,
+        OperationCanceledException cancellation
+    )
     {
         try
         {
@@ -755,6 +797,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             RecordLeaseFailure(
                 $"Owner lease cancellation cleanup failed: {cleanupException.Message}"
             );
+            throw new ZLinkOwnerLeaseCancellationCleanupException(cancellation, cleanupException);
         }
     }
 

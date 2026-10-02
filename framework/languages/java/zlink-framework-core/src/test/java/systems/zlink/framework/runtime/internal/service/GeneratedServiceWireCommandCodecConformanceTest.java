@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -29,6 +30,40 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ServiceWireCodec.DecoderContext CONTEXT =
             new ServiceWireCodec.DecoderContext(null, null, null, 0xffff_ffffL, 4_294_966_774L);
+
+    @Test
+    void weightEncoderAcceptsBothBoundsAndRejectsValuesOutsideTheContract() throws Exception {
+        for (int weight : new int[] {0, 10_000}) {
+            var entry = new ServiceWireCodec.ChannelEntry(
+                    new ServiceWireCodec.Text8("channel"), new ServiceWireCodec.U32(weight));
+            assertEquals(entry, ServiceWireCodec.decodeChannelEntry(
+                    ServiceWireCodec.encodeChannelEntry(entry, CONTEXT), CONTEXT));
+            var server = weightedServer(weight);
+            byte[] encoded = ServiceWireCodec.encodeClientServerAdmission(server, CONTEXT);
+            assertArrayEquals(encoded, ServiceWireCodec.encodeClientServerAdmission(
+                    ServiceWireCodec.decodeClientServerAdmission(encoded, CONTEXT), CONTEXT));
+        }
+        for (int weight : new int[] {-1, 10_001}) {
+            var entry = new ServiceWireCodec.ChannelEntry(
+                    new ServiceWireCodec.Text8("channel"), new ServiceWireCodec.U32(weight));
+            var server = weightedServer(weight);
+            assertThrows(IOException.class, () -> ServiceWireCodec.encodeChannelEntry(entry, CONTEXT));
+            assertThrows(IOException.class,
+                    () -> ServiceWireCodec.encodeClientServerAdmission(server, CONTEXT));
+        }
+    }
+
+    private static ServiceWireCodec.ClientServerAdmissionServer weightedServer(int weight) {
+        return new ServiceWireCodec.ClientServerAdmissionServer(
+                ServiceWireCodec.ClientServerRole.SERVER,
+                new ServiceWireCodec.Text8("channel"),
+                ServiceWireCodec.ClientServerDirection.CLIENT_TO_SERVER,
+                new ServiceWireCodec.Rid(new byte[] {1}),
+                new ServiceWireCodec.NonzeroU64(1), new ServiceWireCodec.NonzeroU64(1),
+                new ServiceWireCodec.U32(weight), ServiceWireCodec.RuntimeState.SERVING,
+                new ServiceWireCodec.Text8("identity"), new ServiceWireCodec.NonzeroU32(1),
+                new ServiceWireCodec.Endpoint("tcp://127.0.0.1:1234"));
+    }
 
     @Test
     void batch3RuntimeAndGeneratedCodecsMatchCanonicalGoldens() throws Exception {

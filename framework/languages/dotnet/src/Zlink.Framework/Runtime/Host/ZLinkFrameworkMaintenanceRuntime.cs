@@ -262,9 +262,23 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         );
     }
 
+    internal CancellationToken ShutdownCancellationToken => _lifecycle.ShutdownCancellationToken;
+
+    internal void RequestStartupCancellation() => _lifecycle.RequestShutdown(DefaultDeadline);
+
+    internal ValueTask<ZLinkFrameworkTerminationResult> ShutdownAfterStartupFailureAsync(
+        ZLinkDrainForceReason reason
+    ) => ShutdownCoreAsync(null, CancellationToken.None, reason);
+
     public ValueTask<ZLinkFrameworkTerminationResult> ShutdownAsync(
         TimeSpan? deadline = null,
         CancellationToken cancellationToken = default
+    ) => ShutdownCoreAsync(deadline, cancellationToken, null);
+
+    private ValueTask<ZLinkFrameworkTerminationResult> ShutdownCoreAsync(
+        TimeSpan? deadline,
+        CancellationToken cancellationToken,
+        ZLinkDrainForceReason? forcedReason
     )
     {
         var timeout = deadline ?? DefaultDeadline;
@@ -296,7 +310,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 using (ExecutionContext.SuppressFlow())
                     _shutdownOperation = ExecuteShutdownAsync(
                         Stopwatch.GetElapsedTime(0) + timeout,
-                        timeout
+                        timeout,
+                        forcedReason
                     );
             }
             operation = _shutdownOperation;
@@ -485,7 +500,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
 
     private async Task<ZLinkFrameworkTerminationResult> ExecuteShutdownAsync(
         TimeSpan absoluteDeadline,
-        TimeSpan teardownBound
+        TimeSpan teardownBound,
+        ZLinkDrainForceReason? forcedReason
     )
     {
         await Task.Yield();
@@ -496,18 +512,27 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         ZLinkDrainResult drained;
         try
         {
-            if (relocation is not null)
-                await relocation.WaitAsync(deadline.Token).ConfigureAwait(false);
-            var remaining = absoluteDeadline - Stopwatch.GetElapsedTime(0);
-            if (remaining <= TimeSpan.Zero)
-                throw new OperationCanceledException(deadline.Token);
-            drained = await _lifecycle
-                .DrainAsync(
-                    ZLinkFrameworkLifecycleIntent.Shutdown,
-                    remaining,
-                    cancellationToken: CancellationToken.None
-                )
-                .ConfigureAwait(false);
+            if (forcedReason is { } reason)
+            {
+                drained = await _lifecycle
+                    .ForceStopAsync(reason, teardownBound)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                if (relocation is not null)
+                    await relocation.WaitAsync(deadline.Token).ConfigureAwait(false);
+                var remaining = absoluteDeadline - Stopwatch.GetElapsedTime(0);
+                if (remaining <= TimeSpan.Zero)
+                    throw new OperationCanceledException(deadline.Token);
+                drained = await _lifecycle
+                    .DrainAsync(
+                        ZLinkFrameworkLifecycleIntent.Shutdown,
+                        remaining,
+                        cancellationToken: CancellationToken.None
+                    )
+                    .ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException exception)
             when (exception.CancellationToken == deadline.Token)

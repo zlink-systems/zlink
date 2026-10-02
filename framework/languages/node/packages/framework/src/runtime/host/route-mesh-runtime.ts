@@ -365,16 +365,12 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return waitForOperation(this.hostOperation, signal);
   }
 
-  shutdownHost(
-    deadline: number | Date = 30_000,
-    signal?: AbortSignal,
-    remainingTimeoutMs?: number
-  ): Promise<ZLinkMeshDrainResult> {
+  shutdownHost(deadline: number | Date, signal: AbortSignal): Promise<ZLinkMeshDrainResult> {
     if (typeof deadline === 'number' && (!Number.isFinite(deadline) || deadline <= 0)) {
       return Promise.reject(new TypeError('Shutdown deadlineMs must be greater than zero.'));
     }
     if (this.shutdownOperation === undefined) {
-      const operation = this.performHostShutdown(deadline, remainingTimeoutMs);
+      const operation = this.performHostShutdown(deadline, signal);
       this.shutdownOperation = operation;
       for (const state of this.states.values()) state.operation ??= operation;
     }
@@ -598,25 +594,14 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
 
   private async performHostShutdown(
     cleanupDeadline: Date | number,
-    remainingTimeoutMs?: number
+    signal: AbortSignal
   ): Promise<ZLinkMeshDrainResult> {
-    const timeoutMs = Math.max(
-      0,
-      remainingTimeoutMs ??
-        (cleanupDeadline instanceof Date ? cleanupDeadline.getTime() - Date.now() : cleanupDeadline)
-    );
     const deadlineAt =
       cleanupDeadline instanceof Date ? cleanupDeadline : new Date(Date.now() + cleanupDeadline);
     const entries = [...this.states.entries()];
-    if (entries.length === 0) return { kind: 'drained' };
     for (const [, state] of entries) {
       state.deadline = deadlineAt;
     }
-    const deadline = new AbortController();
-    const timer = setTimeout(
-      () => deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.')),
-      timeoutMs
-    );
     let result: ZLinkMeshDrainResult;
     try {
       for (const [meshName, state] of entries) {
@@ -624,16 +609,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.transition(meshName, state, ZLinkTopologyState.Stopping);
       }
       await Promise.all(
-        entries.map(([meshName]) => this.options.publishDraining(meshName, deadline.signal))
+        entries.map(([meshName]) => this.options.publishDraining(meshName, signal))
       );
-      await this.options.publishHostDraining(deadline.signal);
+      await this.options.publishHostDraining(signal);
       await Promise.all(
-        entries.map(([meshName]) => this.options.admission.awaitZero(meshName, deadline.signal))
+        entries.map(([meshName]) => this.options.admission.awaitZero(meshName, signal))
       );
       await Promise.all(
-        entries.map(([meshName]) => this.options.shutdownResources?.(meshName, deadline.signal))
+        entries.map(([meshName]) => this.options.shutdownResources?.(meshName, signal))
       );
-      await this.options.cleanupHostResources(deadline.signal);
+      await this.options.cleanupHostResources(signal);
       result = { kind: 'drained' };
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Stopped);
@@ -643,7 +628,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       const reason: ZLinkDrainForceReason =
         classified !== 'teardown_failed'
           ? classified
-          : deadline.signal.aborted
+          : signal.aborted
             ? 'deadline_exceeded'
             : classified;
       await Promise.all(
@@ -655,8 +640,6 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Failed);
       }
-    } finally {
-      clearTimeout(timer);
     }
     for (const [, state] of entries) {
       state.result = result;

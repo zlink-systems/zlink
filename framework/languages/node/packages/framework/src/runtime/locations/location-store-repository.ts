@@ -2956,7 +2956,8 @@ const AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS = 5_000;
  * A write response can be lost after the provider applied the atomic batch.
  * The Framework confirms every mutation by an independent exact read. A put
  * must retain the requested bytes and a version different from the conditioned
- * version; a delete must remain absent. Any mismatch is a normal conflict, so
+ * version; a delete must remain absent. An unconfirmed delete preserves the
+ * provider failure. Put mismatches are normal conflicts, so
  * the domain repository can reread its authoritative record and classify the
  * operation without exposing a provider-specific retry API.
  */
@@ -2978,15 +2979,20 @@ class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
     try {
       return await this.inner.write(request, signal);
     } catch (failure) {
+      let reconciled: ZLinkStoreWriteResult | undefined;
       try {
-        return await this.reconcile(request);
+        reconciled = await this.reconcile(request);
       } catch {
         throw failure;
       }
+      if (reconciled === undefined) throw failure;
+      return reconciled;
     }
   }
 
-  private async reconcile(request: ZLinkStoreWriteRequest): Promise<ZLinkStoreWriteResult> {
+  private async reconcile(
+    request: ZLinkStoreWriteRequest
+  ): Promise<ZLinkStoreWriteResult | undefined> {
     if (request.mutations.length === 0) {
       throw new Error('Cannot reconcile an opaque Store write without mutations.');
     }
@@ -3009,7 +3015,7 @@ class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
           : latestDate(storeNow, read.storeNow);
 
       if (mutation.kind === 'delete') {
-        if (read.kind !== 'missing') return { kind: 'conflict', storeNow };
+        if (read.kind !== 'missing') return undefined;
         continue;
       }
       if (

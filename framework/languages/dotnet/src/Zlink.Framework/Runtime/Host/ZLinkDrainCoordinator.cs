@@ -98,6 +98,8 @@ internal sealed class ZLinkDrainBlockedException(ZLinkFrameworkRelocationReason 
 
 internal interface IZLinkDrainExecutor
 {
+    CancellationToken ShutdownCancellationToken => CancellationToken.None;
+
     void RequestShutdown(TimeSpan deadline) { }
 
     ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
@@ -201,6 +203,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
         _executor.RequestShutdown(deadline);
     }
+
+    internal CancellationToken ShutdownCancellationToken => _executor.ShutdownCancellationToken;
 
     public ValueTask<ZLinkDrainResult> DrainAsync(CancellationToken cancellationToken = default) =>
         DrainAsync(
@@ -453,6 +457,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         ulong committedUnitCount = 0
     )
     {
+        RequestShutdown(deadline);
         var operation = await _lane
             .RunAsync(() =>
             {

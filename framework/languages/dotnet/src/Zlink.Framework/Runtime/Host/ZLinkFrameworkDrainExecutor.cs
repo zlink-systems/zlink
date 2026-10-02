@@ -41,6 +41,8 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 
     private static Task Noop() => Task.CompletedTask;
 
+    public CancellationToken ShutdownCancellationToken => _shutdownDeadline.Token;
+
     public void RequestShutdown(TimeSpan deadline)
     {
         if (deadline <= TimeSpan.Zero)
@@ -99,6 +101,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             if (Interlocked.CompareExchange(ref _shutdownRequested, 1, 0) == 0)
                 _shutdownDeadline.CancelAfter(deadline);
             sealCancellationToken = _shutdownDeadline.Token;
+            deadlineToken = _shutdownDeadline.Token;
         }
         var absoluteDeadline = DateTimeOffset.UtcNow + deadline;
         ulong committedUnitCount = 0;
@@ -490,7 +493,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         CancellationToken cancellationToken
     )
     {
-        _shutdownDeadline.Cancel();
         // The runtime force-stop owner sends the ServerDrain notification and
         // cancels session work before disposing the component state. Waiting
         // for the same sessions here would consume the entire force budget
@@ -522,13 +524,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             // Forced teardown still closes the remaining location resources.
             if (reason != ZLinkDrainForceReason.OwnerCleanupFailed)
             {
-                using var cleanupBound = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken
-                );
-                cleanupBound.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
-                    await _operations.CleanupOwner(cleanupBound.Token).ConfigureAwait(false);
+                    await _operations.CleanupOwner(_shutdownDeadline.Token).ConfigureAwait(false);
                 }
                 catch (Exception error)
                 {
@@ -539,7 +537,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
             await CaptureAsync(
                     "stop_location",
-                    () => _operations.StopLocation(cancellationToken),
+                    () => _operations.StopLocation(_shutdownDeadline.Token),
                     failures
                 )
                 .ConfigureAwait(false);
