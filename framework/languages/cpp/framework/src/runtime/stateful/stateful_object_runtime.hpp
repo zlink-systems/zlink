@@ -37,7 +37,6 @@ enum class object_state_t
     creating,
     ready,
     moving,
-    closing,
     recovering
 };
 
@@ -114,14 +113,6 @@ struct membership_token_t
     object_ref_t target_spot;
 
     friend bool operator== (const membership_token_t &, const membership_token_t &) = default;
-};
-
-struct spot_close_token_t
-{
-    std::uint64_t value = 0;
-    object_ref_t spot;
-
-    friend bool operator== (const spot_close_token_t &, const spot_close_token_t &) = default;
 };
 
 enum class turn_domain_t
@@ -321,12 +312,7 @@ class stateful_object_runtime_t
     std::optional<std::string> actor_membership (const object_ref_t &actor) const;
     stateful_error_t destroy_actor (const object_ref_t &actor);
     std::pair<stateful_error_t, bool> close_spot (const object_ref_t &spot);
-    std::pair<stateful_error_t, std::optional<spot_close_token_t>>
-    begin_close_spot (const object_ref_t &spot);
-    stateful_error_t commit_close_spot (const spot_close_token_t &token);
-    // The token of the Close that sealed this exact record, if it has not ended.
-    std::optional<spot_close_token_t> closing_spot_token (const object_ref_t &spot);
-    stateful_error_t abort_close_spot (const spot_close_token_t &token);
+    std::pair<stateful_error_t, bool> can_close_spot (const object_ref_t &spot) const;
 
     stateful_error_t enqueue (const object_ref_t &owner,
                               turn_domain_t domain,
@@ -455,6 +441,8 @@ class stateful_object_runtime_t
     static bool replaceable_relocation_remnant (const object_record_t &record,
                                                 const object_ref_t &target);
     static object_key_t key_for (const object_ref_t &reference);
+    const object_record_t *find_closeable_spot_locked (const object_ref_t &spot,
+                                                       stateful_error_t &error) const;
     object_record_t *find_record_locked (const object_ref_t &reference, stateful_error_t &error);
     const object_record_t *find_record_locked (const object_ref_t &reference,
                                                stateful_error_t &error) const;
@@ -478,7 +466,6 @@ class stateful_object_runtime_t
     std::map<object_key_t, std::uint64_t> _last_generation;
     std::map<std::uint64_t, object_key_t> _attempts;
     std::map<std::uint64_t, membership_move_t> _membership_moves;
-    std::map<std::uint64_t, spot_close_token_t> _spot_closes;
     std::map<std::uint64_t, relocation_seal_state_t> _relocation_seals;
     std::map<object_key_t, std::uint64_t> _relocation_restore_reservations;
     relocation_state_capture_t _relocation_state_capture;
@@ -489,7 +476,6 @@ class stateful_object_runtime_t
     bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;
     std::uint64_t _next_membership_token = 1;
-    std::uint64_t _next_spot_close_token = 1;
     std::uint64_t _next_relocation_token = 1;
     std::uint64_t _next_relocation_restore_reservation = 1;
 };

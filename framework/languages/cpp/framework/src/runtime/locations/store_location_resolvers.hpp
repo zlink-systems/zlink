@@ -138,7 +138,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                                           *projected_id, authority->object_generation};
             address.node_generation = authority->allocation.target.node_lifecycle_generation;
             apply_authority (address, *authority);
-            cache_ready_route (_spot_routes, spot_id, address);
+            // Closing retains its exact owner route, but is never a Ready cache entry.
+            const auto ready_user = decode_ready_user_spot_authority_payload (authority->payload);
+            const auto instance = ready_user
+                                    ? std::optional<instance_spot_authority_payload_t>{}
+                                    : decode_instance_spot_authority_payload (authority->payload);
+            if (ready_user
+                || (instance && instance->state == instance_spot_authority_state_t::ready))
+                cache_ready_route (_spot_routes, spot_id, address);
             return completed (std::optional<spot_address_t>{std::move (address)});
         }
         if (!mesh_name.empty ()) {
@@ -398,11 +405,16 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     static std::optional<std::string> decode_spot_id (const std::vector<std::byte> &payload)
     {
-        if (const auto user = decode_ready_user_spot_authority_payload (payload))
+        if (const auto user = decode_direct_user_spot_authority_payload (payload);
+            user
+            && (user->state == user_spot_authority_state_t::ready
+                || user->state == user_spot_authority_state_t::closing))
             return user->spot_id;
         if (const auto instance = decode_instance_spot_authority_payload (payload);
             instance && instance->state == instance_spot_authority_state_t::ready)
             return instance->spot_id;
+        if (const auto closing = decode_instance_closing_state (payload))
+            return closing->spot_id;
         if (payload.size () < 5 || std::to_integer<unsigned char> (payload[0]) != 'Z'
             || std::to_integer<unsigned char> (payload[1]) != 'L'
             || std::to_integer<unsigned char> (payload[2]) != 'I'

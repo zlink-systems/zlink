@@ -28,6 +28,9 @@ using namespace zlink::framework;
 using namespace zlink::framework::runtime;
 using zlink::framework::tests::owner_lease_time_store_t;
 
+const store_key_t object_generation_counter_key{"zlink:v11:object-counter"};
+const store_key_t authority_owner_generation_counter_key{"zlink:v11:authority-owner-counter"};
+
 class deferred_owner_read_store_t final : public location_store_t
 {
   public:
@@ -1406,6 +1409,15 @@ TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterCondit
     const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
     EXPECT_TRUE (provider.peer_marker_published);
     ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared));
+    for (const auto &mutation : std::vector<authority_mutation_t>{
+           authority_put_t{}, authority_reincarnate_t{}, authority_delete_t{}})
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+          repository
+            .compare_exchange_authority (actor_authority_key (actor_request.key.global_id),
+                                         actor->ready.store_version, mutation)
+            .result ()
+            .value ()));
+    EXPECT_EQ (source_capacity, capacity_record (provider, source_descriptor));
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransientConflicts)
@@ -1571,11 +1583,11 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     // Missing canonical counter rows bootstrap at issue 1 and are stored as
     // bare next-to-issue decimals in the same reserve batch.
     EXPECT_EQ (
-      std::get<store_found_t> (provider.read ({"zlink:v11:object-counter"}).result ().value ())
+      std::get<store_found_t> (provider.read (object_generation_counter_key).result ().value ())
         .value.bytes,
       bytes ("2"));
     EXPECT_EQ (std::get<store_found_t> (
-                 provider.read ({"zlink:v11:authority-owner-counter"}).result ().value ())
+                 provider.read (authority_owner_generation_counter_key).result ().value ())
                  .value.bytes,
                bytes ("2"));
     // store_version is the provider's own opaque per-key version
@@ -1680,7 +1692,7 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     // The two-participant aggregate issues 4 and 5 after reserve/retarget/
     // reserve, then stores the next-to-issue value 6 in one transition batch.
     EXPECT_EQ (std::get<store_found_t> (
-                 provider.read ({"zlink:v11:authority-owner-counter"}).result ().value ())
+                 provider.read (authority_owner_generation_counter_key).result ().value ())
                  .value.bytes,
                bytes ("6"));
     const auto aggregated_actor = reopened.read_authority (actor_key).result ().value ();
@@ -1790,7 +1802,7 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
       reopened.prepare_aggregate (exhausted_aggregate).result ().value ();
     const auto *exhausted_fence = std::get_if<aggregate_prepared_t> (&exhausted_prepared);
     ASSERT_NE (exhausted_fence, nullptr);
-    const store_key_t authority_counter_key{"zlink:v11:authority-owner-counter"};
+    const auto &authority_counter_key = authority_owner_generation_counter_key;
     const auto counter_before =
       std::get<store_found_t> (provider.read (authority_counter_key).result ().value ());
     const auto maximum = std::to_string (std::numeric_limits<std::int64_t>::max ());
@@ -1810,6 +1822,181 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
       std::get<authority_snapshot_t> (reopened.read_authority (actor_key).result ().value ())
         .store_version,
       exhausted_actor.store_version);
+}
+
+class counter_conflict_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        if (conflict_key) {
+            const auto key = std::exchange (conflict_key, std::nullopt).value ();
+            const auto current = std::get<store_found_t> (inner.read (key).result ().value ());
+            inner.write ({{}, {store_put_t{key, current.value.bytes, std::nullopt}}})
+              .result ()
+              .value ();
+        }
+        return inner.write (std::move (request));
+    }
+
+    in_memory_location_store_t inner;
+    std::optional<store_key_t> conflict_key;
+};
+
+TEST (CppFrameworkOpaqueLocationStore, ReincarnateAtomicallyIssuesPairAndPreservesCapacity)
+{
+    counter_conflict_store_t conflict_store;
+    auto &provider = conflict_store.inner;
+    provider_location_repository_t repository (conflict_store);
+    const auto owner = std::get<owner_lease_claimed_t> (
+                         repository.claim_owner_lease ("reincarnate-owner", 30s).result ().value ())
+                         .token;
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "reincarnate-mesh";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"reincarnate-node"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+    descriptor.capacity.actors.limit = 1;
+    ASSERT_EQ (location_write_status_t::stored,
+               repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "reincarnate-actor"};
+    request.intent.stable_type = "player";
+    request.target = {descriptor.mesh_name, node_rid_t::from_string ("reincarnate-node"), 1, owner};
+    request.capacity_bundle.actor_slots = 1;
+    const auto reservation =
+      std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    const auto key = actor_authority_key (request.key.global_id);
+    const auto &object_counter = object_generation_counter_key;
+    const auto &owner_counter = authority_owner_generation_counter_key;
+    const auto counter = [&] (const store_key_t &counter_key) {
+        return std::get<store_found_t> (provider.read (counter_key).result ().value ()).value;
+    };
+    const auto object_before = counter (object_counter);
+    const auto owner_before = counter (owner_counter);
+    EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+      repository
+        .compare_exchange_authority (key, reservation.creating.store_version,
+                                     authority_reincarnate_t{bytes ("new")})
+        .result ()
+        .value ()));
+    EXPECT_EQ (object_before.version.value, counter (object_counter).version.value);
+    EXPECT_EQ (owner_before.version.value, counter (owner_counter).version.value);
+    const auto ready =
+      std::get<object_committed_t> (
+        repository.commit ({request.key, reservation.fence, bytes ("ready")}).result ().value ())
+        .ready;
+    const auto capacity_before = capacity_record (provider, descriptor);
+    const auto result = repository
+                          .compare_exchange_authority (key, ready.store_version,
+                                                       authority_reincarnate_t{bytes ("new")})
+                          .result ()
+                          .value ();
+    const auto *stored = std::get_if<authority_stored_t> (&result);
+    ASSERT_NE (nullptr, stored);
+    EXPECT_GT (stored->snapshot.object_generation, ready.object_generation);
+    EXPECT_GT (stored->snapshot.authority_owner_generation, ready.authority_owner_generation);
+    EXPECT_EQ (owner.owner_id, stored->snapshot.owner.owner_id);
+    EXPECT_EQ (owner.lease_generation, stored->snapshot.owner.lease_generation);
+    EXPECT_EQ (ready.allocation.target.node_rid.value (),
+               stored->snapshot.allocation.target.node_rid.value ());
+    EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
+    EXPECT_EQ (bytes (std::to_string (stored->snapshot.object_generation + 1)),
+               counter (object_counter).bytes);
+    EXPECT_EQ (bytes (std::to_string (stored->snapshot.authority_owner_generation + 1)),
+               counter (owner_counter).bytes);
+    auto over_capacity = request;
+    over_capacity.key.global_id = "reincarnate-over-capacity";
+    EXPECT_TRUE (std::holds_alternative<object_placement_capacity_exhausted_t> (
+      repository.reserve (over_capacity).result ().value ()));
+    EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
+    for (const auto &mutation :
+         std::vector<authority_mutation_t>{authority_reincarnate_t{}, authority_delete_t{}})
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+          repository.compare_exchange_authority (key, ready.store_version, mutation)
+            .result ()
+            .value ()));
+
+    const auto object_unexhausted = counter (object_counter);
+    const auto owner_unexhausted = counter (owner_counter);
+    for (const auto &conflict_key : {object_counter, owner_counter}) {
+        conflict_store.conflict_key = conflict_key;
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+          repository
+            .compare_exchange_authority (key, stored->snapshot.store_version,
+                                         authority_reincarnate_t{bytes ("counter-conflict")})
+            .result ()
+            .value ()));
+        EXPECT_FALSE (conflict_store.conflict_key);
+        EXPECT_EQ (object_unexhausted.bytes, counter (object_counter).bytes);
+        EXPECT_EQ (owner_unexhausted.bytes, counter (owner_counter).bytes);
+        EXPECT_EQ (
+          stored->snapshot.store_version,
+          std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ())
+            .store_version);
+        EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
+    }
+    for (const auto &exhausted_key : {object_counter, owner_counter}) {
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider
+            .write (
+              {{},
+               {store_put_t{exhausted_key,
+                            bytes (std::to_string (std::numeric_limits<std::int64_t>::max ())),
+                            std::nullopt}}})
+            .result ()
+            .value ()));
+        const auto object_exhausted = counter (object_counter);
+        const auto owner_exhausted = counter (owner_counter);
+        EXPECT_TRUE (std::holds_alternative<authority_generation_exhausted_t> (
+          repository
+            .compare_exchange_authority (key, stored->snapshot.store_version,
+                                         authority_reincarnate_t{bytes ("exhausted")})
+            .result ()
+            .value ()));
+        EXPECT_EQ (object_exhausted.version.value, counter (object_counter).version.value);
+        EXPECT_EQ (owner_exhausted.version.value, counter (owner_counter).version.value);
+        EXPECT_EQ (
+          stored->snapshot.store_version,
+          std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ())
+            .store_version);
+        EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider
+            .write ({{},
+                     {store_put_t{object_counter, object_unexhausted.bytes, std::nullopt},
+                      store_put_t{owner_counter, owner_unexhausted.bytes, std::nullopt}}})
+            .result ()
+            .value ()));
+    }
+    repository.release_owner_lease (owner).result ().value ();
+    EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+      repository
+        .compare_exchange_authority (key, stored->snapshot.store_version,
+                                     authority_reincarnate_t{bytes ("expired")})
+        .result ()
+        .value ()));
+    EXPECT_EQ (object_unexhausted.bytes, counter (object_counter).bytes);
+    EXPECT_EQ (owner_unexhausted.bytes, counter (owner_counter).bytes);
+    EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
 }
 
 TEST (CppFrameworkOpaqueLocationStore, ReservationLivesOnlyInReservedAuthorityRow)

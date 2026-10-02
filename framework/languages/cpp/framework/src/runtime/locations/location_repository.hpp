@@ -142,6 +142,10 @@ struct authority_put_t
 {
     std::vector<std::byte> payload;
 };
+struct authority_reincarnate_t
+{
+    std::vector<std::byte> payload;
+};
 struct authority_retarget_t
 {
     std::vector<std::byte> payload;
@@ -155,8 +159,11 @@ struct authority_restore_t
 struct authority_delete_t
 {
 };
-using authority_mutation_t =
-  std::variant<authority_put_t, authority_retarget_t, authority_restore_t, authority_delete_t>;
+using authority_mutation_t = std::variant<authority_put_t,
+                                          authority_retarget_t,
+                                          authority_restore_t,
+                                          authority_delete_t,
+                                          authority_reincarnate_t>;
 
 struct authority_stored_t
 {

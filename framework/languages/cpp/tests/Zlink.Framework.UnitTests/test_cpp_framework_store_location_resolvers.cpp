@@ -137,6 +137,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
         authorities.insert_or_assign (std::move (key), std::move (snapshot));
     }
 
+    void set_authority (const std::string &key, std::nullopt_t) { authorities.erase (key); }
+
     zlink::framework::task_t<zlink::framework::location_write_result_t>
     update_mesh_node (zlink::framework::mesh_node_descriptor_t descriptor,
                       zlink::framework::location_write_intent_t intent) override
@@ -1966,6 +1968,69 @@ TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnl
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_EQ (0u, store.resolve_spot_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ClosingRoutePreservesOwnerFencesWithoutPositiveCache)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const auto kind :
+         {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {
+        test_location_repository_t store;
+        const auto owner = claim_test_owner (store, "closing-owner");
+        const std::string spot_id = "closing-route";
+        const auto key = spot_authority_key (spot_id);
+        authority_snapshot_t authority{
+          .store_version = "closing-version",
+          .object_generation = 7,
+          .authority_owner_generation = 11,
+          .owner = owner,
+          .allocation = {.state = placement_allocation_state_t::active,
+                         .object_kind = kind,
+                         .stable_type = "play",
+                         .target = {.mesh_name = "closing-mesh",
+                                    .node_rid = node_rid_t::from_string ("closing-node"),
+                                    .node_lifecycle_generation = 13,
+                                    .owner = owner}}};
+        if (kind == placement_object_kind_t::user_spot)
+            authority.payload = encode_user_spot_authority_payload (
+              {.state = user_spot_authority_state_t::closing,
+               .stable_type = authority.allocation.stable_type,
+               .spot_id = spot_id,
+               .owner_id = owner.owner_id,
+               .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+               .mesh_name = authority.allocation.target.mesh_name,
+               .node_rid = authority.allocation.target.node_rid,
+               .node_generation = authority.allocation.target.node_lifecycle_generation});
+        else
+            authority.payload = encode_instance_closing_state (
+              {authority.allocation.stable_type, spot_id, authority.object_generation,
+               authority.authority_owner_generation});
+        store.set_authority (key.value, authority);
+        location_options_t options;
+        options.route_cache_max_age = std::chrono::seconds (1);
+        store_location_resolvers_t resolvers (store, options);
+        const auto address = resolvers.resolve_spot_address ({}, spot_id).result ().value ();
+        ASSERT_TRUE (address);
+        EXPECT_EQ (spot_id, address->spot_id);
+        EXPECT_EQ (authority.allocation.target.mesh_name, address->mesh_name);
+        EXPECT_EQ (authority.allocation.target.node_rid.value (), address->node_rid.to_string ());
+        EXPECT_EQ (authority.allocation.target.node_lifecycle_generation, address->node_generation);
+        EXPECT_EQ (authority.store_version, address->store_version);
+        EXPECT_EQ (authority.object_generation, address->spot_generation);
+        EXPECT_EQ (authority.object_generation, address->object_generation);
+        EXPECT_EQ (authority.authority_owner_generation, address->authority_owner_generation);
+        EXPECT_EQ (owner.owner_id, address->owner.owner_id);
+        EXPECT_EQ (owner.lease_generation, address->owner.lease_generation);
+
+        authority.store_version = "closing-version-next";
+        store.set_authority (key.value, authority);
+        const auto refreshed = resolvers.resolve_spot_address ({}, spot_id).result ().value ();
+        ASSERT_TRUE (refreshed);
+        EXPECT_EQ (authority.store_version, refreshed->store_version);
+        store.set_authority (key.value, std::nullopt);
+        EXPECT_FALSE (resolvers.resolve_spot_address ({}, spot_id).result ().value ());
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AddLocationStoreRegistersOpaqueProvider)

@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace zlink::framework::runtime::messaging
@@ -25,6 +26,12 @@ enum class request_result_t
     internal_error
 };
 
+struct request_wire_failure_t
+{
+    std::uint32_t terminal_result;
+    std::uint32_t failure_code;
+};
+
 class request_failure_mapper_t
 {
   public:
@@ -36,6 +43,9 @@ class request_failure_mapper_t
     framework_exception_t reply_header_exception (std::uint32_t terminal_result,
                                                   std::uint32_t failure_code,
                                                   const std::string &operation_name) const;
+    // Encodes a target Framework failure; source/native completion uses its own mapper.
+    // A missing value means the closed wire contract cannot represent this ErrorKind.
+    std::optional<request_wire_failure_t> target_failure_reply (framework_error_kind_t kind) const;
 };
 
 } // namespace zlink::framework::runtime::messaging

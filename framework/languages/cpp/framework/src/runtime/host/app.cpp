@@ -1632,10 +1632,27 @@ void app_t::_apply_zlink_framework ()
             mesh_node_descriptor_t target;
             std::string stable_type;
         };
-        auto select_instance_target = [mesh_nodes, &location_store, &location_resolvers] (
-                                        const spot_id_t &spot_id,
-                                        const detail::spot_activation_intent_t &intent)
+        auto select_instance_target =
+          [mesh_nodes, &location_store, &location_resolvers] (
+            const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
+            const std::optional<runtime::spot_address_t> &cached_route = {})
           -> result_t<selected_instance_target_t> {
+            if (cached_route) {
+                const auto source =
+                  std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
+                      return mesh->mesh_name () == cached_route->mesh_name;
+                  });
+                if (source == mesh_nodes.end ())
+                    return result_t<selected_instance_target_t>::failure (
+                      framework_error_kind_t::not_configured,
+                      "Ready Instance Spot source Mesh is not configured");
+                mesh_node_descriptor_t target;
+                target.rid = cached_route->node_rid;
+                target.lifecycle_generation = cached_route->node_generation;
+                target.mesh_name = cached_route->mesh_name;
+                return result_t<selected_instance_target_t>::success (
+                  {*source, std::move (target), {}});
+            }
             std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> sources;
             for (const auto &mesh : mesh_nodes) {
                 if (!intent.mesh_name || mesh->mesh_name () == *intent.mesh_name)
@@ -1759,10 +1776,41 @@ void app_t::_apply_zlink_framework ()
             return result_t<selected_instance_target_t>::success (
               {source, candidates[index], stable_type});
         };
-        auto make_activation = [operation_sequence] (const selected_instance_target_t &selected,
-                                                     const spot_id_t &spot_id, bool request,
-                                                     bool has_metadata,
-                                                     std::chrono::milliseconds timeout) {
+        for (const auto &registration : mesh_node_registrations) {
+            if (!registration->spot_state)
+                continue;
+            registration->spot_state->select_instance_spot_target =
+              [select_instance_target] (
+                const runtime::protocol::instance_spot_activation_header_t &original)
+              -> result_t<runtime::protocol::instance_spot_activation_header_t> {
+                const detail::spot_activation_intent_t intent{
+                  .instance = true,
+                  .stable_type = original.target.stable_type,
+                  .mesh_name = original.target.mesh_name};
+                const auto selected =
+                  select_instance_target (spot_id_t (original.target.spot_id), intent);
+                if (!selected)
+                    return detail::propagate_failure<
+                      runtime::protocol::instance_spot_activation_header_t> (
+                      selected, "Instance Spot target selection failed");
+                auto header = original;
+                header.target.target_node_routing_id = selected.value ().target.rid.to_bytes ();
+                header.target.target_node_generation =
+                  selected.value ().target.lifecycle_generation;
+                header.target.mesh_name = selected.value ().target.mesh_name;
+                header.target.stable_type = selected.value ().stable_type;
+                header.target.descriptor_version =
+                  std::to_string (selected.value ().target.descriptor_revision);
+                return result_t<runtime::protocol::instance_spot_activation_header_t>::success (
+                  std::move (header));
+            };
+        }
+        auto make_activation = [operation_sequence] (
+                                 const selected_instance_target_t &selected,
+                                 const spot_id_t &spot_id, bool request, bool has_metadata,
+                                 std::chrono::milliseconds timeout,
+                                 const detail::spot_activation_intent_t &intent,
+                                 const std::optional<runtime::spot_address_t> &cached_route) {
             const auto source_status = selected.source->status ();
             const auto operation = operation_sequence->fetch_add (1, std::memory_order_relaxed);
             auto operation_scope = static_cast<std::uint64_t> (std::hash<std::string>{}(
@@ -1772,7 +1820,7 @@ void app_t::_apply_zlink_framework ()
                 operation_scope = source_status.lifecycle_generation () != 0
                                     ? source_status.lifecycle_generation ()
                                     : 1;
-            return runtime::protocol::instance_spot_activation_header_t{
+            auto header = runtime::protocol::instance_spot_activation_header_t{
               {selected.target.rid.to_bytes (), selected.target.lifecycle_generation,
                std::string (spot_id), selected.target.mesh_name, selected.stable_type,
                std::to_string (selected.target.descriptor_revision),
@@ -1787,24 +1835,36 @@ void app_t::_apply_zlink_framework ()
               {operation_scope, operation},
               0,
               has_metadata};
+            if (cached_route) {
+                header.target.object_generation = cached_route->object_generation;
+                header.target.authority_owner_generation = cached_route->authority_owner_generation;
+                header.target.owner_id = cached_route->owner.owner_id;
+                header.target.owner_lease_generation = cached_route->owner.lease_generation;
+                header.target.store_version = cached_route->store_version;
+                header.target.instance_intent = intent.instance;
+                header.target.deadline_unix_ms = 0;
+            }
+            return header;
         };
         channel_runtime.bind_instance_spot_activator (
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
             const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
+            const std::optional<runtime::spot_address_t> &cached_route,
             const std::string &packet_name, std::type_index,
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             const std::map<std::string, std::string> &metadata) -> task_t<result_t<void>> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
-              auto selected = select_instance_target (spot_id, intent);
+              auto selected = select_instance_target (spot_id, intent, cached_route);
               if (!selected)
                   co_return detail::propagate_failure<void> (
                     selected, "Instance Spot target selection failed");
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
-              auto header = make_activation (selected.value (), spot_id, false,
-                                             !metadata_frame.empty (), std::chrono::seconds (30));
+              auto header =
+                make_activation (selected.value (), spot_id, false, !metadata_frame.empty (),
+                                 std::chrono::seconds (30), intent, cached_route);
               const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
                 packet_name, serialized.content_type, serialized.payload.to_bytes ()};
@@ -1834,20 +1894,22 @@ void app_t::_apply_zlink_framework ()
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
             const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
-            std::string packet_name, std::type_index,
+            const std::optional<runtime::spot_address_t> &cached_route, std::string packet_name,
+            std::type_index,
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             std::chrono::milliseconds timeout,
             std::map<std::string, std::string> metadata) -> task_t<zlink::message_t> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
-              auto selected = select_instance_target (spot_id, intent);
+              auto selected = select_instance_target (spot_id, intent, cached_route);
               if (!selected)
                   co_return detail::propagate_failure<zlink::message_t> (
                     selected, "Instance Spot target selection failed");
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
-              auto header = make_activation (selected.value (), spot_id, true,
-                                             !metadata_frame.empty (), timeout);
+              auto header =
+                make_activation (selected.value (), spot_id, true, !metadata_frame.empty (),
+                                 timeout, intent, cached_route);
               const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
                 packet_name, serialized.content_type, serialized.payload.to_bytes ()};
@@ -3786,12 +3848,15 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         }
     }
 
+    if (std::holds_alternative<shutdown_completed_t> (result))
+        state.runtime_state.store (framework_runtime_state_t::draining, std::memory_order_release);
+
     for (const auto &service : state.hosted_services) {
         if (auto *lifecycle = detail::lifecycle_of (service.get ()))
             lifecycle->seal_application_dispatch ();
     }
 
-    auto publish_draining_markers = [&] (bool wait_for_propagation) {
+    auto publish_draining_markers = [&] {
         bool marker_published = false;
         try {
             auto provider = state.services.build_provider ();
@@ -3821,40 +3886,13 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             force (shutdown_force_reason_t::teardown_failed);
             return;
         }
-
-        if (!wait_for_propagation)
-            return;
-        const bool has_auto_connect = std::any_of (
-          state.hosted_services.begin (), state.hosted_services.end (), [] (const auto &service) {
-              const auto *lifecycle = detail::lifecycle_of (service.get ());
-              return lifecycle && lifecycle->participates_in_drain_propagation ();
-          });
-        if (!has_auto_connect)
-            return;
-        try {
-            auto provider = state.services.build_provider ();
-            auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
-            const auto propagation_bound = location_runtime.options ().polling_interval
-                                           + std::chrono::seconds (5)
-                                           + std::chrono::milliseconds (100);
-            if (std::chrono::steady_clock::now () + propagation_bound > deadline_at) {
-                std::this_thread::sleep_until (deadline_at);
-                force (shutdown_force_reason_t::deadline_exceeded);
-            } else {
-                std::this_thread::sleep_for (propagation_bound);
-            }
-        }
-        catch (...) {
-            force (shutdown_force_reason_t::teardown_failed);
-        }
     };
 
     /* Publish the draining state before waiting for accepted callbacks. A
      * caller must stop selecting this host while an already accepted handler
      * is still completing. */
     if (std::holds_alternative<shutdown_completed_t> (result)) {
-        state.runtime_state.store (framework_runtime_state_t::draining, std::memory_order_release);
-        publish_draining_markers (false);
+        publish_draining_markers ();
         if (std::holds_alternative<shutdown_completed_t> (result)
             && !publish_mesh_descriptor_state (state, framework_runtime_state_t::draining)) {
             force (shutdown_force_reason_t::teardown_failed);

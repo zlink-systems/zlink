@@ -1687,6 +1687,7 @@ std::uint8_t read_instance_route (std::span<const std::uint8_t> bytes, std::size
         (void) read_nonzero_u64 (body, body_offset, "authority owner generation");
         (void) read_nonzero_u64 (body, body_offset, "lease generation");
         (void) read_text16 (body, body_offset, "StoreVersion", authorityStoreVersionBytes);
+        (void) read_bool8 (body, body_offset, "Instance intent");
     } else {
         (void) read_text8 (body, body_offset, "target Mesh name");
         (void) read_text8 (body, body_offset, "stable type");
@@ -2101,9 +2102,16 @@ frozen_record_t summarize_frozen_application_record (const frozen_application_re
 std::vector<std::uint8_t>
 encode_instance_spot_activation_header (const instance_spot_activation_header_t &record)
 {
-    if (record.target.target_node_generation == 0 || record.target.deadline_unix_ms == 0
-        || record.target.deadline_unix_ms
-             > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())
+    const bool ready = record.target.authority_owner_generation != 0;
+    if (record.target.target_node_generation == 0
+        || (!ready
+            && (record.target.deadline_unix_ms == 0
+                || record.target.deadline_unix_ms
+                     > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())))
+        || (ready
+            && (record.target.object_generation == 0 || record.target.owner_id.empty ()
+                || record.target.owner_lease_generation == 0
+                || record.target.store_version.empty ()))
         || record.source_node_generation == 0
         || (record.operation.high == 0 && record.operation.low == 0)
         || record.request != (record.reply_route_id != 0)) {
@@ -2114,10 +2122,20 @@ encode_instance_spot_activation_header (const instance_spot_activation_header_t 
     append_bytes8 (route, record.target.target_node_routing_id, "target node RID");
     append_u64 (route, record.target.target_node_generation);
     append_text8 (route, record.target.spot_id, "target SpotId");
-    append_text8 (route, record.target.mesh_name, "target MeshName");
-    append_text8 (route, record.target.stable_type, "stable type");
-    append_text8 (route, record.target.descriptor_version, "target descriptor version");
-    append_u64 (route, record.target.deadline_unix_ms);
+    if (ready) {
+        append_u64 (route, record.target.object_generation);
+        append_text8 (route, record.target.owner_id, "owner ID");
+        append_u64 (route, record.target.authority_owner_generation);
+        append_u64 (route, record.target.owner_lease_generation);
+        append_text16 (route, record.target.store_version, "StoreVersion",
+                       authorityStoreVersionBytes);
+        route.push_back (record.target.instance_intent ? 1 : 0);
+    } else {
+        append_text8 (route, record.target.mesh_name, "target MeshName");
+        append_text8 (route, record.target.stable_type, "stable type");
+        append_text8 (route, record.target.descriptor_version, "target descriptor version");
+        append_u64 (route, record.target.deadline_unix_ms);
+    }
     if (route.size () > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t ("Instance Spot activation route exceeds u16 bound");
     }
@@ -2126,7 +2144,7 @@ encode_instance_spot_activation_header (const instance_spot_activation_header_t 
       magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::instanceSpot),
       static_cast<std::uint8_t> (record.has_metadata ? static_cast<std::uint8_t> (flag::metadata)
                                                      : 0)};
-    bytes.push_back (2);
+    bytes.push_back (ready ? 1 : 2);
     append_u16 (bytes, static_cast<std::uint16_t> (route.size ()));
     bytes.insert (bytes.end (), route.begin (), route.end ());
     append_u64 (bytes, record.source_node_generation);
@@ -2154,9 +2172,10 @@ decode_instance_spot_activation_header (std::span<const std::uint8_t> bytes)
         throw service_wire_error_t ("record is not an Instance Spot activation command");
     }
     std::size_t offset = prefix_size;
-    if (offset >= bytes.size () || bytes[offset++] != 2) {
+    if (offset >= bytes.size () || (bytes[offset] != 1 && bytes[offset] != 2)) {
         throw service_wire_error_t ("Instance Spot activation route version is invalid");
     }
+    const bool ready = bytes[offset++] == 1;
     const auto route_length = read_u16 (bytes, offset);
     if (route_length == 0 || bytes.size () - offset < route_length) {
         throw service_wire_error_t ("Instance Spot activation route is truncated");
@@ -2168,11 +2187,24 @@ decode_instance_spot_activation_header (std::span<const std::uint8_t> bytes)
     record.target.target_node_routing_id = read_bytes8 (route, route_offset, "target node RID");
     record.target.target_node_generation = read_u64 (route, route_offset);
     record.target.spot_id = read_text8 (route, route_offset, "target SpotId");
-    record.target.mesh_name = read_text8 (route, route_offset, "target MeshName");
-    record.target.stable_type = read_text8 (route, route_offset, "stable type");
-    record.target.descriptor_version =
-      read_text8 (route, route_offset, "target descriptor version");
-    record.target.deadline_unix_ms = read_u64 (route, route_offset);
+    if (ready) {
+        record.target.object_generation =
+          read_nonzero_u64 (route, route_offset, "object generation");
+        record.target.owner_id = read_text8 (route, route_offset, "owner ID");
+        record.target.authority_owner_generation =
+          read_nonzero_u64 (route, route_offset, "authority owner generation");
+        record.target.owner_lease_generation =
+          read_nonzero_u64 (route, route_offset, "lease generation");
+        record.target.store_version =
+          read_text16 (route, route_offset, "StoreVersion", authorityStoreVersionBytes);
+        record.target.instance_intent = read_bool8 (route, route_offset, "Instance intent");
+    } else {
+        record.target.mesh_name = read_text8 (route, route_offset, "target MeshName");
+        record.target.stable_type = read_text8 (route, route_offset, "stable type");
+        record.target.descriptor_version =
+          read_text8 (route, route_offset, "target descriptor version");
+        record.target.deadline_unix_ms = read_u64 (route, route_offset);
+    }
     if (route_offset != route.size ()) {
         throw service_wire_error_t ("Instance Spot activation route has trailing bytes");
     }
@@ -2201,9 +2233,10 @@ decode_instance_spot_activation_header (std::span<const std::uint8_t> bytes)
     }
     record.has_metadata = (header.flags & metadata_flag) != 0;
     if (offset != bytes.size () || record.target.target_node_generation == 0
-        || record.target.deadline_unix_ms == 0
-        || record.target.deadline_unix_ms
-             > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())
+        || (!ready
+            && (record.target.deadline_unix_ms == 0
+                || record.target.deadline_unix_ms
+                     > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())))
         || record.source_node_generation == 0
         || (record.operation.high == 0 && record.operation.low == 0)
         || record.request != (record.reply_route_id != 0)) {
