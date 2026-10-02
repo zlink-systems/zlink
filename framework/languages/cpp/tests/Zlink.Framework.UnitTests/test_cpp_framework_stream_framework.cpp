@@ -495,6 +495,11 @@ class oversized_stream_compression_codec_t final
 class transport_error_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
+    static constexpr char async_write_probe_name[] = "async-write-probe";
+    static constexpr std::size_t async_write_probe_size = 8 * 1024 * 1024;
+    static constexpr int async_write_receive_buffer_size = 4096;
+    std::promise<void> async_write_submitted;
+
     zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
     {
         {
@@ -534,6 +539,15 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
                const zlink::message_t &payload) override
     {
         record (_packets);
+        if (dispatch.packet_name == async_write_probe_name) {
+            auto writing =
+              stream
+                .reply_packet (zlink::message_t::from (std::string (async_write_probe_size, 'x')))
+                .async ();
+            async_write_submitted.set_value ();
+            co_await std::move (writing);
+            co_return;
+        }
         if (dispatch.can_reply) {
             (void) co_await stream.reply_packet (payload).async ();
         }
@@ -2173,6 +2187,32 @@ int main ()
     if (!stale_diagnostics_recorded) {
         transport_host.stop ();
         return 329;
+    }
+
+    // The peer deliberately does not read a reply larger than the socket
+    // buffers. async() must return a pending task before transport completion;
+    // otherwise the application worker becomes a second connection io pump.
+    auto async_write_client = connect_loopback (transport_port);
+    if (!async_write_client) {
+        transport_host.stop ();
+        return 330;
+    }
+    async_write_client->socket.set_option (boost::asio::socket_base::receive_buffer_size (
+      transport_error_session_t::async_write_receive_buffer_size));
+    auto async_write_submitted = transport_session.async_write_submitted.get_future ();
+    const zlink::framework::detail::stream_header_t async_write_header (
+      stream_message_kind_t::request, stream_codec_t::raw,
+      zlink::framework::detail::stream_header_flags_t::has_request_seq, 1,
+      transport_error_session_t::async_write_probe_name);
+    send_native_bytes (async_write_client,
+                       make_native_stream_frame (transport_runtime, async_write_header,
+                                                 zlink::message_t::from ("probe")));
+    const bool submission_returned =
+      async_write_submitted.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    close_native_client (async_write_client);
+    if (!submission_returned || !transport_session.wait_disconnected (8)) {
+        transport_host.stop ();
+        return 331;
     }
 
     transport_host.stop ();

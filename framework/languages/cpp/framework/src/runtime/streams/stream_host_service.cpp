@@ -2572,34 +2572,6 @@ class stream_host_service_t::listener_t
         wait_for_retired_core_sessions ();
     }
 
-    struct stream_write_wait_state_t
-    {
-        std::mutex mutex;
-        std::condition_variable condition;
-        bool completed = false;
-        std::atomic_bool cancel_requested{false};
-        boost::system::error_code error;
-
-        void complete (const boost::system::error_code &completion_error)
-        {
-            {
-                const std::lock_guard<std::mutex> lock (mutex);
-                if (completed) {
-                    return;
-                }
-                error = completion_error;
-                completed = true;
-            }
-            condition.notify_all ();
-        }
-
-        boost::system::error_code result ()
-        {
-            const std::lock_guard<std::mutex> lock (mutex);
-            return error;
-        }
-    };
-
     using stream_write_completion_t =
       std::function<void (const boost::system::error_code &, std::size_t)>;
     using stream_write_start_t = std::function<void (stream_write_completion_t)>;
@@ -2607,9 +2579,15 @@ class stream_host_service_t::listener_t
 
     struct stream_write_operation_t
     {
-        std::shared_ptr<stream_write_wait_state_t> state;
+        task_completion_source_t<boost::system::error_code> completion;
+        std::atomic_bool cancel_requested{false};
         stream_write_start_t start;
         stream_write_cancel_t cancel;
+
+        void complete (const boost::system::error_code &error)
+        {
+            completion.complete (result_t<boost::system::error_code>::success (error));
+        }
     };
 
     struct stream_write_queue_t
@@ -2653,7 +2631,7 @@ class stream_host_service_t::listener_t
                 start_next = true;
             }
         }
-        operation->state->complete (error);
+        operation->complete (error);
         if (start_next) {
             start_next_stream_write (owner);
         }
@@ -2671,7 +2649,7 @@ class stream_host_service_t::listener_t
             operation = owner->write_queue->pending.front ();
         }
         if (stream_stop_requested (*_stop, &owner->closing)) {
-            if (!operation->state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
+            if (!operation->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
                 operation->cancel ();
             }
             finish_stream_write (owner, operation, asio::error::operation_aborted);
@@ -2683,7 +2661,7 @@ class stream_host_service_t::listener_t
               if (const auto owner = weak_owner.lock ()) {
                   finish_stream_write (owner, operation, error);
               } else {
-                  operation->state->complete (asio::error::operation_aborted);
+                  operation->complete (asio::error::operation_aborted);
               }
           });
     }
@@ -2698,7 +2676,6 @@ class stream_host_service_t::listener_t
         if (stream_stop_requested (*_stop, &owner->closing))
             return {};
         auto operation = std::make_shared<stream_write_operation_t> ();
-        operation->state = std::make_shared<stream_write_wait_state_t> ();
         operation->start = std::forward<Start> (start);
         operation->cancel = std::forward<Cancel> (cancel);
         bool schedule = false;
@@ -2721,7 +2698,7 @@ class stream_host_service_t::listener_t
         return operation;
     }
 
-    // The caller waits for its own queued write while it runs the connection io.
+    // Only the connection reader pumps io at synchronous transport boundaries.
     boost::system::error_code
     wait_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
                        const std::atomic_bool &stop,
@@ -2729,27 +2706,20 @@ class stream_host_service_t::listener_t
     {
         if (!operation)
             return asio::error::operation_aborted;
-        std::unique_lock<std::mutex> lock (operation->state->mutex);
-        while (!operation->state->completed) {
+        auto completion = operation->completion.task ();
+        while (!completion.await_ready ()) {
             if (stream_stop_requested (stop, &owner->closing)
-                && !operation->state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
+                && !operation->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
                 /* Cancellation is submitted to the connection's executor. The
                  * same caller pumps that executor below, so a write that was
                  * started by the session dispatch executor is drained before
                  * this synchronous boundary returns. */
                 operation->cancel ();
             }
-            lock.unlock ();
             owner->io.restart ();
-            if (owner->io.run_one () == 0) {
-                lock.lock ();
-                operation->state->condition.wait_for (lock, std::chrono::milliseconds (100));
-            } else {
-                lock.lock ();
-            }
+            (void) owner->io.run_one ();
         }
-        lock.unlock ();
-        return operation->state->result ();
+        return completion.result ().value ();
     }
 
     struct frame_t
@@ -3161,7 +3131,9 @@ class stream_host_service_t::listener_t
         }
         auto error_header = detail::stream_runtime_t::make_terminal_header (
           stream, stream_message_kind_t::error, request_header);
-        write_frame (owner, connection, error_header, stream_error_payload (error));
+        if (!queue_frame (owner, connection, error_header, stream_error_payload (error)))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "STREAM error reply connection is closing");
     }
 
     template <typename TStream>
@@ -3262,16 +3234,17 @@ class stream_host_service_t::listener_t
               [this, owner, connection] (const stream_header_t &header,
                                          const zlink::message_t &payload,
                                          std::optional<std::chrono::milliseconds>) -> task_t<void> {
-                  try {
-                      write_frame (owner, connection, header, payload);
+                  auto operation = queue_frame (owner, connection, header, payload);
+                  if (!operation) {
+                      throw framework_exception_t (
+                        framework_error_kind_t::unavailable,
+                        asio::error::make_error_code (asio::error::operation_aborted).message ());
                   }
-                  catch (const framework_exception_t &) {
-                      throw;
-                  }
-                  catch (const std::exception &error) {
+                  const auto error = co_await operation->completion.task ();
+                  if (error)
                       throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                   error.what ());
-                  }
+                                                   error.message ());
+                  trace_stream_host ("write-completion", _stream, header, "result=success");
                   co_return;
               });
         }
@@ -3280,7 +3253,13 @@ class stream_host_service_t::listener_t
         std::optional<stream_error_t> session_transport_error;
         auto liveness = std::make_shared<session_liveness_t> ();
         try {
-            if (auto connected = _runtime.dispatch_connected (session, stream); !connected) {
+            if (auto connected = _runtime.dispatch_connected_async (
+                  session, stream,
+                  [this, connection] (const result_t<void> &result) {
+                      if (!result)
+                          request_close (*connection);
+                  });
+                !connected) {
                 return;
             }
             connected_session = true;
@@ -3381,6 +3360,9 @@ class stream_host_service_t::listener_t
                                       write_error_frame (owner, connection, stream, header, result);
                                   }
                                   catch (...) {
+                                      report_packet_dispatch_error (
+                                        header, detail::current_exception_result<void> ());
+                                      request_close (*connection);
                                   }
                               }
                           }
@@ -3402,6 +3384,9 @@ class stream_host_service_t::listener_t
                                 write_error_frame (owner, connection, stream, header, dispatched);
                             }
                             catch (...) {
+                                report_packet_dispatch_error (
+                                  header, detail::current_exception_result<void> ());
+                                request_close (*connection);
                             }
                         }
                     }
@@ -3450,6 +3435,12 @@ class stream_host_service_t::listener_t
         }
         if (connected_session) {
             owner->closing.store (true, std::memory_order_release);
+            // The reader owns connection io through shutdown. Cancelling the
+            // transport and consuming its ready completions releases write
+            // tasks before the session's existing dispatch drain waits on them.
+            close_stream (*connection);
+            io.restart ();
+            (void) io.poll ();
             if (connection_state->replacement) {
                 connection_state->replacement->deactivate ();
             }
