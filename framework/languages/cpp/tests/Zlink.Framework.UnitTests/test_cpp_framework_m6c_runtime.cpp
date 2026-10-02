@@ -12,6 +12,8 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -718,6 +720,134 @@ void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
                   "the held timer turn must resume after relocation readiness completion");
 }
 
+void test_remote_actor_leave_commits_before_source_callback (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    const auto owner = zlink::framework::node_rid_t::from_string ("remote-leave-owner");
+    const auto actor_ref = detail::actor_ref_access_t::make (owner, "remote_actor", "actor-1", 1);
+    const auto committed_actor_ref = detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("remote-leave-committed-owner"), "remote_actor",
+      "actor-1", 1);
+    detail::actor_gateway_runtime_t gateway;
+    struct test_actor_t : zlink::framework::actor_t
+    {
+        explicit test_actor_t (zlink::framework::actor_context_t context) :
+            state (std::move (context))
+        {
+        }
+        zlink::framework::actor_context_t &context () noexcept override { return state; }
+        const zlink::framework::actor_context_t &context () const noexcept override
+        {
+            return state;
+        }
+        void set_actor_ref (const zlink::framework::actor_ref_t &ref) { committed_ref = ref; }
+        zlink::framework::actor_context_t state;
+        std::optional<zlink::framework::actor_ref_t> committed_ref;
+    } actor (gateway.actor_context (actor_ref));
+    auto node = std::make_shared<detail::spot_node_builder_state_t> ("remote-leave-source");
+    node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::logging_builder_t logging;
+    logging.use_provider ("remote-leave-test", [] (const zlink::framework::log_record_t &record) {
+        std::clog << "remote-leave-flow ";
+        for (const auto &field : record.fields)
+            std::clog << field.key << '=' << field.value << ' ';
+        std::clog << '\n';
+    });
+    detail::dispatch_options_access_t::set_logger (node->dispatch,
+                                                   logging.create_logger ("remote-leave-test"));
+    auto source = std::make_shared<detail::spot_context_state_t> ();
+    source->node = node;
+    source->node_rid = zlink::framework::node_rid_t::from_string ("remote-leave-source");
+    source->spot_id = "source";
+    source->spot_instance = std::make_shared<int> (1);
+    source->serial_executor = std::make_shared<runtime::offload_executor_t> (2, "remote-leave");
+    source->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *source->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    std::atomic_bool committed{false};
+    std::atomic_bool callback_after_commit{false};
+    std::atomic_int callbacks{0};
+    auto join_completion =
+      std::make_shared<zlink::framework::task_completion_source_t<detail::actor_join_reply_t>> ();
+    source->actor_admissions[std::type_index (typeid (test_actor_t))].on_leave_actor =
+      [&] (void *, void *) {
+          callback_after_commit.store (committed.load ());
+          callbacks.fetch_add (1);
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+            zlink::framework::framework_error_kind_t::internal_failure,
+            "remote source leave callback failed after membership commit"));
+      };
+    node->lane
+      .run_checked ([&] {
+          node->actor_spot_ids.emplace ("remote_actor:actor-1", source->spot_id);
+          node->actor_generations.emplace ("remote_actor:actor-1", 1);
+          source->actor_count = 1;
+          node->actor_instances.emplace ("remote_actor:actor-1",
+                                         std::shared_ptr<void> (&actor, [] (void *) {}));
+      })
+      .get ();
+    gateway.on_join_entry_spot (
+      [&] (const auto &, const auto &, auto) { return join_completion->task (); });
+    auto context = detail::spot_context_access_t::create (source);
+    auto leaving = context.leave_actor (actor);
+    const auto source_retained = node->lane
+                                   .run ([&] {
+                                       return node->actor_spot_ids.contains ("remote_actor:actor-1")
+                                              && source->actor_count == 1;
+                                   })
+                                   .get ();
+    test.require (!leaving.await_ready () && source_retained && callbacks.load () == 0
+                    && !actor.committed_ref,
+                  "remote leave must retain source membership and callback until entry commit");
+    committed.store (true);
+    join_completion->complete (zlink::framework::result_t<detail::actor_join_reply_t>::success (
+      detail::actor_join_reply_t{.actor = committed_actor_ref}));
+    const auto left = leaving.result ();
+    const auto completed =
+      wait_until_bounded ([&] { return callbacks.load () == 1; }, std::chrono::seconds (1));
+    const auto source_removed = node->lane
+                                  .run ([&] {
+                                      return !node->actor_spot_ids.contains ("remote_actor:actor-1")
+                                             && source->actor_count == 0;
+                                  })
+                                  .get ();
+    test.require (left && completed && callback_after_commit.load () && source_removed
+                    && actor.context ().actor_ref ().node_rid ().value ()
+                         == committed_actor_ref.node_rid ().value ()
+                    && actor.committed_ref
+                    && actor.committed_ref->node_rid ().value ()
+                         == committed_actor_ref.node_rid ().value (),
+                  "remote source leave callback must run after entry membership commit");
+
+    callbacks.store (0);
+    join_completion =
+      std::make_shared<zlink::framework::task_completion_source_t<detail::actor_join_reply_t>> ();
+    node->lane
+      .run_checked ([&] {
+          node->actor_spot_ids.emplace ("remote_actor:actor-1", source->spot_id);
+          node->actor_generations.emplace ("remote_actor:actor-1", 1);
+          source->actor_count = 1;
+      })
+      .get ();
+    auto failed_leave = context.leave_actor (actor);
+    join_completion->complete (zlink::framework::result_t<detail::actor_join_reply_t>::failure (
+      zlink::framework::framework_error_kind_t::internal_failure, "entry commit failed"));
+    const auto failed = failed_leave.result ();
+    const auto failure_retained_source =
+      node->lane
+        .run ([&] {
+            return node->actor_spot_ids.contains ("remote_actor:actor-1")
+                   && source->actor_count == 1;
+        })
+        .get ();
+    test.require (
+      !failed && failed.error_kind () == zlink::framework::framework_error_kind_t::internal_failure
+        && failure_retained_source && callbacks.load () == 0,
+      "failed remote entry commit must retain source membership and skip leave callback");
+}
+
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -731,6 +861,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 
     struct test_actor_t
     {
+        std::optional<zlink::framework::actor_context_t> state;
+        zlink::framework::actor_context_t &context () noexcept { return *state; }
     } actor;
 
     const auto node =
@@ -770,10 +902,21 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     const auto entry = make_state (entry_id, "entry", true);
     std::atomic_int leave_callbacks{0};
     std::atomic_int joined_callbacks{0};
+    std::atomic_bool leave_saw_committed_entry{false};
     source->on_leave_actor_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
+        leave_saw_committed_entry.store (
+          node->lane
+            .run ([&] {
+                const auto found = node->actor_spot_ids.find ("test_actor:actor-1");
+                return found != node->actor_spot_ids.end () && found->second == entry_id;
+            })
+            .get (),
+          std::memory_order_release);
         leave_callbacks.fetch_add (1, std::memory_order_acq_rel);
-        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "source leave callback failed after membership commit"));
     };
     entry->on_actor_joined_callbacks[std::type_index (typeid (test_actor_t))] = [&] (void *,
                                                                                      void *) {
@@ -784,6 +927,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
 
     const auto actor_ref =
       ::zlink::framework::detail::actor_ref_access_t::make (node_rid, "test_actor", "actor-1", 1);
+    detail::actor_gateway_runtime_t gateway;
+    actor.state.emplace (gateway.actor_context (actor_ref));
     const std::string key = "test_actor:actor-1";
     node->lane
       .run_checked ([&] {
@@ -801,7 +946,7 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
       .get ();
 
     const auto submitted = source->run_serial_sync ("actor-leave-with-relocation-fence", [&] {
-        const auto left = context.leave_actor (actor_ref, actor).result ();
+        const auto left = context.leave_actor (actor).result ();
         if (!left) {
             throw std::runtime_error ("actor leave was not accepted from the handler turn");
         }
@@ -828,9 +973,10 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
       })
       .get ();
     test.require (submitted && completed && current_location == entry_id && source_actor_count == 0
-                    && entry_actor_count == 1,
-                  "actor leave deferred by a relocation-ready handler must run source and entry "
-                  "lifecycle callbacks before the next relocation turn");
+                    && entry_actor_count == 1
+                    && leave_saw_committed_entry.load (std::memory_order_acquire),
+                  "source leave callback failure must not prevent the committed entry membership "
+                  "or its joined callback");
     node->lane
       .run_checked ([&] {
           node->spot_contexts_by_id.clear ();
@@ -5874,6 +6020,7 @@ int main ()
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
     test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
+    test_remote_actor_leave_commits_before_source_callback (test);
     test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
