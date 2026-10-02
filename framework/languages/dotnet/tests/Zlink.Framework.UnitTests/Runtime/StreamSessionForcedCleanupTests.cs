@@ -12,6 +12,118 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StreamSessionForcedCleanupTests
 {
     [Theory]
+    [InlineData(MonitorEventFlags.None)]
+    [InlineData(MonitorEventFlags.ConnectionReadyEdge)]
+    public void Monitor_mapping_preserves_ready_edge_flag(MonitorEventFlags flags)
+    {
+        var native = new MonitorEvent(
+            MonitorEventType.ConnectionReady,
+            0,
+            RoutingId.From("mapping-ready"),
+            "local",
+            "remote",
+            0,
+            0,
+            flags
+        );
+        var mapped =
+            Zlink.Framework.Runtime.Backend.DotNet.Mappings.ZLinkDotNetBackendMappings.ToFramework(
+                native
+            );
+        Assert.Equal(flags, mapped.Flags);
+    }
+
+    [Fact]
+    public async Task Ready_count_snapshot_cannot_create_session_but_ready_edge_can()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var monitor = new TestSocketMonitor();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        await using var node = new ZLinkStreamNodeRuntime(
+            "ready-edge-contract",
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "test"
+        );
+        var snapshot = RoutingId.From("count-snapshot");
+        var edge = RoutingId.From("actual-ready-edge");
+        node.Start();
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.Disconnected,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                0
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                0,
+                MonitorEventFlags.None
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                edge,
+                "local-edge",
+                "remote-edge",
+                1,
+                MonitorEventFlags.ConnectionReadyEdge
+            )
+        );
+        await lifetime.WaitConnectedAsync(edge);
+        Assert.Empty(lifetime.Events(snapshot));
+        Assert.Equal(1, node.SessionCount);
+        var receiveProcessed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        socket.BeforeRecvPacket = () =>
+        {
+            if (socket.DequeuedPacketCount != 0)
+                receiveProcessed.TrySetResult();
+            return true;
+        };
+        EmitJson(socket, snapshot, new SessionOrderingMessage());
+        await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Empty(lifetime.Events(snapshot));
+        Assert.Equal(1, node.SessionCount);
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                2,
+                MonitorEventFlags.ConnectionReadyEdge
+            )
+        );
+        await lifetime.WaitConnectedAsync(snapshot);
+        Assert.Equal(2, node.SessionCount);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData(ZlinkStreamMessageKind.Send)]
     [InlineData(ZlinkStreamMessageKind.Control)]
@@ -502,7 +614,8 @@ public sealed class StreamSessionForcedCleanupTests
                     first,
                     "local-a",
                     "remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -511,7 +624,8 @@ public sealed class StreamSessionForcedCleanupTests
                     second,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             await lifetime.WaitConnectedAsync(first);
@@ -619,7 +733,8 @@ public sealed class StreamSessionForcedCleanupTests
                     session,
                     "local-c",
                     "remote-c",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -678,7 +793,8 @@ public sealed class StreamSessionForcedCleanupTests
                     goodPeer,
                     "local-good",
                     "remote-good",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, goodPeer, new SessionOrderingMessage());
@@ -738,7 +854,8 @@ public sealed class StreamSessionForcedCleanupTests
                     goodPeer,
                     "local-good",
                     "remote-good",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, goodPeer, new SessionOrderingMessage());
@@ -791,7 +908,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new SessionOrderingMessage());
@@ -844,7 +962,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             await lifetime.WaitConnectedAsync(routingId);
@@ -907,7 +1026,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new SessionOrderingMessage());
@@ -982,7 +1102,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             for (var packet = 0; packet < 4; packet++)
@@ -1047,7 +1168,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "stale-local",
                     "stale-remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1071,7 +1193,8 @@ public sealed class StreamSessionForcedCleanupTests
                     session,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -1126,7 +1249,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "ambiguous-local-a",
                     "ambiguous-remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1135,7 +1259,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "ambiguous-local-b",
                     "ambiguous-remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1144,7 +1269,8 @@ public sealed class StreamSessionForcedCleanupTests
                     second,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1153,7 +1279,8 @@ public sealed class StreamSessionForcedCleanupTests
                     first,
                     "local-a",
                     "remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -1218,7 +1345,8 @@ public sealed class StreamSessionForcedCleanupTests
                     expected,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             var header = new ZlinkStreamHeader(
@@ -1299,7 +1427,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             var header = new ZlinkStreamHeader(
@@ -1379,7 +1508,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new TerminalCancellationMessage());
