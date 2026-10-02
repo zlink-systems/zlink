@@ -8078,7 +8078,6 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
 bool spot_node_runtime_t::commit_relocation_materialization (
   const std::vector<runtime::stateful::object_ref_t> &targets)
 {
-    static constexpr const char *completion_failure_message = "Actor Join completion failed";
     end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
     std::vector<std::pair<std::string, runtime::stateful::object_ref_t>> actor_fences;
@@ -8212,7 +8211,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                                                      true);
             }
             catch (...) {
-                failed = detail::current_exception_result<void> (completion_failure_message);
+                failed = detail::current_exception_result<void> ();
             }
             if (completion_record->lifecycle_reservation)
                 completion_record->lifecycle_reservation->settle (std::move (failed));
@@ -8236,7 +8235,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                   });
             }
             catch (...) {
-                fail_commit (detail::current_exception_result<void> (completion_failure_message));
+                fail_commit (detail::current_exception_result<void> ());
                 return;
             }
             auto fail_join = [delivery_scope, fail_commit] (result_t<void> failed) mutable {
@@ -8339,8 +8338,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                         }
                     }
                     catch (...) {
-                        joined =
-                          detail::current_exception_result<void> (completion_failure_message);
+                        joined = detail::current_exception_result<void> ();
                     }
                 }
                 const auto actor = completion.actor;
@@ -8402,8 +8400,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                     result_t<void>::success ());
                           }
                           catch (...) {
-                              fail_commit (detail::current_exception_result<void> (
-                                completion_failure_message));
+                              fail_commit (detail::current_exception_result<void> ());
                           }
                       },
                       [delivery_scope] (result_t<void> result,
@@ -8412,7 +8409,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                       });
                 }
                 catch (...) {
-                    fail_join (detail::current_exception_result<void> (completion_failure_message));
+                    fail_join (detail::current_exception_result<void> ());
                 }
             };
             if (completion.admission.on_actor_joined) {
@@ -8431,14 +8428,12 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   finish_join (std::move (value));
                               }
                               catch (...) {
-                                  fail_join (detail::current_exception_result<void> (
-                                    completion_failure_message));
+                                  fail_join (detail::current_exception_result<void> ());
                               }
                           });
                     }
                     catch (...) {
-                        finish_join (
-                          detail::current_exception_result<void> (completion_failure_message));
+                        finish_join (detail::current_exception_result<void> ());
                     }
                 };
                 if (completion.lifecycle_reservation) {
@@ -8457,7 +8452,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             complete_join ();
         }
         catch (...) {
-            fail_commit (detail::current_exception_result<void> (completion_failure_message));
+            fail_commit (detail::current_exception_result<void> ());
         }
     }
     return true;
