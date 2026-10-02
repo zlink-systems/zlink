@@ -1202,12 +1202,15 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::already_committed);
             if (status != aggregate_status::prepared && status != aggregate_status::committing)
                 return completed (aggregate_commit_result_t::stale);
-            const auto target_owner = decode_owner (record.at (location_record_fields::targetOwner));
+            const auto target_owner =
+              decode_owner (record.at (location_record_fields::targetOwner));
             const bool resuming_commit = status == aggregate_status::committing;
             const object_creation_target_t target{
               record.at (location_record_fields::targetMeshName).get<std::string> (),
-              node_rid_t::from_string (record.at (location_record_fields::targetNodeRid).get<std::string> ()),
-              record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (), target_owner};
+              node_rid_t::from_string (
+                record.at (location_record_fields::targetNodeRid).get<std::string> ()),
+              record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
+              target_owner};
             // A staged aggregate retains its rollback path, but an unconfirmed
             // target commit still requires the original live target owner lease.
             auto target_descriptor = read_target_descriptor (target, !resuming_commit);
@@ -1216,8 +1219,10 @@ class provider_location_repository_t final : public location_repository_t
             if (!owner_is_live (target_owner))
                 return completed (aggregate_commit_result_t::stale);
 
-            const auto inventory_count = record.value (location_record_fields::inventoryCount, std::size_t{0});
-            const auto inventory_page_count = record.value (location_record_fields::inventoryPageCount, std::size_t{0});
+            const auto inventory_count =
+              record.value (location_record_fields::inventoryCount, std::size_t{0});
+            const auto inventory_page_count =
+              record.value (location_record_fields::inventoryPageCount, std::size_t{0});
             const auto expected_inventory_page_count =
               inventory_count / aggregate_inventory::page_item_limit
               + (inventory_count % aggregate_inventory::page_item_limit != 0 ? 1 : 0);
@@ -1242,7 +1247,8 @@ class provider_location_repository_t final : public location_repository_t
             const auto inventory_tree = aggregate_inventory::build_tree (participants);
             if (!inventory_tree || inventory_tree->participant_count != inventory_count
                 || inventory_tree->pages.size () != inventory_page_count
-                || hex (inventory_tree->root) != record.at (location_record_fields::inventoryRoot).get<std::string> ())
+                || hex (inventory_tree->root)
+                     != record.at (location_record_fields::inventoryRoot).get<std::string> ())
                 return completed (aggregate_commit_result_t::stale);
             for (std::size_t page_index = 0; page_index < inventory_page_count; ++page_index) {
                 const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
@@ -1271,8 +1277,8 @@ class provider_location_repository_t final : public location_repository_t
                     return completed (aggregate_commit_result_t::stale);
             }
             if (fence.inventory_digest) {
-                const auto stored_digest =
-                  unhex_array<32> (record.at (location_record_fields::inventoryDigest).get<std::string> ());
+                const auto stored_digest = unhex_array<32> (
+                  record.at (location_record_fields::inventoryDigest).get<std::string> ());
                 if (stored_digest != fence.inventory_digest->value)
                     return completed (aggregate_commit_result_t::stale);
             }
@@ -1288,7 +1294,8 @@ class provider_location_repository_t final : public location_repository_t
                     return completed (aggregate_commit_result_t::generation_exhausted);
                 owner_generation_start = next_owner_generation;
             } else {
-                owner_generation_start = record.value (location_record_fields::ownerGenerationStart, std::uint64_t{0});
+                owner_generation_start =
+                  record.value (location_record_fields::ownerGenerationStart, std::uint64_t{0});
                 if (owner_generation_start == 0
                     || record.value (location_record_fields::ownerGenerationEnd, std::uint64_t{0})
                          != owner_generation_start + participant_count - 1)
@@ -1321,7 +1328,8 @@ class provider_location_repository_t final : public location_repository_t
                     || lock->aggregate_generation != fence.aggregate_generation
                     || lock->authority_key != participant.key.value
                     || lock->expected_store_version != participant.expected_store_version
-                    || (lock->status != aggregate_status::prepared && lock->status != aggregate_status::committing))
+                    || (lock->status != aggregate_status::prepared
+                        && lock->status != aggregate_status::committing))
                     return completed (aggregate_commit_result_t::stale);
 
                 aggregate_commit_entry_t entry;
@@ -1397,7 +1405,8 @@ class provider_location_repository_t final : public location_repository_t
                     continue;
                 record[location_record_fields::status] = aggregate_status::committing;
                 record[location_record_fields::ownerGenerationStart] = owner_generation_start;
-                record[location_record_fields::ownerGenerationEnd] = owner_generation_start + participant_count - 1;
+                record[location_record_fields::ownerGenerationEnd] =
+                  owner_generation_start + participant_count - 1;
                 record[location_record_fields::commitPageCount] = commit_pages->size ();
                 auto transition =
                   write ({{version_condition (row_key, stored->value.version),
@@ -1484,8 +1493,9 @@ class provider_location_repository_t final : public location_repository_t
 
             auto target_capacity_state = capacities.find (target_capacity_key);
             if (target_capacity_state == capacities.end ()
-                || !adjust_capacity (target_capacity_state->second.record,
-                                     decode_bundle (record.at (location_record_fields::capacityBundle)), -1, 1))
+                || !adjust_capacity (
+                  target_capacity_state->second.record,
+                  decode_bundle (record.at (location_record_fields::capacityBundle)), -1, 1))
                 return completed (aggregate_commit_result_t::stale);
             store_write_request_t final_request;
             final_request.conditions.push_back (version_condition (row_key, stored->value.version));

@@ -608,7 +608,13 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('release replay preserves typed request failures and observes one-way failures', async () => {
+test('release replay preserves typed request failures and observes one-way failures', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  t.after(() => {
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
   const { coordinator } = harness();
   const requestDeadlineUnixMs = Date.now() + 10;
   const requestParts = frame('expired-release');
@@ -627,7 +633,7 @@ test('release replay preserves typed request failures and observes one-way failu
     async () => 'too-late'
   );
   requestParts.forEach(part => part.close());
-  await new Promise(resolve => setTimeout(resolve, 20));
+  t.mock.timers.tick(20);
   await coordinator.releaseDeferred('actor-1');
   await assert.rejects(
     request,
@@ -1190,7 +1196,13 @@ test('a sealed Session route refuses a connection-bound send at capture and keep
   coordinator.cancel('actor-1');
 });
 
-test('Message Follow relays before duration expiry and prunes route and stale records after removal', async () => {
+test('Message Follow relays before duration expiry and prunes route and stale records after removal', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  t.after(() => {
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
   const { coordinator, followed, markers } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
@@ -1201,7 +1213,7 @@ test('Message Follow relays before duration expiry and prunes route and stale re
   inside.forEach((part) => part.close());
   assert.deepEqual(followed, ['G1']);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  t.mock.timers.tick(20);
   assert.equal(markers.some((entry) => entry.marker === 'message_follow_route_removed'), true);
   assert.equal(coordinator.messageFollowCount('actor-1'), 0);
 
@@ -1414,7 +1426,13 @@ test('an exact current-owner context bypasses an older Message Follow route', as
   assert.equal(markers.some((entry) => entry.marker === 'message_follow_relay'), false);
 });
 
-test('chained relocation keeps exact source-owner routes with one ObjectGeneration', async () => {
+test('chained relocation keeps exact source-owner routes with one ObjectGeneration', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  t.after(() => {
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
   const { coordinator, followed, messageFollowPayloads, setRequestSource } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
@@ -1473,7 +1491,7 @@ test('chained relocation keeps exact source-owner routes with one ObjectGenerati
   );
   assert.equal(messageFollowPayloads[1].messageFollowContext.hopCount, 2);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  t.mock.timers.tick(20);
   assert.equal(coordinator.messageFollowCount('actor-1'), 0);
 });
 

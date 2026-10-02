@@ -103,8 +103,9 @@ internal sealed partial class ZLinkActorSessionManager
 
         // Spec 15 §4.2: commit does not complete source membership lifecycle.
         // This is the retirement gate for Join and maintenance alike. A remote
-        // Join registers its one-way leave obligation at seal; keep the source
-        // instance and ingress/Message Follow state until its callback ends.
+        // Join registers its one-way leave obligation at seal. Wait for its
+        // completion within the caller's cleanup deadline before retiring the
+        // source application instance.
         try
         {
             if (state.Handoff.SourceMembershipLeaveCompletion is { } leaveCompletion)

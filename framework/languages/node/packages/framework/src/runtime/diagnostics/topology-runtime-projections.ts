@@ -96,11 +96,6 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
     const runtime = this.requireRuntime();
     const queue = new RuntimeEventQueue<ZLinkClientServerStatus>(capacity, signal);
     let lastSnapshot = this.snapshotCore(channelName);
-    const stop = runtime.observeClientServerTopology(channelName, () => {
-      this.sequence += 1n;
-      lastSnapshot = this.snapshotCore(channelName);
-      queue.push(lastSnapshot, channelName);
-    });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
@@ -128,11 +123,13 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
         );
       }
     };
+    const stop = runtime.observeClientServerTopology(channelName, hostObserver.changed);
     this.hostObservers.add(hostObserver);
     queue.onClose(() => {
       stop();
       this.hostObservers.delete(hostObserver);
     });
+    queue.push(lastSnapshot, channelName);
     return queue;
   }
 
@@ -230,11 +227,6 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
     const runtime = this.requireRuntime();
     const queue = new RuntimeEventQueue<ZLinkFanoutStatus>(capacity, signal);
     let lastSnapshot = this.snapshotCore(channelName);
-    const stop = runtime.observeFanoutTopology(channelName, () => {
-      this.sequence += 1n;
-      lastSnapshot = this.snapshotCore(channelName);
-      queue.push(lastSnapshot, channelName);
-    });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
@@ -262,11 +254,13 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
         );
       }
     };
+    const stop = runtime.observeFanoutTopology(channelName, hostObserver.changed);
     this.hostObservers.add(hostObserver);
     queue.onClose(() => {
       stop();
       this.hostObservers.delete(hostObserver);
     });
+    queue.push(lastSnapshot, channelName);
     return queue;
   }
 

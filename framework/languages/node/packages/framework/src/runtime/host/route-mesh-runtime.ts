@@ -246,8 +246,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       state.observers.delete(queue);
       this.stopPlacementObserverIfIdle();
     });
-    this.snapshot(meshName);
+    const initial = this.snapshot(meshName);
     state.observers.add(queue);
+    queue.push(initial, meshName);
     this.startPlacementObserver();
     return queue;
   }

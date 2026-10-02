@@ -222,7 +222,18 @@ public sealed partial class EntrySpotActorDispatchTests
         state.Handoff.BeginCapture();
         state.Handoff.SealCapture(new SourceRetirementReservation(), "source-unfinished-leave");
         _ = state.Handoff.FreezeCaptureCommitBoundary();
-        _ = state.Handoff.CutoverCaptureToMessageFollow(0, source, target, "mesh", 1, 1, 1, 2, 1, 2);
+        _ = state.Handoff.CutoverCaptureToMessageFollow(
+            0,
+            source,
+            target,
+            "mesh",
+            1,
+            1,
+            1,
+            2,
+            1,
+            2
+        );
         state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
         Assert.NotNull(state.Handoff.TryBeginSourceMembershipLeave("source-unfinished-leave"));
         var diagnosed = new TaskCompletionSource<Exception>(

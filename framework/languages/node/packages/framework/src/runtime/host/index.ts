@@ -925,6 +925,7 @@ export class ZLinkFrameworkRuntimeHost
     const queue = new RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>(undefined, signal);
     this.runtimeObservers.add(queue);
     queue.onClose(() => this.runtimeObservers.delete(queue));
+    queue.push(this.status, this.runtimeObservationSource);
     return queue;
   }
 
