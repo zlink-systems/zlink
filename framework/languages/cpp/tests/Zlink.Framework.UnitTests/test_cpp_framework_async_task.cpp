@@ -848,8 +848,38 @@ zlink::framework::task_t<int> throw_standard_cancellation ()
 bool verify_cancellation_contract ()
 {
     using namespace zlink::framework;
-    const auto cancelled =
-      detail::boundary_failure<int> (detail::boundary_error_t::cancelled, "request cancelled");
+    const auto original = detail::make_cancellation_exception ("request cancelled");
+    try {
+        std::rethrow_exception (original);
+        return false;
+    }
+    catch (const std::system_error &error) {
+        if (!detail::is_cancellation_exception (error))
+            return false;
+    }
+    const auto cancelled = detail::result_access_t::failure<int> (original);
+    if (cancelled.exception () != original)
+        return false;
+    if (detail::is_cancellation_exception (
+          std::system_error (std::make_error_code (std::errc::timed_out))))
+        return false;
+    for (const auto state :
+         {detail::boundary_error_t::timed_out, detail::boundary_error_t::shutdown,
+          detail::boundary_error_t::disconnected, detail::boundary_error_t::closed,
+          detail::boundary_error_t::stale_generation}) {
+        auto error = detail::make_boundary_exception (state, "boundary failure");
+        if (detail::is_cancellation_exception (error))
+            return false;
+        error = detail::with_error_origin (std::move (error), detail::error_origin_t::framework);
+        const auto pointer = std::make_exception_ptr (error);
+        const auto boundary = detail::result_access_t::failure<int> (pointer);
+        if (boundary.exception () != pointer || !boundary.error ()
+            || boundary.error ()->kind () != error.kind ()
+            || boundary.error ()->code () != error.code ()
+            || detail::boundary_state (*boundary.error ()) != state
+            || detail::error_origin (*boundary.error ()) != detail::error_origin_t::framework)
+            return false;
+    }
     if (!has_standard_cancellation (cancelled))
         return false;
     auto mutable_cancelled = cancelled;
@@ -868,8 +898,8 @@ bool verify_cancellation_contract ()
     request_call_t<int> request (cancelled);
     send_call_t send (propagated);
     send_call_t submit ("test.cancelled", [] (const auto &, const auto &) {
-        return detail::boundary_failure<void> (detail::boundary_error_t::cancelled,
-                                               "submit cancelled");
+        return detail::result_access_t::failure<void> (
+          detail::make_cancellation_exception ("submit cancelled"));
     });
     if (!has_standard_cancellation (request.async ().result ())
         || !has_standard_cancellation (send.async ().result ())

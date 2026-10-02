@@ -2025,29 +2025,29 @@ resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_
     return address->spot_generation;
 }
 
-framework_exception_t
+std::exception_ptr
 spot_request_terminal_exception (runtime::foundation::operation_terminal_t terminal)
 {
     switch (terminal) {
         case runtime::foundation::operation_terminal_t::timed_out:
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    "SPOT mesh request timed out");
+            return std::make_exception_ptr (detail::make_boundary_exception (
+              detail::boundary_error_t::timed_out, "SPOT mesh request timed out"));
         case runtime::foundation::operation_terminal_t::cancelled:
-            return detail::make_boundary_exception (detail::boundary_error_t::cancelled,
-                                                    "SPOT mesh request was cancelled");
+            return detail::make_cancellation_exception ("SPOT mesh request was cancelled");
         case runtime::foundation::operation_terminal_t::transport_failed:
         case runtime::foundation::operation_terminal_t::route_unavailable:
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "SPOT mesh request lost its connection");
+            return std::make_exception_ptr (detail::make_boundary_exception (
+              detail::boundary_error_t::disconnected, "SPOT mesh request lost its connection"));
         case runtime::foundation::operation_terminal_t::shutdown:
-            return detail::make_boundary_exception (
+            return std::make_exception_ptr (detail::make_boundary_exception (
               detail::boundary_error_t::shutdown,
-              "SPOT mesh request stopped because the runtime is shutting down");
+              "SPOT mesh request stopped because the runtime is shutting down"));
         case runtime::foundation::operation_terminal_t::completed:
             break;
     }
-    return framework_exception_t (framework_error_kind_t::internal_failure,
-                                  "SPOT mesh request completed without a terminal result");
+    return std::make_exception_ptr (
+      framework_exception_t (framework_error_kind_t::internal_failure,
+                             "SPOT mesh request completed without a terminal result"));
 }
 
 task_t<runtime::messaging::message_parts_t>
@@ -2110,8 +2110,12 @@ request_spot_parts_async (service::spot_handle_t egress,
           runtime::messaging::map_submit_result_exception (error.result (), error.what ())));
     }
     catch (const std::exception &error) {
-        source->complete (result_t<runtime::messaging::message_parts_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
+        source->complete (
+          detail::is_cancellation_exception (error)
+            ? detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+                std::current_exception ())
+            : result_t<runtime::messaging::message_parts_t>::failure (
+                framework_error_kind_t::internal_failure, error.what ()));
     }
     co_return co_await output;
 }

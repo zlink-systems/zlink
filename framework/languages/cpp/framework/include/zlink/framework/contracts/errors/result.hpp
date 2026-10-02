@@ -37,13 +37,6 @@ inline framework_error_kind_t result_error_kind (const std::exception_ptr &excep
                                  "result has no Framework error");
 }
 
-inline std::exception_ptr result_exception (std::exception_ptr exception)
-{
-    const auto *error = framework_error (exception);
-    if (error && boundary_state (*error) == boundary_error_t::cancelled)
-        return std::make_exception_ptr (std::system_error (error->code (), error->what ()));
-    return exception;
-}
 } // namespace detail
 
 template <typename T> class result_t
@@ -99,10 +92,7 @@ template <typename T> class result_t
         result_t (std::make_exception_ptr (std::move (error)))
     {
     }
-    explicit result_t (std::exception_ptr error) :
-        _error (detail::result_exception (std::move (error)))
-    {
-    }
+    explicit result_t (std::exception_ptr error) : _error (std::move (error)) {}
 
     std::optional<T> _value;
     std::exception_ptr _error;
@@ -146,10 +136,7 @@ template <> class result_t<void>
         result_t (std::make_exception_ptr (std::move (error)))
     {
     }
-    explicit result_t (std::exception_ptr error) :
-        _error (detail::result_exception (std::move (error)))
-    {
-    }
+    explicit result_t (std::exception_ptr error) : _error (std::move (error)) {}
 
     std::exception_ptr _error;
 };
