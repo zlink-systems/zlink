@@ -19,6 +19,8 @@ one chat room, one matchmaking queue. A channel cannot express that: a channel c
 the nodes serving that name, so two messages sent to the same room can arrive at different
 nodes.
 
+<p><a href="/common/diagrams/zlink-tour-en.html#lobby" target="_blank">▶ Try it in the interactive tour — Lobby and dungeon</a></p>
+
 A Spot has an id. Messages sent to the same id always arrive at the same Spot, and inside that
 Spot they run **one at a time**. A Spot's fields therefore need no lock.
 
@@ -444,6 +446,8 @@ What this chapter created is **the Spot an application creates explicitly**, and
 stages, and zones are that one. There is also the kind the Framework creates when the Object
 Server starts, and the kind created when the first message arrives. They differ in when they are
 created and in which lifecycle callbacks they receive.
+
+<p><a href="/common/diagrams/zlink-tour-en.html#instance" target="_blank">▶ Try it in the interactive tour — Instance Spot</a></p>
 
 The differences between the kinds and the full lifecycle are covered by [Spot](21-spot.en.md).
 
