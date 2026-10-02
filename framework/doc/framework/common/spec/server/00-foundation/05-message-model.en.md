@@ -67,8 +67,8 @@ that Spot's creation and initialization finish, when it can receive application
 messages, is called [Ready](02-glossary.en.md#ready).
 
 A CAS loser never
-sends the creation request as a regular message. The content reference is kept
-until Ready commit or fenced failure cleanup finishes.
+sends the creation request as a regular message. [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record)
+defines the content reference's lifetime.
 
 [ObjectGeneration](02-glossary.en.md#objectgeneration),
 [AuthorityOwnerGeneration](02-glossary.en.md#authorityownergeneration) (the

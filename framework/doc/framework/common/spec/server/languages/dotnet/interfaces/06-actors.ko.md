@@ -263,8 +263,8 @@ Create deadline과 Mesh 선택은 [Actor 모델](../../../03-spot-actor/04-actor
 
 Create·GetOrCreate 결과와 terminal 재전송은 [Actor 모델](../../../03-spot-actor/04-actor-model.ko.md), [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.ko.md)과 [Framework API](../../../00-foundation/06-framework-api.ko.md)가 정한다. .NET 결과 이름은 `AlreadyExists`, `TypeMismatch`, `Existing`, `DeadlineExceeded`다.
 
-Creation request의 크기 한도는 [Location runtime §7](../../../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정하고, semantic terminal envelope는 최대 1 MiB다. Creation request는 reservation 전에 immutable reference와 hash를
-기록한다. Factory는 같은 ID, ObjectGeneration과 creation attempt에 대해
+Creation request의 크기 한도는 [Location runtime §7](../../../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정하고, semantic terminal envelope는 최대 1 MiB다. Content reference·hash와 저장 시점은
+[Location runtime §3.4](../../../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다. Factory는 같은 ID, ObjectGeneration과 creation attempt에 대해
 retry-safe해야 한다.
 
 `FindAsync(actorId)`는 current Ready `ActorRef`만 반환한다. `FindSpotAsync(actorId)`는 current User Spot

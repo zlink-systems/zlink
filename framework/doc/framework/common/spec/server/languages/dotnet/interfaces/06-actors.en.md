@@ -276,8 +276,8 @@ re-invocation errors of `Create` and `GetOrCreate` calls.
 [Actor model](../../../03-spot-actor/04-actor-model.en.md), [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.en.md), and [Framework API](../../../00-foundation/06-framework-api.en.md) define Create/GetOrCreate outcomes and terminal replay. .NET projects `AlreadyExists`, `TypeMismatch`, `Existing`, and `DeadlineExceeded`.
 
 The size limit of the creation request is defined by
-[Location runtime §7](../../../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot), and the semantic terminal envelope is at most 1 MiB. The creation request records an immutable reference and hash before
-reservation. The factory must be retry-safe for the same ID,
+[Location runtime §7](../../../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot), and the semantic terminal envelope is at most 1 MiB. [Location runtime §3.4](../../../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines its content reference,
+hash, and when it is stored. The factory must be retry-safe for the same ID,
 ObjectGeneration, and creation attempt.
 
 `FindAsync(actorId)` only returns the current Ready `ActorRef`.

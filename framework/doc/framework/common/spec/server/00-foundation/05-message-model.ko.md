@@ -57,8 +57,8 @@ at-least-once 실행에도 같은 결과로 수렴해야 한다.
 [Spot](02-glossary.ko.md#spot)의 생성과 초기화가 끝나 application message를 받을 수 있는
 상태를 [Ready](02-glossary.ko.md#ready)라고 한다.
 
-CAS loser는 creation request를 일반 message로 보내지 않는다. Ready commit 또는 fenced failure
-cleanup이 끝날 때까지 content reference를 유지한다.
+CAS loser는 creation request를 일반 message로 보내지 않는다. Content reference의 수명은
+[Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다.
 
 [ObjectGeneration](02-glossary.ko.md#objectgeneration), 같은 object incarnation에서 authority
 owner가 바뀐 순서를 나타내는 [AuthorityOwnerGeneration](02-glossary.ko.md#authorityownergeneration),
