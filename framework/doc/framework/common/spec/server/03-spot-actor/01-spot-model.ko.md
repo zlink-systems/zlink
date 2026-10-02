@@ -23,7 +23,7 @@ title: "Spot 모델 — Entry, User, Instance"
 - Message 전달 방법: [Spot 메시징](02-spot-messaging.ko.md)
 - Gate·turn·Yield·Actor claim: [실행 계약 §2·§3](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)
 - Actor callback의 정확한 순서: [Spot과 Actor membership](05-spot-actor-membership.ko.md)
-- Entry Spot ID의 발급·형식·충돌 규칙, Object role과 factory 등록: [MeshNode](03-mesh-node.ko.md)
+- Entry Spot ID의 발급·형식 규칙, Object role과 factory 등록: [MeshNode](03-mesh-node.ko.md)
 - User·Instance Spot의 생성과 주소 계약: [Spot 주소 메시징](06-spot-address-messaging.ko.md)
 
 ## 2. 세 Spot은 준비되는 시점과 목적이 다르다
@@ -558,7 +558,7 @@ relocation 결과)만으로 다음을 확인한다.
 - User Spot은 member Actor와 aggregate로 이동하고 Instance Spot은 Actor가 없는
   단일 relocation unit으로 이동한다.
 
-Entry Spot ID 형식, replacement lifecycle과 active conflict의 검증 요구는
+Entry Spot ID 형식과 replacement lifecycle의 검증 요구는
 [MeshNode 「구현 및 contract test 검증 요구」](03-mesh-node.ko.md)가 소유한다.
 
 ---

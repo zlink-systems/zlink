@@ -459,7 +459,7 @@ this section. The contract's meaning is owned by the common spec.
 | Common Concept | Node.js |
 | automatic termination (default) | the framework joins an in-progress host shutdown or starts `Shutdown` in `onApplicationShutdown()` |
 | `Shutdown` order | block new application acceptance → complete already-accepted execution turns and requests → confirm in-progress relocation/STREAM barrier → clean up local object/ownership/peer resources → forced termination within a bound, if needed |
-| `Retire` order | all-or-none preflight → target reservation → admission seal → Actor/Instance Spot continuity relocation → STREAM barrier → host resource cleanup |
+| `Retire` order | all-or-none preflight → target check → admission seal → Actor/Instance Spot continuity relocation → STREAM barrier → host resource cleanup |
 | Spot re-creation boundary | public `create`/`getOrCreate` are local-only. Only Instance address cold activation and explicit `Retire` target materialization run under a separate contract, and a stale handle doesn't start a hidden remote create |
 | explicit control | the host singleton `ZLinkFrameworkRuntime`'s `retire(options?)` and `shutdown(options?)`; the default deadline is 30,000ms, and `AbortSignal` ends only the waiter |
 | termination result | `ZLinkTerminationResult` provides the effective intent, a `Stopped|Blocked|ForceStopped` outcome, and a closed reason together |

@@ -352,15 +352,10 @@ error during callback execution. The capacity filter is applied before
 weight. `enableActorDispatch()` takes no argument, and the global
 ActorId resolves the Mesh.
 
-The Object Server's Entry Spot ID has the format
-`<prefix>-entry-<lowercase-canonical-uuid-v4>` using the MeshNode
-diagnostic prefix, with a UUID v4 generated separately from the
-MeshNode. The framework-internal descriptor's `entrySpotId` provides the
- mapping for the same lifecycle. If the global Spot ID conflicts
-with an active owner, startup fails immediately with a configuration
-exception instead of retrying with a new UUID. If a caller-specified
-User/Instance Spot ID matches this reserved format, it's rejected with
-`INVALID_OPERATION` before starting the Store and factory.
+The framework-internal descriptor's `entrySpotId` provides the Entry Spot ID
+mapping for the same lifecycle. [Common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id)
+defines how the Entry Spot ID is issued, its format, and the rejection of the reserved format;
+in Java that rejection's error is `INVALID_OPERATION`.
 
 The Location provider provides, through `ZLinkLocationStore`, read of
 the framework's opaque record, version-conditional atomic batch, and
