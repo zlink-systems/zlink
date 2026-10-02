@@ -137,7 +137,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             RemotePushRelay = RelayRemoteSessionPush,
             RemotePushRelayAsync = RelayRemoteSessionPushAsync,
-            RemoteFrameRelay = RelayRemoteActorFrame,
+            RemoteFrameRelayAsync = RelayRemoteActorFrameAsync,
         };
         _standaloneActorRelocationRuntime = new ZLinkStandaloneActorRelocationRuntime(
             this,

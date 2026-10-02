@@ -1662,7 +1662,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public void ActorMessageFollowerToRelay_PreservesExactDirectRouteAndPayload()
+    public async Task ActorMessageFollowerToRelay_PreservesExactDirectRouteAndPayload()
     {
         var localNode = new CapturingSpotNode();
         var states = new Dictionary<string, ZLinkActorRuntimeState>(StringComparer.Ordinal);
@@ -1683,7 +1683,7 @@ public sealed partial class EntrySpotActorDispatchTests
             byte[] Header,
             byte[] Body
         )? relayed = null;
-        coordinator.RemoteFrameRelay = (
+        coordinator.RemoteFrameRelayAsync = (
             _,
             _,
             _,
@@ -1696,11 +1696,12 @@ public sealed partial class EntrySpotActorDispatchTests
             source,
             _,
             header,
-            body
+            body,
+            _
         ) =>
         {
             relayed = (route, sourceGeneration, source, header, body);
-            return true;
+            return ValueTask.CompletedTask;
         };
         var incomingRoute = new ZLinkBackendActorRouteContext(
             new MeshOperationId(81, 82),
@@ -1742,7 +1743,7 @@ public sealed partial class EntrySpotActorDispatchTests
         using var body = Message.From(Encoding.UTF8.GetBytes("body"));
 
         Assert.True(
-            coordinator.ForwardPart(
+            await coordinator.ForwardPartAsync(
                 target,
                 RoutingId.From("caller-node"),
                 default,
@@ -1759,7 +1760,7 @@ public sealed partial class EntrySpotActorDispatchTests
             )
         );
         Assert.True(
-            coordinator.ForwardPart(
+            await coordinator.ForwardPartAsync(
                 target,
                 RoutingId.From("caller-node"),
                 default,
@@ -3646,6 +3647,89 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task MessageFollower_ObservesRelayAdmissionFailureWithoutResubmission()
+    {
+        var submitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var admission = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var replies = new List<byte[]>();
+        var node = new CapturingSpotNode
+        {
+            OnNodeSend = () => submitted.TrySetResult(),
+            NodeSendAsyncHandler = async cancellationToken =>
+            {
+                submitted.TrySetResult();
+                await admission.Task.WaitAsync(cancellationToken);
+            },
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            using var frame = CreateRelocationRequestFrame(
+                actor,
+                RoutingId.From("request-source"),
+                requestId: 712,
+                parts =>
+                {
+                    replies.Add(Assert.Single(parts).ToArray());
+                    return SubmitResult.Ok;
+                }
+            );
+            ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(runtime, frame);
+            var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
+            lease.Commit(TimeSpan.FromSeconds(5));
+            var route = new ZLinkActorMessageFollowRoute(
+                actor,
+                new ZLinkBackendActorRef(
+                    RoutingId.From("remote-owner"),
+                    actor.ActorId,
+                    actor.Generation
+                ),
+                "entry",
+                SourceNodeGeneration: 13,
+                TargetNodeGeneration: 23,
+                SourceAuthorityOwnerGeneration: 17,
+                TargetAuthorityOwnerGeneration: 27,
+                SourceOwnerLeaseGeneration: 19,
+                TargetOwnerLeaseGeneration: 29,
+                Lease: lease
+            );
+            var completion = runtime.ActorMessageFollower.EnqueueTracked(
+                route,
+                frame.SourceNodeRid,
+                frame.SourceSessionRid,
+                frame.RequestId,
+                frame.Flags,
+                frame.RouteContext,
+                frame.Header,
+                frame.Body,
+                frame.SourceNodeGeneration,
+                frame.RequestSource,
+                frame.DirectReply
+            );
+
+            await submitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(completion.IsCompleted);
+            admission.TrySetException(
+                new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)
+            );
+            Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(1, node.NodeSendAsyncCalls);
+            Assert.Empty(node.NodeSendAttempts);
+            var reply = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(replies));
+            Assert.Equal("unavailable", reply.Payload.Code);
+        }
+        finally
+        {
+            admission.TrySetCanceled();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -12255,6 +12339,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ConcurrentQueue<SubmitResult> NodeSendResults { get; } = new();
 
+        public Func<CancellationToken, ValueTask>? NodeSendAsyncHandler { get; set; }
+
         public Exception? NodeSendAsyncFailure { get; set; }
 
         public ConcurrentQueue<Exception> NodeSendAsyncFailures { get; } = new();
@@ -12825,6 +12911,8 @@ public sealed partial class EntrySpotActorDispatchTests
         )
         {
             NodeSendAsyncCalls++;
+            if (NodeSendAsyncHandler is { } handler)
+                await handler(cancellationToken);
             if (NodeSendAsyncFailure is { } failure)
                 throw failure;
             if (NodeSendAsyncFailures.TryDequeue(out var nextFailure))

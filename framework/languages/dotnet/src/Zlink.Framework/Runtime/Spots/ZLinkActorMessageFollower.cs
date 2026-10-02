@@ -515,39 +515,45 @@ internal sealed class ZLinkActorMessageFollower
                 cancellationToken.ThrowIfCancellationRequested();
                 using var headerPart = Message.From(frame.HeaderBytes);
                 if (
-                    _runtime.ForwardActorBoundSessionPart(
-                        frame.MessageFollowRoute.TargetMeshName,
-                        frame.MessageFollowRoute.TargetActor,
-                        frame.MessageFollowRoute.TargetNodeGeneration,
-                        frame.MessageFollowRoute.TargetAuthorityOwnerGeneration,
-                        frame.MessageFollowRoute.TargetOwnerLeaseGeneration,
-                        frame.SourceNodeRid,
-                        frame.SourceSessionRid,
-                        headerPart,
-                        true,
-                        frame.MessageFollowRouteContext,
-                        frame.SourceNodeGeneration,
-                        frame.RequestSource,
-                        frame.ApplicationMetadata
-                    )
+                    await _runtime
+                        .ForwardActorBoundSessionPartAsync(
+                            frame.MessageFollowRoute.TargetMeshName,
+                            frame.MessageFollowRoute.TargetActor,
+                            frame.MessageFollowRoute.TargetNodeGeneration,
+                            frame.MessageFollowRoute.TargetAuthorityOwnerGeneration,
+                            frame.MessageFollowRoute.TargetOwnerLeaseGeneration,
+                            frame.SourceNodeRid,
+                            frame.SourceSessionRid,
+                            headerPart,
+                            true,
+                            frame.MessageFollowRouteContext,
+                            frame.SourceNodeGeneration,
+                            frame.RequestSource,
+                            frame.ApplicationMetadata,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
                 )
                 {
                     using var bodyPart = Message.From(frame.BodyBytes);
-                    submitted = _runtime.ForwardActorBoundSessionPart(
-                        frame.MessageFollowRoute.TargetMeshName,
-                        frame.MessageFollowRoute.TargetActor,
-                        frame.MessageFollowRoute.TargetNodeGeneration,
-                        frame.MessageFollowRoute.TargetAuthorityOwnerGeneration,
-                        frame.MessageFollowRoute.TargetOwnerLeaseGeneration,
-                        frame.SourceNodeRid,
-                        frame.SourceSessionRid,
-                        bodyPart,
-                        false,
-                        frame.MessageFollowRouteContext,
-                        frame.SourceNodeGeneration,
-                        frame.RequestSource,
-                        frame.ApplicationMetadata
-                    );
+                    submitted = await _runtime
+                        .ForwardActorBoundSessionPartAsync(
+                            frame.MessageFollowRoute.TargetMeshName,
+                            frame.MessageFollowRoute.TargetActor,
+                            frame.MessageFollowRoute.TargetNodeGeneration,
+                            frame.MessageFollowRoute.TargetAuthorityOwnerGeneration,
+                            frame.MessageFollowRoute.TargetOwnerLeaseGeneration,
+                            frame.SourceNodeRid,
+                            frame.SourceSessionRid,
+                            bodyPart,
+                            false,
+                            frame.MessageFollowRouteContext,
+                            frame.SourceNodeGeneration,
+                            frame.RequestSource,
+                            frame.ApplicationMetadata,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
                 }
                 if (submitted)
                 {
