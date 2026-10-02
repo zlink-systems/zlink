@@ -608,8 +608,11 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('release replay preserves typed request failures and observes one-way failures', async () => {
-  const { coordinator } = harness();
+test('release replay preserves typed request failures and observes one-way failures', async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { coordinator, markers } = harness();
   const requestDeadlineUnixMs = Date.now() + 10;
   const requestParts = frame('expired-release');
   coordinator.beginProvisional('actor-1', 1n);
@@ -626,13 +629,19 @@ test('release replay preserves typed request failures and observes one-way failu
     undefined,
     async () => 'too-late'
   );
-  requestParts.forEach(part => part.close());
-  await new Promise(resolve => setTimeout(resolve, 20));
-  await coordinator.releaseDeferred('actor-1');
-  await assert.rejects(
+  const requestFailure = assert.rejects(
     request,
     error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
+  requestParts.forEach(part => part.close());
+  // 원래 deadline 전에 capture가 backlog를 소유했음을 확인한다.
+  assert.equal(markers.filter(entry => entry.marker === 'handoff_backlog').length, 1);
+  assert.equal(coordinator.isActive('actor-1'), true);
+  now += 20;
+  t.mock.timers.tick(20);
+  await coordinator.releaseDeferred('actor-1');
+  await requestFailure;
+  assert.equal(coordinator.isActive('actor-1'), false);
 
   coordinator.beginProvisional('actor-1', 1n);
   const sendParts = frame('failed-release-send');
@@ -713,8 +722,12 @@ test('durable request handoff returns its initial permit before capacity-one rep
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('Message Follow preserves operation identity and rejects an exhausted hop with its marker', async () => {
-  const { coordinator, messageFollowPayloads, markers } = harness();
+test('Message Follow preserves operation identity and rejects an exhausted hop with its marker', async t => {
+  let now = performance.now();
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const messageFollowDurationMs = 30;
+  const { coordinator, messageFollowPayloads, markers } = harness(messageFollowDurationMs);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
   coordinator.complete(
@@ -767,6 +780,17 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
     markers.some((entry) => entry.marker === 'message_follow_rejected'),
     true
   );
+
+  // 같은 commit route가 원래 수명 경계에서 ingress를 거부하는지 확인한다.
+  now += messageFollowDurationMs;
+  const expiredParts = frame('expired-route');
+  await assert.rejects(
+    coordinator.capture('actor-1', expiredParts, false, undefined, contextRef(expiredParts)),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  expiredParts.forEach(part => part.close());
+  t.mock.timers.tick(messageFollowDurationMs);
+  assert.equal(messageFollowPayloads.length, 1);
 });
 
 test('Message Follow rejects repeated stale packets that do not carry the original immutable context', async () => {
@@ -1190,7 +1214,10 @@ test('a sealed Session route refuses a connection-bound send at capture and keep
   coordinator.cancel('actor-1');
 });
 
-test('Message Follow relays before duration expiry and prunes route and stale records after removal', async () => {
+test('Message Follow relays before duration expiry and prunes route and stale records after removal', async t => {
+  let now = performance.now();
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const { coordinator, followed, markers } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
@@ -1201,7 +1228,8 @@ test('Message Follow relays before duration expiry and prunes route and stale re
   inside.forEach((part) => part.close());
   assert.deepEqual(followed, ['G1']);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  now += 20;
+  t.mock.timers.tick(20);
   assert.equal(markers.some((entry) => entry.marker === 'message_follow_route_removed'), true);
   assert.equal(coordinator.messageFollowCount('actor-1'), 0);
 
