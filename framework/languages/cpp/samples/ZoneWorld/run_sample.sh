@@ -60,7 +60,8 @@ cleanup() {
 }
 trap zlink_cpp_sample_exit_trap EXIT
 
-read -r -a ZONEWORLD_PORTS <<<"$(zlink_sample_allocate_ports 16)"
+readonly ZONEWORLD_PORT_COUNT=22
+read -r -a ZONEWORLD_PORTS <<<"$(zlink_sample_allocate_ports "$ZONEWORLD_PORT_COUNT")"
 NODE1_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[0]}"
 NODE2_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[1]}"
 GATEWAY_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[2]}"
@@ -77,6 +78,12 @@ OPS_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[12]}"
 NODE3_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[13]}"
 NODE3_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[14]}"
 NODE3_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[15]}"
+NODE1_REPLACEMENT_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[16]}"
+NODE2_REPLACEMENT_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[17]}"
+NODE1_REPLACEMENT_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[18]}"
+NODE2_REPLACEMENT_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[19]}"
+NODE1_REPLACEMENT_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[20]}"
+NODE2_REPLACEMENT_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[21]}"
 GATEWAY_MESH_BIND="$GATEWAY_MESH"
 GATEWAY_MESH_ADVERTISE_HOST=""
 NODE1_MESH_BIND="$NODE1_MESH"
@@ -130,10 +137,10 @@ write_role_config "$CONFIG_DIR/zone-node-1.json" zone-node-1 "$NODE1_MESH_BIND" 
   "$NODE1_STREAM" "${NODE1_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST"
 write_role_config "$CONFIG_DIR/zone-node-2.json" zone-node-2 "$NODE2_MESH_BIND" \
   "$NODE2_STREAM" "${NODE2_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST"
-write_role_config "$CONFIG_DIR/zone-node-1-replacement.json" zone-node-1 "$NODE1_MESH_BIND" \
-  "$NODE1_STREAM" "${NODE1_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST" false true true
-write_role_config "$CONFIG_DIR/zone-node-2-replacement.json" zone-node-2 "$NODE2_MESH_BIND" \
-  "$NODE2_STREAM" "${NODE2_HTTP/tcp:/http:}" "$NODE_MESH_ADVERTISE_HOST" false true true
+write_role_config "$CONFIG_DIR/zone-node-1-replacement.json" zone-node-1 "$NODE1_REPLACEMENT_MESH" \
+  "$NODE1_REPLACEMENT_STREAM" "${NODE1_REPLACEMENT_HTTP/tcp:/http:}" "" false true true
+write_role_config "$CONFIG_DIR/zone-node-2-replacement.json" zone-node-2 "$NODE2_REPLACEMENT_MESH" \
+  "$NODE2_REPLACEMENT_STREAM" "${NODE2_REPLACEMENT_HTTP/tcp:/http:}" "" false true true
 write_role_config "$CONFIG_DIR/ops.json" ops "$OPS_MESH" "$OPS_STREAM" \
   "${OPS_HTTP/tcp:/http:}"
 write_role_config "$CONFIG_DIR/gateway.json" gateway "$GATEWAY_MESH_BIND" "$GAME_STREAM" \
@@ -199,11 +206,6 @@ start_zone_node() {
   first_line="$(next_log_line "$LOG_DIR/$label.log")"
   start_role "$label" "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node" \
     --config="$CONFIG_DIR/$config_label.json"
-  if [[ "$label" == "zone-node-1" ]]; then
-    wait_port "$NODE1_MESH"
-  elif [[ "$label" == "zone-node-2" ]]; then
-    wait_port "$NODE2_MESH"
-  fi
   wait_for_log_after "$label" "topology=ready node=$label zones=" "$first_line" 300
 }
 routing_id_of() {

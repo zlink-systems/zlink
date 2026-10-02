@@ -4074,13 +4074,20 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (actorState.LiveActivation is { } sourceActivation)
-            sourceActivation.DetachRelocatedPerActorMember(actor, actorState);
-        actorState.BindNativeActorRef(targetActorRef);
-        actorState.InvalidateContext();
         await _actorSessionManager
-            .FinalizeMigratedSourceAsync(actorState, sourceActorRef)
+            .FinalizeMigratedSourceAsync(
+                actorState,
+                sourceActorRef,
+                cancellationToken,
+                () =>
+                {
+                    if (actorState.LiveActivation is { } sourceActivation)
+                        sourceActivation.DetachRelocatedPerActorMember(actor, actorState);
+                    actorState.BindNativeActorRef(targetActorRef);
+                    actorState.FenceRuntimeGeneration();
+                    return ValueTask.CompletedTask;
+                }
+            )
             .ConfigureAwait(false);
     }
 

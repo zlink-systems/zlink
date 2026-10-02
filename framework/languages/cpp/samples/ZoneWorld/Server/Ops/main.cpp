@@ -493,6 +493,7 @@ int main (int argc, char **argv)
     const auto configuration = load_configuration (app, argc, argv);
     app.logging ().use_console ().set_min_level (fw::log_level_t::info);
     auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
     options.services ()
       .add_singleton<ops_state_t> ()
       .add_singleton<ops_console_registry_t> ()

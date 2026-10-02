@@ -263,6 +263,7 @@ int main (int argc, char **argv)
     app.logging ().use_console ().set_min_level (fw::log_level_t::info);
 
     auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
     options.add_location_store<fw::redis::redis_location_store_t> ()
       .set_connection_string (configuration.redis_endpoint)
       .set_key_prefix (configuration.redis_key_prefix + "location:");

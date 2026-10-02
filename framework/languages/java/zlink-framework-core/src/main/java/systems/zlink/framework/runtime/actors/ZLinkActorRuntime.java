@@ -4786,18 +4786,49 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         ZLinkActor actor = check.actor();
         DefaultActorContext context = check.context();
-        return dispatches.beginTeardown(
-                actorId,
-                () -> {
-                    inStateLane(
-                            () -> {
-                                actorRegistry.remove(actorId, actor);
-                                return null;
-                            });
-                    removeActorSessionRouteForContext(context);
-                    context.clearAfterDestroy();
-                    return CompletableFuture.completedFuture(null);
-                });
+        CompletableFuture<Throwable> cleanupFailure = new CompletableFuture<>();
+        CompletionStage<Void> teardown =
+                dispatches.beginTeardown(
+                        actorId,
+                        () ->
+                                ZLinkHandlerStages.completeAll(
+                                                List.of(
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        () ->
+                                                                                inStateLane(
+                                                                                        () -> {
+                                                                                            actorRegistry
+                                                                                                    .remove(
+                                                                                                            actorId,
+                                                                                                            actor);
+                                                                                            return null;
+                                                                                        })),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        () ->
+                                                                                removeActorSessionRouteForContext(
+                                                                                        context)),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        context
+                                                                                ::closeHandlerInstances),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        context.state
+                                                                                ::clearAfterDestroy)))
+                                        .handle(
+                                                (ignored, failure) -> {
+                                                    cleanupFailure.complete(failure);
+                                                    return null;
+                                                }));
+        return teardown.thenCompose(
+                ignored ->
+                        cleanupFailure.thenCompose(
+                                failure ->
+                                        failure == null
+                                                ? CompletableFuture.completedFuture(null)
+                                                : CompletableFuture.failedFuture(unwrap(failure))));
     }
 
     private CompletionStage<Void> closeActorEntry(ActorEntry entry) {

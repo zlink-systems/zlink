@@ -959,6 +959,7 @@ int main (int argc, char **argv)
       .on_spot_event (
         [] (const fw::spot_event_t &event) { g_node_state->record_spot_event (event); });
     auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
     if (configuration.subscriber_only) {
         options.handlers ()
           .group ("zoneworld-extra-broadcast")

@@ -1268,14 +1268,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken = default
     )
     {
-        var retryDeadline = Stopwatch.GetElapsedTime(0) + CounterRetryWindow;
-        return await CommitAggregateCoreAsync(
-                fence,
-                retryAttempt: 0,
-                retryDeadline,
-                cancellationToken,
-                allowPreparingTarget: false
-            )
+        return await CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: false)
             .ConfigureAwait(false);
     }
 
@@ -1284,234 +1277,224 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken = default
     )
     {
-        var retryDeadline = Stopwatch.GetElapsedTime(0) + CounterRetryWindow;
-        return await CommitAggregateCoreAsync(
-                fence,
-                retryAttempt: 0,
-                retryDeadline,
-                cancellationToken,
-                allowPreparingTarget: true
-            )
+        return await CommitAggregateCoreAsync(fence, cancellationToken, allowPreparingTarget: true)
             .ConfigureAwait(false);
     }
 
     private async ValueTask<ZLinkAggregateCommitResult> CommitAggregateCoreAsync(
         ZLinkAggregateFence fence,
-        int retryAttempt,
-        TimeSpan retryDeadline,
         CancellationToken cancellationToken,
         bool allowPreparingTarget
     )
     {
-        var key = AggregateKey(fence);
-        var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
-            .ConfigureAwait(false);
-        if (aggregate is null || aggregate.Record.Status == AggregateStatus.Aborted)
-            return ZLinkAggregateCommitResult.Stale;
-        if (aggregate.Record.Status == AggregateStatus.Staging)
-            return ZLinkAggregateCommitResult.Stale;
-        if (aggregate.Record.Status == AggregateStatus.Committed)
+        while (true)
         {
-            await NormalizeCommittedAggregateAsync(fence, aggregate.Record, cancellationToken)
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = AggregateKey(fence);
+            var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
                 .ConfigureAwait(false);
-            return ZLinkAggregateCommitResult.AlreadyCommitted;
-        }
-        var participants = await ReadAggregateParticipantsAsync(
-                fence,
-                aggregate.Record,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        var request = RehydrateAggregateRequest(aggregate.Record, participants);
-        var target = await ReadEligibleTargetAsync(
-                request.TargetDescriptor,
-                request.TargetDescriptorLifecycleGeneration,
-                request.TargetOwner,
-                null,
-                null,
-                cancellationToken,
-                requireNewPlacementEligibility: request.Participants.Any(static participant =>
-                    participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
-                ),
-                allowPreparingTarget: allowPreparingTarget
-            )
-            .ConfigureAwait(false);
-        if (target is null)
-            return ZLinkAggregateCommitResult.Stale;
-        var authorities = new StoredAuthority?[request.Participants.Count];
-        await Parallel
-            .ForEachAsync(
-                Enumerable.Range(0, request.Participants.Count),
-                new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = 64,
-                    CancellationToken = cancellationToken,
-                },
-                async (index, token) =>
-                {
-                    authorities[index] = await ReadAuthorityRecordAsync(
-                            request.Participants[index].Key,
-                            knownMeta: null,
-                            projectCommittedAggregate: false,
-                            token
-                        )
-                        .ConfigureAwait(false);
-                }
-            )
-            .ConfigureAwait(false);
-        if (
-            authorities.Any(authority =>
-                authority is null || authority.Meta.AggregateFence != fence
-            )
-        )
-            return ZLinkAggregateCommitResult.Stale;
-        var capacity = await ReadCapacityAsync(request.TargetDescriptor, cancellationToken)
-            .ConfigureAwait(false);
-        var capacityRecords = new Dictionary<ZLinkStoreKey, StoredCapacity>();
-        capacityRecords[capacity.Key] = capacity;
-        // Capacity is keyed purely by mesh descriptor identity (the
-        // canonical capacity row excludes lifecycle generation), so two
-        // allocations against the same descriptor but different lifecycle
-        // generations share one capacity row and need only one read.
-        var sourceAllocations = authorities
-            .Select(static authority => authority!.Snapshot.Allocation)
-            .DistinctBy(static allocation => allocation.Descriptor)
-            .ToArray();
-        var sourceCapacities = new StoredCapacity[sourceAllocations.Length];
-        await Parallel
-            .ForEachAsync(
-                Enumerable.Range(0, sourceAllocations.Length),
-                new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = 64,
-                    CancellationToken = cancellationToken,
-                },
-                async (index, token) =>
-                {
-                    var allocation = sourceAllocations[index];
-                    sourceCapacities[index] = await ReadCapacityAsync(allocation.Descriptor, token)
-                        .ConfigureAwait(false);
-                }
-            )
-            .ConfigureAwait(false);
-        foreach (var source in sourceCapacities)
-            capacityRecords[source.Key] = source;
-        var updatedCapacity = capacityRecords.ToDictionary(
-            static pair => pair.Key,
-            static pair => pair.Value.Record.Clone()
-        );
-        ApplyCapacityVector(updatedCapacity[capacity.Key], request.Capacity, pendingDelta: -1);
-
-        var conditions = new List<ZLinkStoreCondition>
-        {
-            new ZLinkStoreCondition.Version(key, aggregate.Version),
-            target.DescriptorCondition,
-            target.OwnerCondition,
-        };
-        var mutations = new List<ZLinkStoreMutation>();
-        foreach (var pair in capacityRecords)
-        {
-            AddCondition(conditions, pair.Value.Condition);
-        }
-        // authorities[index].Meta already carries both generation values
-        // for this exact read (checklist C-2b: no separate GenerationKey
-        // to reconcile), so the per-participant next-generation check below
-        // compares directly against it.
-        for (var index = 0; index < request.Participants.Count; index++)
-        {
-            var participant = request.Participants[index];
-            var authority = authorities[index]!;
-            var changesOwner =
-                participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-            if (changesOwner)
+            if (aggregate is null || aggregate.Record.Status == AggregateStatus.Aborted)
+                return ZLinkAggregateCommitResult.Stale;
+            if (aggregate.Record.Status == AggregateStatus.Staging)
+                return ZLinkAggregateCommitResult.Stale;
+            if (aggregate.Record.Status == AggregateStatus.Committed)
             {
-                ulong nextAuthorityOwnerGeneration = participants[index]
-                    .Metadata
-                    .TargetAuthorityOwnerGeneration;
-                if (
-                    nextAuthorityOwnerGeneration == 0
-                    || nextAuthorityOwnerGeneration <= authority.Meta.AuthorityOwnerGeneration
-                    || nextAuthorityOwnerGeneration > long.MaxValue
-                )
-                    return ZLinkAggregateCommitResult.Stale;
-                ApplyCapacity(
-                    updatedCapacity[CapacityKey(authority.Snapshot.Allocation.Descriptor)],
-                    authority.Snapshot.Allocation,
-                    activeDelta: -1
-                );
-                var moved = authority.Snapshot.Allocation with
-                {
-                    Descriptor = request.TargetDescriptor,
-                    DescriptorLifecycleGeneration = request.TargetDescriptorLifecycleGeneration,
-                };
-                ApplyCapacity(updatedCapacity[capacity.Key], moved, activeDelta: 1);
-            }
-        }
-        foreach (var pair in updatedCapacity)
-            mutations.Add(new ZLinkStoreMutation.Put(pair.Key, Encode(pair.Value), null));
-        mutations.Add(
-            new ZLinkStoreMutation.Put(
-                key,
-                Encode(aggregate.Record with { Status = AggregateStatus.Committed }),
-                null
-            )
-        );
-        ZLinkStoreWriteResult result;
-        try
-        {
-            result = await provider
-                .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            var reconciled = await ReadRecordForReconciliationAsync<AggregateRecord>(key)
-                .ConfigureAwait(false);
-            if (reconciled?.Record.Status != AggregateStatus.Committed)
-                throw;
-            await NormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
-                .ConfigureAwait(false);
-            return ZLinkAggregateCommitResult.AlreadyCommitted;
-        }
-        if (result is not ZLinkStoreWriteResult.Applied)
-        {
-            var reconciled = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
-                .ConfigureAwait(false);
-            if (reconciled?.Record.Status == AggregateStatus.Committed)
-            {
-                await NormalizeCommittedAggregateAsync(fence, reconciled.Record, cancellationToken)
+                await NormalizeCommittedAggregateAsync(fence, aggregate.Record, cancellationToken)
                     .ConfigureAwait(false);
                 return ZLinkAggregateCommitResult.AlreadyCommitted;
             }
+            var participants = await ReadAggregateParticipantsAsync(
+                    fence,
+                    aggregate.Record,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            var request = RehydrateAggregateRequest(aggregate.Record, participants);
+            var target = await ReadEligibleTargetAsync(
+                    request.TargetDescriptor,
+                    request.TargetDescriptorLifecycleGeneration,
+                    request.TargetOwner,
+                    null,
+                    null,
+                    cancellationToken,
+                    requireNewPlacementEligibility: request.Participants.Any(static participant =>
+                        participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                    ),
+                    allowPreparingTarget: allowPreparingTarget
+                )
+                .ConfigureAwait(false);
+            if (target is null)
+                return ZLinkAggregateCommitResult.Stale;
+            var authorities = new StoredAuthority?[request.Participants.Count];
+            await Parallel
+                .ForEachAsync(
+                    Enumerable.Range(0, request.Participants.Count),
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = 64,
+                        CancellationToken = cancellationToken,
+                    },
+                    async (index, token) =>
+                    {
+                        authorities[index] = await ReadAuthorityRecordAsync(
+                                request.Participants[index].Key,
+                                knownMeta: null,
+                                projectCommittedAggregate: false,
+                                token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                )
+                .ConfigureAwait(false);
             if (
-                reconciled?.Record.Status == AggregateStatus.Prepared
-                && retryAttempt < CounterRetryLimit
-                && Stopwatch.GetElapsedTime(0) < retryDeadline
+                authorities.Any(authority =>
+                    authority is null || authority.Meta.AggregateFence != fence
+                )
             )
+                return ZLinkAggregateCommitResult.Stale;
+            var capacity = await ReadCapacityAsync(request.TargetDescriptor, cancellationToken)
+                .ConfigureAwait(false);
+            var capacityRecords = new Dictionary<ZLinkStoreKey, StoredCapacity>();
+            capacityRecords[capacity.Key] = capacity;
+            // Capacity is keyed purely by mesh descriptor identity (the
+            // canonical capacity row excludes lifecycle generation), so two
+            // allocations against the same descriptor but different lifecycle
+            // generations share one capacity row and need only one read.
+            var sourceAllocations = authorities
+                .Select(static authority => authority!.Snapshot.Allocation)
+                .DistinctBy(static allocation => allocation.Descriptor)
+                .ToArray();
+            var sourceCapacities = new StoredCapacity[sourceAllocations.Length];
+            await Parallel
+                .ForEachAsync(
+                    Enumerable.Range(0, sourceAllocations.Length),
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = 64,
+                        CancellationToken = cancellationToken,
+                    },
+                    async (index, token) =>
+                    {
+                        var allocation = sourceAllocations[index];
+                        sourceCapacities[index] = await ReadCapacityAsync(
+                                allocation.Descriptor,
+                                token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                )
+                .ConfigureAwait(false);
+            foreach (var source in sourceCapacities)
+                capacityRecords[source.Key] = source;
+            var updatedCapacity = capacityRecords.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value.Record.Clone()
+            );
+            ApplyCapacityVector(updatedCapacity[capacity.Key], request.Capacity, pendingDelta: -1);
+
+            var conditions = new List<ZLinkStoreCondition>
             {
-                await DelayCounterRetryAsync(retryAttempt, retryDeadline, cancellationToken)
-                    .ConfigureAwait(false);
-                return await CommitAggregateCoreAsync(
-                        fence,
-                        retryAttempt + 1,
-                        retryDeadline,
-                        cancellationToken,
-                        allowPreparingTarget
+                new ZLinkStoreCondition.Version(key, aggregate.Version),
+                target.DescriptorCondition,
+                target.OwnerCondition,
+            };
+            var mutations = new List<ZLinkStoreMutation>();
+            foreach (var pair in capacityRecords)
+            {
+                AddCondition(conditions, pair.Value.Condition);
+            }
+            // authorities[index].Meta already carries both generation values
+            // for this exact read (checklist C-2b: no separate GenerationKey
+            // to reconcile), so the per-participant next-generation check below
+            // compares directly against it.
+            for (var index = 0; index < request.Participants.Count; index++)
+            {
+                var participant = request.Participants[index];
+                var authority = authorities[index]!;
+                var changesOwner =
+                    participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner;
+                if (changesOwner)
+                {
+                    ulong nextAuthorityOwnerGeneration = participants[index]
+                        .Metadata
+                        .TargetAuthorityOwnerGeneration;
+                    if (
+                        nextAuthorityOwnerGeneration == 0
+                        || nextAuthorityOwnerGeneration <= authority.Meta.AuthorityOwnerGeneration
+                        || nextAuthorityOwnerGeneration > long.MaxValue
+                    )
+                        return ZLinkAggregateCommitResult.Stale;
+                    ApplyCapacity(
+                        updatedCapacity[CapacityKey(authority.Snapshot.Allocation.Descriptor)],
+                        authority.Snapshot.Allocation,
+                        activeDelta: -1
+                    );
+                    var moved = authority.Snapshot.Allocation with
+                    {
+                        Descriptor = request.TargetDescriptor,
+                        DescriptorLifecycleGeneration = request.TargetDescriptorLifecycleGeneration,
+                    };
+                    ApplyCapacity(updatedCapacity[capacity.Key], moved, activeDelta: 1);
+                }
+            }
+            foreach (var pair in updatedCapacity)
+                mutations.Add(new ZLinkStoreMutation.Put(pair.Key, Encode(pair.Value), null));
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    key,
+                    Encode(aggregate.Record with { Status = AggregateStatus.Committed }),
+                    null
+                )
+            );
+            ZLinkStoreWriteResult result;
+            try
+            {
+                result = await provider
+                    .WriteAsync(
+                        new ZLinkStoreWriteRequest(conditions, mutations),
+                        cancellationToken
                     )
                     .ConfigureAwait(false);
             }
-            return ZLinkAggregateCommitResult.Stale;
-        }
-        await NormalizeCommittedAggregateAsync(
-                fence,
-                aggregate.Record with
+            catch
+            {
+                var reconciled = await ReadRecordForReconciliationAsync<AggregateRecord>(key)
+                    .ConfigureAwait(false);
+                if (reconciled?.Record.Status != AggregateStatus.Committed)
+                    throw;
+                await NormalizeCommittedAggregateForAmbiguousAsync(fence, reconciled.Record)
+                    .ConfigureAwait(false);
+                return ZLinkAggregateCommitResult.AlreadyCommitted;
+            }
+            if (result is not ZLinkStoreWriteResult.Applied)
+            {
+                var reconciled = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (reconciled?.Record.Status == AggregateStatus.Committed)
                 {
-                    Status = AggregateStatus.Committed,
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        return ZLinkAggregateCommitResult.Committed;
+                    await NormalizeCommittedAggregateAsync(
+                            fence,
+                            reconciled.Record,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    return ZLinkAggregateCommitResult.AlreadyCommitted;
+                }
+                if (reconciled?.Record.Status == AggregateStatus.Prepared)
+                    continue;
+                return ZLinkAggregateCommitResult.Stale;
+            }
+            await NormalizeCommittedAggregateAsync(
+                    fence,
+                    aggregate.Record with
+                    {
+                        Status = AggregateStatus.Committed,
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return ZLinkAggregateCommitResult.Committed;
+        }
     }
 
     private async ValueTask NormalizeCommittedAggregateAsync(

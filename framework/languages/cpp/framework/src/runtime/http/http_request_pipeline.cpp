@@ -578,7 +578,6 @@ void apply_framework_error (http::response<http::string_body> &response,
             break;
         case detail::boundary_error_t::disconnected:
         case detail::boundary_error_t::closed:
-        case detail::boundary_error_t::cancelled:
         case detail::boundary_error_t::stale_generation:
             break;
         case detail::boundary_error_t::none:

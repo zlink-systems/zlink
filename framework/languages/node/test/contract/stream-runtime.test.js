@@ -5488,6 +5488,27 @@ test('actor packet target keeps a Ready snapshot across equivalent routing-id in
   assert.strictEqual(store.targetForState('actor-ready-fence'), target);
 });
 
+test('actor packet target does not fabricate a Ready hint from native membership', () => {
+  const store = new ZLinkRemoteActorPacketTargetStore({
+    actorManager: () => ({
+      getState() {
+        return {
+          nativeActorRef: { nodeRid: zlink.RoutingId.from('actor-node'), actorId: 'actor-no-ready', generation: 9n },
+          spotId: 'user-spot',
+          spotGeneration: 7n
+        };
+      }
+    }),
+    streamBindingRuntime: () => ({ find: () => undefined }),
+    meshRouters: {
+      defaultSpotRouterChannelId() { return 'game.route'; },
+      defaultRouterChannelId() { return 'game'; }
+    },
+    primaryNodeRid: () => zlink.RoutingId.from('actor-node')
+  });
+  assert.equal(store.targetForState('actor-no-ready'), undefined);
+});
+
 test('remote actor packet route failure is submitted once and stays Unavailable', async () => {
   const actorId = 'actor-incomplete-ready-fence';
   const routeFailure = framework.createInternalFrameworkException(
@@ -5596,6 +5617,49 @@ test('runtime host joined Spot route invalidates a stale entry target instead of
 
   const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
   assert.equal(target, undefined);
+});
+
+test('runtime host actor packet target requires a Ready spot mesh snapshot when route mesh also exists', () => {
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      routeChannels: [{ routerChannelId: 'spot.control' }],
+      spotNodes: {
+        'spot.service': {
+          router: { bind: 'tcp://127.0.0.1:1', routingId: 'session-node' }
+        }
+      }
+    })
+  });
+  host.spotNodeRuntime = {
+    primaryMeshNode: {
+      status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
+      routingId: 'session-node'
+    }
+  };
+  const state = {
+    spotId: 'room-spot',
+    nativeActorRef: { nodeRid: 'play-node', actorId: 'actor-remote-room', generation: 1n }
+  };
+  host.setActorManager({
+    getState(actorId) {
+      assert.equal(actorId, 'actor-remote-room');
+      return state;
+    }
+  });
+
+  assert.equal(host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room'), undefined);
+  state.remoteActorPacketTarget = {
+    routerChannelId: 'spot.service', targetNodeRid: 'play-node', spotId: 'room-spot',
+    spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 3n, targetNodeGeneration: 5n,
+    authorityOwnerGeneration: 7n, targetOwnerId: 'spot-owner', ownerLeaseGeneration: 11n,
+    authorityStoreVersion: 'spot-ready'
+  };
+  const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
+  assert.strictEqual(target, state.remoteActorPacketTarget);
+  assert.equal(target.routerChannelId, 'spot.service');
+  assert.equal(String(target.targetNodeRid), 'play-node');
+  assert.equal(String(target.spotId), 'room-spot');
+  assert.equal(target.spotKind, framework.ZLinkSpotKind.User);
 });
 
 test('Actor binding install does not overwrite the actor packet route target', () => {

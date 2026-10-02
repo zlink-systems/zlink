@@ -493,10 +493,24 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const state = this.states.get(actorId);
     const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
     const nativeActorRef = exactNativeActorRef ?? state?.nativeActorRef;
-    if (nativeActorRef !== undefined) {
-      node?.discardRelocatedActor?.(nativeActorRef);
+    const failures: unknown[] = [];
+    try {
+      if (nativeActorRef !== undefined) {
+        node?.discardRelocatedActor?.(nativeActorRef);
+      }
+    } catch (error) {
+      failures.push(error);
     }
-    await this.finalizeActorState(actorId, state);
+    try {
+      await this.completeCoreRelocationSource(actorId);
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, 'Actor relocation cleanup failed.');
+    }
   }
 
   async completeCoreRelocationSource(actorId: string): Promise<void> {
@@ -509,13 +523,16 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     state: ZLinkActorRuntimeState | undefined
   ): Promise<void> {
     if (state === undefined || this.states.get(actorId) !== state) return;
-    if (state.actor !== undefined)
-      await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
-    state.clearAfterDestroy();
-    if (this.states.get(actorId) === state) {
-      this.states.delete(actorId);
-      this.actorMeshNames.delete(actorId);
-      this.relocationStaged.delete(actorId);
+    try {
+      if (state.actor !== undefined)
+        await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
+    } finally {
+      state.clearAfterDestroy();
+      if (this.states.get(actorId) === state) {
+        this.states.delete(actorId);
+        this.actorMeshNames.delete(actorId);
+        this.relocationStaged.delete(actorId);
+      }
     }
   }
 
