@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -41,26 +42,169 @@ import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodeMetricsTest {
     @Test
-    void instanceActivationUsesCanonicalDispatchReasonsOnce() throws Exception {
-        LinkedBlockingQueue<String> diagnostics = new LinkedBlockingQueue<>();
-        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        Handler listener =
-                new Handler() {
-                    @Override
-                    public void publish(LogRecord record) {
-                        if (record.getMessage().contains("event_id=zlink.dispatch_error")) {
-                            diagnostics.add(record.getMessage());
+    void notMaterializedInstanceFailuresReportOncePerMessage() throws Exception {
+        try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();
+                Pair pair = new Pair()) {
+            var reporter =
+                    new ZLinkDispatchErrorReporter(
+                            new ZLinkDispatchOptionsRegistration(),
+                            ZLinkHandlerActivator.reflection(),
+                            Runnable::run);
+            pair.target.setDispatchErrorReporter(reporter);
+            long count = 0;
+            for (boolean local : List.of(false, true)) {
+                for (boolean request : List.of(true, false)) {
+                    var route = pair.instanceRoute("absent-" + local + "-" + request);
+                    var caller = local ? pair.target : pair.source;
+                    try (Message packet = Message.from("Packet");
+                            Message body = Message.from("body")) {
+                        CompletionStage<?> submitted =
+                                request
+                                        ? caller.requestInstanceSpot(
+                                                route,
+                                                "absent",
+                                                null,
+                                                new byte[0],
+                                                List.of(packet, body),
+                                                Duration.ofSeconds(2))
+                                        : caller.submitInstanceSpotSend(
+                                                route,
+                                                "absent",
+                                                null,
+                                                new byte[0],
+                                                List.of(packet, body),
+                                                Duration.ofSeconds(2));
+                        if (request || local) {
+                            var failure =
+                                    assertThrows(
+                                            java.util.concurrent.ExecutionException.class,
+                                            () ->
+                                                    submitted
+                                                            .toCompletableFuture()
+                                                            .get(2, TimeUnit.SECONDS));
+                            assertEquals(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                    ((ZLinkFrameworkException) failure.getCause()).kind());
+                        } else {
+                            submitted.toCompletableFuture().get(2, TimeUnit.SECONDS);
                         }
+                        diagnostics.expect(
+                                request ? "request" : "send",
+                                request ? (local ? "fail_caller" : "reply_error") : "drop",
+                                "no_handler");
+                        assertEquals(++count, reporter.reportedCount());
                     }
+                }
+            }
+            assertEquals(4, reporter.reportedCount());
+            assertTrue(diagnostics.events.isEmpty());
+        }
+    }
 
-                    @Override
-                    public void flush() {}
+    @Test
+    void instanceActivationRecoveryRequestFailureReportsOnce() throws Exception {
+        try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();
+                Pair pair = new Pair()) {
+            var reporter =
+                    new ZLinkDispatchErrorReporter(
+                            new ZLinkDispatchOptionsRegistration(),
+                            ZLinkHandlerActivator.reflection(),
+                            Runnable::run);
+            pair.target.setDispatchErrorReporter(reporter);
+            pair.target.registerInstanceSpotType(
+                    "missing",
+                    (ignored, route, spot) ->
+                            CompletableFuture.failedFuture(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            "recovered activation handler is missing")));
+            var route = pair.instanceRoute("recovered-request-missing");
+            try (Message packet = Message.from("Packet");
+                    Message body = Message.from("body")) {
+                var envelope =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope(
+                                route.targetSpotId(),
+                                "missing",
+                                "mesh",
+                                pair.target.routingId(),
+                                pair.target.lifecycleGeneration(),
+                                Long.toString(pair.target.status().descriptorRevision()),
+                                pair.source.routingId(),
+                                pair.source.lifecycleGeneration(),
+                                java.util.Optional.empty(),
+                                true,
+                                1,
+                                1,
+                                1L,
+                                System.currentTimeMillis() + 2000,
+                                new byte[0],
+                                new ZLinkServiceM6AWireCodec()
+                                        .encodeFrameworkMultipartFrame(List.of(packet, body)));
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () ->
+                                pair.target
+                                        .recoverInstanceActivation(envelope, route)
+                                        .toCompletableFuture()
+                                        .get(2, TimeUnit.SECONDS));
+                assertEquals(1, reporter.reportedCount());
+                diagnostics.expect("request", "fail_caller", "no_handler");
+                assertTrue(diagnostics.events.isEmpty());
+            }
+        }
+    }
 
-                    @Override
-                    public void close() {}
-                };
-        logger.addHandler(listener);
-        try (Pair pair = new Pair()) {
+    @Test
+    void instanceActivationRequestFailureReportsOnce() throws Exception {
+        try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();
+                Pair pair = new Pair()) {
+            var reporter =
+                    new ZLinkDispatchErrorReporter(
+                            new ZLinkDispatchOptionsRegistration(),
+                            ZLinkHandlerActivator.reflection(),
+                            Runnable::run);
+            pair.target.setDispatchErrorReporter(reporter);
+            var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
+            spots.registerInstanceSpotType(
+                    "missing",
+                    (ignored, route, spot) ->
+                            CompletableFuture.failedFuture(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            "activation handler is missing")));
+            var route = pair.instanceRoute("request-missing");
+            spots.registerInstanceSpotAuthority("missing", route);
+            try (Message packet = Message.from("Packet");
+                    Message body = Message.from("body")) {
+                var failure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        pair.source
+                                                .requestInstanceSpot(
+                                                        route,
+                                                        "missing",
+                                                        null,
+                                                        new byte[0],
+                                                        List.of(packet, body),
+                                                        Duration.ofSeconds(2))
+                                                .toCompletableFuture()
+                                                .get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ((ZLinkFrameworkException) failure.getCause()).kind());
+                assertEquals(1, reporter.reportedCount());
+                diagnostics.expect("request", "reply_error", "no_handler");
+                assertTrue(diagnostics.events.isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void instanceActivationUsesCanonicalDispatchReasonsOnce() throws Exception {
+        try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();
+                Pair pair = new Pair()) {
             var reporter =
                     new ZLinkDispatchErrorReporter(
                             new ZLinkDispatchOptionsRegistration(),
@@ -92,18 +236,11 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS);
                 }
-                String diagnostic = diagnostics.poll(2, TimeUnit.SECONDS);
-                assertNotNull(diagnostic);
-                assertTrue(diagnostic.contains("surface=instance_spot"), diagnostic);
-                assertTrue(diagnostic.contains("kind=send"), diagnostic);
-                assertTrue(diagnostic.contains("action=drop"), diagnostic);
-                assertTrue(diagnostic.contains("reason=" + expected.getValue()), diagnostic);
+                diagnostics.expect("send", "drop", expected.getValue());
                 assertEquals(++diagnosticCount, reporter.reportedCount());
             }
             assertEquals(5, reporter.reportedCount());
-            assertTrue(diagnostics.isEmpty());
-        } finally {
-            logger.removeHandler(listener);
+            assertTrue(diagnostics.events.isEmpty());
         }
     }
 
@@ -426,6 +563,39 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                 throw new AssertionError("runtime state transition was not observed");
             }
             Thread.yield();
+        }
+    }
+
+    private static final class DispatchDiagnostics extends Handler implements AutoCloseable {
+        private final Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        private final LinkedBlockingQueue<String> events = new LinkedBlockingQueue<>();
+
+        private DispatchDiagnostics() {
+            logger.addHandler(this);
+        }
+
+        @Override
+        public void publish(LogRecord record) {
+            if (record.getMessage().contains("event_id=zlink.dispatch_error")) {
+                events.add(record.getMessage());
+            }
+        }
+
+        private void expect(String kind, String action, String reason) throws Exception {
+            String diagnostic = events.poll(2, TimeUnit.SECONDS);
+            assertNotNull(diagnostic);
+            assertTrue(diagnostic.contains("surface=instance_spot"), diagnostic);
+            assertTrue(diagnostic.contains("kind=" + kind), diagnostic);
+            assertTrue(diagnostic.contains("action=" + action), diagnostic);
+            assertTrue(diagnostic.contains("reason=" + reason), diagnostic);
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {
+            logger.removeHandler(this);
         }
     }
 
