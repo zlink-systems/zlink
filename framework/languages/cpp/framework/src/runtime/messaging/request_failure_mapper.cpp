@@ -23,6 +23,7 @@ struct wire_failure_mapping_t
     const char *message;
     detail::boundary_error_t boundary = detail::boundary_error_t::none;
     bool receive = true;
+    failure_t code_only_failure = failure;
 };
 constexpr wire_failure_mapping_t wire_failure_mapping[] = {
   {kind_t::not_found, failure_t::requestTargetNotFound, terminal_t::notFound,
@@ -49,10 +50,12 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
    " failed because the target route is not connected.", detail::boundary_error_t::disconnected},
   {kind_t::deadline_exceeded, failure_t::workerTimedOut, terminal_t::internalError,
    " timed out inside the worker."},
-  {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr},
+  {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr,
+   detail::boundary_error_t::none, true, failure_t::routeNotConnected},
   {kind_t::protocol_error, failure_t::requestProtocolError, terminal_t::protocolError,
    " failed with a protocol error."},
-  {kind_t::invalid_operation, failure_t::none, terminal_t::invalidState, nullptr},
+  {kind_t::invalid_operation, failure_t::none, terminal_t::invalidState, nullptr,
+   detail::boundary_error_t::none, true, failure_t::requestFailed},
   {kind_t::data_lost, failure_t::relocationDataLost, terminal_t::internalError,
    " failed because relocation data was lost."},
   {kind_t::internal_failure, failure_t::requestFailed, terminal_t::internalError, " failed."},
@@ -77,29 +80,40 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
    " failed because the spot generation was stale."},
   {kind_t::unavailable, failure_t::spotMoving, terminal_t::conflict,
    " failed because the spot is moving."}};
+
+const wire_failure_mapping_t *outgoing_mapping (kind_t kind, std::uint32_t cause_code) noexcept
+{
+    const wire_failure_mapping_t *representative = nullptr;
+    for (const auto &row : wire_failure_mapping) {
+        if (row.kind != kind)
+            continue;
+        if (!representative)
+            representative = &row;
+        if (cause_code == 0
+            || (row.receive && cause_code == static_cast<std::uint32_t> (row.failure)))
+            return &row;
+    }
+    return representative;
+}
 }
 
 std::optional<request_wire_failure_t>
 request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind,
                                                 std::uint32_t cause_code) const
 {
-    const wire_failure_mapping_t *representative = nullptr;
-    for (const auto &row : wire_failure_mapping) {
-        if (row.kind != kind)
-            continue;
-        if (cause_code == 0)
-            return request_wire_failure_t{static_cast<std::uint32_t> (row.terminal),
-                                          static_cast<std::uint32_t> (row.failure)};
-        if (!representative)
-            representative = &row;
-        if (cause_code != 0 && row.receive
-            && cause_code == static_cast<std::uint32_t> (row.failure))
-            return request_wire_failure_t{static_cast<std::uint32_t> (row.terminal), cause_code};
-    }
-    if (!representative)
+    const auto *row = outgoing_mapping (kind, cause_code);
+    if (!row)
         return std::nullopt;
-    return request_wire_failure_t{static_cast<std::uint32_t> (representative->terminal),
-                                  static_cast<std::uint32_t> (representative->failure)};
+    return request_wire_failure_t{static_cast<std::uint32_t> (row->terminal),
+                                  static_cast<std::uint32_t> (row->failure)};
+}
+
+std::uint32_t
+request_failure_mapper_t::target_failure_code (framework_error_kind_t kind,
+                                               std::uint32_t cause_code) const noexcept
+{
+    const auto *row = outgoing_mapping (kind, cause_code);
+    return static_cast<std::uint32_t> (row ? row->code_only_failure : failure_t::requestFailed);
 }
 
 framework_error_kind_t
@@ -333,13 +347,12 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
     // Fine codes retain precedence even for an invalid terminal/code combination.
     // None is decoded by the unchanged source/native terminal fallback below.
     if (failure_code != static_cast<std::uint32_t> (failure_t::none)) {
-        for (const auto &[kind, failure, terminal, message, boundary, receive] :
-             wire_failure_mapping) {
-            if (receive && failure_code == static_cast<std::uint32_t> (failure))
+        for (const auto &row : wire_failure_mapping) {
+            if (row.receive && failure_code == static_cast<std::uint32_t> (row.failure))
                 return detail::with_failure_code (
-                  boundary == detail::boundary_error_t::none
-                    ? framework_exception_t (kind, operation_name + message)
-                    : detail::make_boundary_exception (boundary, operation_name + message),
+                  row.boundary == detail::boundary_error_t::none
+                    ? framework_exception_t (row.kind, operation_name + row.message)
+                    : detail::make_boundary_exception (row.boundary, operation_name + row.message),
                   failure_code);
         }
     }

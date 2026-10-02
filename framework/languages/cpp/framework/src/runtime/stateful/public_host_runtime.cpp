@@ -40,6 +40,47 @@
 namespace zlink::framework::runtime::host
 {
 
+namespace
+{
+std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::stateful_error_t failure)
+{
+    switch (failure) {
+        case stateful::stateful_error_t::not_found:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::notFound),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+        case stateful::stateful_error_t::type_mismatch:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::actorTypeMismatch)};
+        case stateful::stateful_error_t::already_exists:
+            return {
+              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+              static_cast<std::uint32_t> (protocol::framework_error_code::actorAlreadyExists)};
+        case stateful::stateful_error_t::generation_stale:
+            return {
+              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+              static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)};
+        case stateful::stateful_error_t::moving:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)};
+        case stateful::stateful_error_t::conflict:
+            // Source-local conflicts are InvalidOperation (error model §2, §5).
+            // A remote owner's unavailable result is classified at its boundary.
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::invalidState),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+        case stateful::stateful_error_t::backpressured:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::backpressured),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+        case stateful::stateful_error_t::invalid:
+        case stateful::stateful_error_t::instance_manager_create_forbidden:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::invalidState),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+        default:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::none)};
+    }
+}
+}
+
 bool bound_session_bind_actor_matches (const protocol::actor_route_fence_t &requested,
                                        const std::optional<stateful::object_ref_t> &local_actor,
                                        const zlink::routing_id_t &local_routing_id,
@@ -1344,11 +1385,12 @@ void complete_close_step (const close_completion_t &completion, spot_close_commi
     completion->complete (result_t<spot_close_commit_t>::success (std::move (commit)));
 }
 
-spot_close_commit_t close_step_failure (framework_error_kind_t kind, const char *message,
-                                       std::uint32_t cause_code = 0)
+spot_close_commit_t
+close_step_failure (framework_error_kind_t kind, const char *message, std::uint32_t cause_code = 0)
 {
-    return {detail::result_access_t::failure<bool> (detail::with_failure_code (
-              framework_exception_t (kind, message), cause_code)), {}};
+    return {detail::result_access_t::failure<bool> (
+              detail::with_failure_code (framework_exception_t (kind, message), cause_code)),
+            {}};
 }
 
 template <typename T> result_t<bool> close_store_failure (const result_t<T> &failed)
@@ -1586,9 +1628,9 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
       [self, completion, store, owner_resolver, authority_key,
        target = std::move (target)] (result_t<authority_read_result_t> read) {
           const auto moving = [] {
-              return close_step_failure (framework_error_kind_t::unavailable,
-                                         "User Spot owner is moving",
-                                         static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+              return close_step_failure (
+                framework_error_kind_t::unavailable, "User Spot owner is moving",
+                static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
           };
           if (!read) {
               complete_close_step (completion, {close_store_failure (read), {}});
@@ -1600,10 +1642,12 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
               return;
           }
           if (snapshot->object_generation != target.object_generation) {
-              complete_close_step (completion,
-                                   close_step_failure (framework_error_kind_t::invalid_operation,
-                                                       "User Spot generation is stale",
-                                                       static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)));
+              complete_close_step (
+                completion,
+                close_step_failure (framework_error_kind_t::invalid_operation,
+                                    "User Spot generation is stale",
+                                    static_cast<std::uint32_t> (
+                                      protocol::framework_error_code::spotGenerationStale)));
               return;
           }
           // The one classification of a Close request (§7.1, §9): another
@@ -1688,10 +1732,12 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
           }
           const auto [close_error, eligible] = self->_objects.can_close_spot (exact_ref);
           if (close_error == stateful::stateful_error_t::generation_stale) {
-              complete_close_step (completion,
-                                   close_step_failure (framework_error_kind_t::invalid_operation,
-                                                       "User Spot generation is stale",
-                                                       static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)));
+              complete_close_step (
+                completion,
+                close_step_failure (framework_error_kind_t::invalid_operation,
+                                    "User Spot generation is stale",
+                                    static_cast<std::uint32_t> (
+                                      protocol::framework_error_code::spotGenerationStale)));
               return;
           }
           if (close_error != stateful::stateful_error_t::none) {
@@ -3644,11 +3690,14 @@ void public_host_runtime_t::reply_relocation_assembly_failure (
   const pending_relocation_assembly_t &pending, protocol::framework_error_code code)
 {
     (void) _transport->reply_relocation_failed (
-      pending.request,
-      protocol::relocation_failed_t{
-        pending.prepare.relocation, pending.prepare.target_attempt_generation,
-        pending.prepare.coordinator, pending.prepare.target, pending.prepare.object,
-        protocol::relocation_role_t::target, static_cast<std::uint32_t> (code)});
+      pending.request, protocol::relocation_failed_t{
+                         pending.prepare.relocation, pending.prepare.target_attempt_generation,
+                         pending.prepare.coordinator, pending.prepare.target,
+                         pending.prepare.object, protocol::relocation_role_t::target,
+                         messaging::request_failure_mapper_t{}.target_failure_code (
+                           messaging::request_failure_mapper_t{}.failure_code_kind (
+                             static_cast<std::uint32_t> (code)),
+                           static_cast<std::uint32_t> (code))});
 }
 
 void public_host_runtime_t::rollback_actor_join_recoveries (
@@ -3693,7 +3742,7 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
   std::shared_ptr<const relocation_assembly_staging_t> staging)
 {
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
-    bool threw = false;
+    std::optional<framework_exception_t> failure;
     try {
         std::optional<stateful::object_ref_t> actor_join_target_spot;
         if (staging->targets.size () == 1
@@ -3717,15 +3766,28 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
                       : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
                                                                staging->restore_identity, {}));
     }
-    catch (...) {
-        threw = true;
+    catch (const framework_exception_t &error) {
+        failure = error;
     }
-    if (!threw
+    catch (const std::exception &error) {
+        failure.emplace (framework_error_kind_t::internal_failure, error.what ());
+    }
+    catch (...) {
+        failure.emplace (framework_error_kind_t::internal_failure, "Relocation restore failed");
+    }
+    if (!failure
         && (restored == stateful::stateful_error_t::none
             || restored == stateful::stateful_error_t::already_exists))
         co_return true;
     discard_relocation_assembly_staging (*pending, *staging);
-    reply_relocation_assembly_failure (*pending, protocol::framework_error_code::requestFailed);
+    const messaging::request_failure_mapper_t mapper;
+    if (!failure) {
+        const auto [terminal, code] = stateful_failure_pair (restored);
+        failure = mapper.reply_header_exception (terminal, code, "Relocation restore");
+    }
+    reply_relocation_assembly_failure (
+      *pending, static_cast<protocol::framework_error_code> (
+                  mapper.target_failure_code (failure->kind (), detail::failure_code (*failure))));
     co_return false;
 }
 
@@ -3749,7 +3811,10 @@ void public_host_runtime_t::activate_relocation_assembly (
         .run ([&] { return _relocation_target_attempts.emplace (key, std::move (attempt)).second; })
         .get ();
     if (!inserted) {
-        reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
+        reply_relocation_assembly_failure (
+          pending, static_cast<protocol::framework_error_code> (
+                     messaging::request_failure_mapper_t{}.target_failure_code (
+                       framework_error_kind_t::invalid_operation)));
         return;
     }
     const auto ready_sent = _transport->reply_relocation_ready (
@@ -3798,16 +3863,8 @@ void public_host_runtime_t::activate_relocation_assembly (
 void public_host_runtime_t::complete_relocation_assembly (const relocation_attempt_key_t &key,
                                                           pending_relocation_assembly_t pending)
 {
-    // relocationDataLost(35) is reserved for a verified checksum/assembly/
-    // digest/conflict integrity failure — the assembled payload itself, or
-    // its identity against the negotiated Prepare, is provably wrong.
-    // A restore/factory/staging failure below (target queue registration,
-    // the factory/restore path throwing, a retried restore still failing,
-    // or a duplicate attempt-key conflict) is not a payload integrity
-    // failure and must not encode 35; it maps to requestFailed(17), same
-    // as maintenance_runtime.cpp's aggregate path already does for the
-    // equivalent restore_failed case (relocation_terminal_t::blocked, not
-    // data_lost).
+    // Verified identity and payload-integrity failures retain relocationDataLost.
+    // Restore failures preserve their Framework kind and cause code instead.
     const auto reply_failure = [&] (protocol::framework_error_code code =
                                       protocol::framework_error_code::relocationDataLost) {
         reply_relocation_assembly_failure (pending, code);
@@ -4661,8 +4718,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         }
     }
     catch (const framework_exception_t &error) {
-        const auto failure =
-          messaging::request_failure_mapper_t{}.target_failure_reply (error);
+        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
         result.terminal_result = failure ? failure->terminal_result : 105;
         result.failure_code =
           failure ? failure->failure_code
@@ -4726,7 +4782,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
             expired.prepare.relocation, expired.prepare.target_attempt_generation,
             expired.prepare.coordinator, expired.prepare.target, expired.prepare.object,
             protocol::relocation_role_t::target,
-            static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost)});
+            messaging::request_failure_mapper_t{}.target_failure_code (
+              framework_error_kind_t::data_lost,
+              static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))});
     }
     poll_relocation_target_attempts ();
     flush_pending_session_relocation_seals ();
@@ -4864,8 +4922,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 prepare->relocation, prepare->target_attempt_generation,
                                 prepare->coordinator, prepare->target, prepare->object,
                                 protocol::relocation_role_t::target,
-                                static_cast<std::uint32_t> (
-                                  protocol::framework_error_code::requestProtocolError)});
+                                messaging::request_failure_mapper_t{}.target_failure_code (
+                                  framework_error_kind_t::protocol_error,
+                                  static_cast<std::uint32_t> (
+                                    protocol::framework_error_code::requestProtocolError))});
                             continue;
                         }
                     }
@@ -4901,30 +4961,47 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->payload_chunk_count == 0
                         || prepare->payload_chunk_count > protocol::relocationChunkCount)
                         continue;
-                    _relocation_session_terminal_lane
-                      .run ([&] {
-                          const auto found = _relocation_assemblies.find (key);
-                          if (found != _relocation_assemblies.end ()) {
-                              if (found->second.prepare == *prepare)
-                                  found->second.expires_at = std::chrono::steady_clock::now ()
-                                                             + relocation_assembly_retention;
-                              return;
-                          }
-                          _relocation_assemblies.emplace (
-                            key,
-                            pending_relocation_assembly_t{
-                              *prepare, std::move (mailbox_record),
-                              stateful::relocation_state_assembly_t{
-                                prepare->relocation,
-                                prepare->target_attempt_generation,
-                                prepare->coordinator,
-                                prepare->object,
-                                {prepare->payload_total_length, prepare->payload_chunk_count,
-                                 prepare->payload_checksum_crc32c}},
-                              false,
-                              std::chrono::steady_clock::now () + relocation_assembly_retention});
-                      })
-                      .get ();
+                    const auto accepted =
+                      _relocation_session_terminal_lane
+                        .run ([&] {
+                            const auto found = _relocation_assemblies.find (key);
+                            if (found != _relocation_assemblies.end ()) {
+                                if (found->second.prepare == *prepare)
+                                    found->second.expires_at = std::chrono::steady_clock::now ()
+                                                               + relocation_assembly_retention;
+                                return true;
+                            }
+                            const auto current_state = status ().state;
+                            if (current_state == node_status_t::state_t::draining
+                                || current_state == node_status_t::state_t::stopped
+                                || current_state == node_status_t::state_t::error)
+                                return false;
+                            _relocation_assemblies.emplace (
+                              key,
+                              pending_relocation_assembly_t{
+                                *prepare, std::move (mailbox_record),
+                                stateful::relocation_state_assembly_t{
+                                  prepare->relocation,
+                                  prepare->target_attempt_generation,
+                                  prepare->coordinator,
+                                  prepare->object,
+                                  {prepare->payload_total_length, prepare->payload_chunk_count,
+                                   prepare->payload_checksum_crc32c}},
+                                false,
+                                std::chrono::steady_clock::now () + relocation_assembly_retention});
+                            return true;
+                        })
+                        .get ();
+                    if (!accepted) {
+                        (void) _transport->reply_relocation_failed (
+                          mailbox_record,
+                          protocol::relocation_failed_t{
+                            prepare->relocation, prepare->target_attempt_generation,
+                            prepare->coordinator, prepare->target, prepare->object,
+                            protocol::relocation_role_t::target,
+                            messaging::request_failure_mapper_t{}.target_failure_code (
+                              framework_error_kind_t::shutting_down)});
+                    }
                     continue;
                 }
                 if (wire.kind == protocol::command::relocationState) {
@@ -4974,8 +5051,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             failed->prepare.relocation, failed->prepare.target_attempt_generation,
                             failed->prepare.coordinator, failed->prepare.target,
                             failed->prepare.object, protocol::relocation_role_t::target,
-                            static_cast<std::uint32_t> (
-                              protocol::framework_error_code::relocationDataLost)});
+                            messaging::request_failure_mapper_t{}.target_failure_code (
+                              framework_error_kind_t::data_lost,
+                              static_cast<std::uint32_t> (
+                                protocol::framework_error_code::relocationDataLost))});
                     }
                     if (completed)
                         complete_relocation_assembly (key, std::move (*completed));
@@ -5747,7 +5826,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         terminal (0, 0, result.value ());
                         return;
                     }
-                    const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (*result.error ());
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (*result.error ());
                     terminal (failure->terminal_result, failure->failure_code, false);
                 };
                 // The started operation settles its terminal record once, also
@@ -6528,35 +6608,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
           }
           auto [error, membership] = _objects.begin_membership_move (*current, *target);
           if (error != stateful::stateful_error_t::none) {
-              const auto classified =
-                [] (stateful::stateful_error_t failure) -> std::pair<std::uint32_t, std::uint32_t> {
-                  switch (failure) {
-                      case stateful::stateful_error_t::not_found:
-                          return {102, 0};
-                      case stateful::stateful_error_t::type_mismatch:
-                          return {107, 4};
-                      case stateful::stateful_error_t::already_exists:
-                          return {107, 3};
-                      case stateful::stateful_error_t::generation_stale:
-                          return {107, 33};
-                      case stateful::stateful_error_t::moving:
-                          return {107, 34};
-                      case stateful::stateful_error_t::conflict:
-                          //  Source-local conflict (an active application turn or a
-                          //  not-ready local object) is an operation forbidden in the
-                          //  current state -> InvalidOperation (spec 32:41), not the
-                          //  remote-owner Unavailable a bare conflict terminal maps
-                          //  to (spec 32:99-103).
-                          return {111, 0};
-                      case stateful::stateful_error_t::backpressured:
-                          return {113, 0};
-                      case stateful::stateful_error_t::invalid:
-                      case stateful::stateful_error_t::instance_manager_create_forbidden:
-                          return {111, 0};
-                      default:
-                          return {105, 0};
-                  }
-              }(error);
+              const auto classified = stateful_failure_pair (error);
               return fail (classified.first, classified.second);
           }
 

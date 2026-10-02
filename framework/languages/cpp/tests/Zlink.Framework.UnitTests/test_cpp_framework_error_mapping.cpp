@@ -59,9 +59,17 @@ int main ()
         }
         for (const auto &[name, target_kind] : kinds) {
             const auto sent = mapper.target_failure_reply (target_kind, code);
+            const auto code_only = mapper.target_failure_code (target_kind, code);
+            if (code_only
+                != (kind == target_kind ? code : mapper.target_failure_code (target_kind))) {
+                std::cerr << "code-only cause preservation mismatch: " << name << " / "
+                          << row.at ("code") << '\n';
+                ++failures;
+            }
             const auto representative = mapper.target_failure_reply (target_kind);
             const auto expected = kind == target_kind ? code : representative->failure_code;
-            if (!sent || !zlink::framework::runtime::protocol::valid_terminal_failure (
+            if (!sent
+                || !zlink::framework::runtime::protocol::valid_terminal_failure (
                   sent->terminal_result,
                   static_cast<zlink::framework::runtime::protocol::framework_error_code> (
                     sent->failure_code))) {
@@ -91,6 +99,14 @@ int main ()
             ++failures;
         }
     }
+    for (const auto &row : fixture.at ("send")) {
+        const auto code = mapper.target_failure_code (kinds.at (row.at ("kind")));
+        if (code
+            != row.value ("codeOnlyFailureCode", row.at ("failureCode").get<std::uint32_t> ())) {
+            std::cerr << "code-only send mismatch: " << row.at ("kind") << '\n';
+            ++failures;
+        }
+    }
     using namespace zlink::framework::runtime::protocol;
     if (valid_terminal_failure (static_cast<std::uint32_t> (request_terminal_result::internalError),
                                 framework_error_code::actorAlreadyExists)
@@ -100,6 +116,8 @@ int main ()
         ++failures;
     }
     std::cout << "receive=" << fixture.at ("receive").size ()
-              << " send=" << fixture.at ("send").size () << " failures=" << failures << '\n';
+              << " send=" << fixture.at ("send").size ()
+              << " code-only-send=" << fixture.at ("send").size () << " failures=" << failures
+              << '\n';
     return failures == 0 ? 0 : 1;
 }

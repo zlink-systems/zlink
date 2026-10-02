@@ -6930,16 +6930,108 @@ void verify_relocation_id_generation_retries_collisions ()
     assert (next == candidates.size ());
 }
 
-// Cross-language failure-code alignment: relocationDataLost(35) is
-// reserved for a verified checksum/assembly/digest/conflict integrity
-// failure and must classify distinctly from requestFailed(17), which the
-// encode side now uses for restore/factory/staging internal failures
-// (complete_relocation_assembly's register_relocation_target_queue
-// conflict, factory/restore exception, retried-restore-still-failing, and
-// duplicate attempt-key branches — public_host_runtime.cpp). Also pins
-// that a shutdown-shaped code (requestFailed) never classifies as
-// data_lost, and that an unrecognized code falls back to internal_failure
-// rather than being silently ignored.
+void verify_draining_target_relocation_prepare (bool already_accepted)
+{
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-source")}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-target")}});
+    int prepares = 0;
+    target->configure_actor_join_relocation (
+      [&] (const protocol::relocation_prepare_t &) -> std::optional<bool> {
+          ++prepares;
+          return std::nullopt;
+      },
+      [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
+          const protocol::relocation_prepare_t &) { return true; },
+      [] (const stateful::object_ref_t &)
+        -> std::optional<std::tuple<std::string, std::string, std::uint64_t>> {
+          return std::nullopt;
+      },
+      [] (const std::string &, const stateful::object_ref_t &) {},
+      [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
+    source->start ();
+    target->start ();
+    target->configure_session_route_owner ([] {
+        return std::make_optional (zlink::framework::location_owner_token_t{"prepare-owner", 7});
+    });
+    const auto source_status = source->status ();
+    const auto target_status = target->status ();
+    assert (source->connect_peer (target->transport ().endpoint (), target_status.routing_id ()));
+    const auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                              std::vector<zlink::message_t>) {};
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
+            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (dispatch);
+    }
+    const protocol::relocation_prepare_t prepare{
+      {801, 802},
+      1,
+      {"prepare-coordinator", 1, source_status.routing_id ().to_bytes (),
+       source_status.lifecycle_generation (), "prepare-store"},
+      {target_status.routing_id ().to_bytes (), target_status.lifecycle_generation (),
+       "prepare-owner", 7},
+      protocol::relocation_role_t::source,
+      {protocol::relocation_object_kind_t::actor, {}, "prepare-actor", 1, 1},
+      source_status.routing_id ().to_bytes (),
+      source_status.lifecycle_generation (),
+      1,
+      1,
+      1,
+      1};
+    std::optional<zlink::framework::task_t<mesh::relocation_prepare_response_t>> initial;
+    if (already_accepted) {
+        initial.emplace (source->transport ().request_relocation_prepare (
+          target_status.routing_id ().to_bytes (), prepare, 2s));
+        while (prepares < 1 && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (target->dispatch_ready (dispatch));
+            (void) source->dispatch_ready (dispatch);
+        }
+        assert (prepares == 1);
+        assert (!initial->await_ready ());
+    }
+    await_task (target->transport ().publish_draining ());
+    assert (target->status ().state == host::node_status_t::state_t::draining);
+    auto pending = source->transport ().request_relocation_prepare (
+      target_status.routing_id ().to_bytes (), prepare, 2s);
+    if (already_accepted) {
+        while (prepares < 2 && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (target->dispatch_ready (dispatch));
+            (void) source->dispatch_ready (dispatch);
+        }
+        assert (prepares == 2);
+        const auto chunk = stateful::make_relocation_state_chunk (
+          prepare.relocation, prepare.target_attempt_generation, prepare.coordinator,
+          prepare.object, std::vector<std::uint8_t>{1}, 0, 1);
+        assert (await_task (source->transport ().send_relocation_control (
+          target_status.routing_id ().to_bytes (), chunk)));
+    }
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (dispatch);
+    }
+    const auto response = await_task (std::move (pending));
+    assert (!response.ready);
+    if (already_accepted) {
+        assert (!response.failed);
+        const auto accepted = await_task (std::move (*initial));
+        assert (accepted.failed);
+        assert (accepted.failed->failure_code
+                == static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost));
+    } else {
+        assert (response.failed);
+        assert (response.failed->failure_code
+                == static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
+    }
+    target->close ();
+    source->close ();
+}
+
+// Code-only receive classification preserves verified integrity failures and
+// keeps InternalFailure distinct from DataLost, including unknown-code fallback.
 void verify_relocation_failure_code_classification_is_distinct ()
 {
     using zlink::framework::framework_error_kind_t;
@@ -7056,6 +7148,8 @@ int main (int argc, char **argv)
     verify_relocation_assembly_rejects_mismatched_identity_chunk ();
     verify_relocation_assembly_rejects_checksum_mismatch ();
     verify_relocation_id_generation_retries_collisions ();
+    verify_draining_target_relocation_prepare (false);
+    verify_draining_target_relocation_prepare (true);
     verify_relocation_failure_code_classification_is_distinct ();
     return 0;
 }
