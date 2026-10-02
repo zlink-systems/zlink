@@ -31,6 +31,56 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
+    [Fact]
+    public async Task Flow_file_snapshots_are_complete_while_dispatch_events_are_written()
+    {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"snapshot-{Guid.NewGuid():N}.flow"
+        );
+        using var listener = new TestHostMessageFlowListener(flowPath);
+        using var activities = new ActivitySource("Zlink.Framework");
+        const int eventCount = 1000;
+        var snapshotId = Guid.NewGuid().ToString("N");
+        var writer = Task.Run(() =>
+        {
+            for (var index = 0; index < eventCount; index++)
+            {
+                using var activity = activities.StartActivity("zlink.dispatch_error");
+                activity!.SetTag("snapshot_test", snapshotId);
+                activity.SetTag("sequence", index);
+            }
+        });
+        do
+        {
+            foreach (var line in listener.ReadLines())
+            {
+                var tagsOffset = line.IndexOf(" tags=", StringComparison.Ordinal);
+                using var tags = JsonDocument.Parse(line[(tagsOffset + " tags=".Length)..]);
+                if (
+                    tags.RootElement.TryGetProperty("snapshot_test", out var id)
+                    && id.GetString() == snapshotId
+                )
+                    Assert.InRange(
+                        tags.RootElement.GetProperty("sequence").GetInt32(),
+                        0,
+                        eventCount - 1
+                    );
+            }
+            await Task.Yield();
+        } while (!writer.IsCompleted);
+        await writer;
+        Assert.Equal(
+            eventCount,
+            listener
+                .ReadLines()
+                .Count(line =>
+                    line.Contains($"\"snapshot_test\":\"{snapshotId}\"", StringComparison.Ordinal)
+                )
+        );
+    }
+
     [Theory]
     [InlineData(
         ZLinkFrameworkErrorKind.NotFound,
@@ -264,14 +314,15 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-send-released", host.State.InstanceHandlerMarkers);
-            var records = File.ReadAllLines(flowPath)
+            var records = listener
+                .ReadLines()
                 .Where(line =>
                     line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
                 );
             var record = Assert.Single(records);
             Assert.Contains("\"action\":\"drop\"", record);
             Assert.Contains($"\"reason\":\"{expectedReason}\"", record);
-            var diagnostic = await ObserveSendDiagnosticAsync(flowPath);
+            var diagnostic = await ObserveSendDiagnosticAsync(listener);
             Assert.Equal("instance_spot", diagnostic.Surface);
             Assert.Equal(expectedReason, diagnostic.Reason);
             return diagnostic;
@@ -341,7 +392,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-request-released", host.State.InstanceHandlerMarkers);
-            var records = File.ReadAllLines(flowPath)
+            var records = listener
+                .ReadLines()
                 .Where(line =>
                     line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
                 );
@@ -1123,9 +1175,9 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 new("stale"),
                 instanceIntent
             ).Async();
-            sendDiagnostic = await ObserveSendDiagnosticAsync(flowPath);
+            sendDiagnostic = await ObserveSendDiagnosticAsync(flow);
         }
-        var records = File.ReadAllLines(flowPath)
+        var records = flow.ReadLines()
             .Where(line => line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal));
         var record = Assert.Single(records);
         var request = given.GetProperty("messageKind").GetString() == "request";
@@ -1178,13 +1230,15 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
 
     private sealed record SendDiagnosticObservation(string Surface, string Reason);
 
-    private static async Task<SendDiagnosticObservation> ObserveSendDiagnosticAsync(string flowPath)
+    private static async Task<SendDiagnosticObservation> ObserveSendDiagnosticAsync(
+        TestHostMessageFlowListener listener
+    )
     {
         using var deadline = new CancellationTokenSource(Wait);
         while (true)
         {
             deadline.Token.ThrowIfCancellationRequested();
-            foreach (var line in File.ReadAllLines(flowPath))
+            foreach (var line in listener.ReadLines())
             {
                 if (!line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal))
                     continue;
