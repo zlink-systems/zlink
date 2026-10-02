@@ -565,6 +565,10 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await Assert.ThrowsAsync<ArgumentException>(() =>
             store.ReadAsync(new ZLinkStoreKey(string.Empty)).AsTask()
         );
+        // Bound raised from 1 MiB to 2 MiB (checklist C-2b): the collapsed
+        // authority row embeds its base64 payload inline, so a maximum-size
+        // (1 MiB, spec §6) payload plus JSON/base64 overhead must still fit
+        // in one opaque record value.
         await Assert.ThrowsAsync<ArgumentException>(() =>
             store
                 .WriteAsync(
@@ -573,7 +577,7 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
                         [
                             new ZLinkStoreMutation.Put(
                                 new ZLinkStoreKey("too-large"),
-                                new byte[(1 * 1024 * 1024) + 1],
+                                new byte[(2 * 1024 * 1024) + 1],
                                 null
                             ),
                         ]
