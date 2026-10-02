@@ -433,38 +433,34 @@ class reincarnating_spot_t final : public zf::instance_spot_t
     int _projection = 0;
 };
 
-// This public coroutine counts actual request completions, including typed errors.
+// The terminal observer records request completion before caller continuation scheduling.
 zf::task_t<reply_t> count_completion (zf::task_t<reply_t> task,
                                       std::shared_ptr<evidence_t> evidence,
                                       std::string packet)
 {
+    zf::detail::observe_task_terminal (
+      task, [evidence, packet] (const zf::result_t<reply_t> &result) {
+          std::lock_guard lock (evidence->mutex);
+          ++evidence->terminals[packet];
+          if (packet == intent_request_t::packet_name
+              || packet == followup_intent_request_t::packet_name)
+              evidence->terminal_packets.push_back (packet);
+          if (!result) {
+              if ((packet == intent_request_t::packet_name
+                   || packet == followup_intent_request_t::packet_name)
+                  && initializer_fails (evidence->branch))
+                  evidence->order.push_back ("pendingMessagesTypedFailure");
+              if (packet == intent_request_t::packet_name
+                  && (evidence->branch == branch_t::draining
+                      || evidence->branch == branch_t::relocating))
+                  evidence->order.push_back ("pendingMessagesTerminated");
+          }
+      });
     try {
         auto reply = co_await task;
-        {
-            std::lock_guard lock (evidence->mutex);
-            ++evidence->terminals[packet];
-            if (packet == intent_request_t::packet_name
-                || packet == followup_intent_request_t::packet_name)
-                evidence->terminal_packets.push_back (packet);
-        }
         co_return reply;
     }
     catch (const zf::framework_exception_t &error) {
-        {
-            std::lock_guard lock (evidence->mutex);
-            ++evidence->terminals[packet];
-            if (packet == intent_request_t::packet_name
-                || packet == followup_intent_request_t::packet_name)
-                evidence->terminal_packets.push_back (packet);
-            if ((packet == intent_request_t::packet_name
-                 || packet == followup_intent_request_t::packet_name)
-                && initializer_fails (evidence->branch))
-                evidence->order.push_back ("pendingMessagesTypedFailure");
-            if (packet == intent_request_t::packet_name
-                && (evidence->branch == branch_t::draining
-                    || evidence->branch == branch_t::relocating))
-                evidence->order.push_back ("pendingMessagesTerminated");
-        }
         co_return zf::result_t<reply_t>::failure (error.kind (), error.what ());
     }
 }

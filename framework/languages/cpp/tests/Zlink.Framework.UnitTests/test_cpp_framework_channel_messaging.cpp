@@ -63,6 +63,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <typeinfo>
 #include <vector>
 
 namespace
@@ -1661,10 +1662,19 @@ int main ()
         || observed_dispatch_errors[0].channel_name.value_or ("") != "local"
         || observed_dispatch_errors[0].topic.value_or ("") != "request"
         || observed_dispatch_errors[0].correlation_id.value_or ("") != "corr-payload-decode"
-        || observed_dispatch_errors[0].exception
+        || !observed_dispatch_errors[0].exception
         || observed_dispatch_errors[0].error_type.value_or ("").empty ()
         || observed_dispatch_errors[0].error_message.value_or ("").empty ()) {
         return 110;
+    }
+    try {
+        std::rethrow_exception (observed_dispatch_errors[0].exception);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () != zlink::framework::framework_error_kind_t::protocol_error
+            || observed_dispatch_errors[0].error_type.value_or ("") != typeid (error).name ()
+            || observed_dispatch_errors[0].error_message.value_or ("") != error.what ())
+            return 110;
     }
     clear_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
 
@@ -1706,11 +1716,20 @@ int main ()
         || observed_dispatch_errors[0].channel_name.value_or ("") != "local"
         || observed_dispatch_errors[0].topic.value_or ("") != "request"
         || observed_dispatch_errors[0].correlation_id.value_or ("") != "corr-handler-exception"
-        || observed_dispatch_errors[0].exception
+        || !observed_dispatch_errors[0].exception
         || observed_dispatch_errors[0].error_type.value_or ("").empty ()
         || observed_dispatch_errors[0].error_message.value_or ("")
              != "DERR-007 handler exception") {
         return 107;
+    }
+    try {
+        std::rethrow_exception (observed_dispatch_errors[0].exception);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () != zlink::framework::framework_error_kind_t::internal_failure
+            || observed_dispatch_errors[0].error_type.value_or ("") != typeid (error).name ()
+            || observed_dispatch_errors[0].error_message.value_or ("") != error.what ())
+            return 107;
     }
     clear_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     const auto dispatch_log_text = read_text_file (dispatch_log_path);

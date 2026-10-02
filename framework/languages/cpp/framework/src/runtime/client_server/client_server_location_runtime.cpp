@@ -726,7 +726,7 @@ void client_server_location_runtime_t::run ()
                 _descriptor_publish_changed.notify_all ();
             if (reconcile_after_publish && result && !_stop.load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
-                detail::observe_task_completion (
+                detail::observe_task_terminal (
                   *pending_reconcile,
                   [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
             } else if (reconcile_after_publish) {
@@ -774,7 +774,7 @@ void client_server_location_runtime_t::run ()
             if (_descriptor_publish_pending || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
                 pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
-                detail::observe_task_completion (
+                detail::observe_task_terminal (
                   *pending_maintenance,
                   [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
             } else {
@@ -786,7 +786,7 @@ void client_server_location_runtime_t::run ()
                 && !pending_pump) {
                 pending_worker_snapshot = std::make_shared<task_t<worker_lane_snapshot_t>> (
                   refresh_client_pump_snapshot ());
-                detail::observe_task_completion (
+                detail::observe_task_terminal (
                   *pending_worker_snapshot,
                   [wake = _wake_timer] (const result_t<worker_lane_snapshot_t> &) {
                       wake->signal ();
@@ -799,12 +799,12 @@ void client_server_location_runtime_t::run ()
                 ready_deadline = current.ready_deadline;
                 next_activity = current.next_activity;
                 pending_pump = std::make_shared<task_t<void>> (pump ());
-                detail::observe_task_completion (
+                detail::observe_task_terminal (
                   *pending_pump,
                   [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
                 if (!pending_snapshot) {
                     pending_snapshot = std::make_shared<task_t<void>> (publish_snapshot_changes ());
-                    detail::observe_task_completion (
+                    detail::observe_task_terminal (
                       *pending_snapshot,
                       [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
                 }
@@ -1058,14 +1058,13 @@ task_t<void> client_server_location_runtime_t::pump ()
     const auto start_task = [wake = _wake_timer] (task_t<void> pending) {
         auto state = std::make_shared<pump_task_state_t> ();
         state->task = std::make_shared<task_t<void>> (std::move (pending));
-        detail::observe_task_completion (*state->task,
-                                         [state, wake] (const result_t<void> &result) {
-                                             {
-                                                 std::lock_guard lock (state->mutex);
-                                                 state->completion = result;
-                                             }
-                                             wake->signal ();
-                                         });
+        detail::observe_task_terminal (*state->task, [state, wake] (const result_t<void> &result) {
+            {
+                std::lock_guard lock (state->mutex);
+                state->completion = result;
+            }
+            wake->signal ();
+        });
         return state;
     };
 

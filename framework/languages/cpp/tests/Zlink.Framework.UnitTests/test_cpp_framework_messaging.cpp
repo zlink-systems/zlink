@@ -26,6 +26,7 @@
 #include <condition_variable>
 #include <ctime>
 #include <iomanip>
+#include <fstream>
 #include <sstream>
 #include <mutex>
 #include <string>
@@ -661,8 +662,23 @@ int main ()
                      != kind)
                 return 26;
         }
-        if (mapper.target_failure_reply (framework_error_kind_t::not_configured))
-            return 26;
+        {
+            std::ifstream input (ZLINK_ERROR_MAPPING_CONFORMANCE_PATH);
+            const auto fixture = nlohmann::json::parse (input);
+            const auto sent = mapper.target_failure_reply (framework_error_kind_t::not_configured);
+            const auto row = std::find_if (
+              fixture.at ("send").begin (), fixture.at ("send").end (),
+              [] (const auto &entry) { return entry.at ("kind") == "NotConfigured"; });
+            if (row == fixture.at ("send").end () || !sent
+                || sent->terminal_result != row->at ("terminalResult")
+                || sent->failure_code != row->at ("failureCode")
+                || mapper
+                       .reply_header_exception (sent->terminal_result, sent->failure_code,
+                                                "not configured")
+                       .kind ()
+                     != framework_error_kind_t::internal_failure)
+                return 26;
+        }
         {
             namespace wire = zlink::framework::runtime::protocol;
             const auto alias = mapper.reply_header_exception (

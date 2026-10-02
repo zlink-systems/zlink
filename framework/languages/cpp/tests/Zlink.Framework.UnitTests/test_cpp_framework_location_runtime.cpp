@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_validation.hpp>
 
 #include <zlink/framework/contracts/configuration/app.hpp>
@@ -22,6 +23,9 @@ using zlink::framework::runtime::in_memory_location_repository_t;
 using zlink::framework::runtime::location_runtime_t;
 
 constexpr auto heartbeat_observation_timeout = std::chrono::seconds (5);
+const location_options_t asynchronous_heartbeat_options{
+  .owner_lease_renew_interval = std::chrono::milliseconds (5),
+  .owner_lease_ttl = std::chrono::seconds (15)};
 
 TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
 {
@@ -152,8 +156,7 @@ TEST (ZLinkFrameworkLocationRuntime, PendingHeartbeatDoesNotOverlapAndCompletion
 TEST (ZLinkFrameworkLocationRuntime, HeartbeatContinuesWhenRenewCompletesAsynchronously)
 {
     pending_renew_repository_t store;
-    const location_options_t options{.owner_lease_renew_interval = std::chrono::milliseconds (5),
-                                     .owner_lease_ttl = std::chrono::seconds (15)};
+    const auto &options = asynchronous_heartbeat_options;
     location_runtime_t runtime (store, options, "owner-a");
     auto renew_started = store.renew_started ();
     const auto observation_deadline =
@@ -175,11 +178,7 @@ TEST (ZLinkFrameworkLocationRuntime, HeartbeatContinuesWhenRenewCompletesAsynchr
 TEST (ZLinkFrameworkLocationRuntime, StopDiscardsLateHeartbeatRenewCompletion)
 {
     pending_renew_repository_t store;
-    location_runtime_t runtime (
-      store,
-      location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (5),
-                         .owner_lease_ttl = std::chrono::seconds (15)},
-      "owner-a");
+    location_runtime_t runtime (store, asynchronous_heartbeat_options, "owner-a");
     auto renew_started = store.renew_started ();
     runtime.start (zlink::routing_id_t::from ("node-a"));
     const auto initial_renewed_at = runtime.owner_lease_renewed_at ();
@@ -190,6 +189,23 @@ TEST (ZLinkFrameworkLocationRuntime, StopDiscardsLateHeartbeatRenewCompletion)
     store.complete_renew (zlink::framework::owner_lease_renewed_t{
       late_store_now + std::chrono::seconds (15), late_store_now});
     EXPECT_EQ (initial_renewed_at, runtime.owner_lease_renewed_at ());
+}
+
+TEST (ZLinkFrameworkLocationRuntime, HostShutdownDiscardsLateHeartbeatStoreCompletion)
+{
+    using namespace zlink::framework;
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::install_host_context_hooks ();
+    pending_renew_repository_t store;
+    location_runtime_t location (store, asynchronous_heartbeat_options, "owner-late-host");
+    auto started = store.renew_started ();
+    location.start (zlink::routing_id_t::from ("node-late-host"));
+    EXPECT_EQ (std::future_status::ready, started.wait_for (heartbeat_observation_timeout));
+    const auto renewed_at = location.owner_lease_renewed_at ();
+    location.stop ();
+    runtime::shutdown_handler_coroutine_executor ();
+    EXPECT_NO_THROW (store.complete_renew (owner_lease_stale_t{}));
+    EXPECT_EQ (renewed_at, location.owner_lease_renewed_at ());
 }
 
 class startup_owner_lease_repository_t final : public in_memory_location_repository_t

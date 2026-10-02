@@ -2085,6 +2085,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  target_include_directories(test_cpp_framework_message_flow PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_monitoring
     tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp
@@ -2104,6 +2106,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;messaging")
   target_include_directories(test_cpp_framework_messaging PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_messaging PRIVATE
+    ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
   target_link_libraries(test_cpp_framework_gtest_harness PRIVATE

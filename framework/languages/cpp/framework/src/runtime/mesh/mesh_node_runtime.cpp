@@ -538,10 +538,12 @@ void mesh_node_runtime_t::bind_descriptor_publisher (
     _state->lane.run ([&] { _descriptor_publisher = std::move (publisher); }).get ();
 }
 
-host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_kind_t kind, std::uint32_t cause_code = 0)
+host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_kind_t kind,
+                                                               std::uint32_t cause_code = 0)
 {
     host::actor_join_operation_result_t result;
-    const auto failure = runtime::messaging::request_failure_mapper_t{}.target_failure_reply (kind, cause_code);
+    const auto failure =
+      runtime::messaging::request_failure_mapper_t{}.target_failure_reply (kind, cause_code);
     result.terminal_result = failure->terminal_result;
     result.failure_code = failure->failure_code;
     return result;
@@ -629,12 +631,13 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                 .result ();
             if (!admitted)
                 return actor_join_typed_terminal (admitted.error_kind (),
-                                              detail::failure_code (*admitted.error ()));
+                                                  detail::failure_code (*admitted.error ()));
             auto application_reply =
               canonical_actor_join_application_reply (admitted.value ().reply, serializers);
             if (!application_reply)
-                return actor_join_typed_terminal (application_reply.error_kind (),
-                                              detail::failure_code (*application_reply.error ()));
+                return actor_join_typed_terminal (
+                  application_reply.error_kind (),
+                  detail::failure_code (*application_reply.error ()));
             if (!admitted.value ().accepted) {
                 rejected.application_reply = std::move (application_reply.value ());
                 return rejected;
