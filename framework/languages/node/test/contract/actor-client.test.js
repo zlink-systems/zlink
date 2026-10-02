@@ -908,11 +908,15 @@ for (const [phase, expectedKind] of [
 ]) {
   test(`Actor capacity ${phase} preserves its public error kind`, async () => {
     const { SubmitResult } = require('@zlink-systems/zlink');
-    const { ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    const {
+      ZLinkBackendResultError
+    } = require('../../packages/framework/dist/runtime/backend/runtime-values');
     const client = createActorClient({
       nodeProvider: () => ({
         sendToActor() {
-          throw new ZLinkBackendResultError('submit', SubmitResult.Backpressured, undefined, { phase });
+          throw new ZLinkBackendResultError('submit', SubmitResult.Backpressured, undefined, {
+            phase
+          });
         }
       }),
       completionTableProvider: () => undefined,
