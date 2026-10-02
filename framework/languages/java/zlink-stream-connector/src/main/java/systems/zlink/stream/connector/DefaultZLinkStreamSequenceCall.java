@@ -128,7 +128,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                         });
         result.whenComplete(
                 (ignored, error) -> {
-                    closeQuietly(subscription);
+                    ZLinkStreamCleanup.close(subscription);
                     if (error != null) {
                         List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> pending;
                         synchronized (sequenceLock) {
@@ -164,7 +164,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             }
         }
         if (closeBeforePredicate) {
-            closeMessage(message);
+            ZLinkStreamCleanup.closeMessage(message);
             turn.complete(null);
             return;
         }
@@ -173,7 +173,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
         try {
             matches = predicate.test(message);
         } catch (RuntimeException error) {
-            closeMessage(message);
+            ZLinkStreamCleanup.closeMessage(message);
             result.completeExceptionally(error);
             turn.complete(null);
             return;
@@ -201,7 +201,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             }
         }
         if (closeCurrent) {
-            closeMessage(message);
+            ZLinkStreamCleanup.closeMessage(message);
         }
         if (failure != null) {
             result.completeExceptionally(failure);
@@ -282,7 +282,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                         closeCurrent = true;
                     }
                     if (closeCurrent) {
-                        closeMessage(message);
+                        ZLinkStreamCleanup.closeMessage(message);
                     }
                     //  Same rule as the timeout path above: the application
                     //  future is completed with no lock held.
@@ -363,15 +363,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
 
     private static void closeMessages(
             List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> messages) {
-        messages.forEach(DefaultZLinkStreamSequenceCall::closeMessage);
-    }
-
-    private static void closeMessage(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
-        try {
-            message.payload().payload().close();
-        } catch (RuntimeException ignored) {
-            // The cancelled sequence no longer owns a message that it cannot deliver.
-        }
+        messages.forEach(ZLinkStreamCleanup::closeMessage);
     }
 
     private <TPayload> ZLinkStreamMessage<TPayload> decodeMessage(
@@ -381,12 +373,5 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                 codec.decode(message.payload(), payloadType),
                 message.metadata(),
                 message.actorId());
-    }
-
-    private static void closeQuietly(AutoCloseable closeable) {
-        try {
-            closeable.close();
-        } catch (Exception ignored) {
-        }
     }
 }

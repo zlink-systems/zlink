@@ -22,6 +22,49 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpotRelocationReplyRoutesTest {
     @Test
+    void unavailableNotificationFailureDoesNotSkipOtherPendingRoutes() {
+        var routes = new ZLinkSpotRelocationReplyRoutes();
+        var deliveryFailure = new IllegalStateException("reply transport failed");
+        AtomicInteger notifications = new AtomicInteger();
+        for (long requestId : new long[] {41, 42}) {
+            byte[] accepted =
+                    ZLinkAcceptedJournalTestRecords.spot(
+                            "source-spot",
+                            "room-1",
+                            requestId,
+                            "room.query",
+                            Map.of(),
+                            new byte[] {1},
+                            requestId);
+            var received =
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.of(RoutingId.from("journal-node")),
+                            Optional.of("room-1"),
+                            Optional.of(requestId),
+                            new byte[0],
+                            accepted,
+                            List.of(),
+                            parts -> {
+                                notifications.incrementAndGet();
+                                parts.forEach(Message::close);
+                                if (requestId == 41) throw deliveryFailure;
+                            },
+                            () -> {});
+            routes.register(accepted, received, "room-1", 1).releaseForRelocation();
+        }
+        var failure =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                routes.failUnavailable(false, "room-1", 1)
+                                        .toCompletableFuture()
+                                        .join());
+        org.junit.jupiter.api.Assertions.assertSame(deliveryFailure, failure.getCause());
+        assertEquals(2, notifications.get());
+    }
+
+    @Test
     void highBitReplyRouteIdIsAnOpaqueU64() {
         long highBit = Long.MIN_VALUE;
         var relay =

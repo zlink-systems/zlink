@@ -90,6 +90,11 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     @Override
+    public Object findService(Class<?> serviceType) {
+        return beanFactory.getBeanProvider(serviceType).getIfAvailable();
+    }
+
+    @Override
     public Activation openActivation() {
         return new SpringActivation();
     }

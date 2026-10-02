@@ -115,10 +115,10 @@ final class ZLinkStreamDispatchQueue {
             }
             if (matched != null) {
                 if (predicateFailure != null) {
-                    closeMessage(message);
+                    ZLinkStreamCleanup.closeMessage(message);
                     matched.result().completeExceptionally(predicateFailure);
                 } else if (!matched.result().complete(message)) {
-                    closeMessage(message);
+                    ZLinkStreamCleanup.closeMessage(message);
                 }
                 return;
             }
@@ -131,7 +131,7 @@ final class ZLinkStreamDispatchQueue {
                     synchronized (queue) {
                         countArrivalLocked(message);
                     }
-                    closeMessage(message);
+                    ZLinkStreamCleanup.closeMessage(message);
                     publishError.accept(
                             new ZLinkStreamError(
                                     ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
@@ -162,7 +162,7 @@ final class ZLinkStreamDispatchQueue {
                     // The dispatch supplier did not return its completion
                     // stage, so its normal terminal close callback was never
                     // installed. Release the outer message here.
-                    closeMessage(message);
+                    ZLinkStreamCleanup.closeMessage(message);
                     publishError.accept(
                             new ZLinkStreamError(
                                     ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
@@ -216,10 +216,10 @@ final class ZLinkStreamDispatchQueue {
             if (matched != null) {
                 ZLinkStreamMessage<ZLinkStreamEncodedPayload> found = matched.message();
                 if (predicateFailure != null) {
-                    closeMessage(found);
+                    ZLinkStreamCleanup.closeMessage(found);
                     result.completeExceptionally(predicateFailure);
                 } else if (!result.complete(found)) {
-                    closeMessage(found);
+                    ZLinkStreamCleanup.closeMessage(found);
                 }
                 return;
             }
@@ -260,9 +260,7 @@ final class ZLinkStreamDispatchQueue {
                 version++;
             }
         }
-        abandoned.stream()
-                .map(QueuedDispatch::message)
-                .forEach(ZLinkStreamDispatchQueue::closeMessage);
+        abandoned.stream().map(QueuedDispatch::message).forEach(ZLinkStreamCleanup::closeMessage);
     }
 
     /**
@@ -332,7 +330,7 @@ final class ZLinkStreamDispatchQueue {
                                     }
                                 });
             } catch (Throwable error) {
-                closeMessage(next.message());
+                ZLinkStreamCleanup.closeMessage(next.message());
                 publishError.accept(DefaultZLinkStreamConnector.userCallbackFailed(error));
             }
         }
@@ -430,14 +428,6 @@ final class ZLinkStreamDispatchQueue {
             }
         }
         return false;
-    }
-
-    private static void closeMessage(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
-        try {
-            message.payload().payload().close();
-        } catch (RuntimeException ignored) {
-            // The receive path has no caller that can recover a dropped payload.
-        }
     }
 
     private record QueuedDispatch(

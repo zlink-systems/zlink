@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -72,22 +71,6 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
                 ZLinkSpotRuntime.preferConnectedInstanceTargets(candidates, Set.of());
 
         assertEquals(candidates, selected);
-    }
-
-    @Test
-    void manualObjectPeerReplacementCarriesTheDescriptorFence() {
-        ZLinkMeshNodeDescriptor target = descriptor(CONNECTED, 1);
-        RecordingMeshNode source = new RecordingMeshNode();
-
-        ZLinkSpotRuntime.ManualObjectPeerIntent intent =
-                ZLinkSpotRuntime.ensureManualObjectPeerIntent(source, target, null).orElseThrow();
-
-        assertTrue(source.replaced);
-        assertEquals(target.endpoint(), source.endpoint);
-        assertEquals(target.rid(), source.routingId);
-        assertEquals(target.lifecycleGeneration(), source.lifecycleGeneration);
-        assertEquals(target.securityIdentity(), source.securityIdentity);
-        assertEquals(source.intentId, intent.connectionIntentId());
     }
 
     @Test
@@ -325,12 +308,6 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         }
 
         private final RoutingId localRid = RoutingId.from("source-node");
-        private String endpoint;
-        private RoutingId routingId;
-        private long lifecycleGeneration;
-        private String securityIdentity;
-        private long intentId;
-        private boolean replaced;
 
         @Override
         public String name() {
@@ -365,13 +342,7 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         @Override
         public long replacePeerConnection(
                 String value, RoutingId expected, long generation, String security) {
-            endpoint = value;
-            routingId = expected;
-            lifecycleGeneration = generation;
-            securityIdentity = security;
-            intentId = 11L;
-            replaced = true;
-            return intentId;
+            throw new UnsupportedOperationException("placement selection does not replace peers");
         }
 
         @Override

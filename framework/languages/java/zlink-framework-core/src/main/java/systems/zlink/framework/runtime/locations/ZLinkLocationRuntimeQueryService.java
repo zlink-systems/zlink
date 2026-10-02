@@ -360,8 +360,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                     while (cause instanceof CompletionException && cause.getCause() != null) {
                         cause = cause.getCause();
                     }
-                    if (cause instanceof IllegalArgumentException
-                            || cause instanceof ZLinkFrameworkException) {
+                    if (cause instanceof ZLinkFrameworkException) {
                         result.completeExceptionally(cause);
                     } else {
                         result.completeExceptionally(
@@ -605,7 +604,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
         ZLinkLocationServiceSummary toSummary(String meshName) {
             return new ZLinkLocationServiceSummary(
-                    meshName, total, ready, total - ready, 0, updatedAt);
+                    meshName, total, ready, 0, total - ready, updatedAt);
         }
     }
 }

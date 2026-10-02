@@ -26,6 +26,57 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
     @Test
+    void inlineClaimDoesNotBypassQueuedTurnsAndPreservesNullCompletion() {
+        var scheduled = new java.util.ArrayDeque<Runnable>();
+        var lane = new ZLinkStateLane(scheduled::addLast);
+        var turns = new ArrayList<Integer>();
+        var queued =
+                lane.runAsync(
+                        () -> {
+                            turns.add(1);
+                            return 1;
+                        });
+        assertTrue(
+                lane.tryRunNow(
+                                () -> {
+                                    turns.add(2);
+                                    return 2;
+                                })
+                        == null);
+        scheduled.removeFirst().run();
+        assertEquals(1, queued.toCompletableFuture().join());
+        assertEquals(List.of(1), turns);
+        while (!scheduled.isEmpty()) {
+            scheduled.removeFirst().run();
+        }
+        var claimed =
+                lane.tryRunNow(
+                        () -> {
+                            turns.add(3);
+                            return null;
+                        });
+        assertTrue(claimed != null);
+        assertTrue(claimed.toCompletableFuture().isDone());
+        assertTrue(claimed.toCompletableFuture().join() == null);
+        assertEquals(List.of(1, 3), turns);
+    }
+
+    @Test
+    void inlineClaimPreservesReentrantAndClosedRejection() {
+        var lane = new ZLinkStateLane(Runnable::run);
+        lane.tryRunNow(
+                        () -> {
+                            assertThrows(
+                                    IllegalStateException.class, () -> lane.tryRunNow(() -> null));
+                            return null;
+                        })
+                .toCompletableFuture()
+                .join();
+        lane.closeAsync().toCompletableFuture().join();
+        assertThrows(IllegalStateException.class, () -> lane.tryRunNow(() -> null));
+    }
+
+    @Test
     void synchronousWaitGuardUsesExistingExecutionContext() {
         assertTrue(ZLinkStateLane.assertMayBlock());
         ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);

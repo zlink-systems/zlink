@@ -438,7 +438,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
             CompletableFuture<Void> activeTurn = new CompletableFuture<>();
             ZLinkSerialExecutionQueue sourceQueue =
-                    sourceSpots.actorSessions().actorRelocationLane(ACTOR_ID);
+                    sourceSpots
+                            .actorSessions()
+                            .actorRelocationLaneAsync(ACTOR_ID)
+                            .toCompletableFuture()
+                            .join();
             CompletionStage<Void> blocker = sourceQueue.enqueueLifecycleBarrier(() -> activeTurn);
             AtomicInteger released = new AtomicInteger();
             CompletionStage<Void> b1Accepted =

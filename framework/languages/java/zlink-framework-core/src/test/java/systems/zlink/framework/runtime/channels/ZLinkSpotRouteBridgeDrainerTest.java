@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -12,57 +11,34 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBri
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 final class ZLinkSpotRouteBridgeDrainerTest {
     @Test
-    void rotatesSortedBridgeChannelsAcrossDrainTicks() throws Exception {
-        List<String> order = Collections.synchronizedList(new ArrayList<>());
-        CountDownLatch fourDrains = new CountDownLatch(4);
-        var first = new RecordingBridge("first", order, fourDrains);
-        var second = new RecordingBridge("second", order, fourDrains);
-        Map<String, ZLinkBackendSpotRouteBridge> bridges = new HashMap<>();
-        bridges.put("z-channel", second);
-        bridges.put("a-channel", first);
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        try {
-            new ZLinkSpotRouteBridgeDrainer(
-                            bridges,
-                            scheduler,
-                            () -> true,
-                            (channel, failure) -> {
-                                throw new AssertionError(failure);
-                            })
-                    .start();
-
-            assertTrue(fourDrains.await(1, TimeUnit.SECONDS));
-            scheduler.shutdownNow();
-            assertEquals(
-                    List.of("first", "second", "second", "first"),
-                    List.copyOf(order.subList(0, 4)));
-        } finally {
-            scheduler.shutdownNow();
-        }
+    void drainsOnlyTheReadableChannelAndThenDispatches() {
+        List<String> order = new ArrayList<>();
+        var first = new RecordingBridge("first", order);
+        var second = new RecordingBridge("second", order);
+        var drainer = new ZLinkSpotRouteBridgeDrainer(Map.of("a", first, "z", second));
+        drainer.setDispatchDrainer(() -> order.add("dispatch"));
+        drainer.drainNow("z");
+        assertEquals(List.of("second", "dispatch"), order);
+        drainer.drainNow("a");
+        assertEquals(List.of("second", "dispatch", "first", "dispatch"), order);
+        drainer.drainNow("absent");
+        assertEquals(4, order.size());
     }
 
     private static final class RecordingBridge implements ZLinkBackendSpotRouteBridge {
         private final String name;
         private final List<String> order;
-        private final CountDownLatch drainCount;
 
-        private RecordingBridge(String name, List<String> order, CountDownLatch drainCount) {
+        private RecordingBridge(String name, List<String> order) {
             this.name = name;
             this.order = order;
-            this.drainCount = drainCount;
         }
 
         @Override
@@ -96,7 +72,6 @@ final class ZLinkSpotRouteBridgeDrainerTest {
         @Override
         public int drain() {
             order.add(name);
-            drainCount.countDown();
             return 0;
         }
 

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.handlers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +11,53 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkHandlerActivatorTest {
+    @Test
+    void fallbackDependencyConstructionFailureIsPreserved() {
+        IllegalStateException failure = new IllegalStateException("dependency construction failed");
+        ZLinkHandlerActivator.MutableServices services =
+                ZLinkHandlerActivator.services(
+                        type -> {
+                            if (type == MissingService.class) throw failure;
+                            return null;
+                        });
+        services.add(TestRuntimeService.class, new TestRuntimeService());
+
+        assertSame(
+                failure,
+                assertThrows(
+                        IllegalStateException.class,
+                        () -> services.create(NeedsRuntimeService.class)));
+    }
+
+    public static final class NeedsRuntimeService {
+        public NeedsRuntimeService(TestRuntimeService runtime, MissingService dependency) {}
+    }
+
+    private interface MissingService {}
+
+    @Test
+    void optionalReflectionServicePreservesConstructorFailureAndReturnsNullOnlyForAbsence() {
+        ZLinkHandlerActivator services = ZLinkHandlerActivator.services();
+        org.junit.jupiter.api.Assertions.assertNull(services.findService(RuntimeService.class));
+        var failure =
+                assertThrows(
+                        systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                        () -> services.findService(ThrowingService.class));
+        assertSame(ThrowingService.FAILURE, failure.getCause().getCause());
+        assertThrows(
+                systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                () -> services.create(RuntimeService.class));
+    }
+
+    public static final class ThrowingService {
+        private static final IllegalStateException FAILURE =
+                new IllegalStateException("ctor failed");
+
+        public ThrowingService() {
+            throw FAILURE;
+        }
+    }
+
     @Test
     void mutableServicesBuildsAssignableLookupIndexAtRegistration() throws Exception {
         ZLinkHandlerActivator.MutableServices services = ZLinkHandlerActivator.services();

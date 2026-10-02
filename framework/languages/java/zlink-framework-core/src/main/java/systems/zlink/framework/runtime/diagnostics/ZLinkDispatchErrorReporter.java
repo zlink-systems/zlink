@@ -145,7 +145,7 @@ public final class ZLinkDispatchErrorReporter {
             ErrorDetails errorDetails) {
         reportedCount.incrementAndGet();
         tracePoint.trace(
-                ZLinkMessageFlowEvent.dispatchError(
+                failureEvent(
                         surface,
                         messageKind,
                         packetName,
@@ -159,8 +159,40 @@ public final class ZLinkDispatchErrorReporter {
                         targetRid,
                         reason,
                         action,
-                        errorDetails.type(),
-                        errorDetails.message()));
+                        errorDetails));
+    }
+
+    static ZLinkMessageFlowEvent failureEvent(
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            String packetName,
+            String channelName,
+            String topic,
+            String correlationId,
+            String sourceRid,
+            String spotId,
+            String actorId,
+            String meshName,
+            String targetRid,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            ErrorDetails details) {
+        return ZLinkMessageFlowEvent.dispatchError(
+                surface,
+                messageKind,
+                packetName,
+                channelName,
+                topic,
+                correlationId,
+                sourceRid,
+                spotId,
+                actorId,
+                meshName,
+                targetRid,
+                reason,
+                action,
+                details.type(),
+                details.message());
     }
 
     public long reportedCount() {

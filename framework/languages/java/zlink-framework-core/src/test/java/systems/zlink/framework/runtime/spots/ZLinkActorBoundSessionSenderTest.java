@@ -20,10 +20,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkActorBoundSessionSenderTest {
     @Test
-    void missingLocalBindingKeepsLogicalRouteReevaluation() throws Exception {
-        AtomicBoolean localRoute = new AtomicBoolean();
+    void missingCurrentBindingFailsWithInvalidOperation() throws Exception {
         AtomicInteger routeChecks = new AtomicInteger();
-        AtomicInteger asynchronousSubmissions = new AtomicInteger();
+        AtomicInteger submissions = new AtomicInteger();
         ZLinkInternalSpotNode node =
                 (ZLinkInternalSpotNode)
                         Proxy.newProxyInstance(
@@ -33,38 +32,77 @@ final class ZLinkActorBoundSessionSenderTest {
                                         switch (method.getName()) {
                                             case "hasRemoteActorBoundSessionRoute" -> false;
                                             case "hasLocalActorBoundSessionRoute" -> {
-                                                int check = routeChecks.incrementAndGet();
-                                                yield check > 1 && localRoute.get();
+                                                routeChecks.incrementAndGet();
+                                                yield false;
                                             }
                                             case "sendLocalActorBoundSessionAsync" -> {
-                                                asynchronousSubmissions.incrementAndGet();
+                                                submissions.incrementAndGet();
                                                 yield CompletableFuture.completedFuture(null);
                                             }
                                             default ->
                                                     throw new UnsupportedOperationException(
                                                             method.getName());
                                         });
-        ZLinkActorBoundSessionSender sender =
-                new ZLinkActorBoundSessionSender(Duration.ofSeconds(1), () -> false);
+        var result =
+                new ZLinkActorBoundSessionSender(Duration.ofSeconds(1), () -> false)
+                        .send(
+                                node,
+                                new ZLinkBackendActorRef(RoutingId.from("node"), "actor", 1),
+                                "actor",
+                                new byte[] {1},
+                                "bound reply failed");
+        var terminal =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> result.toCompletableFuture().get(1, TimeUnit.SECONDS));
+        var error =
+                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        terminal.getCause());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                error.kind());
+        assertEquals(1, routeChecks.get());
+        assertEquals(0, submissions.get());
+    }
 
-        CompletionStage<Void> submitted =
-                sender.send(
-                        node,
-                        new ZLinkBackendActorRef(
-                                RoutingId.from("logical-route-node"), "logical-route-actor", 1),
-                        "logical-route-actor",
-                        new byte[] {1, 2, 3},
-                        "bound reply failed");
-        long firstCheckDeadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
-        while (routeChecks.get() == 0 && System.nanoTime() < firstCheckDeadline) {
-            Thread.onSpinWait();
-        }
-        localRoute.set(true);
-
-        submitted.toCompletableFuture().get(1, TimeUnit.SECONDS);
-
-        assertEquals(1, asynchronousSubmissions.get());
-        assertEquals(2, routeChecks.get());
+    @Test
+    void localNotFoundTerminalIsNotResubmitted() throws Exception {
+        AtomicInteger submissions = new AtomicInteger();
+        var failure =
+                new systems.zlink.contracts.errors.ZlinkSubmitException(
+                        systems.zlink.contracts.sockets.SubmitResult.NOT_FOUND);
+        ZLinkInternalSpotNode node =
+                (ZLinkInternalSpotNode)
+                        Proxy.newProxyInstance(
+                                ZLinkInternalSpotNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalSpotNode.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "hasRemoteActorBoundSessionRoute" -> false;
+                                            case "hasLocalActorBoundSessionRoute" -> true;
+                                            case "sendLocalActorBoundSessionAsync" -> {
+                                                submissions.incrementAndGet();
+                                                yield CompletableFuture.failedFuture(failure);
+                                            }
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.getName());
+                                        });
+        var result =
+                new ZLinkActorBoundSessionSender(Duration.ofMillis(80), () -> false)
+                        .send(
+                                node,
+                                new ZLinkBackendActorRef(RoutingId.from("node"), "actor", 1),
+                                "actor",
+                                new byte[] {1},
+                                "bound reply failed");
+        var terminal =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> result.toCompletableFuture().get(1, TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertSame(failure, terminal.getCause());
+        assertEquals(1, submissions.get());
     }
 
     @Test

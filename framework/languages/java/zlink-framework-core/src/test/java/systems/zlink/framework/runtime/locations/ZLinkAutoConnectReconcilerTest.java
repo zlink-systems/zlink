@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ConnectResult;
+import systems.zlink.contracts.errors.ZlinkConnectException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -19,6 +21,143 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkAutoConnectReconcilerTest {
+    @Test
+    void bindingRejectionReportsTypedErrorAndRetainsIntentForNextReconcile() {
+        MutableResolver resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        RecordingExecutor executor = new RecordingExecutor();
+        var rejection = new ZlinkConnectException(ConnectResult.BUSY);
+        executor.connectFailure = rejection;
+        var errors = new java.util.ArrayList<Throwable>();
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions(),
+                        System::nanoTime,
+                        errors::add);
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(1, executor.connects);
+        assertEquals(List.of(rejection), errors);
+        assertSame(rejection, errors.get(0));
+        executor.connectFailure = null;
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        assertEquals(1, errors.size());
+    }
+
+    @Test
+    void manualReplacementRejectionKeepsThePreviouslyObservedIntent() {
+        MutableResolver resolver = new MutableResolver();
+        var initial = peer();
+        resolver.rows = List.of(initial);
+        RecordingExecutor executor = new RecordingExecutor();
+        executor.manual = true;
+        var errors = new java.util.ArrayList<Throwable>();
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.ROUTER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions(),
+                        System::nanoTime,
+                        errors::add);
+        reconciler.tick().toCompletableFuture().join();
+        resolver.rows =
+                List.of(
+                        new ZLinkAutoConnectPeer(
+                                initial.autoConnectType(),
+                                initial.meshName(),
+                                initial.nodeRid(),
+                                initial.role(),
+                                "inproc://replacement",
+                                initial.weight(),
+                                initial.draining(),
+                                initial.generation(),
+                                initial.metadata(),
+                                initial.capabilities(),
+                                "replacement-owner",
+                                initial.ownerLeaseGeneration(),
+                                initial.updatedAt()));
+        var rejection = new ZlinkConnectException(ConnectResult.BUSY);
+        executor.connectFailure = rejection;
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(1, executor.connects);
+        assertSame(rejection, errors.get(0));
+        executor.connectFailure = null;
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        assertEquals(1, errors.size());
+    }
+
+    @Test
+    void programmingFailureIsNotConvertedToARejectedAttempt() {
+        MutableResolver resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        RecordingExecutor executor = new RecordingExecutor();
+        var failure = new IllegalStateException("executor defect");
+        executor.connectFailure = failure;
+        var reconciler =
+                reconciler(resolver, executor, new ZLinkLocationOptions(), new AtomicLong());
+        var actual =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () -> reconciler.tick().toCompletableFuture().join());
+        assertSame(failure, actual.getCause());
+    }
+
+    @Test
+    void unchangedTargetDoesNotResubmitItsConnectionIntent() {
+        MutableResolver resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        java.util.ArrayList<String> connectionOperations = new java.util.ArrayList<>();
+        ZLinkAutoConnectExecutor executor =
+                (ZLinkAutoConnectExecutor)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkAutoConnectExecutor.class.getClassLoader(),
+                                new Class<?>[] {ZLinkAutoConnectExecutor.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("isManual")) return false;
+                                    if (method.getName().equals("observeAdmissionExpectation"))
+                                        return null;
+                                    connectionOperations.add(method.getName());
+                                    return method.getReturnType() == boolean.class ? true : null;
+                                });
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions(),
+                        System::nanoTime,
+                        failure -> {
+                            throw failure;
+                        });
+        reconciler.tick().toCompletableFuture().join();
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(List.of("connect"), connectionOperations);
+    }
+
     @Test
     void storeFailureRetriesOnlyThePreviouslyDesiredPendingTargetWithinGrace() {
         MutableResolver resolver = new MutableResolver();
@@ -131,12 +270,13 @@ final class ZLinkAutoConnectReconcilerTest {
                                 "inproc://client-a",
                                 ZLinkMeshNodeObjectRole.CLIENT,
                                 false),
-                        null,
-                        null,
                         resolver,
                         executor,
                         new ZLinkLocationOptions(),
-                        now::get);
+                        now::get,
+                        failure -> {
+                            throw failure;
+                        });
         resolver.rows =
                 List.of(
                         new ZLinkAutoConnectPeer(
@@ -179,12 +319,13 @@ final class ZLinkAutoConnectReconcilerTest {
                         ZLinkLocationRole.DEALER,
                         RoutingId.from("client"),
                         "inproc://client"),
-                null,
-                null,
                 resolver,
                 executor,
                 options,
-                now::get);
+                now::get,
+                failure -> {
+                    throw failure;
+                });
     }
 
     private static ZLinkAutoConnectPeer peer() {
@@ -229,10 +370,18 @@ final class ZLinkAutoConnectReconcilerTest {
         private int admissionExpectations;
         private int forgottenAdmissionExpectations;
         private boolean connectSucceeds = true;
+        private RuntimeException connectFailure;
+        private boolean manual;
+
+        @Override
+        public boolean isManual(ZLinkAutoConnectPlanner.Target target) {
+            return manual;
+        }
 
         @Override
         public boolean connect(ZLinkAutoConnectPlanner.Target target) {
             connects++;
+            if (connectFailure != null) throw connectFailure;
             return connectSucceeds;
         }
 
