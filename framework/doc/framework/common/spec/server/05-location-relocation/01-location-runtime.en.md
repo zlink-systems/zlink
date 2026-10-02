@@ -941,7 +941,7 @@ value, the following new work isn't accepted.
 | Descriptor publishing and automatic RID owner change |
 | Starting Actor/Spot/Instance messages and timer callbacks |
 | Work confirming factory/restore results in the Store |
-| Relocation source/target state changes and capacity reservation |
+| Relocation source/target state changes |
 
 Processing and cleanup of results from work already accepted into the local queue can
 proceed within a separate deadline. But no new Store change is made with expired owner

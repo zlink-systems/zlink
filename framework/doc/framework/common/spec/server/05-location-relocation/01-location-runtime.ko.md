@@ -851,7 +851,7 @@ Deadline을 넘거나 현재 host 실행 조합이 Store 값과 다르면 다음
 | Descriptor 게시와 automatic RID owner 변경 |
 | Actor·Spot·Instance message와 timer callback 시작 |
 | Factory·restore 결과를 Store에 확정하는 작업 |
-| Relocation source·target 상태 변경과 수용 공간 확보 |
+| Relocation source·target 상태 변경 |
 
 이미 local queue가 받은 작업의 결과 처리와 정리는 별도 deadline 안에서 진행할 수 있다.
 하지만 만료된 owner 자격으로 새 Store 변경을 만들지 않는다.

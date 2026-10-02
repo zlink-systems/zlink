@@ -621,7 +621,7 @@ ObjectGeneration, but isn't exposed to resolver and application handlers
 before the Location Store authority changes to the target. It doesn't
 create a temporary public SpotId or change SpotId after creation.
 
-The source seal, durable capture, target reservation/factory/restore,
+The source seal, durable capture, target factory/restore,
 authority commit, and admission order are set by
 [Spot And Actor Membership](05-spot-actor-membership.en.md).
 

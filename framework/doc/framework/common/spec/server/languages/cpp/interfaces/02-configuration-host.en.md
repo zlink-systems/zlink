@@ -519,8 +519,8 @@ options.add_stream_node(sample_names_t::stream_name)
  .register_session<client_session_t>()
 ```
 
-The Entry Spot's SpotId is issued by the Framework in the format
-`<prefix>-entry-<lowercase-canonical-uuid-v4>`. A public option for the
+The Entry Spot's SpotId is issued by the Framework, and
+[common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines its format. A public option for the
 application to set the Entry Spot's RoutingId or a fixed SpotId isn't
 provided.
 

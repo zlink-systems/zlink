@@ -521,7 +521,7 @@ Spot shell은 같은 public SpotId와 ObjectGeneration을 유지하지만 Locati
 target으로 바뀌기 전까지 resolver와 application handler에 노출하지 않는다. 임시 public
 SpotId를 만들거나 생성 뒤 SpotId를 바꾸지 않는다.
 
-Source seal, durable capture, target reservation·factory·restore, authority commit과 admission
+Source seal, durable capture, target factory·restore, authority commit과 admission
 순서는 [Spot과 Actor membership](05-spot-actor-membership.ko.md)이 정한다.
 
 - **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지한다.** 그 뒤 authority 판정은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Target commit이면 선택한 같은 target process에서 절차를 계속한다. Target process가 종료되면 다른 target을 선택하거나

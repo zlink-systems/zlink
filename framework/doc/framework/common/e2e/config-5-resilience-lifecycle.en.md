@@ -689,7 +689,7 @@ successful terminal?
 
 Priority: `P0`
 
-If a target reservation or restore declares failure before the source accepts the RelayReady reply,
+If a target check or restore declares failure before the source accepts the RelayReady reply,
 frozen work and work received during the seal must be re-processed at the source in original order.
 After RelayReady is accepted, the source isn't restored regardless of the CUTOVER submit result.
 

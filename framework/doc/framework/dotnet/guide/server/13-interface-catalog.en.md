@@ -90,7 +90,7 @@ services.AddZLinkFramework(options =>
 | `IZLinkFanoutChannelBuilder` | Registers a classic fanout publisher/subscriber |
 | `IZLinkStreamNodeBuilder` | Registers a STREAM listener and session |
 
-The Entry Spot's SpotId is issued by the Framework in the form `<prefix>-entry-<uuid>`.
+The Entry Spot's SpotId is issued by the Framework, and [Transport RID and Spot ID policy §6.3](../../../common/spec/server/02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines its format.
 There's no API for the application to set the Entry Spot's RoutingId or SpotId.
 
 For the exact builders, see the

@@ -438,7 +438,7 @@ options.add_stream_node(sample_names_t::stream_name)
  .register_session<client_session_t>()
 ```
 
-Entry Spot의 SpotId는 Framework가 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급한다.
+Entry Spot의 SpotId는 Framework가 발급하며 형식은 [공통 Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 Application이 Entry Spot의 RoutingId나 고정 SpotId를 설정하는 public option은 제공하지 않는다.
 
 `enable_actor_dispatch()`는 session Actor dispatch에 global ActorId lookup과 ActorRef bind를 사용하도록

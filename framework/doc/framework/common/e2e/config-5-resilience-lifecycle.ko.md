@@ -623,7 +623,7 @@ Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units�
 
 우선순위: `P0`
 
-Target reservation 또는 restore가 source의 RelayReady reply acceptance 전에 명시 실패하면 frozen
+Target 확인 또는 restore가 source의 RelayReady reply acceptance 전에 명시 실패하면 frozen
 work와 seal 중 받은 work를 source에서 원래 순서로 다시 처리해야 한다. RelayReady accepted 뒤에는
 CUTOVER submit 결과와 무관하게 source를 복원하지 않는다.
 
