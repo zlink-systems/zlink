@@ -34,6 +34,7 @@ internal sealed class ZLinkAuthorityGenerationExhaustedException(string operatio
     : InvalidOperationException($"Authority generation was exhausted while {operation}.");
 
 internal sealed class ZLinkAggregateRelocationCoordinator(
+    IZLinkRuntimeFailureReporter failureReporter,
     IZLinkLocationRepository authorityStore,
     IZLinkRelocationRepository relocationStore
 )
@@ -46,10 +47,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ReadOnlyMemory<byte> InventoryDigest
     );
 
-    private const int MaxConflictRetries = 8;
     private const int MaxPublicationProbeConcurrency = 64;
     private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
-    private static readonly TimeSpan ReconciliationTimeout = TimeSpan.FromSeconds(5);
 
     internal async ValueTask<ZLinkAggregateRelocationPublished> PublishAsync(
         ZLinkAggregateRelocationRequest request,
@@ -194,7 +193,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     request.Participants,
                     stored,
                     envelope,
-                    inventoryDigest
+                    inventoryDigest,
+                    cancellationToken
                 )
                 .ConfigureAwait(false);
             if (publication.State == AggregatePublicationProbe.Published)
@@ -217,21 +217,22 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             var safeToDelete = false;
             try
             {
-                using var abortDeadline = new CancellationTokenSource(ReconciliationTimeout);
                 var abort = await authorityStore
-                    .AbortAggregateAsync(fence, abortDeadline.Token)
-                    .AsTask()
-                    .WaitAsync(abortDeadline.Token)
+                    .AbortAggregateAsync(fence, cancellationToken)
                     .ConfigureAwait(false);
                 safeToDelete =
                     abort
                         is ZLinkAggregateAbortResult.Aborted
                             or ZLinkAggregateAbortResult.AlreadyAborted;
             }
-            catch
+            catch (Exception exception)
             {
                 // An ambiguous authority state keeps the immutable root
                 // available for provider reconciliation and recovery.
+                failureReporter.ReportRuntimeTaskException(
+                    nameof(PreparePublicationAsync),
+                    exception
+                );
             }
             if (safeToDelete && ownsStoredRoot)
                 await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
@@ -368,7 +369,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                             publication.Participants,
                             publication.Relocation,
                             publication.Envelope,
-                            publication.InventoryDigest
+                            publication.InventoryDigest,
+                            cancellationToken
                         )
                         .ConfigureAwait(false)
                 ).State != AggregatePublicationProbe.Published
@@ -400,8 +402,9 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         CancellationToken cancellationToken
     )
     {
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
+        while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ZLinkCanonicalRelocationAuthorityProjection? shared = null;
             ZLinkAuthorityKey? sharedKey = null;
             (
@@ -529,12 +532,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             };
             return new CanonicalProgress(root, currentProjection);
         }
-
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "Canonical replay progress changed throughout the bounded read window.",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        );
     }
 
     private static bool SameCanonicalProgress(
@@ -613,11 +610,11 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         IReadOnlyList<ZLinkAggregateRelocationParticipant> participants,
         ZLinkRelocationStored stored,
         ZLinkRelocationEnvelope envelope,
-        ReadOnlyMemory<byte> inventoryDigest
+        ReadOnlyMemory<byte> inventoryDigest,
+        CancellationToken cancellationToken
     )
     {
         var results = new AggregatePublicationProbe[participants.Count];
-        using var deadline = new CancellationTokenSource(ReconciliationTimeout);
         try
         {
             await Parallel
@@ -626,7 +623,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     new ParallelOptions
                     {
                         MaxDegreeOfParallelism = MaxPublicationProbeConcurrency,
-                        CancellationToken = deadline.Token,
+                        CancellationToken = cancellationToken,
                     },
                     async (index, token) =>
                     {
@@ -649,8 +646,9 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 )
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
+            failureReporter.ReportRuntimeTaskException(nameof(ProbePublicationAsync), exception);
             return AggregatePublicationProbeResult.Unknown;
         }
 
@@ -714,7 +712,10 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 .DeleteTreeAsync(relocationStore, reference, CancellationToken.None)
                 .ConfigureAwait(false);
         }
-        catch { }
+        catch (Exception exception)
+        {
+            failureReporter.ReportRuntimeTaskException(nameof(DeleteOrphanAsync), exception);
+        }
     }
 
     private static void Validate(ZLinkAggregateRelocationRequest request)

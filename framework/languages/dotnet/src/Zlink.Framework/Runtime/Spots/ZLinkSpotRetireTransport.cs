@@ -1355,7 +1355,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 );
             })
             .ToArray();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore, relocationStore);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            runtime.ErrorSink,
+            authorityStore,
+            relocationStore
+        );
         var request = new ZLinkAggregateRelocationRequest(
             stage.Envelope.AggregateId,
             stage.Envelope.AggregateGeneration,
@@ -2567,7 +2571,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         var relocationStore =
             registration.Locations.ResolveRelocationStore()
             ?? throw new ZLinkConfigurationException("Relocation Store is not registered.");
-        var candidate = await new ZLinkRelocationStartupRecovery(authorityStore, relocationStore)
+        var candidate = await new ZLinkRelocationStartupRecovery(
+            runtime.ErrorSink,
+            authorityStore,
+            relocationStore
+        )
             .TryReadExactPublishedAsync(stage.Envelope, cancellationToken)
             .ConfigureAwait(false);
         if (candidate is not null)

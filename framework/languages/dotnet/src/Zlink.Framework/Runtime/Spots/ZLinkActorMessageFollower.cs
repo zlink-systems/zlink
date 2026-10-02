@@ -509,18 +509,14 @@ internal sealed class ZLinkActorMessageFollower
         var submitted = false;
         try
         {
-            var headerSubmitted = false;
-            var firstAttempt = true;
-            while (firstAttempt || frame.MessageFollowRoute.Lease.IsActive)
+            Exception? failure = null;
+            try
             {
-                firstAttempt = false;
                 cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    if (!headerSubmitted)
-                    {
-                        using var headerPart = Message.From(frame.HeaderBytes);
-                        headerSubmitted = _runtime.ForwardActorBoundSessionPart(
+                using var headerPart = Message.From(frame.HeaderBytes);
+                if (
+                    await _runtime
+                        .ForwardActorBoundSessionPartAsync(
                             frame.MessageFollowRoute.TargetMeshName,
                             frame.MessageFollowRoute.TargetActor,
                             frame.MessageFollowRoute.TargetNodeGeneration,
@@ -533,18 +529,15 @@ internal sealed class ZLinkActorMessageFollower
                             frame.MessageFollowRouteContext,
                             frame.SourceNodeGeneration,
                             frame.RequestSource,
-                            frame.ApplicationMetadata
-                        );
-                        if (!headerSubmitted)
-                        {
-                            await DelayRetryAsync(cancellationToken).ConfigureAwait(false);
-                            continue;
-                        }
-                    }
-
+                            frame.ApplicationMetadata,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
                     using var bodyPart = Message.From(frame.BodyBytes);
-                    if (
-                        _runtime.ForwardActorBoundSessionPart(
+                    submitted = await _runtime
+                        .ForwardActorBoundSessionPartAsync(
                             frame.MessageFollowRoute.TargetMeshName,
                             frame.MessageFollowRoute.TargetActor,
                             frame.MessageFollowRoute.TargetNodeGeneration,
@@ -557,36 +550,20 @@ internal sealed class ZLinkActorMessageFollower
                             frame.MessageFollowRouteContext,
                             frame.SourceNodeGeneration,
                             frame.RequestSource,
-                            frame.ApplicationMetadata
+                            frame.ApplicationMetadata,
+                            cancellationToken
                         )
-                    )
-                    {
-                        TrySendMessageFollowNotification(queue, frame);
-                        submitted = true;
-                        return;
-                    }
+                        .ConfigureAwait(false);
                 }
-                catch (ZlinkSubmitException exception)
-                    when (exception.Result
-                            is ZlinkSubmitException.ErrorCode.Backpressured
-                                or ZlinkSubmitException.ErrorCode.InvalidState
-                                or ZlinkSubmitException.ErrorCode.NotConnected
-                                or ZlinkSubmitException.ErrorCode.NotFound
-                    )
+                if (submitted)
                 {
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"message follow retry: {exception.Message}"
-                    );
+                    TrySendMessageFollowNotification(queue, frame);
+                    return;
                 }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"message follow failed: {exception.Message}"
-                    );
-                    break;
-                }
-
-                await DelayRetryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                failure = exception;
             }
 
             await ZLinkActorBoundSessionRelay
@@ -601,7 +578,8 @@ internal sealed class ZLinkActorMessageFollower
                     frame.Header,
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor ref '{frame.MessageFollowRoute.SourceActor.ActorId}' could not use Message Follow before its duration expired."
+                        $"Actor ref '{frame.MessageFollowRoute.SourceActor.ActorId}' could not submit Message Follow.",
+                        innerException: failure
                     ),
                     cancellationToken
                 )
@@ -696,9 +674,6 @@ internal sealed class ZLinkActorMessageFollower
             );
         }
     }
-
-    private static ValueTask DelayRetryAsync(CancellationToken cancellationToken) =>
-        new(Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken));
 
     private sealed class ActorQueue(ZLinkActorMessageFollower owner, MessageFollowKey key)
     {

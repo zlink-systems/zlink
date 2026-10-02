@@ -684,7 +684,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     )
     {
         try
@@ -695,7 +696,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     SendFlags.None,
                     timeout,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    durable
                 )
                 .ConfigureAwait(false);
         }

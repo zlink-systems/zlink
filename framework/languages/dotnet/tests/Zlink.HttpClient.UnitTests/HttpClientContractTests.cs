@@ -1139,4 +1139,20 @@ public sealed class HttpClientContractTests
         [Key(1)]
         public string Name { get; set; } = string.Empty;
     }
+
+    [Fact]
+    public async Task Standalone_callback_exception_faults_the_awaited_request()
+    {
+        using var server = new TestHttpServer(async ctx =>
+            await ctx.Response.WriteAsync(200, """{"id":"game-7","ranked":true}""")
+        );
+        using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
+        var failure = new InvalidOperationException("callback failed");
+
+        var observed = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.Get("/games").Async<CreateGameRes>((_, _) => throw failure)
+        );
+
+        Assert.Same(failure, observed);
+    }
 }

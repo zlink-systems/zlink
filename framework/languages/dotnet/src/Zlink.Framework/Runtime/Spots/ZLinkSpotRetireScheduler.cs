@@ -550,6 +550,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 sourceDescriptor.ApplicationVersion
             );
             var stagingRoot = await new ZLinkRelocationPublicationCoordinator(
+                runtime.ErrorSink,
                 authorityStore,
                 relocationStore
             )
@@ -1067,7 +1068,11 @@ internal sealed class ZLinkSpotRetireScheduler(
                 return;
             var discard = staging;
             staging = null;
-            await new ZLinkRelocationPublicationCoordinator(authorityStore, relocationStore)
+            await new ZLinkRelocationPublicationCoordinator(
+                runtime.ErrorSink,
+                authorityStore,
+                relocationStore
+            )
                 .DiscardPreparedAsync(discard.Root)
                 .ConfigureAwait(false);
         }

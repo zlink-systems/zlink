@@ -46,6 +46,7 @@
 | Node Store의 owner lease 교체가 삭제를 막나 | repository contract test 통과 | generic write wrapper가 fixture의 존재하지 않는 API 호출에서 발생한 `TypeError`까지 `Conflict`로 바꾸면 lease 교체 없이도 통과한다. fixture는 domain repository로 lease를 교체하고 provider 오류 보존을 별도로 검사한다 | #1083 |
 | 신규 .NET 회귀 시험이 실행됐나 | filter 명령의 종료 코드 0 | `EnableDefaultCompileItems=false` 프로젝트의 compile 목록에 시험 파일이 없으면 실행 대상이 0건이다. compile 포함 여부와 실제 실행 건수를 확인한다 | #1083 |
 | Reject reason 오해석을 회귀 test가 잡나 | Server role fixture에서 not-required peer 수 0 | Role policy가 not-required 표시를 거부했는지만 확인한다. 결함 분기가 실제로 표시할 수 있는 Client role fixture에서 수정 전 실패를 확보한다 | #1082 |
+| reply의 별도 deadline이 종료를 결정했나 | clock 진행 뒤 ProtocolErrors 증가 | 최초 admission 거절도 같은 counter를 증가시킨다. clock 진행 전후의 제출 횟수와 reply claim 종료를 각각 확인한다 | #1213 |
 | 원본·병합 source를 실제로 다시 빌드했나 | source를 덮은 뒤 test 통과 또는 link 실패 | 보존된 수정 시각 때문에 MSBuild·Ninja가 이전 DLL·object를 재사용할 수 있다. source와 산출물의 해시·시각을 확인하고 변경된 source를 다시 빌드해 결과를 판정한다 | #1083 |
 | Node Store fixture가 lease 교체를 검증하나 | 가공한 claim 결과를 돌려준 뒤 test 통과 | Store에 lease를 기록하지 않으면 교체 경로가 실행되지 않는다. 기존 repository로 실제 lease를 확정하고 Store 상태와 결과를 함께 검사한다 | #1083 |
 

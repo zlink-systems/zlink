@@ -8,8 +8,8 @@ namespace Zlink.Framework.Runtime.Locations;
 /// <summary>
 /// Executes the connect/disconnect decisions of the reconciler. The channel
 /// runtime implements this over core socket calls; stores never touch
-/// sockets. Connect failures are the executor's concern (retry backoff) and
-/// are never a reason to remove a location row.
+/// sockets. The reconciler owns connect rejection reporting and retains the
+/// desired target for the next tick; rejection never removes a location row.
 /// </summary>
 internal interface IZLinkAutoConnectExecutor
 {
@@ -35,6 +35,7 @@ internal sealed class ZLinkAutoConnectReconciler
     private readonly ZLinkLocationRuntime _runtime;
     private readonly IZLinkMeshNodeLocationResolver _peers;
     private readonly IZLinkAutoConnectExecutor _executor;
+    private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly ZLinkStateLane _lane = new();
@@ -85,7 +86,8 @@ internal sealed class ZLinkAutoConnectReconciler
         TimeProvider? timeProvider = null,
         bool retainRemovedMembers = false,
         bool initiallyPublished = false,
-        ulong initialStoreGeneration = 0
+        ulong initialStoreGeneration = 0,
+        IZLinkRuntimeFailureReporter? errorSink = null
     )
     {
         _local = local;
@@ -94,6 +96,7 @@ internal sealed class ZLinkAutoConnectReconciler
         _runtime = runtime;
         _peers = peers;
         _executor = executor;
+        _errorSink = errorSink ?? new ZLinkRuntimeErrorSink();
         _options = options;
         _time = timeProvider ?? TimeProvider.System;
         _retainRemovedMembers = retainRemovedMembers;
@@ -575,12 +578,16 @@ internal sealed class ZLinkAutoConnectReconciler
                     || !await ReleaseEndpointConflictsAsync(target).ConfigureAwait(false)
                 )
                     continue;
-                var accepted = _executor.Connect(target);
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"autoconnect_add local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
+                var acceptance = ValueTask.CompletedTask;
+                ConnectTarget(
+                    target,
+                    () =>
+                        acceptance = _lane.RunAsync(() =>
+                        {
+                            _active[key] = target;
+                        })
                 );
-                if (accepted)
-                    await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
+                await acceptance.ConfigureAwait(false);
                 continue;
             }
 
@@ -597,9 +604,16 @@ internal sealed class ZLinkAutoConnectReconciler
                 await _lane.RunAsync(() => _active.Remove(key)).ConfigureAwait(false);
                 if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                     return;
-                var connected = _executor.Connect(target);
-                if (connected)
-                    await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
+                var acceptance = ValueTask.CompletedTask;
+                ConnectTarget(
+                    target,
+                    () =>
+                        acceptance = _lane.RunAsync(() =>
+                        {
+                            _active[key] = target;
+                        })
+                );
+                await acceptance.ConfigureAwait(false);
             }
             else if (OwnerChanged(current, target) || current.Draining != target.Draining)
             {
@@ -795,9 +809,27 @@ internal sealed class ZLinkAutoConnectReconciler
                 return;
             if (_active.ContainsKey(key) || target.Draining)
                 continue;
-            if (_executor.Connect(target))
-                _active[key] = target;
+            ConnectTarget(target, () => _active[key] = target);
         }
+    }
+
+    private void ConnectTarget(ZLinkAutoConnectTarget target, Action accept)
+    {
+        bool accepted;
+        try
+        {
+            accepted = _executor.Connect(target);
+        }
+        catch (Systems.Zlink.ZlinkConnectException failure)
+        {
+            _errorSink.ReportRuntimeTaskException(nameof(ConnectTarget), failure);
+            return;
+        }
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"autoconnect_add local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
+        );
+        if (accepted)
+            accept();
     }
 
     internal async ValueTask ShutdownAsync(CancellationToken cancellationToken = default)

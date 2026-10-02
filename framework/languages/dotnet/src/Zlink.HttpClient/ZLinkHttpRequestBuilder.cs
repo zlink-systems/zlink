@@ -232,15 +232,16 @@ public class ZLinkHttpRequestBuilder
     /// <summary>
     ///     Starts the request and reports completion through a callback. Exactly one of
     ///     <c>error</c> and <c>response</c> is non-null. A server callback is queued as a new turn on
-    ///     the execution line captured when this request was created.
+    ///     the execution line captured when this request was created. Outside an execution turn the
+    ///     callback runs inline, and an exception it throws faults the returned task.
     /// </summary>
-    public void Async<T>(
+    public Task Async<T>(
         ZLinkHttpCallback<T> callback,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(callback);
-        _ = CompleteCallbackAsync(ExecuteTypedAsync<T>(cancellationToken), callback);
+        return CompleteCallbackAsync(ExecuteTypedAsync<T>(cancellationToken), callback);
     }
 
     protected async ValueTask<HttpResponse<T>> ExecuteTypedAsync<T>(
@@ -331,6 +332,12 @@ public class ZLinkHttpRequestBuilder
             error = exception;
         }
 
+        if (_executionTurn is null)
+        {
+            callback(error, response);
+            return;
+        }
+
         void Complete()
         {
             try
@@ -339,21 +346,18 @@ public class ZLinkHttpRequestBuilder
             }
             catch (Exception exception)
             {
-                _executionTurn?.ReportError(exception);
+                _executionTurn.ReportError(exception);
             }
         }
 
-        if (_executionTurn is null)
-            Complete();
-        else
-            try
-            {
-                _executionTurn.Post(Complete);
-            }
-            catch (Exception exception)
-            {
-                _executionTurn.ReportError(exception);
-            }
+        try
+        {
+            _executionTurn.Post(Complete);
+        }
+        catch (Exception exception)
+        {
+            _executionTurn.ReportError(exception);
+        }
     }
 
     private HttpRequestSpec MakeRequest(Action<ReadOnlyMemory<byte>>? sink)

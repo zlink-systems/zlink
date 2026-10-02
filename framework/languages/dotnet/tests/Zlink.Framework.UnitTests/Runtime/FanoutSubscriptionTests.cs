@@ -2,12 +2,118 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class FanoutSubscriptionTests
 {
+    [Fact]
+    public async Task AutomaticSubscribers_SerializeHandlersAcrossPublishers()
+    {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var probe = new FanoutConcurrencyProbe();
+        using var first = CreateConcurrencyHost(store, probe, publisher: true);
+        using var second = CreateConcurrencyHost(store, probe, publisher: true);
+        using var subscriber = CreateConcurrencyHost(store, probe, publisher: false);
+        await first.StartAsync();
+        await second.StartAsync();
+        await subscriber.StartAsync();
+        try
+        {
+            var runtime = subscriber.Services.GetRequiredService<IZLinkFanoutRuntime>();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (runtime.GetStatus("events").ReadyPublisherCount != 2)
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+
+            await first
+                .Services.GetRequiredService<IZLinkFanoutClient>()
+                .Publish("events", new FanoutSubscriptionEvent("first"))
+                .Async();
+            await probe.FirstStarted.Task.WaitAsync(timeout.Token);
+            await second
+                .Services.GetRequiredService<IZLinkFanoutClient>()
+                .Publish("events", new FanoutSubscriptionEvent("second"))
+                .Async();
+            var state = await subscriber
+                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                .EnsureStartedStateAsync(timeout.Token);
+            while (
+                !probe.SecondStarted.Task.IsCompleted
+                && state.ApplicationJobQueue.GetStatus().QueuedApplicationJobs == 0
+            )
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+
+            await Task.WhenAny(
+                probe.SecondStarted.Task,
+                Task.Delay(TimeSpan.FromMilliseconds(200), timeout.Token)
+            );
+            Assert.False(probe.SecondStarted.Task.IsCompleted);
+            probe.ReleaseFirst.TrySetResult();
+            await probe.SecondStarted.Task.WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            probe.ReleaseFirst.TrySetResult();
+            await subscriber.StopAsync();
+            await second.StopAsync();
+            await first.StopAsync();
+        }
+    }
+
+    private static IHost CreateConcurrencyHost(
+        ZLinkInMemoryProviderLocationStore store,
+        FanoutConcurrencyProbe probe,
+        bool publisher
+    )
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(probe);
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(store);
+            var channel = options.AddFanoutChannel("events");
+            if (publisher)
+                channel.EnablePublisher();
+            else
+                channel
+                    .EnableSubscriber()
+                    .AddHandler<FanoutConcurrencyHandler, FanoutSubscriptionEvent>();
+        });
+        return builder.Build();
+    }
+
+    private sealed class FanoutConcurrencyProbe
+    {
+        public TaskCompletionSource FirstStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class FanoutConcurrencyHandler(FanoutConcurrencyProbe probe)
+        : IZLinkFanoutHandler<FanoutSubscriptionEvent>
+    {
+        public async ValueTask HandleAsync(
+            FanoutSubscriptionEvent message,
+            ZLinkPublishMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            if (message.Value == "first")
+            {
+                probe.FirstStarted.TrySetResult();
+                await probe.ReleaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            else
+                probe.SecondStarted.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task HandlerContext_PreservesChannelTopicAndPacketName_WithoutUsingTopicForSelection()
     {

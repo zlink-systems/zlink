@@ -90,13 +90,11 @@ public sealed class ActorHandlerActivationTests
         var releaseBlocker = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        Assert.True(
-            lane.TryPost(async () =>
-            {
-                blockerStarted.TrySetResult();
-                await releaseBlocker.Task.ConfigureAwait(false);
-            })
-        );
+        _ = lane.RunAsync(async () =>
+        {
+            blockerStarted.TrySetResult();
+            await releaseBlocker.Task.ConfigureAwait(false);
+        });
         await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var reset = Task.Run(async () => await registry.ResetGenerationAsync());

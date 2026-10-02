@@ -34,7 +34,14 @@ public sealed class AutoConnectLoopTests
             options,
             time
         );
-        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, store, timeProvider: time);
+        var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
+            reconciler,
+            local,
+            options,
+            store,
+            timeProvider: time
+        );
 
         var first = loop.DisposeAsync().AsTask();
         var second = loop.DisposeAsync().AsTask();
@@ -73,7 +80,14 @@ public sealed class AutoConnectLoopTests
             options,
             time
         );
-        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, store, timeProvider: time);
+        var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
+            reconciler,
+            local,
+            options,
+            store,
+            timeProvider: time
+        );
 
         // First tick always reads the list (and publishes the local row,
         // which bumps the stamp), so the second tick still reads once more
@@ -131,6 +145,7 @@ public sealed class AutoConnectLoopTests
             time
         );
         var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
             reconciler,
             local,
             options,
@@ -202,6 +217,7 @@ public sealed class AutoConnectLoopTests
             time
         );
         var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
             reconciler,
             local,
             options,
@@ -249,7 +265,14 @@ public sealed class AutoConnectLoopTests
             time
         );
         var stamps = new FailingStampStore();
-        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, stamps, timeProvider: time);
+        var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
+            reconciler,
+            local,
+            options,
+            stamps,
+            timeProvider: time
+        );
 
         await loop.TickAsync();
         Assert.Single(reconciler.ActiveTargets);

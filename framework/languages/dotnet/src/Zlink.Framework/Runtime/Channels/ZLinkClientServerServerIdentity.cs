@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Channels;
@@ -11,7 +12,8 @@ internal sealed class ZLinkClientServerServerIdentity(
     string securityIdentity,
     int weight,
     uint normalizedEffectiveMaxMessageBytes,
-    string advertisedEndpoint
+    string advertisedEndpoint,
+    IZLinkRuntimeFailureReporter errorSink
 )
 {
     private readonly ZLinkStateLane _lane = new();
@@ -140,23 +142,24 @@ internal sealed class ZLinkClientServerServerIdentity(
         var (probes, expired) = await _lane
             .RunAsync(() => PrepareLivenessTick(now))
             .ConfigureAwait(false);
+        var failures = new ZLinkFailureCollector();
         foreach (var routingId in expired)
-            try
-            {
-                router.DisconnectRid(routingId);
-            }
-            catch { }
+            failures.Capture(() => router.DisconnectRid(routingId));
         foreach (var probe in probes)
-            if (
-                await SendOwnedAsync(
-                        router,
-                        probe.RoutingId,
-                        ZLinkClientServerControlProtocol.EncodeLivenessProbe(probe.ProbeId),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-            )
-                Interlocked.Increment(ref _livenessProbeCount);
+            await failures
+                .CaptureAsync(async () =>
+                {
+                    await SendOwnedAsync(
+                            router,
+                            probe.RoutingId,
+                            ZLinkClientServerControlProtocol.EncodeLivenessProbe(probe.ProbeId),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    Interlocked.Increment(ref _livenessProbeCount);
+                })
+                .ConfigureAwait(false);
+        failures.ThrowIfAny();
     }
 
     private void PushUpdate(Snapshot snapshot)
@@ -165,16 +168,20 @@ internal sealed class ZLinkClientServerServerIdentity(
         if (router is null)
             return;
         foreach (var peer in peers)
-            _ = SendOwnedAsync(
-                router,
-                peer.RoutingId,
-                ZLinkClientServerControlProtocol.EncodeUpdate(
-                    ToAdmission(snapshot) with
-                    {
-                        NormalizedEffectiveMaxMessageBytes = peer.MaximumMessageBytes,
-                    }
+            ZLinkUnawaitedSubmit.Observe(
+                SendOwnedAsync(
+                    router,
+                    peer.RoutingId,
+                    ZLinkClientServerControlProtocol.EncodeUpdate(
+                        ToAdmission(snapshot) with
+                        {
+                            NormalizedEffectiveMaxMessageBytes = peer.MaximumMessageBytes,
+                        }
+                    ),
+                    CancellationToken.None
                 ),
-                CancellationToken.None
+                nameof(PushUpdate),
+                errorSink
             );
     }
 
@@ -268,7 +275,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static async ValueTask<bool> SendOwnedAsync(
+    private static async ValueTask SendOwnedAsync(
         IRouterSocket router,
         RoutingId routingId,
         Message message,
@@ -283,11 +290,6 @@ internal sealed class ZLinkClientServerServerIdentity(
                 .Async(cancellationToken)
                 .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            return false;
         }
         finally
         {
