@@ -78,28 +78,17 @@ Server is a startup error.
 
 ### 2.1 Entry Spot ID
 
-The Entry Spot ID is issued by the framework, and the caller doesn't
-specify it as a create target. The format
-`<diagnostic-prefix>-entry-<lowercase-canonical-uuid-v4>` is reserved for a
-Framework-issued Entry Spot ID. The UUID part is an RFC 4122 UUID v4 value
-generated separately from the MeshNode RID.
+[Transport RID and Spot ID policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines how the Entry Spot ID is issued, its
+format and lifecycle, and the rejection of the reserved format. The framework doesn't compute a
+MeshNode relationship from the Spot ID string — it uses the Entry Spot ID mapping the MeshNode
+descriptor published.
 
-**If a caller-specified User/Instance Spot ID matches this reserved format,
-it's rejected with `InvalidOperation` before starting a Location Store
-reservation or factory.** The framework doesn't compute a MeshNode
-relationship from the Spot ID string — it uses the Entry Spot ID
-mapping the MeshNode descriptor published.
-
-The Entry Spot ID is kept for the same Object Server lifecycle. Even on a
-replacement lifecycle at the same endpoint, a new Entry Spot ID is issued, and with an automatic
-RID a new MeshNode RID is issued as well. The framework doesn't build the Entry Spot
-ID by concatenating the full MeshNode RID.
-
-[Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove and owner cleanup — a
-descriptor being the registration record a remote runtime publishes so its endpoint, identity,
-and status can be discovered — delete the descriptor only if the stored
-descriptor's owner lease and lifecycle match the request. Stale cleanup from a
-previous lifecycle can't delete a replacement lifecycle's descriptor. `EntrySpotId` is
+[Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove — a descriptor being the
+registration record a remote runtime publishes so its endpoint, identity, and status can be
+discovered — deletes the descriptor only if the stored descriptor's owner lease and lifecycle
+match the request. A stale remove from a previous lifecycle can't delete a replacement
+lifecycle's descriptor. [Location runtime §11](../05-location-relocation/01-location-runtime.en.md#11-cleaning-up-store-records-when-a-host-shuts-down)
+defines what owner cleanup reclaims. `EntrySpotId` is
 included in the descriptor's immutable fields and immutable digest, and
 can't be changed by `Renew` or a mutable descriptor update.
 

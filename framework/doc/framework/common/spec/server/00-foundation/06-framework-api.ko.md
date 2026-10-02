@@ -725,14 +725,9 @@ subscriber 수, 수신 또는 handler 완료 정보를 포함하지 않는다.
 
 Spot factory와 typed Actor factory는 Object Server builder에 등록한다. User·Instance Spot type은 UTF-8
 1..255 bytes의 case-sensitive stable name이며 언어 class 이름을 wire·Store identity로 사용하지 않는다.
-Entry Spot ID는 Framework가 Object Server MeshNode lifecycle마다
-`<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급하고 caller가 생성하지 않는다. MeshNode와
-Entry Spot은 같은 diagnostic prefix를 사용하되 각각 별도의 UUID v4를 생성한다. 같은 lifecycle에서는 같은
-Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를 발급한다. MeshNode descriptor가 그 Entry
+Entry Spot ID는 Framework가 발급하고 caller가 생성하지 않는다. MeshNode descriptor가 그 Entry
 Spot ID와 lifecycle generation의 관계를 게시하며 Actor placement와 Entry Spot join은 이 mapping을
-사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다.
-
-Entry Spot ID의 발급·형식과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
+사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다. Entry Spot ID의 발급·형식과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
 Actor membership과 Logical Multicast subscription을 등록할 수 없다.
 
 Actor manager와 User Spot manager는 global ID를 받는 `Create`, `GetOrCreate`, `Find` family를 제공한다. Actor

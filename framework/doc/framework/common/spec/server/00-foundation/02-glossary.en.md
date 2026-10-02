@@ -134,16 +134,12 @@ current authority.
 | User Spot | `IZLinkSpot` | Explicitly created by the application via `IZLinkSpotManager.Create` or `GetOrCreate`. |
 | Instance Spot | `IZLinkInstanceSpot` | Prepared by the first message when an `InstanceSpot(...)` intent is present on `IZLinkSpotSendCall`/`IZLinkSpotRequestCall`. |
 
-The Entry Spot ID is issued in the form `<prefix>-entry-<lowercase-canonical-uuid-v4>`
-for every Object Server MeshNode lifecycle. MeshNode and Entry Spot use the same
-prefix but each generates its own separate UUID v4.
+[Transport RID and Spot ID policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines how the Entry Spot ID is issued, its
+format, and its lifecycle.
 
 A descriptor records the
 relationship between the MeshNode and that Entry Spot ID, and the application
 doesn't infer node relationships by parsing the Spot ID string.
-
-The Entry Spot ID stays the same
-within the same lifecycle and a new Entry Spot ID is issued on a replacement lifecycle.
 
 This format is reserved for
 framework issuance, so if a caller specifies a User/Instance Spot ID in the same
@@ -541,15 +537,12 @@ result of an attempt that started earlier.
 ### Reservation ID
 
 An identifier the Location Store uses to distinguish the admitted capacity and
-progress record reserved for creation or relocation. Creation IDs and relocation IDs
-use separate namespaces. Resending the same request with the same ID returns the
+progress record reserved for creation. Resending the same request with the same ID returns the
 previously issued result. Sending a request with different content under the same ID
 is a `Conflict`.
 
-For creation, it can be used to continue the same work after a process restart, or to
-cancel exactly that work. For relocation, it's used only to distinguish duplicate
-requests within the running source and target processes, and doesn't carry work over
-after process termination. It isn't an identifier that merges different operations
+It can be used to continue the same work after a process restart, or to cancel
+exactly that work. It isn't an identifier that merges different operations
 into the same application result.
 
 ```csharp

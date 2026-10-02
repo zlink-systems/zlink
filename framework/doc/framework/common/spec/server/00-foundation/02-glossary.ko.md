@@ -120,13 +120,9 @@ public readonly record struct SpotRef(
 | User Spot | `IZLinkSpot` | Application이 `IZLinkSpotManager.Create` 또는 `GetOrCreate`로 명시적으로 만든다. |
 | Instance Spot | `IZLinkInstanceSpot` | `IZLinkSpotSendCall`·`IZLinkSpotRequestCall`의 `InstanceSpot(...)` intent가 있을 때 최초 message로 준비한다. |
 
-Entry Spot ID는 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 Object Server MeshNode
-lifecycle마다 발급한다. MeshNode와 Entry Spot은 같은 prefix를 사용하되 각각 별도의 UUID v4를 생성한다.
+Entry Spot ID의 발급·형식·lifecycle은 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 Descriptor가 MeshNode와 해당 Entry Spot ID의 관계를 기록하며 application은 Spot ID 문자열을 parsing해 node
 관계를 추론하지 않는다.
-
-같은 lifecycle에서는 Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를
-발급한다.
 
 이 형식은 Framework 발급용으로 예약하므로 caller가 같은 형식의
 User·Instance Spot ID를 지정하면 Store와 factory를 실행하기 전에 `InvalidOperation`으로 거부한다.
@@ -504,14 +500,11 @@ Store reservation이 factory와 callback 실행을 하나씩 직렬화한다. �
 <a id="reservation-id"></a>
 ### Reservation ID
 
-Location Store에서 생성 또는 relocation을 위해 확보한 수용 공간과 진행 record를
-구분하는 식별자다. 생성용 ID와 relocation용 ID는 서로 다른 namespace를 사용한다.
+Location Store에서 생성을 위해 확보한 수용 공간과 진행 record를 구분하는 식별자다.
 같은 ID와 같은 요청을 다시 보내면 앞서 발급한 결과를 반환한다. 같은 ID로 내용이
 다른 요청을 보내면 `Conflict`다.
 
-Creation에서는 process 재시작 뒤 같은 작업을 계속하거나 정확히 그 작업만 취소할 때
-사용할 수 있다. relocation에서는 실행 중인 source와 target process 안에서
-중복 요청을 구분하는 데만 사용하며 process 종료 뒤 작업을 이어받지 않는다. 서로
+Process 재시작 뒤 같은 작업을 계속하거나 정확히 그 작업만 취소할 때 사용할 수 있다. 서로
 다른 operation을 같은 application 결과에 합류시키는 식별자가 아니다.
 
 ```csharp

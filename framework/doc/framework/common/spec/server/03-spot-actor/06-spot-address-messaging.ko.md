@@ -64,23 +64,15 @@ normalization이나 case folding을 적용하지 않으며 언어 class 이름(n
 
 ### 2.1 Entry Spot ID
 
-Entry Spot ID는 Framework가 발급하며 caller가 create 대상으로 지정하지 않는다.
-`<diagnostic-prefix>-entry-<lowercase-canonical-uuid-v4>` 형식은 Framework가 발급하는 Entry
-Spot ID를 위해 예약한다. UUID 부분은 MeshNode RID와 별도로 만드는 RFC 4122 UUID v4 값이다.
-
-**Caller가 지정한 User·Instance Spot ID가 이 예약 형식과 일치하면 Location Store reservation이나
-factory를 시작하기 전에 `InvalidOperation`으로 거부한다.** Framework는 Spot ID 문자열로 MeshNode 관계를 계산하지 않고
-MeshNode descriptor가 게시한 Entry Spot ID mapping을 사용한다.
-
-Entry Spot ID는 같은 Object Server lifecycle 동안 유지한다. Endpoint가 같은 replacement
-lifecycle에서도 새 Entry Spot ID를 발급하며, automatic RID이면 MeshNode RID도 새로 발급한다. Framework는 full MeshNode
-RID를 이어 붙여 Entry Spot ID를 만들지 않는다.
+Entry Spot ID의 발급·형식·lifecycle과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이
+정한다. Framework는 Spot ID 문자열로 MeshNode 관계를 계산하지 않고 MeshNode descriptor가 게시한 Entry Spot
+ID mapping을 사용한다.
 
 remote runtime이 endpoint, identity와 상태를 발견할 수 있도록 게시하는 등록 정보인
-[Descriptor](../00-foundation/02-glossary.ko.md#descriptor) remove와 owner cleanup은 저장된 descriptor의
-owner lease와 lifecycle이 요청과
-일치할 때만 descriptor를 지운다. 이전 lifecycle의 stale
-cleanup은 replacement lifecycle의 descriptor를 삭제할 수 없다. `EntrySpotId`는
+[Descriptor](../00-foundation/02-glossary.ko.md#descriptor) remove는 저장된 descriptor의
+owner lease와 lifecycle이 요청과 일치할 때만 descriptor를 지운다. 이전 lifecycle의 stale remove는
+replacement lifecycle의 descriptor를 삭제할 수 없다. Owner cleanup이 회수하는 범위는
+[Location runtime §11](../05-location-relocation/01-location-runtime.ko.md#11-host가-종료될-때-store-record를-정리한다)이 정한다. `EntrySpotId`는
 descriptor immutable field와 immutable digest에 포함하며 `Renew` 또는 mutable descriptor
 update로 바꿀 수 없다.
 
