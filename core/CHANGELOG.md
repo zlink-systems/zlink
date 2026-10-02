@@ -12,6 +12,36 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.13.0]
+
+### Fixed
+
+- Public data receives use the handle receive bit for admission; one call owns one record (#1292).
+- Removed recursive trie traversal for long subscription topics to prevent Windows stack exhaustion (#1334).
+- Direct engine termination emits a `DISCONNECTED` monitor event for the physical disconnect (#1334).
+- Fixed READY processing reporting protocol errors for terminating ROUTER lanes (#1334).
+- Corrected TSan instrumentation and classification of normal ROUTER pair termination (#1293).
+
+## [1.13.0]
+
+### Fixed
+
+- Public data receives use the handle receive bit for admission; one call owns one record (#1292).
+- Removed recursive trie traversal for long subscription topics to prevent Windows stack exhaustion (#1334).
+- Direct engine termination emits a `DISCONNECTED` monitor event for the physical disconnect (#1334).
+- Fixed READY processing reporting protocol errors for terminating ROUTER lanes (#1334).
+- Corrected TSan instrumentation and classification of normal ROUTER pair termination (#1293).
+
+## [1.13.0]
+
+### Fixed
+
+- Public data receives use the handle receive bit for admission; one call owns one record (#1292).
+- Removed recursive trie traversal for long subscription topics to prevent Windows stack exhaustion (#1334).
+- Direct engine termination emits a `DISCONNECTED` monitor event for the physical disconnect (#1334).
+- Fixed READY processing reporting protocol errors for terminating ROUTER lanes (#1334).
+- Corrected TSan instrumentation and classification of normal ROUTER pair termination (#1293).
+
 ## [1.12.0]
 
 ### Changed

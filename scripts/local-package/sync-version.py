@@ -828,18 +828,8 @@ def synchronize(
         rf"\g<1>{binding_version}\2",
         1,
     )
-    sync.regex(
-        "bindings/cpp/packaging/conan/conandata.yml",
-        rf"(?P<version>{SEMVER})",
-        lambda match, version=binding_version: replace_version_group(match, version),
-        3,
-    )
-    sync.regex(
-        "vcpkg/ports/zlink-cpp/vcpkg.json",
-        rf'("version"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{binding_version}\2",
-        1,
-    )
+    # Release archive URLs, version keys and checksums are updated together
+    # by release-check.sh --write after the release assets are published.
     sync.regex(
         "vcpkg/ports/zlink-cpp/usage",
         rf"(find_package\(zlink_cpp ){SEMVER}( CONFIG REQUIRED\))",
