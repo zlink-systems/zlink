@@ -28,7 +28,13 @@ class FlowFileExporter implements LogRecordExporter {
         })
       )
       .join('\n');
-    fs.appendFile(this.filePath, `${lines}\n`, () => done({ code: ExportResultCode.SUCCESS }));
+    fs.appendFile(this.filePath, `${lines}\n`, (error) =>
+      done(
+        error === null
+          ? { code: ExportResultCode.SUCCESS }
+          : { code: ExportResultCode.FAILED, error }
+      )
+    );
   }
 
   forceFlush(): Promise<void> {
@@ -59,9 +65,11 @@ function enableFlowFileLogging(role: string): void {
       ]
     });
     logs.setGlobalLoggerProvider(provider);
-  } catch {
-    //  Diagnostics wiring only: a missing or malformed config must not stop
-    //  the sample server; the run just proceeds without file flow logs.
+  } catch (cause) {
+    // Spec 26: telemetry failure is reported outside the failed provider.
+    process.stderr.write(
+      `Flow file logging setup failed: ${cause instanceof Error ? cause.message : String(cause)}\n`
+    );
   }
 }
 

@@ -199,13 +199,9 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
   }
 
   addRelocationStore(store: ZLinkRelocationStore): this {
-    this.state.additionalOptions = {
-      ...this.state.additionalOptions,
-      locations: {
-        ...(this.state.additionalOptions.locations ?? {}),
-        relocationStoreInstance: store
-      }
-    };
+    const locations = { ...(this.state.additionalOptions.locations ?? {}) };
+    framework.registerRelocationStore(locations, store);
+    this.state.additionalOptions = { ...this.state.additionalOptions, locations };
     return this;
   }
 

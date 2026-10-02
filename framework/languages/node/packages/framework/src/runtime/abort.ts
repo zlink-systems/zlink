@@ -43,10 +43,6 @@ export function awaitWithAbort<T>(
   signal: AbortSignal | undefined,
   abortOperation?: () => void
 ): Promise<T> {
-  if (signal?.aborted === true) {
-    abortOperation?.();
-    throw createAbortError();
-  }
   if (signal === undefined) {
     return operation;
   }
@@ -63,7 +59,6 @@ export function awaitWithAbort<T>(
       abortOperation?.();
       reject(createAbortError());
     };
-    signal.addEventListener('abort', abort, { once: true });
     operation.then(
       (value) => {
         if (settle()) resolve(value);
@@ -72,5 +67,7 @@ export function awaitWithAbort<T>(
         if (settle()) reject(error);
       }
     );
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
   });
 }

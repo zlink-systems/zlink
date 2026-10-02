@@ -2,6 +2,26 @@
 
 package systems.zlink.runtime.sockets;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.RequestSubmission;
+import systems.zlink.contracts.messaging.SendSubmission;
+import systems.zlink.contracts.sockets.CompletionKind;
+import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.runtime.nativeapi.Native;
+import systems.zlink.runtime.nativeapi.NativeErrno;
+import systems.zlink.runtime.nativeapi.NativeLayouts;
+import systems.zlink.runtime.nativeapi.NativeMessage;
+import systems.zlink.runtime.nativeapi.NativeRoutingIds;
+import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -17,26 +37,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.RequestSubmission;
-import systems.zlink.contracts.messaging.SendSubmission;
-import systems.zlink.contracts.sockets.CompletionKind;
-import systems.zlink.contracts.sockets.RecvResult;
-import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.internal.sockets.SocketOption;
-import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
-import systems.zlink.runtime.nativeapi.NativeLayouts;
-import systems.zlink.runtime.nativeapi.NativeMessage;
-import systems.zlink.runtime.nativeapi.NativeRoutingIds;
-import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
 
 /** Socket-local owner for Core pull completions and writable send retries. */
 final class CompletionOwner implements AutoCloseable {
@@ -145,7 +145,12 @@ final class CompletionOwner implements AutoCloseable {
         }
         if (rejectClosed)
             state.rejectClosed();
-        closeParts(parts);
+        try {
+            closeParts(parts);
+        } catch (RuntimeException | Error failure) {
+            state.reject(failure);
+            throw failure;
+        }
         return new SendSubmissionValue(SubmitResult.BACKPRESSURED,
             state.admitted);
     }
@@ -184,14 +189,19 @@ final class CompletionOwner implements AutoCloseable {
             }
             retained = retainParts(parts);
         } catch (RuntimeException | Error failure) {
-            state.abandonSend();
+            state.reject(failure);
             throw failure;
         }
-        if (!state.retain(retained)) {
-            closeParts(retained);
+        try {
+            if (!state.retain(retained)) {
+                closeParts(retained);
+            }
+            state.armWritable(attempt.completionId());
+            closeParts(parts);
+        } catch (RuntimeException | Error failure) {
+            state.reject(failure);
+            throw failure;
         }
-        state.armWritable(attempt.completionId());
-        closeParts(parts);
         return new RequestSubmissionValue(SubmitResult.BACKPRESSURED,
             state.admitted, state.future);
     }
@@ -377,22 +387,17 @@ final class CompletionOwner implements AutoCloseable {
             }
             return retained;
         } catch (RuntimeException | Error failure) {
-            closeParts(retained);
+            try {
+                closeParts(retained);
+            } catch (RuntimeException closeFailure) {
+                if (closeFailure != failure) failure.addSuppressed(closeFailure);
+            }
             throw failure;
         }
     }
 
     private static void closeParts(List<Message> parts) {
-        closeRemaining(parts, 0);
-    }
-
-    private static void closeRemaining(List<Message> parts, int from) {
-        for (int i = from; i < parts.size(); i++) {
-            try {
-                parts.get(i).close();
-            } catch (RuntimeException ignored) {
-            }
-        }
+        Message.closeAll(parts);
     }
 
     private Pending<List<Message>> registerRequest() {
@@ -814,7 +819,11 @@ final class CompletionOwner implements AutoCloseable {
                 return;
             }
             state.publishRequest(attempt.completionId(), settleInline);
-            state.releaseRetained();
+            try {
+                state.releaseRetained();
+            } catch (RuntimeException | Error failure) {
+                state.reject(failure, settleInline);
+            }
             return;
         }
         if (isWritableWait(attempt)) {
@@ -1074,9 +1083,14 @@ final class CompletionOwner implements AutoCloseable {
             }
             RequestCompletion completion = (RequestCompletion) capturedResult;
             if (completion.completionId() != expectedId) {
-                closeCapturedValue(completion.outcome());
-                settle(null, new ZlinkRequestException(
-                    RequestResult.PROTOCOL_ERROR), settleInline);
+                ZlinkRequestException failure =
+                        new ZlinkRequestException(RequestResult.PROTOCOL_ERROR);
+                try {
+                    closeCapturedValue(completion.outcome());
+                } catch (RuntimeException | Error closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+                settle(null, failure, settleInline);
                 return;
             }
             capturedResult = completion.outcome();
@@ -1212,7 +1226,22 @@ final class CompletionOwner implements AutoCloseable {
                 notifyAll();
             }
             pending.remove(token, this);
-            releaseRetained();
+            try {
+                releaseRetained();
+            } catch (RuntimeException | Error closeFailure) {
+                if (terminalFailure == null) {
+                    terminalFailure = closeFailure;
+                    try {
+                        closeCapturedValue(terminalValue);
+                    } catch (RuntimeException | Error valueCloseFailure) {
+                        if (valueCloseFailure != closeFailure)
+                            closeFailure.addSuppressed(valueCloseFailure);
+                    }
+                    terminalValue = null;
+                } else if (terminalFailure != closeFailure) {
+                    terminalFailure.addSuppressed(closeFailure);
+                }
+            }
             return true;
         }
 
@@ -1265,13 +1294,8 @@ final class CompletionOwner implements AutoCloseable {
         if (!(value instanceof List<?> values)) {
             return;
         }
-        for (Object element : values) {
-            if (element instanceof Message message) {
-                try {
-                    message.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
+        @SuppressWarnings("unchecked")
+        List<Message> parts = (List<Message>) values;
+        Message.closeAll(parts);
     }
 }

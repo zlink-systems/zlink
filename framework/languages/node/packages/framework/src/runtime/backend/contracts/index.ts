@@ -269,7 +269,7 @@ export interface ZLinkBackendMeshNode {
     stableType: string,
     generation: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: string,
+    spotId: string | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint
   ): ZLinkBackendActorRef;

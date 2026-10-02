@@ -525,11 +525,12 @@ async function cleanChildren() {
   for (const state of [...active].reverse()) {
     signalChild(state, 'SIGTERM');
   }
-  // Keep the existing grace deadline; finish as soon as the owned processes close.
+  // Wait for the host Shutdown default deadline (30 s); finish as soon as the owned processes close.
+  const hostShutdownDeadlineMs = 30_000;
   let deadline;
   try {
     await Promise.race([Promise.all(exited), new Promise((resolve) => {
-      deadline = setTimeout(resolve, 500);
+      deadline = setTimeout(resolve, hostShutdownDeadlineMs);
     })]);
   } finally {
     clearTimeout(deadline);

@@ -98,7 +98,7 @@ interface ZLinkEntrySpotActivationOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
 }
 
 export class ZLinkEntrySpotActivation {
@@ -120,6 +120,11 @@ export class ZLinkEntrySpotActivation {
   readonly context: ZLinkEntrySpotContext;
 
   constructor(private readonly options: ZLinkEntrySpotActivationOptions) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException(
+        'Entry Spot activation requires a detached task runner.'
+      );
+    }
     this.serial = new ZLinkSpotSerialTurnExecutor(false, options.nativeSpot.routingId);
     this.spotSerialExecutor = new ZLinkSpotSerialExecutor(
       this.serial,
@@ -144,7 +149,7 @@ export class ZLinkEntrySpotActivation {
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
     this.context = createEntrySpotContext({
       spotId: String(options.nativeSpot.routingId),
-      objectGeneration: toContextGeneration(entrySpotGeneration(options.nativeSpot)),
+      objectGeneration: entrySpotGeneration(options.nativeSpot),
       nodeRid: options.nodeRid,
       handlers: this.handlers,
       outbound: this.outbound,
@@ -322,7 +327,7 @@ export class ZLinkEntrySpotActivation {
     await cleanup(() => this.actorDispatch?.dispose());
     await cleanup(() => this.timers.dispose());
     await cleanup(() => this.spotSerialExecutor.close());
-    await cleanup(() => disposeLifecycleHandlers(this.entrySpot));
+    await cleanup(() => disposeLifecycleHandlers(this.entrySpot, this.options.detachedTaskRunner));
     await cleanup(() => this.options.nativeSpot.dispose());
     if (this.initialized) {
       this.lifecycleMetrics.closed('entry');
@@ -534,15 +539,6 @@ function notifyEntryActorJoined(entrySpot: ZLinkEntrySpot, actor: ZLinkActor): P
     }
   ).onJoinedActor;
   return callback === undefined ? Promise.resolve() : callback.call(entrySpot, actor);
-}
-
-function toContextGeneration(generation: bigint): number {
-  if (generation < 0n || generation > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new ZLinkConfigurationException(
-      `Entry Spot object generation '${generation}' cannot be represented by the Node.js public context.`
-    );
-  }
-  return Number(generation);
 }
 
 function entrySpotGeneration(spot: ZLinkBackendSpot): bigint {

@@ -18,6 +18,8 @@
     </Target>
     <ItemGroup>
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+        <EmbeddedResource Include="../../../common/errno/*.properties"
+                          LogicalName="Zlink.Errno.%(Filename)%(Extension)" />
     </ItemGroup>
     <ItemGroup Condition="'$(ZLinkLinuxX64NativeRoot)' != ''">
         <None Include="$(ZLinkLinuxX64NativeRoot)\libzlink.so;$(ZLinkLinuxX64NativeRoot)\libzlink.so.0;$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)">

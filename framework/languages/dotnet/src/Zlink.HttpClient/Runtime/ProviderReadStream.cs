@@ -72,7 +72,15 @@ internal sealed class ProviderReadStream(Func<byte[]?> provider) : Stream
             if (_completed)
                 return false;
 
-            var next = provider();
+            byte[]? next;
+            try
+            {
+                next = provider();
+            }
+            catch (Exception exception)
+            {
+                throw HttpFailureMapper.Map(exception, HttpFailureStage.Application);
+            }
             if (next is null)
             {
                 _completed = true;

@@ -1,14 +1,17 @@
 export {
   ZLinkConfigurationException,
   createFrameworkRegistration,
+  normalizeFrameworkRegistration,
   hasActorManager,
   hasSpotNode,
   hasSpotPublisherClient
 } from './contracts/Configuration/Registration';
 export type * from './contracts/Configuration/RegistrationTypes';
 export type * from './contracts';
+export { ZLinkSpotActorSend, ZLinkSpotActorRequest } from './contracts/Handlers/Attributes';
 export {
   registerActorFactory,
+  registerRelocationStore,
   validateRoutingIdPrefix,
   registerEntrySpot,
   registerSpotFactory,
@@ -73,6 +76,10 @@ export {
   registerHandlerFilterScope as registerIntegrationHandlerFilterScope,
   type ZLinkHandlerFilterScopeRunner
 } from './runtime/channels/handler-filter-scope';
+export {
+  disposeOwnedInstance as disposeIntegrationHandler,
+  disposeOwnedInstances as disposeIntegrationHandlers
+} from './runtime/handlers/handler-instance-scope';
 
 export interface ZLinkNestIntegrationRuntimeHost extends Pick<
   import('./contracts').ZLinkFrameworkRuntime,
@@ -187,14 +194,17 @@ export function createIntegrationActorManager(
 ): ZLinkActorManager {
   const host = runtimeHost(runtime);
   const runtimeOptions = host.createActorManagerOptions();
-  const manager = new DefaultZLinkActorManager({
-    actorFactories: registration.actorFactories,
-    ...runtimeOptions,
-    boundSessionFactory:
-      runtimeOptions.boundSessionFactory ??
-      host.boundSessionFactory.create.bind(host.boundSessionFactory),
-    providerResolver
-  });
+  const manager = new DefaultZLinkActorManager(
+    {
+      actorFactories: registration.actorFactories,
+      ...runtimeOptions,
+      boundSessionFactory:
+        runtimeOptions.boundSessionFactory ??
+        host.boundSessionFactory.create.bind(host.boundSessionFactory),
+      providerResolver
+    },
+    host.detachedTaskRunner()
+  );
   host.setActorManager(manager);
   return manager;
 }
@@ -236,6 +246,7 @@ export function createIntegrationSpotManager(
       ...(spotNode.spotActorRequestHandlers ?? [])
     ]),
     ...runtimeOptions,
+    detachedTaskRunner: host.detachedTaskRunner(),
     spotRouteResolver: runtimeOptions.spotRouteResolver,
     routedTransport: host.routeTransport,
     providerResolver,

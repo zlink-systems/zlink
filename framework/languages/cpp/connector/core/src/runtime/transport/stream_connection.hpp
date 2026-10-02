@@ -34,6 +34,7 @@ void connect_tls_async (
   endpoint_parts_t endpoint,
   bool skip_server_certificate_validation,
   std::shared_ptr<transport_connect_control_t> control,
+  std::function<void (boost::system::error_code)> close_completion,
   std::function<void (boost::system::error_code, std::unique_ptr<stream_connection_t>)> callback);
 #endif
 

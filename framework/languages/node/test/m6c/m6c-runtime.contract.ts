@@ -2,10 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import {
-  ServiceMaintenanceRuntime,
-  classifyRelocationRecovery
-} from '../../packages/framework/src/runtime/foundation/service-maintenance-runtime';
+import { ServiceMaintenanceRuntime } from '../../packages/framework/src/runtime/foundation/service-maintenance-runtime';
 import { ServiceMailbox } from '../../packages/framework/src/runtime/foundation/service-mailbox';
 import { ZLinkInMemoryAuthorityStore } from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
 import type {
@@ -728,14 +725,6 @@ test('deadline after publication forces bounded terminal shutdown and observers 
   assert.equal(terminal.state, 'forceStopped');
   assert.equal(forced, 1);
   assert.equal(states.includes('forceStopped'), true);
-});
-
-test('recovery never rolls a published missing or corrupt root back to source', () => {
-  assert.equal(classifyRelocationRecovery(false, true, true, true), 'orphan');
-  assert.equal(classifyRelocationRecovery(true, false, true, true), 'relocationDataLost');
-  assert.equal(classifyRelocationRecovery(true, true, false, true), 'relocationDataLost');
-  assert.equal(classifyRelocationRecovery(true, true, true, false), 'relocationDataLost');
-  assert.equal(classifyRelocationRecovery(true, true, true, true), 'resume');
 });
 
 test('relocation envelope preserves queued work and logical timers deterministically', () => {

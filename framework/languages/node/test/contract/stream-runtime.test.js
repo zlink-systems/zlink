@@ -7,6 +7,10 @@ const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
@@ -71,6 +75,11 @@ const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.ZLinkStreamBindingRuntime, 'function');
@@ -2245,7 +2254,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
   });
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', PlayerFactory]])
-  });
+  }, detachedTaskRunner);
   host.setActorManager(manager);
   host.spotNodeRuntime = {
     primaryMeshNode: {
@@ -4566,6 +4575,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
     }
   }
   const callbackManager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [CallbackSpot],
     entrySpotCallbacks: { async onLeaveActor() {} }
   });
@@ -6157,7 +6167,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
       return { routerChannelId: 'game.route', targetNodeRid: actorRid, spotId: roomRid, spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 9n };
     }
   });
-  host.streamBindingRuntime.commitActorRoute = async () => { events.push('bind'); };
+  host.streamBindingRuntime.commitActorRoute = async () => { assert.fail('Same-node Join must preserve the existing binding route.'); };
   const actor = { context: { actorId: 'actor-local-room', meshName: 'game' } };
   const state = new framework.ZLinkActorRuntimeState(actor.context.actorId);
   state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
@@ -6165,7 +6175,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
   state.setNativeActorRef(actorRef);
   const request = zlink.Message.from('hello');
   const result = await host.createActorManagerOptions().joinCoordinator.joinSpot(actor, state, 'room-1', request, undefined, undefined);
-  assert.deepEqual(events, ['admission', 'membership', 'joined', 'bind']);
+  assert.deepEqual(events, ['admission', 'membership', 'joined']);
   assert.equal(state.spotId.toHex(), roomRid.toHex());
   assert.equal(location.membershipEpoch, 3n);
   assert.equal(result.actor.nodeRid.toHex(), actorRid.toHex());

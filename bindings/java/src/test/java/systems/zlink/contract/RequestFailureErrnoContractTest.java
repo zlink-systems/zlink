@@ -5,15 +5,22 @@ package systems.zlink.contract;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
+import static systems.zlink.internal.NativeErrorCodes.EACCES;
+import static systems.zlink.internal.NativeErrorCodes.EAGAIN;
+import static systems.zlink.internal.NativeErrorCodes.EBUSY;
+import static systems.zlink.internal.NativeErrorCodes.EEXIST;
+import static systems.zlink.internal.NativeErrorCodes.EFSM;
+import static systems.zlink.internal.NativeErrorCodes.EINVAL;
+import static systems.zlink.internal.NativeErrorCodes.EIO;
+import static systems.zlink.internal.NativeErrorCodes.ENOENT;
+import static systems.zlink.internal.NativeErrorCodes.ENOTCONN;
+import static systems.zlink.internal.NativeErrorCodes.ENOTSUP;
+import static systems.zlink.internal.NativeErrorCodes.EPROTO;
+import static systems.zlink.internal.NativeErrorCodes.ETERM;
+import static systems.zlink.internal.NativeErrorCodes.ETIMEDOUT;
+
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -31,21 +38,17 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+
 /** Exercises public request failures and their Core representative errnos. */
 public class RequestFailureErrnoContractTest {
-    private static final int EIO = 5;
-    private static final int EACCES = 13;
-    private static final int EBUSY = 16;
-    private static final int EINVAL = 22;
-    private static final int EPROTO = 71;
-    private static final int ENOTSUP = 95;
-    private static final int EAGAIN = 11;
-    private static final int EEXIST = 17;
-    private static final int ENOENT = 2;
-    private static final int ENOTCONN = 107;
-    private static final int ETIMEDOUT = 110;
-    private static final int EFSM = 156384763;
-    private static final int ETERM = 156384765;
 
     @Test
     public void requestExceptionProjectsCoreRepresentativeErrno() {

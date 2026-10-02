@@ -495,8 +495,8 @@ class provider_location_repository_t final : public location_repository_t
                             std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<std::optional<creation_terminal_record_t>> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<std::optional<creation_terminal_record_t>> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         auto result = co_await _store->read (key_creation_terminal (operation));
         const auto *found = std::get_if<store_found_t> (&result);
         if (!found)
@@ -555,8 +555,8 @@ class provider_location_repository_t final : public location_repository_t
                                                   bool *retry_reclaim)
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_reserve_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_reserve_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         if (request.creating_payload.size () > 1024u * 1024u
             || request.intent.request_encoded_size > 1024u * 1024u)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
@@ -735,8 +735,8 @@ class provider_location_repository_t final : public location_repository_t
                        std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_complete_creation_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_complete_creation_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         const auto publication =
           std::visit ([] (const auto &value) { return value.terminal; }, request.completion);
         if (publication.terminal_envelope.size () > 1024u * 1024u)
@@ -818,8 +818,8 @@ class provider_location_repository_t final : public location_repository_t
                                            std::chrono::milliseconds terminal_retention)
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_commit_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_commit_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         if (request.ready_payload.size () > 1024u * 1024u)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
         const auto authority_key = key_authority (object_key (request.key));
@@ -880,8 +880,8 @@ class provider_location_repository_t final : public location_repository_t
                                          std::chrono::milliseconds terminal_retention)
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_abort_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_abort_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = co_await _store->read (authority_key);
         if (co_await authority_mutation_locked_async (object_key (request.key))) {
@@ -1893,36 +1893,27 @@ class provider_location_repository_t final : public location_repository_t
         if (entries.empty ())
             return std::nullopt;
         std::vector<std::vector<aggregate_commit_entry_t>> pages;
-        std::vector<aggregate_commit_entry_t> current;
-        current.reserve (aggregate_commit_page_item_limit);
-        const auto finish = [&] {
-            if (current.empty ())
-                return true;
-            const auto encoded = encode_aggregate_commit_page (pages.size (), current).dump ();
-            if (encoded.size () > aggregate_commit_page_byte_limit)
-                return false;
+        for (std::size_t offset = 0; offset < entries.size ();) {
+            const auto first = entries.begin () + static_cast<std::ptrdiff_t> (offset);
+            std::vector<aggregate_commit_entry_t> current;
+            const auto count = bounded_page_prefix (
+              std::span<const aggregate_commit_entry_t> (entries).subspan (offset),
+              aggregate_commit_page_item_limit, aggregate_commit_page_byte_limit,
+              [] (const aggregate_commit_entry_t &entry) {
+                  return std::array{entry.authority_key.size (), entry.before.size (),
+                                    entry.after.size ()};
+              },
+              [&] (std::size_t candidate_count) {
+                  current.assign (first, first + static_cast<std::ptrdiff_t> (candidate_count));
+                  return encode_aggregate_commit_page (pages.size (), current).dump ().size ()
+                         <= aggregate_commit_page_byte_limit;
+              });
+            if (!count)
+                return std::nullopt;
+            current.resize (*count);
+            offset += *count;
             pages.push_back (std::move (current));
-            current.clear ();
-            current.reserve (aggregate_commit_page_item_limit);
-            return true;
-        };
-        for (const auto &entry : entries) {
-            if (current.size () == aggregate_commit_page_item_limit && !finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                <= aggregate_commit_page_byte_limit)
-                continue;
-            current.pop_back ();
-            if (!finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                > aggregate_commit_page_byte_limit)
-                return std::nullopt;
         }
-        if (!finish ())
-            return std::nullopt;
         return pages;
     }
 
@@ -3759,8 +3750,8 @@ class provider_location_repository_t final : public location_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "location store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
     location_store_t *_store;

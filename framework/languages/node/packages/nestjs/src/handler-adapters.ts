@@ -12,7 +12,7 @@ import type { ZLinkNestManualHandlerOptions } from './contracts';
 import type { ZLinkNestHandlerMetadata } from './handler-metadata';
 import type { DiscoveredNestProvider } from './provider-discovery';
 import { currentNestDispatchContext } from './dispatch-scope';
-import { createNestHandlerInstance, disposeNestOwnedHandler } from './providers';
+import { createNestHandlerInstance } from './providers';
 
 export function createDiscoveredRequestHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
@@ -118,28 +118,6 @@ export function createManualSendHandlers(
   );
 }
 
-export function createManualRouteSendHandlers(
-  handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
-): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['sendHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, void>(
-    handlerTypes,
-    moduleRef,
-    () => undefined
-  );
-}
-
-export function createManualRouteRequestHandlers(
-  handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
-): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['requestHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, unknown>(
-    handlerTypes,
-    moduleRef,
-    (result) => result
-  );
-}
-
 type ManualHandlerContext =
   ZLinkMessageContext | ZLinkRouteMessageContext | ZLinkPublishMessageContext;
 
@@ -230,7 +208,7 @@ async function invokeDiscoveredHandler(
     }
     return await method.call(instance, decodePayload(metadata, payload, context), context);
   } finally {
-    await disposeNestOwnedHandler(instance);
+    await framework.disposeIntegrationHandler(instance);
   }
 }
 
@@ -250,7 +228,7 @@ async function invokeManualHandler(
     }
     return await method.call(instance, decodePayload(undefined, payload, context), context);
   } finally {
-    await disposeNestOwnedHandler(instance);
+    await framework.disposeIntegrationHandler(instance);
   }
 }
 

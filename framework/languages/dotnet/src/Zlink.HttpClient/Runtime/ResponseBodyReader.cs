@@ -20,19 +20,35 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         CancellationToken cancellationToken
     )
     {
-        await using var stream = await response
-            .Content.ReadAsStreamAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var buffer = new byte[ReadBufferSize];
-        long total = 0;
-        int read;
-        while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        try
         {
-            total += read;
-            if (total > options.MaxResponseBodySize)
-                throw RequestError("HTTP response exceeded the maximum body size");
+            await using var stream = await response
+                .Content.ReadAsStreamAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var buffer = new byte[ReadBufferSize];
+            long total = 0;
+            int read;
+            while (
+                (read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0
+            )
+            {
+                total += read;
+                if (total > options.MaxResponseBodySize)
+                    throw RequestError("HTTP response exceeded the maximum body size");
 
-            sink(new ReadOnlyMemory<byte>(buffer, 0, read));
+                try
+                {
+                    sink(new ReadOnlyMemory<byte>(buffer, 0, read));
+                }
+                catch (Exception exception)
+                {
+                    throw HttpFailureMapper.Map(exception, HttpFailureStage.Application);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            throw HttpFailureMapper.Map(exception, HttpFailureStage.Transport);
         }
     }
 
@@ -41,21 +57,30 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         CancellationToken cancellationToken
     )
     {
-        await using var stream = await response
-            .Content.ReadAsStreamAsync(cancellationToken)
-            .ConfigureAwait(false);
-        using var output = new MemoryStream();
-        var buffer = new byte[ReadBufferSize];
-        int read;
-        while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        try
         {
-            if (output.Length + read > options.MaxResponseBodySize)
-                throw RequestError("HTTP response exceeded the maximum body size");
+            await using var stream = await response
+                .Content.ReadAsStreamAsync(cancellationToken)
+                .ConfigureAwait(false);
+            using var output = new MemoryStream();
+            var buffer = new byte[ReadBufferSize];
+            int read;
+            while (
+                (read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0
+            )
+            {
+                if (output.Length + read > options.MaxResponseBodySize)
+                    throw RequestError("HTTP response exceeded the maximum body size");
 
-            output.Write(buffer, 0, read);
+                output.Write(buffer, 0, read);
+            }
+
+            return output.ToArray();
         }
-
-        return output.ToArray();
+        catch (Exception exception)
+        {
+            throw HttpFailureMapper.Map(exception, HttpFailureStage.Transport);
+        }
     }
 
     public (byte[] Body, IReadOnlyDictionary<string, string> Headers) Decompress(
