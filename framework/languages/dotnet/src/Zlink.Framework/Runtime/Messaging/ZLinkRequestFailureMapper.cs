@@ -212,8 +212,14 @@ internal static class ZLinkRequestFailureMapper
         return CreateSubmitException(error, operationName);
     }
 
-    public static Exception CreateSubmitException(ZlinkSubmitException error, string operationName)
+    public static Exception CreateSubmitException(
+        ZlinkSubmitException error,
+        string operationName,
+        bool completionFailure = true
+    )
     {
+        // Async 호출의 동기 거절에는 대기 토큰이 없으며,
+        // completion task의 실패는 실제 WRITABLE timeout일 수 있다.
         return error.Result switch
         {
             ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkFrameworkException(
@@ -228,8 +234,12 @@ internal static class ZLinkRequestFailureMapper
                 innerException: error
             ),
             ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                $"{operationName} timed out while the socket was backpressured.",
+                completionFailure
+                    ? ZLinkFrameworkErrorKind.DeadlineExceeded
+                    : ZLinkFrameworkErrorKind.Unavailable,
+                completionFailure
+                    ? $"{operationName} timed out while the socket was backpressured."
+                    : $"{operationName} was refused before admission.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
                 error
             ),

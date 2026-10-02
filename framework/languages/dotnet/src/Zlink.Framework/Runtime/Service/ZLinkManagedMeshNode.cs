@@ -9898,38 +9898,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
-        var messages = wire.Select(Message.From).ToArray();
-        var ownershipTransferred = false;
+        var messages = new Message[wire.Count];
+        var created = 0;
         try
         {
-            Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                request = socket
-                    .Request(target)
-                    .Messages(messages)
-                    .Timeout(timeout)
-                    .Async(cancellationToken)
-                    .Reply;
-                ownershipTransferred = true;
-            }
-            return await request.ConfigureAwait(false);
+            for (; created < messages.Length; created++)
+                messages[created] = Message.From(wire[created]);
         }
-        finally
+        catch
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
+            for (var index = 0; index < created; index++)
+                messages[index].Dispose();
+            throw;
         }
+        return RequestDirectWireAsync(target, messages, timeout, cancellationToken);
     }
 
     private async ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
@@ -9943,20 +9932,44 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         try
         {
             Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
+            try
             {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                request = socket
-                    .Request(target)
-                    .Messages(messages)
-                    .Timeout(timeout)
-                    .Async(cancellationToken)
-                    .Reply;
-                ownershipTransferred = true;
+                lock (_socketGate)
+                {
+                    var socket = _socket;
+                    if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                        throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                    request = socket
+                        .Request(target)
+                        .Messages(messages)
+                        .Timeout(timeout)
+                        .Async(cancellationToken)
+                        .Reply;
+                    ownershipTransferred = true;
+                }
             }
-            return await request.ConfigureAwait(false);
+            catch (ZlinkSubmitException error)
+                when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+            {
+                throw ZLinkRequestFailureMapper.CreateSubmitException(
+                    error,
+                    nameof(ZLinkManagedMeshNode),
+                    completionFailure: false
+                );
+            }
+            try
+            {
+                return await request.ConfigureAwait(false);
+            }
+            catch (ZlinkSubmitException error)
+                when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+            {
+                throw ZLinkRequestFailureMapper.CreateSubmitException(
+                    error,
+                    nameof(ZLinkManagedMeshNode),
+                    completionFailure: true
+                );
+            }
         }
         finally
         {
@@ -10093,26 +10106,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
-        var messages = new Message[wire.Count];
-        var created = 0;
-        var ownershipTransferred = false;
         try
         {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(wire[created]);
-            Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                var operation = socket.Request(target).Messages(messages).Timeout(timeout);
-                ownershipTransferred = true;
-                request = operation.Async(cancellationToken).Reply;
-            }
-
-            var replies = await request.ConfigureAwait(false);
+            var replies = await RequestDirectWireAsync(target, wire, timeout, cancellationToken)
+                .ConfigureAwait(false);
             CompleteNativeApplicationRequest(pending, RequestResult.Ok, replies);
+        }
+        catch (ZLinkFrameworkException error)
+            when (error.Kind
+                    is ZLinkFrameworkErrorKind.Unavailable
+                        or ZLinkFrameworkErrorKind.DeadlineExceeded
+            )
+        {
+            CompleteNativeApplicationRequest(
+                pending,
+                error.Kind == ZLinkFrameworkErrorKind.Unavailable
+                    ? RequestResult.NotConnected
+                    : RequestResult.TimedOut,
+                Array.Empty<Message>()
+            );
         }
         catch (ZlinkRequestException exception)
         {
@@ -10152,12 +10164,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Array.Empty<Message>()
             );
         }
-        finally
-        {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    messages[index].Dispose();
-        }
     }
 
     private async Task CompleteNativeDurableRequestAsync(
@@ -10188,7 +10194,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             throw new ZlinkSubmitException(
                                 ZlinkSubmitException.ErrorCode.NotConnected
                             );
-                        return await RequestNativeOnceAsync(
+                        return await RequestDirectWireAsync(
                                 peer.PhysicalRoutingId,
                                 frames,
                                 remaining,
@@ -10235,45 +10241,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (ObjectDisposedException)
         {
             complete(pending, RequestResult.Terminated, Array.Empty<Message>());
-        }
-    }
-
-    private async Task<IReadOnlyList<Message>> RequestNativeOnceAsync(
-        RoutingId target,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
-        TimeSpan timeout,
-        CancellationToken cancellationToken
-    )
-    {
-        var messages = new Message[wire.Count];
-        var created = 0;
-        var ownershipTransferred = false;
-        try
-        {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(wire[created]);
-            Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                request = socket
-                    .Request(target)
-                    .Messages(messages)
-                    .Timeout(timeout)
-                    .Async(cancellationToken)
-                    .Reply;
-                ownershipTransferred = true;
-            }
-
-            return await request.ConfigureAwait(false);
-        }
-        finally
-        {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    messages[index].Dispose();
         }
     }
 
