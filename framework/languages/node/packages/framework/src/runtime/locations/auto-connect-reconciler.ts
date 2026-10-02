@@ -35,7 +35,7 @@ export interface ZLinkAutoConnectReconcilerOptions {
   readonly events?: ZLinkAutoConnectEventSink;
   readonly options?: ZLinkLocationOptionOverrides;
   readonly monotonicNowMs?: () => number;
-  readonly errorSink?: ZLinkDispatchErrorSink;
+  readonly errorSink: ZLinkDispatchErrorSink;
 }
 
 export class ZLinkAutoConnectReconciler {
@@ -49,7 +49,7 @@ export class ZLinkAutoConnectReconciler {
   private readonly events?: ZLinkAutoConnectEventSink;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly monotonicNowMs: () => number;
-  private readonly errorSink?: ZLinkDispatchErrorSink;
+  private readonly errorSink: ZLinkDispatchErrorSink;
   private readonly active = new Map<string, ZLinkAutoConnectTarget>();
   private readonly pendingDisconnects = new Map<string, ZLinkAutoConnectTarget>();
   private readonly failedEndpoints = new Set<string>();
@@ -421,7 +421,7 @@ export class ZLinkAutoConnectReconciler {
     try {
       accepted = await this.executor.connect(target);
     } catch (error) {
-      if (!(error instanceof ConnectError) || this.errorSink === undefined) throw error;
+      if (!(error instanceof ConnectError)) throw error;
       this.errorSink.reportRuntimeTaskException('auto-connect', error);
       return;
     }

@@ -116,7 +116,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
-  readonly errorSink?: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
+  readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;

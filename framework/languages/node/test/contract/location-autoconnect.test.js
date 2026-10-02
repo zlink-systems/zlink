@@ -5,6 +5,11 @@ const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
 const routingIdRuntime = require('../../packages/framework/dist/runtime/routing-id');
 const spotNodeAutoConnect = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
+const failUnexpectedRuntimeTask = {
+  reportRuntimeTaskException(task, error) {
+    assert.fail(`unexpected runtime task error ${task}: ${String(error)}`);
+  }
+};
 
 test('backend routing-id conversion preserves opaque ids from another package instance', () => {
   const expected = zlink.RoutingId.from('node-remote');
@@ -194,20 +199,16 @@ test('auto-connect reports typed connect rejection and continues peers before re
   assert.equal(reconciler.activeTargets.length, 2);
 });
 
-test('auto-connect propagates unrelated failures and typed failures without a reporting owner', async () => {
-  for (const [failure, errorSink] of [
-    [new Error('unexpected connect implementation failure'), { reportRuntimeTaskException() { assert.fail('unrelated failure must propagate'); } }],
-    [new zlink.ConnectError(zlink.ConnectResult.InvalidArgument), undefined]
-  ]) {
-    const reconciler = new internal.ZLinkAutoConnectReconciler({
-      local: local(internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-local', 'tcp://local'),
-      runtime: {},
-      peerResolver: { async listLivePeers() { return [peer('owner-remote', internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-remote', 'tcp://remote')]; } },
-      executor: { connect() { throw failure; }, disconnect() {} },
-      errorSink
-    });
-    await assert.rejects(reconciler.tick(), error => error === failure);
-  }
+test('auto-connect propagates unrelated failures', async () => {
+  const failure = new Error('unexpected connect implementation failure');
+  const reconciler = new internal.ZLinkAutoConnectReconciler({
+    local: local(internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-local', 'tcp://local'),
+    runtime: {},
+    peerResolver: { async listLivePeers() { return [peer('owner-remote', internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-remote', 'tcp://remote')]; } },
+    executor: { connect() { throw failure; }, disconnect() {} },
+    errorSink: failUnexpectedRuntimeTask
+  });
+  await assert.rejects(reconciler.tick(), error => error === failure);
 });
 
 test('spot auto-connect preserves a peer when only its opaque lifecycle generation differs', () => {
@@ -610,6 +611,7 @@ test('auto-connect reconciler publishes local row diffs handover and stays fail-
     runtime,
     peerResolver: resolver,
     executor: executor(calls),
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => 0
   });
@@ -676,6 +678,7 @@ test('auto-connect reconciler does not mark a target active when executor skips 
         calls.push(`disconnect:${target.endpoint}:${target.ownerId}`);
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => 0
   });
@@ -719,7 +722,8 @@ test('auto-connect reconciler waits for an old peer disconnect before reusing it
       isDisconnected() {
         return disconnected;
       }
-    }
+    },
+    errorSink: failUnexpectedRuntimeTask
   });
 
   await reconciler.tick();
@@ -777,6 +781,7 @@ test('auto-connect reconciler removes a disconnected endpoint until a fresh stor
         disconnected = handler;
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { storeFailureGraceMs: 3000 },
     monotonicNowMs: () => 0
   });
@@ -834,6 +839,7 @@ test('auto-connect reconciler defers a missing descriptor until owner lease TTL 
         calls.push(`stale:${targets.length}`);
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseTtlMs: 1000, storeFailureGraceMs: 3000 },
     monotonicNowMs: () => nowMs
   });
@@ -903,6 +909,7 @@ test('auto-connect reconciler connects a new target on the first recovered snaps
         calls.push(`disconnect:${target.endpoint}`);
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => 0
   });
@@ -960,6 +967,7 @@ test('auto-connect reconciler preserves unconnected intent through the recovery 
       },
       disconnect() {}
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseTtlMs: 1000, storeFailureGraceMs: 0 },
     monotonicNowMs: () => 0
   });
@@ -1011,6 +1019,7 @@ test('auto-connect reconciler treats a successful empty candidate scan as author
         calls.push(`stale:${targets.length}`);
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => nowMs
   });
@@ -1103,6 +1112,7 @@ test('publish-only auto-connect capability does not query or reconcile peers', a
         assert.fail('publish-only capability must not disconnect peers');
       }
     },
+    errorSink: failUnexpectedRuntimeTask,
     reconcilePeers: false
   });
 
@@ -1133,6 +1143,7 @@ test('auto-connect reconciler retains an existing draining peer without dialing 
       leaseTracker: new internal.ZLinkOwnerLeaseTracker({ store, options: { pollingIntervalMs: 0 }, monotonicNowMs: () => 0 })
     }),
     executor: executor(calls),
+    errorSink: failUnexpectedRuntimeTask,
     options: { ownerLeaseRenewIntervalMs: 1000 },
     monotonicNowMs: () => 0
   });
