@@ -176,6 +176,85 @@ test('Foundation preserves Missing ingress during Active cold initialization wit
   applicationJobOwner.close();
 });
 
+for (const { state, sealed } of [
+  { state: framework.ZLinkFrameworkRuntimeState.Draining, sealed: false },
+  { state: framework.ZLinkFrameworkRuntimeState.Relocating, sealed: false },
+  { state: framework.ZLinkFrameworkRuntimeState.Relocating, sealed: true }
+]) for (const readyIntent of [false, true]) for (const send of [false, true]) {
+  test(`Close release terminates ${readyIntent ? 'Ready' : 'Missing'} intent ${send ? 'send' : 'request'} in ${state} (sealed=${sealed}) without placement`, async () => {
+    const fixture = await authorityFixture();
+    const ready = await commitFixture(fixture);
+    const entered = deferred();
+    const finish = deferred();
+    const arrived = deferred();
+    let initializations = 0;
+    let reincarnations = 0;
+    let releases = 0;
+    let applicationReleases = 0;
+    const failures = [];
+    class Room {
+      async onInitialize() { initializations++; }
+      async onClosing() { entered.resolve(); await finish.promise; }
+    }
+    class Ping { handle() { assert.fail('released intent must never execute or be placed'); } }
+    const claims = new ZLinkSpotLocationClaims({}, fixture.store);
+    claims.trackInstanceAuthority({ meshName: 'mesh', spotId: 'close-room', stableType: 'room',
+      nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
+      authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
+      ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
+    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [],
+      instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
+      spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
+      statefulExecution: { admissionOpen: () => false, hostState: () => state },
+      instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
+      admission: { claim() { arrived.resolve(); return { close() { applicationReleases++; } }; } },
+      dispatchErrors: { flow: { flowCreationEnabled: () => false, accepts: () => false },
+        report(event) { failures.push(event); } },
+      beginInstanceClosingAuthority: async (...args) => {
+        const authority = await claims.beginInstanceClosing(...args);
+        return { release: async () => { releases++; await authority.release(); },
+          reincarnate() { reincarnations++; assert.fail('host cannot reincarnate while draining or relocating'); } };
+      }
+    });
+    await manager.materializeInstance('mesh', 'room', 'close-room', ready.objectGeneration);
+    const closing = manager.close('mesh', 'close-room');
+    await entered.promise;
+    const activation = manager.relocationActivations('mesh')[0];
+    const parts = protocol.encodeChannelEnvelopeParts(send ? 3 : 1, 'instance', 'Ping', {}).map((part) => zlink.Message.from(part));
+    const replies = [];
+    const record = { kind: framework.ReceiveKind.InstanceSpotActivation,
+      operationKind: send ? 0 : framework.OperationKind.InstanceSpotRequest, parts,
+      reply(replyParts) { replies.push(replyParts.map((part) => zlink.Message.from(part))); return zlink.SubmitResult.Ok; },
+      activationRecord: { kind: 'instanceSpot', activation: readyIntent ? 'ready' : 'missing',
+        ...(readyIntent ? { instanceIntent: true, route: { targetSpotId: 'close-room', targetNodeRid: 'node',
+          targetNodeGeneration: 1n, objectGeneration: ready.objectGeneration, ownerId: 'owner',
+          authorityOwnerGeneration: ready.authorityOwnerGeneration, leaseGeneration: 1n,
+          storeVersion: ready.storeVersion.value } } : { target: { targetSpotId: 'close-room', stableType: 'room',
+          targetNodeRid: 'node', targetNodeGeneration: 1n, descriptorVersion: '1' }, deadlineUnixMs: BigInt(Date.now() + 10_000) }),
+        sourceNodeRid: 'source', sourceNodeGeneration: 1n, operationKind: send ? 'send' : 'request',
+        operation: { high: 1n, low: 1n }, ...(send ? {} : { replyRouteId: 1n }) } };
+    const dispatch = manager.dispatchMeshInstance('mesh', { spotId: 'close-room' }, record);
+    await arrived.promise;
+    const relocationSeal = sealed ? activation.sealExecution('relocation') : undefined;
+    finish.resolve();
+    await Promise.all([closing, dispatch]);
+    await activation.serial.whenIdle();
+    const expected = state === framework.ZLinkFrameworkRuntimeState.Draining
+      ? framework.ZLinkFrameworkErrorKind.ShuttingDown : framework.ZLinkFrameworkErrorKind.Unavailable;
+    assert.equal(replies.length, send ? 0 : 1);
+    if (!send) assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => error.kind === expected);
+    assert.ok(failures.length > 0, 'released intent must leave a diagnostic');
+    for (const failure of failures) assert.equal(failure.error.kind, expected);
+    assert.equal(applicationReleases, 1);
+    assert.equal(initializations, 1);
+    assert.equal(reincarnations, 0);
+    assert.equal(releases, 1);
+    assert.equal((await fixture.store.readAuthority(fixture.key)).kind, 'missing');
+    if (relocationSeal !== undefined) activation.commitExecutionSeal(relocationSeal);
+    for (const part of [...parts, ...replies.flat()]) part.close();
+  });
+}
+
 for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, readyIntent } of [
   { initializationFails: false, queuedBeforeClose: false },
   { initializationFails: true, queuedBeforeClose: false },

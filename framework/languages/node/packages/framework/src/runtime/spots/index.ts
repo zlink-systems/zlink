@@ -32,6 +32,7 @@ import {
   ZLinkMessage,
   ZLinkFrameworkException,
   ZLinkFrameworkErrorKind,
+  ZLinkFrameworkRuntimeState,
   ZLinkSpotCloseReason,
   ZLinkSpotKind
 } from '../../contracts';
@@ -301,7 +302,10 @@ export interface ZLinkSpotManagerOptions {
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
-  readonly statefulExecutionAllowed?: () => boolean;
+  readonly statefulExecution?: {
+    readonly admissionOpen: () => boolean;
+    readonly hostState: () => ZLinkFrameworkRuntimeState;
+  };
   readonly activationAdmission?: ZLinkActivationAdmission;
 }
 
@@ -422,7 +426,7 @@ export class DefaultZLinkSpotManager {
       boundSessionRuntime: options.boundSessionRuntime,
       actorHandoffRuntime: options.actorHandoffRuntime,
       admission: options.admission,
-      statefulExecutionAllowed: options.statefulExecutionAllowed,
+      statefulExecutionAllowed: options.statefulExecution?.admissionOpen,
       leaveActor: (spotId, actor, signal, meshName) =>
         this.actorMembership.leaveActor(spotId, actor, signal, meshName),
       requestContextClose: (activation, objectGeneration, signal) =>
@@ -1247,10 +1251,28 @@ export class DefaultZLinkSpotManager {
         import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
       hasIntent ||= context?.replay !== undefined;
     });
+    const hostState = this.options.statefulExecution?.hostState();
+    const intentFailure = !hasIntent
+      ? undefined
+      : hostState === ZLinkFrameworkRuntimeState.Draining
+        ? createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+            'Instance intent cannot continue while the host is draining.'
+          )
+        : hostState === ZLinkFrameworkRuntimeState.Relocating ||
+            hostState === ZLinkFrameworkRuntimeState.Relocated ||
+            this.options.statefulExecution?.admissionOpen() === false ||
+            (operation.activation.executionBarrier.isSealed &&
+              !operation.activation.executionBarrier.isCloseSealed)
+          ? createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.SpotMoving,
+              'Instance intent cannot continue on an unavailable or relocating owner.'
+            )
+          : undefined;
     if (
       operation.reason === ZLinkSpotCloseReason.ExplicitClose &&
       hasIntent &&
-      this.options.statefulExecutionAllowed?.() !== false &&
+      intentFailure === undefined &&
       operation.authority?.reincarnate !== undefined
     ) {
       try {
@@ -1291,7 +1313,10 @@ export class DefaultZLinkSpotManager {
       operation.activation.serial.visitPendingApplication((record) => {
         const context = record.context as
           import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-        if (context?.replay !== undefined) record.operation = context.replay;
+        if (context?.replay !== undefined) {
+          record.operation =
+            intentFailure === undefined ? context.replay : () => context.replay!(intentFailure);
+        }
       });
     }
     this.closeOperations.delete(`${meshName}\0${String(spotId)}`);

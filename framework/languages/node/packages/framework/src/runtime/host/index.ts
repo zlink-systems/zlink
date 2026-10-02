@@ -2105,7 +2105,10 @@ export class ZLinkFrameworkRuntimeHost
         detachedTaskRunner: this.detachedTaskRunner(),
         metrics: this.metrics,
         admission: this.admission,
-        statefulExecutionAllowed: () => this.ownerAdmissionOpen()
+        statefulExecution: {
+          admissionOpen: () => this.ownerAdmissionOpen(),
+          hostState: () => this.runtimeState
+        }
       }).create(this.actorTransferRuntime),
       activationAdmission: this.activationAdmission
     };

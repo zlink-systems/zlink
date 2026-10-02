@@ -77,7 +77,7 @@ export interface ZLinkSpotRuntimeOptionsFactoryOptions {
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission: ZLinkRuntimeAdmissionGate;
-  readonly statefulExecutionAllowed: () => boolean;
+  readonly statefulExecution: NonNullable<ZLinkSpotManagerOptions['statefulExecution']>;
 }
 
 export class ZLinkSpotRuntimeOptionsFactory {
@@ -329,7 +329,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
       actorHandoffRuntime: this.options.actorHandoff,
       metrics: this.options.metrics,
       admission: this.options.admission,
-      statefulExecutionAllowed: this.options.statefulExecutionAllowed,
+      statefulExecution: this.options.statefulExecution,
       closeErrorSink: this.options.runtimeOrPreStartErrorSink,
       dispatchErrors: this.options.dispatchErrorReporter(this.options.runtimeOrPreStartErrorSink)
     };
