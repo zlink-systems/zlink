@@ -11650,10 +11650,13 @@ public sealed partial class EntrySpotActorDispatchTests
             IReadOnlyList<Message> parts,
             SendFlags flags,
             CancellationToken cancellationToken,
-            ReadOnlyMemory<byte> metadata = default
+            ReadOnlyMemory<byte> metadata = default,
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+                null
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _ = readyRoute;
             var result = SendToSpot(
                 targetRid,
                 targetSpotId,
@@ -11677,13 +11680,16 @@ public sealed partial class EntrySpotActorDispatchTests
             SendFlags flags,
             TimeSpan timeout,
             CancellationToken cancellationToken,
-            ReadOnlyMemory<byte> metadata = default
+            ReadOnlyMemory<byte> metadata = default,
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+                null
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
             _ = flags;
             _ = timeout;
             _ = metadata;
+            _ = readyRoute;
             if (SpotRequestHandler is null)
                 return ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)
