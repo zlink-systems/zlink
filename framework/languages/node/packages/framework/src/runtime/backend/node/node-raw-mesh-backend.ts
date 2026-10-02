@@ -1138,13 +1138,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): Promise<SubmitResult> {
     const result = await this.requireStateful().sendToInstanceSpot(
       route,
       encodeMultipart(parts),
       sourceSpotId,
-      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+      instanceIntent
     );
     return result as SubmitResult;
   }
@@ -1154,7 +1156,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1163,7 +1166,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         encodeMultipart(parts),
         timeoutMs,
         sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+        instanceIntent
       )
     );
   }

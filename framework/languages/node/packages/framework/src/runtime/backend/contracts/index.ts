@@ -141,14 +141,16 @@ export interface ZLinkBackendMeshNode {
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent?: boolean
   ): Promise<SubmitResult>;
   requestInstanceSpot(
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     timeoutMs?: number,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent?: boolean
   ): MeshOperationId;
   registerUserSpotOperationHandler(handler: ServiceUserSpotOperationHandler): void;
   requestUserSpotCreate(

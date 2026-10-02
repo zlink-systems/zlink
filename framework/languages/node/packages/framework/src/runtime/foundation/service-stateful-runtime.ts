@@ -1416,7 +1416,8 @@ export class ServiceStatefulRuntime {
     route: ServiceInstanceRouteFence,
     payload: ServiceApplicationPayload,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    instanceIntent = false
   ): Promise<number> {
     return this.submitOneWay(
       route.targetNodeRid,
@@ -1430,7 +1431,8 @@ export class ServiceStatefulRuntime {
             'send',
             { high: 0n, low: 0n },
             undefined,
-            metadataFrame !== undefined
+            metadataFrame !== undefined,
+            instanceIntent
           ),
           encodeApplicationPayload(payload)
         ],
@@ -1490,7 +1492,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    instanceIntent = false
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     this.submitRequest(
@@ -1506,7 +1509,8 @@ export class ServiceStatefulRuntime {
             'request',
             { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
             pending.id,
-            metadataFrame !== undefined
+            metadataFrame !== undefined,
+            instanceIntent
           ),
           encodeApplicationPayload(payload)
         ],
@@ -2565,12 +2569,14 @@ export class ServiceStatefulRuntime {
       const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
-        refreshedRecord,
+        record,
         payloadFrame,
         spot,
         undefined,
         this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(refreshedRecord)),
-        metadataFrame
+        metadataFrame,
+        false,
+        this.instanceApplicationTarget(refreshedRecord)
       );
       if (admitted !== 'application') {
         throw new Error('Rematerialized Instance message was not admitted to the local queue.');

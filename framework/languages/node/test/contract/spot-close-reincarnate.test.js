@@ -176,16 +176,19 @@ test('Foundation preserves Missing ingress during Active cold initialization wit
   applicationJobOwner.close();
 });
 
-for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of [
+for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, readyIntent } of [
   { initializationFails: false, queuedBeforeClose: false },
   { initializationFails: true, queuedBeforeClose: false },
   { initializationFails: false, queuedBeforeClose: true },
   { initializationFails: false, queuedBeforeClose: false, readyCommitFails: true },
   { initializationFails: false, queuedBeforeClose: false, send: true },
   { initializationFails: true, queuedBeforeClose: false, send: true },
-  { initializationFails: false, queuedBeforeClose: false, readyCommitFails: true, send: true }
+  { initializationFails: false, queuedBeforeClose: false, readyCommitFails: true, send: true },
+  { initializationFails: false, queuedBeforeClose: false, readyIntent: true },
+  { initializationFails: false, queuedBeforeClose: true, readyIntent: true },
+  { initializationFails: false, queuedBeforeClose: false, readyIntent: true, send: true }
 ]) {
-  test(`Close retains Missing-original ${send ? 'send' : 'request'} until initialization (${initializationFails ? 'failure' : readyCommitFails ? 'ready-commit-failure' : queuedBeforeClose ? 'queued-before-close' : 'success'})`, async () => {
+  test(`Close retains ${readyIntent ? 'Ready intent' : 'Missing-original'} ${send ? 'send' : 'request'} until initialization (${initializationFails ? 'failure' : readyCommitFails ? 'ready-commit-failure' : queuedBeforeClose ? 'queued-before-close' : 'success'})`, async () => {
     const fixture = await authorityFixture();
     const ready = await commitFixture(fixture);
     const entered = deferred();
@@ -298,7 +301,17 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of
         deadlineUnixMs: BigInt(Date.now() + 10_000),
         sourceNodeRid: 'source', sourceNodeGeneration: 1n, operationKind: oneWay ? 'send' : 'request',
         operation: { high: 1n, low: BigInt(id) }, ...(oneWay ? {} : { replyRouteId: BigInt(id) }) };
-      const dispatch = runWithApplicationJobPermit(scopePermits[id - 1], () => intent ? manager.dispatchMeshInstance('mesh', { spotId: 'close-room' }, record)
+      if (readyIntent) {
+        record.kind = framework.ReceiveKind.InstanceSpotActivation;
+        record.activationRecord = { kind: 'instanceSpot', activation: 'ready', instanceIntent: intent,
+          route: { targetSpotId: 'close-room', targetNodeRid: 'node', targetNodeGeneration: 1n,
+            objectGeneration: ready.objectGeneration, ownerId: 'owner',
+            authorityOwnerGeneration: ready.authorityOwnerGeneration, leaseGeneration: 1n,
+            storeVersion: ready.storeVersion.value }, sourceNodeRid: 'source', sourceNodeGeneration: 1n,
+          operationKind: oneWay ? 'send' : 'request', operation: oneWay ? { high: 0n, low: 0n } : { high: 1n, low: BigInt(id) },
+          ...(oneWay ? {} : { replyRouteId: BigInt(id) }) };
+      }
+      const dispatch = runWithApplicationJobPermit(scopePermits[id - 1], () => intent || readyIntent ? manager.dispatchMeshInstance('mesh', { spotId: 'close-room' }, record)
         : manager.dispatchMeshSpot('mesh', { spotId: 'close-room' }, record));
       return { dispatch, parts, replies };
     }
@@ -307,6 +320,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of
     await arrived.promise;
     finish.resolve();
     let second;
+    let lateNoIntent;
     if (queuedBeforeClose) {
       await initializing.promise;
       second = receive(3, true);
@@ -318,6 +332,10 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of
     const noIntentExpected = branchExpectation('closing-message-without-intent');
     assert.equal(closingCalls, 1);
     assert.equal(intent.replies.length, send ? 0 : expected.messageTerminalCount);
+    if (readyIntent && !send) {
+      assert.doesNotThrow(() => protocol.decodeChannelReply(intent.replies[0]),
+        'Ready Instance intent request must reply from the new incarnation instead of NotFound');
+    }
     assert.equal(noIntent.replies.length, noIntentExpected.messageTerminalCount);
     assert.throws(() => protocol.decodeChannelReply(noIntent.replies[0]), (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
     assert.equal(events.includes('handler:2'), false);
@@ -333,6 +351,17 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of
       assert.notEqual(targetGeneration, ready.objectGeneration);
       assert.equal(events.indexOf(`initialize:${targetGeneration}`) < events.indexOf('handler:1'), true);
       assert.equal((await fixture.store.readAuthority(fixture.key)).objectGeneration, targetGeneration);
+      if (readyIntent && !queuedBeforeClose && !send) {
+        const permit = await jobs.acquire();
+        scopePermits.push({ releaseBeforeHandler() { assert.fail('stale no-intent Ready frame must not enter a handler'); },
+          releaseAfterInternalProcessing() { permit.releaseAfterInternalProcessing(); } });
+        lateNoIntent = receive(3, false);
+        await lateNoIntent.dispatch;
+        assert.equal(lateNoIntent.replies.length, 1);
+        assert.throws(() => protocol.decodeChannelReply(lateNoIntent.replies[0]),
+          (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+        assert.equal(events.includes('handler:3'), false);
+      }
       const initializationCount = events.filter((event) => event.startsWith('initialize:')).length;
       await manager.close('mesh', 'close-room');
       assert.equal((await fixture.store.readAuthority(fixture.key)).kind, 'missing');
@@ -340,8 +369,9 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send } of
         branchExpectation('release-without-pending-intent').factoryCalls);
     }
     assert.equal(jobs.snapshot().permitsInUse, 0n);
-    assert.equal(releasedClaims, queuedBeforeClose ? 3 : 2);
+    assert.equal(releasedClaims, queuedBeforeClose || lateNoIntent !== undefined ? 3 : 2);
     for (const part of [...intent.parts, ...noIntent.parts, ...intent.replies.flat(), ...noIntent.replies.flat(),
-      ...(second?.parts ?? []), ...(second?.replies.flat() ?? [])]) part.close();
+      ...(second?.parts ?? []), ...(second?.replies.flat() ?? []),
+      ...(lateNoIntent?.parts ?? []), ...(lateNoIntent?.replies.flat() ?? [])]) part.close();
   });
 }

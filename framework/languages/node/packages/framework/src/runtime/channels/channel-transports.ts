@@ -36,6 +36,10 @@ import {
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import type {
+  ZLinkSpotRoutedSendOptions,
+  ZLinkSpotRoutedRequestOptions
+} from '../spots/spot-outbound';
 import {
   ZLinkChannelMessageKind,
   decodeChannelReply,
@@ -592,12 +596,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   sendToSpot(
     spotRouteTarget: ZLinkSpotRouteTarget,
     message: unknown,
-    options: {
-      readonly packetName?: string;
-      readonly timeoutMs?: number;
-      readonly signal?: AbortSignal;
-      readonly metadata?: ReadonlyMap<string, string>;
-    }
+    options: ZLinkSpotRoutedSendOptions
   ): Promise<ZLinkSubmitResult> {
     return runWithOutboundFlow(this.flowCreationEnabled(), () =>
       this.sendToSpotScoped(spotRouteTarget, message, options)
@@ -607,12 +606,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   private async sendToSpotScoped(
     spotRouteTarget: ZLinkSpotRouteTarget,
     message: unknown,
-    options: {
-      readonly packetName?: string;
-      readonly timeoutMs?: number;
-      readonly signal?: AbortSignal;
-      readonly metadata?: ReadonlyMap<string, string>;
-    }
+    options: ZLinkSpotRoutedSendOptions
   ): Promise<ZLinkSubmitResult> {
     const node = this.meshNode(spotRouteTarget.routerChannelId);
     if (node === undefined) {
@@ -648,7 +642,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             instanceSpotRouteFence(spotRouteTarget),
             encoded,
             undefined,
-            options.metadata
+            options.metadata,
+            options.instanceSpot
           )
         );
       }
@@ -698,12 +693,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: {
-      readonly packetName?: string;
-      readonly timeoutMs?: number;
-      readonly signal?: AbortSignal;
-      readonly metadata?: ReadonlyMap<string, string>;
-    }
+    options: ZLinkSpotRoutedRequestOptions
   ): Promise<TReply> {
     return runWithOutboundFlow(this.flowCreationEnabled(), () =>
       this.requestToSpotScoped<TReply>(spotRouteTarget, request, options)
@@ -713,12 +703,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   private async requestToSpotScoped<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: {
-      readonly packetName?: string;
-      readonly timeoutMs?: number;
-      readonly signal?: AbortSignal;
-      readonly metadata?: ReadonlyMap<string, string>;
-    }
+    options: ZLinkSpotRoutedRequestOptions
   ): Promise<TReply> {
     const meshName = spotRouteTarget.routerChannelId;
     const node = this.meshNode(meshName);
@@ -756,7 +741,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
                 encoded,
                 options.timeoutMs,
                 undefined,
-                options.metadata
+                options.metadata,
+                options.instanceSpot
               )
             : node
                 .entrySpot()

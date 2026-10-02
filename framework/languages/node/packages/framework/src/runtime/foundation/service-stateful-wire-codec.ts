@@ -5,11 +5,13 @@ import {
   decodeActorRequestCommand,
   decodeActorSendCommand,
   decodeMetadataFrame,
+  decodeInstanceRouteV1,
   decodeSpotRequestCommand,
   decodeSpotSendCommand,
   encodeActorRequestCommand,
   encodeActorSendCommand,
   encodeApplicationPayloadEnvelopeV1,
+  encodeInstanceRouteV1,
   encodeSpotRequestCommand,
   encodeSpotSendCommand,
   type ServiceWireDecoderContext
@@ -1093,6 +1095,7 @@ export type ServiceStatefulWireRecord =
   | {
       readonly kind: 'instanceSpot';
       readonly activation: 'ready';
+      readonly instanceIntent: boolean;
       readonly route: ServiceInstanceRouteFence;
       readonly sourceNodeGeneration: bigint;
       readonly sourceNodeRid: string;
@@ -1391,17 +1394,25 @@ export function encodeInstanceSpotHeader(
   operationKind: 'send' | 'request',
   operation: { readonly high: bigint; readonly low: bigint },
   replyRouteId?: bigint,
-  hasMetadata = false
+  hasMetadata = false,
+  instanceIntent = false
 ): Buffer {
-  const routeBody = concat(
-    rid(route.targetNodeRid, 'targetNodeRid'),
-    u64(route.targetNodeGeneration),
-    rid(route.targetSpotId, 'targetSpotId'),
-    u64(route.objectGeneration),
-    text8(route.ownerId, 'ownerId'),
-    u64(route.authorityOwnerGeneration),
-    u64(route.leaseGeneration),
-    text16(route.storeVersion, 'storeVersion')
+  const encodedRoute = encodeInstanceRouteV1(
+    {
+      routeKind: 'ready',
+      targetNodeRid: toGeneratedRoutingId(route.targetNodeRid, 'targetNodeRid'),
+      targetNodeGeneration: route.targetNodeGeneration,
+      targetSpotId: route.targetSpotId,
+      authority: {
+        objectGeneration: route.objectGeneration,
+        ownerId: route.ownerId,
+        authorityOwnerGeneration: route.authorityOwnerGeneration,
+        leaseGeneration: route.leaseGeneration,
+        storeVersion: route.storeVersion
+      },
+      instanceIntent: instanceIntent ? 'true' : 'false'
+    },
+    STATEFUL_MESSAGE_CONTEXT
   );
   if (
     operationKind === 'send' &&
@@ -1414,9 +1425,7 @@ export function encodeInstanceSpotHeader(
   }
   return concat(
     prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
-    Buffer.of(INSTANCE_ROUTE_VERSION),
-    u16(routeBody.byteLength),
-    routeBody,
+    encodedRoute,
     u64Any(sourceNodeGeneration),
     rid(sourceNodeRid, 'sourceNodeRid'),
     optionalRid(sourceSpotId),
@@ -1733,25 +1742,42 @@ export function decodeStatefulHeader(
       if ((command.flags & ~M6bServiceWireFlag.metadata) !== 0) {
         fail(`Invalid command flags '${command.flags}'.`);
       }
+      const routeStart = reader.offset;
       const version = reader.u8('instanceRoute.version');
       if (version !== INSTANCE_ROUTE_VERSION && version !== INSTANCE_ACTIVATION_VERSION)
         fail('Unsupported Instance route version.');
       const routeLength = reader.u16('instanceRoute.length');
       const routeEnd = reader.offset + routeLength;
-      const commonTarget = {
-        targetNodeRid: reader.rid('targetNodeRid'),
-        targetNodeGeneration: reader.nonZeroU64('targetNodeGeneration'),
-        targetSpotId: reader.rid('targetSpotId')
-      };
-      const route: ServiceInstanceRouteFence | undefined =
+      const generatedReadyRoute =
         version === INSTANCE_ROUTE_VERSION
+          ? decodeInstanceRouteV1(
+              reader.bytes.subarray(routeStart, routeEnd),
+              STATEFUL_MESSAGE_CONTEXT
+            )
+          : undefined;
+      if (generatedReadyRoute !== undefined && generatedReadyRoute.routeKind !== 'ready') {
+        fail('Invalid Ready Instance route kind.');
+      }
+      const commonTarget =
+        generatedReadyRoute?.routeKind === 'ready'
+          ? {
+              targetNodeRid: fromGeneratedRoutingId(
+                generatedReadyRoute.targetNodeRid,
+                'targetNodeRid'
+              ),
+              targetNodeGeneration: generatedReadyRoute.targetNodeGeneration,
+              targetSpotId: generatedReadyRoute.targetSpotId
+            }
+          : {
+              targetNodeRid: reader.rid('targetNodeRid'),
+              targetNodeGeneration: reader.nonZeroU64('targetNodeGeneration'),
+              targetSpotId: reader.rid('targetSpotId')
+            };
+      const route: ServiceInstanceRouteFence | undefined =
+        generatedReadyRoute?.routeKind === 'ready'
           ? {
               ...commonTarget,
-              objectGeneration: reader.nonZeroU64('objectGeneration'),
-              ownerId: reader.text8('ownerId'),
-              authorityOwnerGeneration: reader.nonZeroU64('authorityOwnerGeneration'),
-              leaseGeneration: reader.nonZeroU64('leaseGeneration'),
-              storeVersion: reader.text16('storeVersion')
+              ...generatedReadyRoute.authority
             }
           : undefined;
       const target: ServiceInstanceActivationTarget | undefined =
@@ -1762,6 +1788,7 @@ export function decodeStatefulHeader(
               descriptorVersion: reader.text16('descriptorVersion')
             }
           : undefined;
+      if (generatedReadyRoute !== undefined) reader.offset = routeEnd;
       if (reader.offset !== routeEnd) fail('Invalid Instance route body length.');
       const sourceNodeGeneration = reader.nonZeroU64('sourceNodeGeneration');
       const sourceNodeRid = reader.rid('sourceNodeRid');
@@ -1802,7 +1829,14 @@ export function decodeStatefulHeader(
         ...(replyRouteId === undefined ? {} : { replyRouteId })
       };
       return version === INSTANCE_ROUTE_VERSION
-        ? { ...common, activation: 'ready', route: route! }
+        ? {
+            ...common,
+            activation: 'ready',
+            route: route!,
+            instanceIntent:
+              generatedReadyRoute!.routeKind === 'ready' &&
+              generatedReadyRoute!.instanceIntent === 'true'
+          }
         : {
             ...common,
             activation: 'missing',
@@ -3085,24 +3119,21 @@ class FrozenReader {
   }
 
   private instanceRoute(): void {
+    const start = this.offset;
     const kind = this.u8('instanceRouteKind');
     if (kind < 1 || kind > 2) fail('Invalid Instance route kind.');
     const body = this.body16('Instance route');
+    if (kind === INSTANCE_ROUTE_VERSION) {
+      decodeInstanceRouteV1(this.bytes.subarray(start, this.offset), STATEFUL_MESSAGE_CONTEXT);
+      return;
+    }
     body.rid8('targetNodeRid');
     body.nonZeroU64('targetNodeGeneration');
     body.text8('targetSpotId');
-    if (kind === 1) {
-      body.nonZeroU64('objectGeneration');
-      body.text8('ownerId');
-      body.nonZeroU64('authorityOwnerGeneration');
-      body.nonZeroU64('leaseGeneration');
-      body.text16('storeVersion');
-    } else {
-      body.text8('targetMeshName');
-      body.text8('stableType');
-      body.text8('targetDescriptorVersion');
-      body.nonZeroU64('deadlineUnixMs');
-    }
+    body.text8('targetMeshName');
+    body.text8('stableType');
+    body.text8('targetDescriptorVersion');
+    body.nonZeroU64('deadlineUnixMs');
     body.end('Instance route');
   }
 

@@ -31,6 +31,7 @@ import {
 } from '../application-jobs/application-job-queue-scope';
 
 interface ZLinkRoutedSpotPacketActivation {
+  readonly objectGeneration?: bigint;
   readonly meshName?: string;
   readonly spotId: RoutingId;
   readonly spot: ZLinkSpot;
@@ -145,14 +146,20 @@ export class ZLinkRoutedSpotPacketDispatch {
       activation.meshName === undefined
         ? undefined
         : this.options.claimApplicationWork?.(activation.meshName);
+    const originalRecord = context.activationRecord?.activationRecord;
+    const instanceIntent =
+      originalRecord?.activation === 'missing' ||
+      (originalRecord?.activation === 'ready' && originalRecord.instanceIntent);
     const runHandler = async (failure?: unknown) => {
       try {
         if (failure !== undefined) throw failure;
         const current = this.options.resolveActivation(spotId);
         if (
           current === undefined ||
-          (current !== activation &&
-            context.activationRecord?.activationRecord?.activation !== 'missing')
+          (!instanceIntent &&
+            (current !== activation ||
+              (originalRecord?.activation === 'ready' &&
+                originalRecord.route.objectGeneration !== current.objectGeneration)))
         ) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
@@ -223,7 +230,7 @@ export class ZLinkRoutedSpotPacketDispatch {
             (error) => this.reportFailure(spotId, packetName, context, false, error),
             context.workOptions,
             { signal: context.signal },
-            context.activationRecord?.activationRecord?.activation === 'missing'
+            instanceIntent
               ? async (failure?: unknown) => {
                   try {
                     await runHandler(failure);
@@ -251,9 +258,7 @@ export class ZLinkRoutedSpotPacketDispatch {
         await activation.serial.execute(
           runHandler,
           context.workOptions,
-          context.activationRecord?.activationRecord?.activation === 'missing'
-            ? runHandler
-            : undefined
+          instanceIntent ? runHandler : undefined
         );
       }
     } catch (error) {
