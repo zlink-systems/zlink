@@ -641,6 +641,55 @@ int main ()
                  != framework_error_kind_t::unavailable) {
             return 26;
         }
+        for (const auto kind :
+             {framework_error_kind_t::not_found, framework_error_kind_t::already_exists,
+              framework_error_kind_t::type_mismatch, framework_error_kind_t::rejected,
+              framework_error_kind_t::unavailable, framework_error_kind_t::deadline_exceeded,
+              framework_error_kind_t::shutting_down, framework_error_kind_t::protocol_error,
+              framework_error_kind_t::invalid_operation, framework_error_kind_t::data_lost,
+              framework_error_kind_t::internal_failure}) {
+            const auto wire = mapper.target_failure_reply (kind);
+            if (!wire
+                || !zlink::framework::runtime::protocol::valid_terminal_failure (
+                  wire->terminal_result,
+                  static_cast<zlink::framework::runtime::protocol::framework_error_code> (
+                    wire->failure_code))
+                || mapper
+                       .reply_header_exception (wire->terminal_result, wire->failure_code,
+                                                "Instance activation")
+                       .kind ()
+                     != kind)
+                return 26;
+        }
+        if (mapper.target_failure_reply (framework_error_kind_t::not_configured))
+            return 26;
+        {
+            namespace wire = zlink::framework::runtime::protocol;
+            const auto alias = mapper.reply_header_exception (
+              static_cast<std::uint32_t> (wire::request_terminal_result::timedOut),
+              static_cast<std::uint32_t> (wire::framework_error_code::actorTypeMismatch), "alias");
+            const auto failed = mapper.reply_header_exception (
+              static_cast<std::uint32_t> (wire::request_terminal_result::ok),
+              static_cast<std::uint32_t> (wire::framework_error_code::requestFailed), "compound");
+            if (alias.kind () != framework_error_kind_t::type_mismatch
+                || std::string (alias.what ())
+                     != "alias failed because the object type did not match."
+                || failed.kind () != framework_error_kind_t::internal_failure
+                || std::string (failed.what ()) != "compound failed.")
+                return 26;
+        }
+        const auto target_timeout =
+          mapper.target_failure_reply (framework_error_kind_t::deadline_exceeded);
+        const auto target_unavailable =
+          mapper.target_failure_reply (framework_error_kind_t::unavailable);
+        if (!target_timeout || !target_unavailable
+            || zlink::framework::detail::boundary_state (mapper.reply_header_exception (
+                 target_timeout->terminal_result, target_timeout->failure_code, "target"))
+                 != zlink::framework::detail::boundary_error_t::none
+            || zlink::framework::detail::boundary_state (mapper.reply_header_exception (
+                 target_unavailable->terminal_result, target_unavailable->failure_code, "target"))
+                 != zlink::framework::detail::boundary_error_t::none)
+            return 26;
         {
             namespace ust = zlink::framework::runtime::user_spot_terminal;
             using zlink::framework::runtime::protocol::reply_header_t;

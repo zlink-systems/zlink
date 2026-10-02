@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
@@ -838,7 +839,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         prepare.target(),
                         prepare.object(),
                         ZLinkCanonicalRelocationProtocol.TARGET,
-                        wireFailureCode(unwrap(failure), prepare.object().kind())));
+                        wireFailureCode(unwrap(failure))));
     }
 
     private void acceptRelayReady(Fence fence, TargetAttempt attempt) {
@@ -888,99 +889,19 @@ final class ZLinkCanonicalRelocationStateMachine
                                         : CompletableFuture.failedFuture(discardFailure.get()));
     }
 
-    /**
-     * Maps a target-side relocation failure's classified {@code ZLinkFrameworkErrorKind} to the
-     * closest wire framework-error code the generated schema ({@link ServiceWireConstants})
-     * actually defines. The wire vocabulary predates the framework's typed error kinds and has no
-     * one-to-one code for every kind, so several kinds share the nearest fit — documented per case
-     * below; unresolvable vocabulary gaps belong at the schema level, not invented here. {@code
-     * objectKind} (1 = Actor, else Spot/Instance — spec 28 §4.2's {@code ObjectFence.kind}) picks
-     * between an Actor- and Spot-specific code where the schema splits by object kind.
-     */
-    static long wireFailureCode(Throwable cause, int objectKind) {
-        if (!(cause instanceof ZLinkFrameworkException framework)) {
-            //  An unclassified throwable carries no evidence of integrity
-            //  loss, so it takes the generic opaque request-failure code —
-            //  DataLost stays reserved for verified checksum/assembly/digest
-            //  failures (spec 15 failure table).
-            return ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED;
-        }
-        return switch (framework.kind()) {
-            case DATA_LOST -> ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST;
-            case REJECTED -> ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED;
-            case PROTOCOL_ERROR -> ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR;
-            //  No dedicated "deadline exceeded" wire code exists; a worker
-            //  timeout is the closest timeout-shaped signal.
-            case DEADLINE_EXCEEDED -> ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT;
-            //  A stale generation/fence is the concrete cause of
-            //  InvalidOperation along this path (spec 15 failure table);
-            //  pick the object-kind-specific stale code.
-            case INVALID_OPERATION ->
-                    objectKind == 1
-                            ? ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE
-                            : ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE;
-            //  No dedicated generic "unavailable" wire code exists; a
-            //  disconnected route is the closest "cannot reach/use the
-            //  target" signal.
-            case UNAVAILABLE -> ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED;
-            case NOT_FOUND -> ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND;
-            //  The only "already exists" wire code is Actor-specific; not
-            //  expected along this target-failure path, mapped for
-            //  completeness.
-            case ALREADY_EXISTS -> ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS;
-            case TYPE_MISMATCH ->
-                    objectKind == 1
-                            ? ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH
-                            : ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH;
-            //  No dedicated "not configured" wire code exists; a missing
-            //  configured handler is the closest analog.
-            case NOT_CONFIGURED -> ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND;
-            //  No dedicated generic "internal failure" or "shutting down"
-            //  wire code exists; the generic opaque request-failure code is
-            //  the closest fit for both.
-            case INTERNAL_FAILURE, SHUTTING_DOWN ->
-                    ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED;
-        };
+    /** Uses the same failure-code mapping as other Framework replies. */
+    static long wireFailureCode(Throwable cause) {
+        ZLinkFrameworkErrorKind kind =
+                cause instanceof ZLinkFrameworkException framework
+                        ? framework.kind()
+                        : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+        return ZLinkRequestFailureMapping.outgoingCode(
+                kind, ZLinkRequestFailureMapping.causeCode(cause));
     }
 
-    /**
-     * Inverse of {@link #wireFailureCode(Throwable, int)}: maps a received {@code
-     * relocationFailed(53)} wire failure code back to the framework error kind the emitting target
-     * classified, so a source-side rejection carries the same typed classification in every
-     * language (node and cpp decode identically). Where the emit table collapses several kinds into
-     * one code the decode picks the kind the emit table documents as the code's primary meaning;
-     * both object-kind variants of a split code (Actor/Spot stale and type-mismatch) decode to the
-     * same kind. Any unknown or unmapped code falls back to {@code INTERNAL_FAILURE} — the same
-     * fail-safe generic classification as before (spec 15 §"Failed.Kind").
-     */
     static ZLinkFrameworkErrorKind wireFailureKind(long failureCode) {
-        return switch ((int) failureCode) {
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST ->
-                    ZLinkFrameworkErrorKind.DATA_LOST;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED ->
-                    ZLinkFrameworkErrorKind.REJECTED;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR ->
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL ->
-                    ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT ->
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED ->
-                    ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND ->
-                    ZLinkFrameworkErrorKind.NOT_FOUND;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS ->
-                    ZLinkFrameworkErrorKind.ALREADY_EXISTS;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH ->
-                    ZLinkFrameworkErrorKind.TYPE_MISMATCH;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND ->
-                    ZLinkFrameworkErrorKind.NOT_CONFIGURED;
-            default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-        };
+        ZLinkFrameworkErrorKind kind = ZLinkRequestFailureMapping.incoming((int) failureCode);
+        return kind != null ? kind : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
     }
 
     private CompletionStage<Void> onReady(
@@ -1023,9 +944,11 @@ final class ZLinkCanonicalRelocationStateMachine
         //  sees the same public classification in every language.
         attempt.ready()
                 .completeExceptionally(
-                        new ZLinkFrameworkException(
+                        ZLinkRequestFailureMapping.receivedFailure(
                                 wireFailureKind(failure.failureCode()),
-                                "target rejected canonical relocation: " + failure.failureCode()));
+                                "target rejected canonical relocation: " + failure.failureCode(),
+                                (int) failure.failureCode(),
+                                java.util.Map.of()));
         return CompletableFuture.completedFuture(null);
     }
 

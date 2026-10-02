@@ -285,7 +285,9 @@ internal sealed class ZLinkBackendSpotWrapper
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     ) =>
         RequireManagedNode()
             .SendToSpotDirectAsync(
@@ -296,7 +298,8 @@ internal sealed class ZLinkBackendSpotWrapper
                 parts,
                 flags,
                 metadata,
-                cancellationToken
+                cancellationToken,
+                readyRoute
             );
 
     public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
@@ -307,7 +310,9 @@ internal sealed class ZLinkBackendSpotWrapper
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     ) =>
         RequireManagedNode()
             .RequestToSpotDirectAsync(
@@ -319,7 +324,8 @@ internal sealed class ZLinkBackendSpotWrapper
                 flags,
                 metadata,
                 timeout,
-                cancellationToken
+                cancellationToken,
+                readyRoute
             );
 
     public bool RequestToSpot(
@@ -515,9 +521,15 @@ internal sealed class ZLinkBackendSpotWrapper
         request as ZLinkMeshActorJoinRequest
         ?? throw new InvalidOperationException("Expected a MeshNode actor join request.");
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        _subscriptions?.RemoveSpot(SpotId);
-        return _spot.DisposeAsync();
+        var spotId = SpotId;
+        var failures = new ZLinkFailureCollector();
+        failures.Capture(() => _subscriptions?.RemoveSpot(spotId));
+        await failures.CaptureAsync(_spot.DisposeAsync).ConfigureAwait(false);
+        await failures
+            .CaptureAsync(() => _pump.UnregisterSpotAsync(spotId, _state))
+            .ConfigureAwait(false);
+        failures.ThrowIfAny();
     }
 }

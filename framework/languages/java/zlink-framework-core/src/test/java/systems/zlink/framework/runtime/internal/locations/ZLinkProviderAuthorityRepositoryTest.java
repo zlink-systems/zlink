@@ -56,6 +56,307 @@ import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    private static final String OBJECT_COUNTER_KEY = "zlink:v11:object-counter";
+    private static final String AUTHORITY_OWNER_COUNTER_KEY = "zlink:v11:authority-owner-counter";
+
+    @Test
+    void reservedAuthorityRejectsPreserveDeleteAndReincarnateWithoutMutation() throws Exception {
+        var fixture = reincarnationFixture("reserved-close");
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(fixture.key(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        for (var mutation :
+                List.of(
+                        new ZLinkAuthorityPut(new byte[] {3}),
+                        new ZLinkAuthorityDelete(),
+                        ZLinkAuthorityMutation.reincarnate(new byte[] {4}))) {
+            assertInstanceOf(
+                    ZLinkAuthorityConflict.class,
+                    fixture.repository()
+                            .compareExchange(
+                                    fixture.key(),
+                                    new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                    mutation,
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+            var after =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(fixture.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            assertEquals(before.storeVersion(), after.storeVersion());
+            assertArrayEquals(before.payload(), after.payload());
+            assertEquals(before.allocation(), after.allocation());
+            assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "2");
+            assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "2");
+        }
+    }
+
+    @Test
+    void reincarnateIssuesBothGenerationsAndPreservesOwnerAndActiveCapacity() throws Exception {
+        var fixture = reincarnationFixture("active-close");
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                fixture.repository()
+                        .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(fixture.key(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        var after =
+                assertInstanceOf(
+                        ZLinkAuthorityStored.class,
+                        fixture.repository()
+                                .compareExchange(
+                                        fixture.key(),
+                                        new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                        ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .get());
+        assertTrue(after.objectGeneration() > before.objectGeneration());
+        assertTrue(after.authorityOwnerGeneration() > before.authorityOwnerGeneration());
+        assertTrue(!after.storeVersion().equals(before.storeVersion()));
+        assertEquals(before.ownerId(), after.ownerId());
+        assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
+        assertEquals(before.allocation(), after.allocation());
+        assertArrayEquals(new byte[] {3}, after.payload());
+        assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "3");
+        assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "3");
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                fixture.repository()
+                        .compareExchange(
+                                fixture.key(),
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityDelete(),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertInstanceOf(
+                ZLinkPlacementCapacityExhausted.class,
+                fixture.repository()
+                        .reserve(
+                                capacityRequest(
+                                        ZLinkAuthorityKeyCodec.spot("other-close"),
+                                        fixture.descriptor(),
+                                        fixture.reservation().targetOwner()),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var visible =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(fixture.key(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        assertEquals(after.storeVersion(), visible.storeVersion());
+        assertEquals(after.objectGeneration(), visible.objectGeneration());
+    }
+
+    @Test
+    void reincarnateCounterExhaustionLeavesBothCountersAndAuthorityUnchanged() throws Exception {
+        for (String exhausted : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
+            var fixture = reincarnationFixture("exhausted-close");
+            fixture.repository()
+                    .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                    .toCompletableFuture()
+                    .get();
+            var before =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(fixture.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            fixture.provider()
+                    .write(
+                            new ZLinkStoreWriteRequest(
+                                    List.of(),
+                                    List.of(
+                                            new ZLinkStorePut(
+                                                    new ZLinkStoreKey(exhausted),
+                                                    Long.toString(Long.MAX_VALUE)
+                                                            .getBytes(
+                                                                    java.nio.charset
+                                                                            .StandardCharsets
+                                                                            .UTF_8),
+                                                    null))),
+                            () -> false)
+                    .toCompletableFuture()
+                    .get();
+            assertInstanceOf(
+                    ZLinkAuthorityGenerationExhausted.class,
+                    fixture.repository()
+                            .compareExchange(
+                                    fixture.key(),
+                                    new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                    ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+            var after =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(fixture.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            assertEquals(before.storeVersion(), after.storeVersion());
+            assertArrayEquals(before.payload(), after.payload());
+            for (String counter : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
+                assertCounterValue(
+                        fixture.provider(),
+                        counter,
+                        counter.equals(exhausted) ? Long.toString(Long.MAX_VALUE) : "2");
+            }
+        }
+    }
+
+    private static ReincarnationFixture reincarnationFixture(String id) throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim(id, Duration.ofMinutes(1)).toCompletableFuture().get())
+                        .token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var repository = new ZLinkProviderAuthorityRepository(provider, descriptors);
+        String key = ZLinkAuthorityKeyCodec.spot(id);
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(
+                                                capacityRequest(key, descriptor, owner),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        return new ReincarnationFixture(provider, repository, descriptor, key, reservation);
+    }
+
+    @Test
+    void reincarnateCounterContentionCannotPartiallyIssueTheObjectGeneration() throws Exception {
+        for (String counterKey : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
+            var fixture = reincarnationFixture("contended-close");
+            fixture.repository()
+                    .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                    .toCompletableFuture()
+                    .get();
+            var before =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(fixture.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            var identity = ZLinkAuthorityKeyCodec.decode(fixture.key());
+            var authorityKey = ZLinkOpaqueRecordKey.of("authority", identity.kind(), identity.id());
+            var contended =
+                    new IndependentCounterContentionStore(
+                            fixture.provider(),
+                            authorityKey,
+                            "7",
+                            null,
+                            new ZLinkStoreKey(counterKey));
+            var repository = new ZLinkProviderAuthorityRepository(contended);
+            assertInstanceOf(
+                    ZLinkAuthorityConflict.class,
+                    repository
+                            .compareExchange(
+                                    fixture.key(),
+                                    new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                    ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+            assertTrue(contended.bumpedCounter);
+            for (String key : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
+                assertCounterValue(fixture.provider(), key, key.equals(counterKey) ? "7" : "2");
+            }
+            var after =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            fixture.repository()
+                                    .read(fixture.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            assertEquals(before.storeVersion(), after.storeVersion());
+            assertArrayEquals(before.payload(), after.payload());
+        }
+    }
+
+    @Test
+    void reincarnateRequiresTheCurrentOwnerLeaseWithoutChangingCounters() throws Exception {
+        var fixture = reincarnationFixture("released-close");
+        fixture.repository()
+                .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                .toCompletableFuture()
+                .get();
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(fixture.key(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        new ZLinkProviderOwnerLeaseRepository(fixture.provider())
+                .release(fixture.reservation().targetOwner())
+                .toCompletableFuture()
+                .get();
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                fixture.repository()
+                        .compareExchange(
+                                fixture.key(),
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertCounterValue(fixture.provider(), OBJECT_COUNTER_KEY, "2");
+        assertCounterValue(fixture.provider(), AUTHORITY_OWNER_COUNTER_KEY, "2");
+        var after =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        fixture.repository()
+                                .read(fixture.key(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        assertEquals(before.storeVersion(), after.storeVersion());
+        assertArrayEquals(before.payload(), after.payload());
+    }
+
+    private record ReincarnationFixture(
+            ZLinkInMemoryProviderLocationStore provider,
+            ZLinkProviderAuthorityRepository repository,
+            ZLinkMeshNodeDescriptor descriptor,
+            String key,
+            ZLinkObjectReservation reservation) {}
+
     @Test
     void authorityParticipantMarkersRoundTripNodeWireBytesThroughPublicRepository()
             throws Exception {
@@ -373,8 +674,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 ZLinkObjectReserved.class,
                                 repository.reserve(first, () -> false).toCompletableFuture().get())
                         .reservation();
-        assertCounterValue(provider, "zlink:v11:object-counter", "2");
-        assertCounterValue(provider, "zlink:v11:authority-owner-counter", "2");
+        assertCounterValue(provider, OBJECT_COUNTER_KEY, "2");
+        assertCounterValue(provider, AUTHORITY_OWNER_COUNTER_KEY, "2");
         assertInstanceOf(
                 ZLinkPlacementCapacityExhausted.class,
                 repository.reserve(second, () -> false).toCompletableFuture().get());
@@ -887,7 +1188,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .toCompletableFuture()
                         .get()
                         .status());
-        ZLinkStoreKey counterKey = new ZLinkStoreKey("zlink:v11:object-counter");
+        ZLinkStoreKey counterKey = new ZLinkStoreKey(OBJECT_COUNTER_KEY);
         provider.write(
                         new ZLinkStoreWriteRequest(
                                 List.of(),
@@ -926,8 +1227,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
     @Test
     void reserveRejectsNonCanonicalObjectAndOwnerCounterRecords() throws Exception {
-        for (String counterName :
-                List.of("zlink:v11:object-counter", "zlink:v11:authority-owner-counter")) {
+        for (String counterName : List.of(OBJECT_COUNTER_KEY, AUTHORITY_OWNER_COUNTER_KEY)) {
             for (String invalid : List.of("01", "+1", "0", "", " 1")) {
                 var provider = new ZLinkInMemoryProviderLocationStore();
                 var owner =
@@ -1010,7 +1310,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                                 null),
                                                         new ZLinkStorePut(
                                                                 new ZLinkStoreKey(
-                                                                        "zlink:v11:authority-owner-counter"),
+                                                                        AUTHORITY_OWNER_COUNTER_KEY),
                                                                 Long.toString(Long.MAX_VALUE - 1)
                                                                         .getBytes(
                                                                                 java.nio.charset
@@ -1055,7 +1355,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
         assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
         assertCounterValue(
-                provider, "zlink:v11:authority-owner-counter", Long.toString(Long.MAX_VALUE - 1));
+                provider, AUTHORITY_OWNER_COUNTER_KEY, Long.toString(Long.MAX_VALUE - 1));
     }
 
     @Test
@@ -2323,7 +2623,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                             && put.key()
                                                                     .value()
                                                                     .equals(
-                                                                            "zlink:v11:authority-owner-counter"));
+                                                                            AUTHORITY_OWNER_COUNTER_KEY));
             if (!reservesAuthorityOwnerGeneration) {
                 return delegate.write(request, cancellation);
             }
@@ -2343,8 +2643,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     private static final class IndependentCounterContentionStore implements ZLinkLocationStore {
-        private static final ZLinkStoreKey COUNTER_KEY =
-                new ZLinkStoreKey("zlink:v11:authority-owner-counter");
+        private final ZLinkStoreKey counterKey;
 
         private final ZLinkLocationStore delegate;
         private final ZLinkStoreKey authorityKey;
@@ -2357,6 +2656,21 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 ZLinkStoreKey authorityKey,
                 String counterValue,
                 byte[] changedParticipant) {
+            this(
+                    delegate,
+                    authorityKey,
+                    counterValue,
+                    changedParticipant,
+                    new ZLinkStoreKey(AUTHORITY_OWNER_COUNTER_KEY));
+        }
+
+        private IndependentCounterContentionStore(
+                ZLinkLocationStore delegate,
+                ZLinkStoreKey authorityKey,
+                String counterValue,
+                byte[] changedParticipant,
+                ZLinkStoreKey counterKey) {
+            this.counterKey = counterKey;
             this.delegate = delegate;
             this.authorityKey = authorityKey;
             this.counterValue = counterValue;
@@ -2378,7 +2692,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                     .filter(ZLinkStorePut.class::isInstance)
                                     .map(ZLinkStorePut.class::cast)
                                     .map(ZLinkStorePut::key)
-                                    .anyMatch(COUNTER_KEY::equals)
+                                    .anyMatch(counterKey::equals)
                             && request.mutations().stream()
                                     .filter(ZLinkStorePut.class::isInstance)
                                     .map(ZLinkStorePut.class::cast)
@@ -2392,7 +2706,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     new ArrayList<systems.zlink.framework.locationprovider.ZLinkStoreMutation>();
             mutations.add(
                     new ZLinkStorePut(
-                            COUNTER_KEY,
+                            counterKey,
                             counterValue.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                             null));
             if (changedParticipant != null) {

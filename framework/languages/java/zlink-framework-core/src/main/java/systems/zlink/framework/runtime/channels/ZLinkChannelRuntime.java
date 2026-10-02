@@ -1293,12 +1293,15 @@ public final class ZLinkChannelRuntime
                             try {
                                 if (reply.result() != ZLinkBackendRequestResult.OK) {
                                     result.completeExceptionally(
-                                            new ZLinkFrameworkException(
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkRequestFailureMapping.receivedFailure(
                                                     reply.result()
                                                             .toFrameworkErrorKind(
                                                                     reply.failureCode()),
                                                     "internal route request failed: "
-                                                            + reply.result()));
+                                                            + reply.result(),
+                                                    reply.failureCode(),
+                                                    java.util.Map.of()));
                                 } else if (reply.parts().isEmpty()) {
                                     result.completeExceptionally(
                                             new ZLinkFrameworkException(

@@ -2211,17 +2211,10 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "in_mesh requires Instance Spot intent");
     }
-    std::optional<runtime::spot_address_t> address;
-    try {
-        address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
-    }
-    catch (const framework_exception_t &error) {
-        // The resolver rejects a Closing authority (§9); Instance intent keeps
-        // the activation path, which decides that request's own result.
-        if (!intent.instance || error.kind () != framework_error_kind_t::rejected)
-            throw;
-    }
-    if (!address && intent.instance) {
+    const auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+
+    auto submitted = result_t<void>::success ();
+    if (intent.instance) {
         detail::channel_runtime_state_t::instance_spot_send_t activate;
         activate = state->runtime->lane
                      .run_checked ([&] {
@@ -2234,16 +2227,17 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
               framework_error_kind_t::not_configured,
               "Instance Spot activation runtime is not configured");
         }
-        co_return co_await activate (target, intent, packet_name, message_type,
-                                     std::move (encode_payload), metadata);
-    }
-    if (!address) {
+        submitted = co_await activate (target, intent, address, packet_name, message_type,
+                                       std::move (encode_payload), metadata);
+    } else if (!address) {
         co_return result_t<void>::failure (framework_error_kind_t::not_found,
                                            "Spot route was not found");
+    } else {
+        submitted = co_await submit_spot_send_erased (
+          state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
+          address->spot_generation, packet_name, message_type, std::move (encode_payload),
+          metadata);
     }
-    auto submitted = co_await submit_spot_send_erased (
-      state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
-      address->spot_generation, packet_name, message_type, std::move (encode_payload), metadata);
     if (!submitted
         && (submitted.error_kind () == framework_error_kind_t::not_found
             || submitted.error_kind () == framework_error_kind_t::unavailable
@@ -2274,54 +2268,41 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    std::optional<runtime::spot_address_t> address;
+    const auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+
     try {
-        address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
-    }
-    catch (const framework_exception_t &error) {
-        // The resolver rejects a Closing authority (§9); Instance intent keeps
-        // the activation path, which decides that request's own result.
-        if (!intent.instance || error.kind () != framework_error_kind_t::rejected)
-            throw;
-    }
-    if (!address && intent.instance) {
-        detail::channel_runtime_state_t::instance_spot_request_t activate;
-        activate = state->runtime->lane
-                     .run_checked ([&] {
-                         activate = state->runtime->instance_spot_requester;
-                         return activate;
-                     })
-                     .get ();
-        if (!activate) {
-            throw framework_exception_t (framework_error_kind_t::not_configured,
-                                         "Instance Spot activation runtime is not configured");
+        if (intent.instance) {
+            detail::channel_runtime_state_t::instance_spot_request_t activate;
+            activate = state->runtime->lane
+                         .run_checked ([&] {
+                             activate = state->runtime->instance_spot_requester;
+                             return activate;
+                         })
+                         .get ();
+            if (!activate) {
+                throw framework_exception_t (framework_error_kind_t::not_configured,
+                                             "Instance Spot activation runtime is not configured");
+            }
+            const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
+                                             ? timeout
+                                             : state->runtime->default_request_timeout;
+            co_return co_await activate (target, intent, address, std::move (packet_name),
+                                         request_type, std::move (encode_payload),
+                                         effective_timeout, std::move (metadata));
         }
-        const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
-                                         ? timeout
-                                         : state->runtime->default_request_timeout;
-        co_return co_await activate (target, intent, std::move (packet_name), request_type,
-                                     std::move (encode_payload), effective_timeout,
-                                     std::move (metadata));
-    }
-    if (!address) {
-        throw framework_exception_t (framework_error_kind_t::not_found, "Spot route was not found");
-    }
-    try {
+        if (!address) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "Spot route was not found");
+        }
         co_return co_await submit_spot_request_reply_message_erased (
           state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
           address->spot_generation, std::move (packet_name), request_type,
           std::move (encode_payload), timeout, std::move (metadata));
     }
     catch (const framework_exception_t &error) {
-        /* Stale-route judgement: a remote error reply is a stale-route signal
-         * only when the framework produced it (zlink.origin=framework marker,
-         * carried here as error_origin_t::framework). ShuttingDown also
-         * retires a resolved address: an explicit Spot close can seal its
-         * serial queue before authority deletion reaches Missing. The failed
-         * operation stays terminal; only a later call re-resolves. An
-         * application's not_found/unavailable/shutting_down must not
-         * invalidate the cached route. Local failures (unspecified origin)
-         * keep invalidating as before. */
+        /* Framework의 NotFound/Unavailable/ShuttingDown terminal은 기존 주소를 무효화한다.
+         * 현재 operation은 terminal로 끝나고 다음 호출이 global SpotId를 조회한다.
+         * application-origin 실패의 주소는 기존 규칙대로 유지한다. */
         if ((error.kind () == framework_error_kind_t::not_found
              || error.kind () == framework_error_kind_t::unavailable
              || error.kind () == framework_error_kind_t::shutting_down)

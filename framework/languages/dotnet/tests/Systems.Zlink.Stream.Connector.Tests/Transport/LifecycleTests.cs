@@ -14,7 +14,8 @@ public sealed partial class StreamConnectorTests
     [InlineData(false, ZlinkStreamErrorCode.Disconnected)]
     public async Task RawConnectFailurePreservesCause(bool tls, ZlinkStreamErrorCode expected)
     {
-        Exception cause = tls ? new AuthenticationException("TLS protocol rejected")
+        Exception cause = tls
+            ? new AuthenticationException("TLS protocol rejected")
             : new IOException("connection refused");
         await using var connector = new ZlinkStreamConnector(
             new ZlinkStreamConnectorOptions
@@ -26,7 +27,8 @@ public sealed partial class StreamConnectorTests
             _ => ValueTask.FromException<IZlinkStreamConnection>(cause)
         );
         var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await connector.Connect.Async());
+            await connector.Connect.Async()
+        );
         Assert.Equal(expected, error.Error.Code);
         Assert.Same(cause, error.Error.Exception);
         Assert.Equal(ZlinkStreamConnectionState.Disconnected, connector.State);
@@ -53,12 +55,15 @@ public sealed partial class StreamConnectorTests
                 started.SetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 throw new InvalidOperationException("canceled connect resumed");
-            });
-        connector.OnErrorReceived((error, _) =>
-        {
-            errors.Add(error);
-            return ValueTask.CompletedTask;
-        });
+            }
+        );
+        connector.OnErrorReceived(
+            (error, _) =>
+            {
+                errors.Add(error);
+                return ValueTask.CompletedTask;
+            }
+        );
         var connect = connector.Connect.Async(caller.Token).AsTask();
         await started.Task;
         if (close)

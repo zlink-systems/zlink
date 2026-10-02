@@ -6376,7 +6376,7 @@ function writeFrozenRecord(input: FrozenRecord, writer: Writer, context: Service
 export function decodeFrozenRecord(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenRecord { const reader = new Reader(bytes); const value = readFrozenRecord(reader, context, {}, 0); reader.done("frozen-record"); return value; }
 export function encodeFrozenRecord(value: FrozenRecord, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenRecord(value, writer, context, {}, 0); return writer.result(); }
 
-export type InstanceRouteV1 = { readonly routeKind: "ready"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly authority: AuthorityGenerationFence } | { readonly routeKind: "coldActivation"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly targetMeshName: Text8; readonly stableType: Text8; readonly targetDescriptorVersion: Text8; readonly deadlineUnixMs: NonzeroU64 };
+export type InstanceRouteV1 = { readonly routeKind: "ready"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly authority: AuthorityGenerationFence; readonly instanceIntent: Bool8 } | { readonly routeKind: "coldActivation"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly targetMeshName: Text8; readonly stableType: Text8; readonly targetDescriptorVersion: Text8; readonly deadlineUnixMs: NonzeroU64 };
 
 function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceRouteV1 {
   void context; void enclosing; void flags;
@@ -6394,6 +6394,9 @@ function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext,
 
 
     value["authority"] = readAuthorityGenerationFence(body, context, value, flags);
+
+
+    value["instanceIntent"] = readBool8(body, context, value, flags);
 
 
   } else if (same(value["routeKind"], "coldActivation")) {
@@ -6439,6 +6442,9 @@ function* readIncrementalInstanceRouteV1(reader: IncrementalInput, context: Serv
 
 
     value["authority"] = yield* readIncrementalAuthorityGenerationFence(body, context, value, flags);
+
+
+    value["instanceIntent"] = yield* readIncrementalBool8(body, context, value, flags);
 
 
   } else if (same(value["routeKind"], "coldActivation")) {
@@ -6491,8 +6497,12 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
 
 
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
+    if (value["instanceIntent"] === undefined) fail("instanceIntent required");
+
+
+    writeBool8(value["instanceIntent"], body, context, value, flags);
   } else if (same(value["routeKind"], "coldActivation")) {
-    if (value["authority"] !== undefined) fail("instance-route-v1 discriminator agreement");
+    if (value["authority"] !== undefined || value["instanceIntent"] !== undefined) fail("instance-route-v1 discriminator agreement");
     if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
 
 

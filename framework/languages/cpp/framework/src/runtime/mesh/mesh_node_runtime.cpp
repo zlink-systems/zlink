@@ -538,41 +538,12 @@ void mesh_node_runtime_t::bind_descriptor_publisher (
     _state->lane.run ([&] { _descriptor_publisher = std::move (publisher); }).get ();
 }
 
-host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_kind_t kind)
+host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_kind_t kind, std::uint32_t cause_code = 0)
 {
     host::actor_join_operation_result_t result;
-    switch (kind) {
-        case framework_error_kind_t::not_found:
-            result.terminal_result = 102;
-            result.failure_code = static_cast<std::uint32_t> (
-              runtime::protocol::framework_error_code::requestTargetNotFound);
-            break;
-        case framework_error_kind_t::protocol_error:
-            result.terminal_result = 104;
-            result.failure_code = static_cast<std::uint32_t> (
-              runtime::protocol::framework_error_code::requestProtocolError);
-            break;
-        case framework_error_kind_t::type_mismatch:
-            result.terminal_result = 107;
-            result.failure_code = static_cast<std::uint32_t> (
-              runtime::protocol::framework_error_code::actorTypeMismatch);
-            break;
-        case framework_error_kind_t::rejected:
-            result.terminal_result = 106;
-            result.failure_code =
-              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestRejected);
-            break;
-        case framework_error_kind_t::unavailable:
-            result.terminal_result = 105;
-            result.failure_code = static_cast<std::uint32_t> (
-              runtime::protocol::framework_error_code::routeNotConnected);
-            break;
-        default:
-            result.terminal_result = 105;
-            result.failure_code =
-              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestFailed);
-            break;
-    }
+    const auto failure = runtime::messaging::request_failure_mapper_t{}.target_failure_reply (kind, cause_code);
+    result.terminal_result = failure->terminal_result;
+    result.failure_code = failure->failure_code;
     return result;
 }
 
@@ -584,7 +555,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                        serializer_registry_t *serializers)
 {
     host::actor_join_operation_result_t rejected;
-    const auto typed_terminal = actor_join_typed_terminal;
+
     try {
         spot_node_runtime_t spot (spot_state);
         const auto valid_identifier = [] (std::string_view value) {
@@ -597,13 +568,14 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         if (!detail::is_valid_actor_id (request.actor.actor_id)
             || !valid_identifier (request.actor.actor_id)
             || !valid_identifier (request.target_spot.spot_id)) {
-            return typed_terminal (framework_error_kind_t::protocol_error);
+            return actor_join_typed_terminal (framework_error_kind_t::protocol_error);
         }
         const auto target = spot.resolve_wire_actor_join_target (request.target_spot);
         if (!target)
-            return typed_terminal (target.error_kind ());
+            return actor_join_typed_terminal (target.error_kind (),
+                                              detail::failure_code (*target.error ()));
         if (request.target_spot.target_node_routing_id != local_node_rid.to_bytes ())
-            return typed_terminal (framework_error_kind_t::protocol_error);
+            return actor_join_typed_terminal (framework_error_kind_t::protocol_error);
         // The actor fence's node coordinates name the CURRENT owner — the
         // source node originating this proposal.
         // actorJoin(28) supplies no type; the empty marker is intentional.
@@ -620,13 +592,13 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         if (request.entry) {
             const auto entry_spot_id = spot.resolve_entry_spot_id ();
             if (!entry_spot_id)
-                return typed_terminal (framework_error_kind_t::not_found);
+                return actor_join_typed_terminal (framework_error_kind_t::not_found);
             target_spot_id = *entry_spot_id;
         } else {
             target_spot_id = spot_id_t (request.target_spot.spot_id);
         }
         if (target_spot_id != request.target_spot.spot_id)
-            return typed_terminal (framework_error_kind_t::protocol_error);
+            return actor_join_typed_terminal (framework_error_kind_t::protocol_error);
         std::optional<runtime::protocol::application_payload_t> result_application_reply;
         if (!request.entry) {
             // Approval-only admission (spec 15 §478-527): run the
@@ -656,11 +628,13 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                   request.target_spot.authority_owner_generation)
                 .result ();
             if (!admitted)
-                return typed_terminal (admitted.error_kind ());
+                return actor_join_typed_terminal (admitted.error_kind (),
+                                              detail::failure_code (*admitted.error ()));
             auto application_reply =
               canonical_actor_join_application_reply (admitted.value ().reply, serializers);
             if (!application_reply)
-                return typed_terminal (application_reply.error_kind ());
+                return actor_join_typed_terminal (application_reply.error_kind (),
+                                              detail::failure_code (*application_reply.error ()));
             if (!admitted.value ().accepted) {
                 rejected.application_reply = std::move (application_reply.value ());
                 return rejected;
@@ -688,7 +662,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         return result;
     }
     catch (...) {
-        return typed_terminal (framework_error_kind_t::unavailable);
+        return actor_join_typed_terminal (framework_error_kind_t::unavailable);
     }
 }
 

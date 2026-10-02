@@ -150,35 +150,43 @@ try {
     $clientLog = Join-Path $LogDir "client.out.log"
     $clientProcess = Start-SampleProcess -Name "client" -FilePath "dotnet" -LogDirectory $LogDir -Arguments @($clientAssembly, "--config", $configFiles["client"])
     Wait-GameQuestLogContains $clientLog "gamequest-client close-replay-armed player=player-alice"
-    $closedMission = $null
+    $closingMission = $null
     for ($attempt = 0; $attempt -lt $GameQuestWaitAttempts; $attempt++) {
-        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-owner closed player=player-alice generation=1 node=mission-a") -gt 0) {
-            $closedMission = "mission-a"
+        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=mission-a") -gt 0) {
+            $closingMission = "mission-a"
             break
         }
-        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-owner closed player=player-alice generation=1 node=mission-b") -gt 0) {
-            $closedMission = "mission-b"
+        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=mission-b") -gt 0) {
+            $closingMission = "mission-b"
             break
         }
         Start-Sleep -Milliseconds 100
     }
-    if ($null -eq $closedMission) { throw "Timed out waiting for the player-alice owner-closed marker" }
+    if ($null -eq $closingMission) { throw "Timed out waiting for the player-alice owner-closing-entered marker" }
     New-Item -ItemType File -Path $GAMEQUEST_CLOSE_REPLAY_RELEASE_FILE | Out-Null
     Wait-GameQuestLogContains $clientLog "gamequest-client owner-loss-armed player=player-alice"
 
     $ownerMission = $null
     for ($attempt = 0; $attempt -lt $GameQuestWaitAttempts; $attempt++) {
-        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-owner ready player=player-alice generation=2 node=mission-a") -gt 0) {
+        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-owner ready player=player-alice rehydrationCount=2 node=mission-a") -gt 0) {
             $ownerMission = "mission-a"
             break
         }
-        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-owner ready player=player-alice generation=2 node=mission-b") -gt 0) {
+        if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-owner ready player=player-alice rehydrationCount=2 node=mission-b") -gt 0) {
             $ownerMission = "mission-b"
             break
         }
         Start-Sleep -Milliseconds 100
     }
     if ($null -eq $ownerMission) { throw "Timed out waiting for the player-alice owner-ready marker" }
+    Wait-GameQuestLogContains (Join-Path $LogDir "${ownerMission}.out.log") "gamequest-mission replayed player=player-alice rehydrationCount=2"
+    $closingEvidence = Select-String -Path (Join-Path $LogDir "${closingMission}.out.log") -SimpleMatch "gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=${closingMission}" | Select-Object -First 1
+    $replayEvidence = Select-String -Path (Join-Path $LogDir "${ownerMission}.out.log") -SimpleMatch "gamequest-mission replayed player=player-alice rehydrationCount=2" | Select-Object -First 1
+    if ($closingEvidence.Line -notmatch 'objectGeneration=([1-9][0-9]*)') { throw "Missing Closing runtime ObjectGeneration evidence" }
+    $closingObjectGeneration = [ulong]$Matches[1]
+    if ($replayEvidence.Line -notmatch 'objectGeneration=([1-9][0-9]*)') { throw "Missing replay runtime ObjectGeneration evidence" }
+    $replayObjectGeneration = [ulong]$Matches[1]
+    if ($closingObjectGeneration -eq $replayObjectGeneration) { throw "Close replay must execute in a different runtime ObjectGeneration" }
     $ownerProcess = if ($ownerMission -eq "mission-a") { $missionAProcess } else { $missionBProcess }
     if ($IsWindows) { Stop-Process -Id $ownerProcess.Id -Force }
     else { $ownerProcess.Kill($true) }
@@ -191,8 +199,8 @@ try {
     Wait-GameQuestTotalAtLeast 4 "gamequest-mission processed player=" @((Join-Path $LogDir "mission-a.out.log"), (Join-Path $LogDir "mission-b.out.log"))
     Wait-GameQuestTotalAtLeast 1 "gamequest-mission reconciled player=player-alice quest=" @((Join-Path $LogDir "mission-a.out.log"), (Join-Path $LogDir "mission-b.out.log"))
     if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-mission reconciled player=player-alice quest=") + (Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-mission reconciled player=player-alice quest=") -ne 1) { throw "Expected one reconcile row for player-alice" }
-    Wait-GameQuestTotalAtLeast 1 "gamequest-mission replayed player=player-alice generation=" @((Join-Path $LogDir "mission-a.out.log"), (Join-Path $LogDir "mission-b.out.log"))
-    if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-mission replayed player=player-alice generation=") + (Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-mission replayed player=player-alice generation=") -ne 1) { throw "Expected one replay row for player-alice" }
+    Wait-GameQuestTotalAtLeast 1 "gamequest-mission replayed player=player-alice rehydrationCount=" @((Join-Path $LogDir "mission-a.out.log"), (Join-Path $LogDir "mission-b.out.log"))
+    if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-mission replayed player=player-alice rehydrationCount=") + (Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-mission replayed player=player-alice rehydrationCount=") -ne 1) { throw "Expected one replay row for player-alice" }
     Wait-GameQuestTotalAtLeast 1 "gamequest-owner unavailable player=player-alice" @((Join-Path $LogDir "api-a.out.log"), (Join-Path $LogDir "api-b.out.log"))
     if ((Get-GameQuestLogCount (Join-Path $LogDir "api-a.out.log") "gamequest-owner unavailable player=player-alice") + (Get-GameQuestLogCount (Join-Path $LogDir "api-b.out.log") "gamequest-owner unavailable player=player-alice") -ne 1) { throw "Expected one unavailable row for player-alice" }
     if ((Get-GameQuestLogCount (Join-Path $LogDir "mission-a.out.log") "gamequest-owner replacement-handler-invoked player=player-alice") + (Get-GameQuestLogCount (Join-Path $LogDir "mission-b.out.log") "gamequest-owner replacement-handler-invoked player=player-alice") -ne 0) { throw "Replacement handler ran for player-alice" }

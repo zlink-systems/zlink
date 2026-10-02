@@ -530,35 +530,15 @@ void raw_mesh_node_owner_t::start ()
 
 task_t<void> raw_mesh_node_owner_t::publish_draining ()
 {
-    const auto publication =
-      _lane
-        .run ([this] {
-            auto descriptor = _topology.local_descriptor ();
-            if (descriptor.state != service_node_state_t::draining) {
-                if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-                    throw std::overflow_error ("service descriptor revision is exhausted");
-                descriptor.state = service_node_state_t::draining;
-                ++descriptor.descriptor_revision;
-                _topology.publish_local (descriptor);
-            }
-            return std::pair{std::move (descriptor), _topology.peers ()};
-        })
-        .get ();
+    const auto publication = co_await _topology.publish_draining_snapshot ();
     send_descriptor_update (publication.first, publication.second);
-    co_return;
 }
 
 void raw_mesh_node_owner_t::publish_descriptor_update (service_node_descriptor_t descriptor)
 {
-    const auto publication = _lane
-                               .run ([this, descriptor = std::move (descriptor)] () mutable {
-                                   _topology.publish_local (descriptor);
-                                   return std::pair{std::move (descriptor), _topology.peers ()};
-                               })
-                               .get ();
-    send_descriptor_update (publication.first, publication.second);
+    const auto peers = _topology.publish_local_snapshot (descriptor);
+    send_descriptor_update (descriptor, peers);
 }
-
 void raw_mesh_node_owner_t::send_descriptor_update (const service_node_descriptor_t &descriptor,
                                                     const std::vector<admitted_peer_t> &peers)
 {
@@ -2479,7 +2459,7 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
   std::optional<protocol::application_payload_t> application_reply)
 {
     if (!request.correlation) {
-        throw std::invalid_argument ("Instance Spot activation reply requires correlation");
+        return true;
     }
     if (terminal_result != 0 && application_reply) {
         throw std::invalid_argument (

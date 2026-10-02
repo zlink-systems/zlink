@@ -493,7 +493,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 internal sealed class ZLinkRouteSpotSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     ZLinkResolvedSpotHandle target,
-    TMessage message
+    TMessage message,
+    bool instanceIntent = false
 ) : IZLinkSendCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
@@ -539,7 +540,8 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
                     snapshot.OwnerLeaseGeneration,
                     parts,
                     cancellationToken,
-                    _metadata.Encode()
+                    _metadata.Encode(),
+                    ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent)
                 )
                 .ConfigureAwait(false);
             ZLinkOneWaySubmitOutcome.EnsureAccepted(
@@ -560,7 +562,8 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
 internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     ZLinkResolvedSpotHandle target,
-    TRequest request
+    TRequest request,
+    bool instanceIntent = false
 ) : IZLinkRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
@@ -653,7 +656,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                         parts,
                         timeout,
                         cancellationToken,
-                        _metadata.Encode()
+                        _metadata.Encode(),
+                        ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent)
                     )
                     .ConfigureAwait(false);
                 return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(

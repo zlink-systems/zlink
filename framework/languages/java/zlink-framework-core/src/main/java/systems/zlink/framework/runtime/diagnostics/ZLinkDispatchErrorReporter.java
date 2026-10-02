@@ -195,6 +195,27 @@ public final class ZLinkDispatchErrorReporter {
                 details.message());
     }
 
+    public static ZLinkDispatchErrorReason reasonFrom(Throwable error, int failureCode) {
+        if (failureCode
+                == systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                        .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED) {
+            return ZLinkDispatchErrorReason.STALE_TARGET;
+        }
+        return error instanceof systems.zlink.framework.errors.ZLinkFrameworkException framework
+                ? reasonFrom(framework.kind())
+                : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+    }
+
+    public static ZLinkDispatchErrorReason reasonFrom(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind) {
+        return switch (kind) {
+            case NOT_FOUND -> ZLinkDispatchErrorReason.HANDLER_MISSING;
+            case PROTOCOL_ERROR -> ZLinkDispatchErrorReason.INVALID_FRAME;
+            case SHUTTING_DOWN -> ZLinkDispatchErrorReason.SHUTDOWN;
+            default -> ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+        };
+    }
+
     public long reportedCount() {
         return reportedCount.get();
     }

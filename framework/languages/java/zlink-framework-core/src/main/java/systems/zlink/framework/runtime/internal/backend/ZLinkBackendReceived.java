@@ -23,6 +23,25 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     private final Consumer<List<Message>> reply;
     private final Runnable closeAction;
     private final String contentType;
+    private systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                    .InstanceSpotMessage
+            activationMessage;
+
+    public void retainActivationMessage(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message) {
+        if (activationMessage != null)
+            throw new IllegalStateException("activation message is already retained");
+        activationMessage = Objects.requireNonNull(message, "message");
+    }
+
+    public Optional<
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage>
+            activationMessage() {
+        return Optional.ofNullable(activationMessage);
+    }
 
     public ZLinkBackendReceived(
             ZLinkBackendRequestResult result,

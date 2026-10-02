@@ -1682,7 +1682,8 @@ class spot_handler_registry_t
                    // can re-admit the packet into the transfer backlog instead
                    // of letting it execute on the old owner after capture.
                    // Only written during this synchronous call.
-                   bool *actor_handoff_fence_refused = nullptr) const;
+                   bool *actor_handoff_fence_refused = nullptr,
+                   std::shared_ptr<const void> retained_message = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
@@ -1854,7 +1855,8 @@ struct spot_lifecycle_callbacks_t
       void *, const zlink::message_t &, serializer_registry_t &)>
       on_create;
     std::function<void (void *)> on_initialize;
-    std::function<void (void *, const spot_closing_context_t &, std::stop_token)> on_closing;
+    std::function<task_t<void> (void *, const spot_closing_context_t &, std::stop_token)>
+      on_closing;
     std::function<void (void *, const spot_relocation_ready_completion_t &)>
       on_relocation_ready_completed;
 };
@@ -2165,10 +2167,7 @@ class spot_node_builder_t
         };
         callbacks.on_closing = [] (void *spot, const spot_closing_context_t &context,
                                    std::stop_token cleanup_cancellation) {
-            static_cast<TSpot *> (spot)
-              ->on_closing (context, cleanup_cancellation)
-              .result ()
-              .value ();
+            return static_cast<TSpot *> (spot)->on_closing (context, cleanup_cancellation);
         };
         if constexpr (detail::user_spot_type<TSpot>) {
             callbacks.on_relocation_ready_completed =

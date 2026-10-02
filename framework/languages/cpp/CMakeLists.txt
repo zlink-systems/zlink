@@ -959,6 +959,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_error_mapping
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_error_mapping.cpp
+    framework/src/runtime/messaging/request_failure_mapper.cpp)
+  target_compile_features(test_cpp_framework_error_mapping PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_error_mapping PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_error_mapping PRIVATE
+    ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
+  target_link_libraries(test_cpp_framework_error_mapping PRIVATE zlink::cpp nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(NAME test_cpp_framework_error_mapping
+    COMMAND test_cpp_framework_error_mapping LABELS "framework-unit;framework-foundation;protocol" TIMEOUT 30)
+
   add_executable(test_cpp_framework_submit_result_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_submit_result_contract.cpp
     framework/src/runtime/backend/raw_dealer_port.cpp
@@ -996,14 +1010,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_service_wire_codec
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
-    framework/src/runtime/protocol/service_wire_codec.cpp
-    framework/src/runtime/messaging/envelope_codec.cpp
-    framework/src/runtime/codecs/serializer.cpp
-    framework/src/runtime/diagnostics/flow_context.cpp
-    framework/src/runtime/dispatch/offload_executor.cpp
-    framework/src/runtime/execution/state_lane.cpp
-    framework/src/runtime/mesh/service_topology_registry.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp)
   target_compile_features(test_cpp_framework_service_wire_codec PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -1022,7 +1029,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-request-v1.json"
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
-    zlink::cpp
+    zlink::framework
     zlink::framework_provider_abstractions
     nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
@@ -1223,6 +1230,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework_m6b_runtime
     zlink_framework
     Threads::Threads)
+  target_compile_definitions(test_cpp_framework_m6b_runtime PRIVATE
+    ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json"
+    ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6b_runtime
     COMMAND test_cpp_framework_m6b_runtime
@@ -1922,7 +1932,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)

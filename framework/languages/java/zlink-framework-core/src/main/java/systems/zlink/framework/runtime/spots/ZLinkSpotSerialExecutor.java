@@ -468,6 +468,22 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.enqueueLifecycleAdmission(operation);
     }
 
+    CompletionStage<Void> enqueueClose(
+            Supplier<CompletionStage<Void>> operation,
+            java.util.function.BooleanSupplier committed) {
+        CompletionStage<Void> close =
+                spotQueue.enqueueLifecycleTransition(
+                        operation,
+                        ignored -> CompletableFuture.completedFuture(null),
+                        committed,
+                        ignored -> false);
+        return spotQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
+    }
+
+    void commitClose() {
+        spotQueue.commitLifecycleTransition();
+    }
+
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
         return spotQueue.trySealRelocation();
     }

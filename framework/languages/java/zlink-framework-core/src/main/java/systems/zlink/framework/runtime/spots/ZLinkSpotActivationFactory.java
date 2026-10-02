@@ -4,6 +4,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
@@ -243,9 +245,24 @@ final class ZLinkSpotActivationFactory {
             RoutingId nodeRid,
             Class<? extends ZLinkInstanceSpot> spotType,
             ZLinkBackendSpot backendSpot) {
+        return activateInstance(meshName, nodeRid, spotType, backendSpot, null);
+    }
+
+    CompletionStage<ZLinkInstanceSpotActivation> activateInstance(
+            String meshName,
+            RoutingId nodeRid,
+            Class<? extends ZLinkInstanceSpot> spotType,
+            ZLinkBackendSpot backendSpot,
+            systems.zlink.framework.execution.ZLinkSerialExecutionQueue ownerQueue) {
         DefaultInstanceSpotContext context =
                 new DefaultInstanceSpotContext(
-                        host, workerPool, handlerLoader, meshName, nodeRid, backendSpot);
+                        host,
+                        workerPool,
+                        handlerLoader,
+                        meshName,
+                        nodeRid,
+                        backendSpot,
+                        ownerQueue);
         ZLinkInstanceSpot spot;
         try {
             spot =
@@ -271,13 +288,25 @@ final class ZLinkSpotActivationFactory {
         }
         try {
             context.bind(spot);
-            spot.configure();
+            try {
+                spot.configure();
+            } catch (RuntimeException failure) {
+                throw ownerQueue == null ? failure : instanceInitializationFailure(failure);
+            }
             context.closeRegistration(spotType);
         } catch (RuntimeException failure) {
             return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
                     .thenApply(ignored -> null);
         }
-        return context.runLifecycle(spot::onInitialize)
+        return (ownerQueue == null
+                        ? context.runLifecycle(spot::onInitialize)
+                        : systems.zlink.framework.execution.ZLinkSerialExecutionQueue.yieldCurrent(
+                                context.runLifecycleExecution(spot::onInitialize)
+                                        .exceptionallyCompose(
+                                                failure ->
+                                                        CompletableFuture.failedFuture(
+                                                                instanceInitializationFailure(
+                                                                        failure)))))
                 .thenApply(
                         ignored -> {
                             var activation =
@@ -299,6 +328,18 @@ final class ZLinkSpotActivationFactory {
                                                         ignored ->
                                                                 (ZLinkInstanceSpotActivation) null))
                 .thenCompose(stage -> stage);
+    }
+
+    private static RuntimeException instanceInitializationFailure(Throwable failure) {
+        Throwable cause = failure;
+        while (cause instanceof java.util.concurrent.CompletionException
+                && cause.getCause() != null) cause = cause.getCause();
+        return cause instanceof ZLinkFrameworkException typed
+                ? typed
+                : new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                        "Instance Spot reincarnation initialization failed",
+                        cause);
     }
 
     private CompletionStage<SpotActivationCreateResult> initializeAcceptedSpot(

@@ -1,3 +1,4 @@
+import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   ActorRef,
   RoutingId,
@@ -32,6 +33,7 @@ import {
   ZLinkMessage,
   ZLinkFrameworkException,
   ZLinkFrameworkErrorKind,
+  ZLinkFrameworkRuntimeState,
   ZLinkSpotCloseReason,
   ZLinkSpotKind
 } from '../../contracts';
@@ -64,7 +66,6 @@ import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/ap
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind,
   internalFrameworkWireReply
 } from '../framework-errors-internal';
 import type { ZLinkBackendSpot, ZLinkBackendSpotNode } from '../backend/contracts';
@@ -247,19 +248,25 @@ export interface ZLinkSpotManagerOptions {
     meshName: string,
     spotId: RoutingId,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   readonly beginInstanceClosingAuthority?: (
     meshName: string,
     spotId: RoutingId,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   /** Moves a local User Spot incarnation's authority to Closing for a context Close. */
   readonly beginUserClosingAuthority?: (
     meshName: string,
     spotId: RoutingId,
     objectGeneration: bigint,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   readonly instanceSpotApplicationTargetProvider?: (
     meshName: string,
     spotId: RoutingId
@@ -295,7 +302,10 @@ export interface ZLinkSpotManagerOptions {
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
-  readonly statefulExecutionAllowed?: () => boolean;
+  readonly statefulExecution?: {
+    readonly admissionOpen: () => boolean;
+    readonly hostState: () => ZLinkFrameworkRuntimeState;
+  };
   readonly activationAdmission?: ZLinkActivationAdmission;
 }
 
@@ -304,10 +314,15 @@ interface ZLinkTargetSpotCloseOperation {
   readonly reason: ZLinkSpotCloseReason;
   readonly beginAuthority: (
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
-  authority?: { release(): Promise<void> };
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
+  authority?: import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority;
   authorityDecision?: Promise<void>;
   ready?: Promise<boolean>;
+  canExecuteApplication?(
+    record: import('../execution/serial-execution-queue').ZLinkSerialWorkRecord<unknown>
+  ): boolean;
 }
 
 export class DefaultZLinkSpotManager {
@@ -355,7 +370,7 @@ export class DefaultZLinkSpotManager {
       nodeGenerationProvider: options.nodeGenerationProvider
     });
     this.routedSpotPackets = new ZLinkRoutedSpotPacketDispatch({
-      resolveActivation: (spotId) => this.activations.resolveUnique(spotId),
+      resolveActivation: (spotId) => this.resolveApplicationActivation(spotId),
       claimApplicationWork:
         options.admission === undefined
           ? undefined
@@ -414,7 +429,7 @@ export class DefaultZLinkSpotManager {
       boundSessionRuntime: options.boundSessionRuntime,
       actorHandoffRuntime: options.actorHandoffRuntime,
       admission: options.admission,
-      statefulExecutionAllowed: options.statefulExecutionAllowed,
+      statefulExecutionAllowed: options.statefulExecution?.admissionOpen,
       leaveActor: (spotId, actor, signal, meshName) =>
         this.actorMembership.leaveActor(spotId, actor, signal, meshName),
       requestContextClose: (activation, objectGeneration, signal) =>
@@ -689,20 +704,41 @@ export class DefaultZLinkSpotManager {
   }
 
   isInstanceMaterialized(meshName: string, instanceType: string, spotId: RoutingId): boolean {
-    const activation = this.activations.resolve(meshName, spotId);
+    const activation = this.resolveApplicationActivation(spotId, meshName);
     return (
       activation !== undefined &&
       activation.spotType === this.requireInstanceFactory(meshName, instanceType)
     );
   }
 
+  private resolveApplicationActivation(
+    spotId: RoutingId,
+    meshName?: string
+  ): ZLinkSpotActivation | undefined {
+    const current =
+      meshName === undefined
+        ? this.activations.resolveUnique(spotId)
+        : this.activations.resolve(meshName, spotId);
+    if (current !== undefined) return current;
+    if (meshName !== undefined)
+      return this.closeOperations.get(`${meshName}\0${String(spotId)}`)?.activation;
+    for (const operation of this.closeOperations.values()) {
+      if (String(operation.activation.spotId) === String(spotId)) return operation.activation;
+    }
+    return undefined;
+  }
+
   isInstanceMaterializing(meshName: string, spotId: RoutingId): boolean {
     const prefix = instanceMaterializationPrefix(meshName, spotId);
-    return (this.pendingInstanceMaterializationsByPrefix.get(prefix)?.size ?? 0) > 0;
+    return (
+      (this.pendingInstanceMaterializationsByPrefix.get(prefix)?.size ?? 0) > 0 ||
+      this.closeOperations.get(`${meshName}\0${String(spotId)}`)?.authority !== undefined
+    );
   }
 
   isSpotClosing(meshName: string, spotId: RoutingId): boolean {
     return (
+      this.closeOperations.get(`${meshName}\0${String(spotId)}`)?.authority !== undefined ||
       this.activations.activationForClose(meshName, spotId)?.executionBarrier.isCloseSealed === true
     );
   }
@@ -1066,7 +1102,9 @@ export class DefaultZLinkSpotManager {
   async closeUserWithAuthority(
     meshName: string,
     spotId: RoutingId,
-    beginAuthority: (onCommitted: () => void) => Promise<{ release(): Promise<void> }>,
+    beginAuthority: (
+      onCommitted: () => void
+    ) => Promise<import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority>,
     signal?: AbortSignal
   ): Promise<boolean> {
     return await this.closeWithReason(
@@ -1121,7 +1159,9 @@ export class DefaultZLinkSpotManager {
     deadline?: Date,
     beginUserAuthority?: (
       onCommitted: () => void
-    ) => Promise<{ release(): Promise<void> } | undefined>
+    ) => Promise<
+      import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+    >
   ): Promise<boolean> {
     requireMeshName(meshName);
     const key = `${meshName}\0${String(spotId)}`;
@@ -1160,12 +1200,22 @@ export class DefaultZLinkSpotManager {
         reason,
         beginAuthority
       };
+      if (reason === ZLinkSpotCloseReason.ExplicitClose) {
+        operation.canExecuteApplication = (record) => {
+          const context = record.context as
+            import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
+          return context === undefined;
+        };
+      }
       this.closeOperations.set(key, operation);
     }
     if (operation.ready === undefined) {
       const active = operation;
-      const run = active.activation.serial.executeControlLifecycleOperation(() =>
-        this.runCloseOperation(meshName, spotId, active, signal, deadline)
+      const run = active.activation.serial.executeControlLifecycleOperation(
+        () => this.runCloseOperation(meshName, spotId, active, signal, deadline),
+        active.canExecuteApplication === undefined
+          ? undefined
+          : (active as import('../execution/serial-execution-queue').ZLinkSerialLifecycleContext)
       );
       active.ready = run.finally(() => {
         active.ready = undefined;
@@ -1186,14 +1236,89 @@ export class DefaultZLinkSpotManager {
   ): Promise<boolean> {
     const seal = await this.beginCloseAuthority(meshName, spotId, operation, signal);
     if (seal === undefined) return false;
-    await this.activationLifecycle.sealForClose(operation.activation, seal);
+    if (seal !== true) {
+      await this.activationLifecycle.sealForClose(operation.activation, seal);
+    }
     const closingFailure = await this.activationLifecycle.cleanupClosedActivation(
       operation.activation,
       operation.reason,
       deadline
     );
-    await operation.authority?.release();
     this.activations.finishClose(meshName, spotId);
+    let hasIntent = false;
+    operation.activation.serial.visitPendingApplication((record) => {
+      const context = record.context as
+        import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
+      hasIntent ||= context?.replay !== undefined;
+    });
+    const hostState = this.options.statefulExecution?.hostState();
+    const intentFailure = !hasIntent
+      ? undefined
+      : hostState === ZLinkFrameworkRuntimeState.Draining
+        ? createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+            'Instance intent cannot continue while the host is draining.'
+          )
+        : hostState === ZLinkFrameworkRuntimeState.Relocating ||
+            hostState === ZLinkFrameworkRuntimeState.Relocated ||
+            this.options.statefulExecution?.admissionOpen() === false ||
+            (operation.activation.executionBarrier.isSealed &&
+              !operation.activation.executionBarrier.isCloseSealed)
+          ? createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.SpotMoving,
+              'Instance intent cannot continue on an unavailable or relocating owner.'
+            )
+          : undefined;
+    if (
+      operation.reason === ZLinkSpotCloseReason.ExplicitClose &&
+      hasIntent &&
+      intentFailure === undefined &&
+      operation.authority?.reincarnate !== undefined
+    ) {
+      try {
+        await operation.authority.reincarnate(async (authority) => {
+          await this.activationLifecycle.materializeInstance(
+            meshName,
+            authority.stableType,
+            operation.activation.spotType as Type<ZLinkInstanceSpot>,
+            spotId,
+            authority.objectGeneration,
+            signal,
+            operation.activation
+          );
+        });
+      } catch (error) {
+        const initialized = this.activations.resolve(meshName, spotId);
+        if (initialized !== undefined && initialized !== operation.activation) {
+          await this.activationLifecycle.cleanupFailedIncarnation(initialized);
+        }
+        this.activations.finishClose(meshName, spotId);
+        operation.activation.serial.visitPendingApplication((record) => {
+          const context = record.context as
+            import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
+          if (context?.replay !== undefined) record.operation = () => context.replay!(error);
+        });
+        operation.activation.serial.closeAdmission();
+        throw error;
+      }
+    } else {
+      await operation.authority?.release();
+      operation.activation.serial.closeAdmission();
+      if (!operation.activation.executionBarrier.isSealed) {
+        const closed = operation.activation.sealExecution('close');
+        operation.activation.commitExecutionSeal(closed);
+      }
+    }
+    if (operation.reason === ZLinkSpotCloseReason.ExplicitClose) {
+      operation.activation.serial.visitPendingApplication((record) => {
+        const context = record.context as
+          import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
+        if (context?.replay !== undefined) {
+          record.operation =
+            intentFailure === undefined ? context.replay : () => context.replay!(intentFailure);
+        }
+      });
+    }
     this.closeOperations.delete(`${meshName}\0${String(spotId)}`);
     // An OnClosing failure never changes a Close result; host shutdown alone
     // reports it as its teardown outcome after cleanup has finished.
@@ -1208,8 +1333,10 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     operation: ZLinkTargetSpotCloseOperation,
     signal?: AbortSignal
-  ): Promise<import('../execution').ZLinkExecutionBarrierSeal | undefined> {
-    await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
+  ): Promise<import('../execution').ZLinkExecutionBarrierSeal | true | undefined> {
+    if (operation.reason !== ZLinkSpotCloseReason.ExplicitClose) {
+      await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
+    }
     if (!operation.activation.canClose(operation.reason)) return undefined;
     if (operation.activation.executionBarrier.isSealed) {
       throw createInternalFrameworkException(
@@ -1218,10 +1345,13 @@ export class DefaultZLinkSpotManager {
         true
       );
     }
-    let seal: import('../execution').ZLinkExecutionBarrierSeal | undefined;
+    let seal: import('../execution').ZLinkExecutionBarrierSeal | true | undefined;
     const authorityPromise = Promise.resolve().then(() =>
       operation.beginAuthority(() => {
-        seal = operation.activation.sealExecution('close');
+        seal =
+          operation.reason === ZLinkSpotCloseReason.ExplicitClose
+            ? true
+            : operation.activation.sealExecution('close');
       })
     );
     operation.authorityDecision = authorityPromise.then(
@@ -1307,6 +1437,12 @@ export class DefaultZLinkSpotManager {
   ): Promise<ZLinkSpotActorJoinResult> {
     const meshName = this.activations.resolveUnique(spotId)?.meshName;
     this.options.admission?.requireRequest('Actor join admission', meshName);
+    if (meshName !== undefined && this.isSpotClosing(meshName, spotId)) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        `Spot '${String(spotId)}' is closing.`
+      );
+    }
     return await this.actorMembership.admitActorJoin(
       spotId,
       actor,
@@ -1545,7 +1681,7 @@ export class DefaultZLinkSpotManager {
     let target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
     if (target === undefined) return;
     for (;;) {
-      const current = this.activations.resolve(meshName, spotId);
+      const current = this.resolveApplicationActivation(spotId, meshName);
       if (
         current !== undefined &&
         current.objectGeneration === target.objectGeneration &&
@@ -1599,7 +1735,7 @@ export class DefaultZLinkSpotManager {
       );
       try {
         await this.ensureInstanceApplicationActivation(meshName, spotId);
-        const activation = this.activations.resolve(meshName, spotId);
+        const activation = this.resolveApplicationActivation(spotId, meshName);
         if (activation === undefined || activation.domain.kind !== 'instance') {
           throw new ZLinkConfigurationException(
             `MeshNode Instance Spot target '${String(spotId)}' is not active.`
@@ -1624,6 +1760,11 @@ export class DefaultZLinkSpotManager {
           channelName: envelope.header.channelName,
           contentType: envelope.header.contentType,
           awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
+          activationRecord: record,
+          onOneWayError: this.options.dispatchErrors?.captureEnabled()
+            ? (error: unknown) =>
+                this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, false, error)
+            : undefined,
           workOptions: zlinkSerialWorkOptions(
             envelope.payload.byteLength,
             record.applicationMetadata?.byteLength ??
@@ -1694,7 +1835,8 @@ export class DefaultZLinkSpotManager {
           target?.stableType
         );
       } catch (error) {
-        const reason = instanceDispatchErrorReason(error);
+        this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, error);
+        const reason = dispatchReasonFromError(error);
         if (!request) {
           this.traceInstanceMessage(
             ZLinkMessageFlowOutcome.Dropped,
@@ -1708,26 +1850,38 @@ export class DefaultZLinkSpotManager {
           );
           return;
         }
-        this.options.dispatchErrors?.report({
-          surface: ZLinkDispatchErrorSurface.InstanceSpot,
-          messageKind: ZLinkDispatchMessageKind.Request,
-          packetName: envelope.packetName,
-          channelName: envelope.header.channelName,
-          meshName,
-          correlationId: envelope.header.correlationId ?? undefined,
-          sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
-          spotId: String(spotId),
-          instanceSpotType: this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
-            ?.stableType,
-          activationState: 'closing',
-          flowId: envelope.header.flowId,
-          flowOrigin: envelope.header.flowOrigin,
-          reason,
-          action: ZLinkDispatchErrorAction.ReplyError,
-          error
-        });
+
         requireMeshSpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
       }
+    });
+  }
+
+  private reportInstanceDispatchFailure(
+    meshName: string,
+    spotId: RoutingId,
+    record: ReceiveRecord,
+    envelope: ReturnType<typeof decodeChannelEnvelope>,
+    request: boolean,
+    error: unknown
+  ): void {
+    if (!this.options.dispatchErrors?.captureEnabled()) return;
+    this.options.dispatchErrors?.report({
+      surface: ZLinkDispatchErrorSurface.InstanceSpot,
+      messageKind: request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+      packetName: envelope.packetName,
+      channelName: envelope.header.channelName,
+      meshName,
+      correlationId: envelope.header.correlationId ?? undefined,
+      sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
+      spotId: String(spotId),
+      instanceSpotType: this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
+        ?.stableType,
+      activationState: 'closing',
+      flowId: envelope.header.flowId,
+      flowOrigin: envelope.header.flowOrigin,
+      reason: dispatchReasonFromError(error),
+      action: request ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+      error
     });
   }
 
@@ -3164,21 +3318,6 @@ function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
   return error instanceof ZLinkFrameworkException
     ? error.kind
     : ZLinkFrameworkErrorKind.InternalFailure;
-}
-
-function instanceDispatchErrorReason(error: unknown): ZLinkDispatchErrorReason {
-  if (error instanceof ZLinkFrameworkException) {
-    const kind = internalFrameworkErrorKind(error);
-    if (
-      kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
-      kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
-      kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
-      kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-    ) {
-      return ZLinkDispatchErrorReason.StaleTarget;
-    }
-  }
-  return ZLinkDispatchErrorReason.HandlerException;
 }
 
 interface ZLinkFormalRemoteTransferRequest {

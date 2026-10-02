@@ -1449,9 +1449,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                         superseded,
                                                                         Map.of(
                                                                                 "zlink.origin",
-                                                                                        "framework",
-                                                                                "zlink.actorJoin.superseded",
-                                                                                        "true"))));
+                                                                                "framework"))));
                             } catch (RuntimeException failure) {
                                 target.publishRequested().completeExceptionally(failure);
                                 throw failure;

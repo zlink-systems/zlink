@@ -455,7 +455,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var source = await PrepareCapturedSourceAsync(store);
         await Assert.ThrowsAsync<ArgumentException>(async () =>
             await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).CommitTargetAsync(
-                source.Captured with { StoreVersion = string.Empty },
+                source.Captured with
+                {
+                    StoreVersion = string.Empty,
+                },
                 source.Envelope,
                 source.Prepare,
                 source.TargetAuthority,

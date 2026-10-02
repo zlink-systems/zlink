@@ -44,7 +44,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         ulong deadlineUnixMs = 0,
         IDisposable? payloadOwner = null,
-        ZLinkMultipartPayloadView? applicationPayloadView = null
+        ZLinkMultipartPayloadView? applicationPayloadView = null,
+        bool instanceIntent = false
     )
     {
         Parts = parts;
@@ -63,6 +64,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         RequestSource = requestSource;
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
+        InstanceIntent = instanceIntent;
         _payloadOwner = payloadOwner;
     }
 
@@ -89,11 +91,22 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 
     public MeshOperationId OperationId { get; }
 
-    public ulong TargetNodeGeneration { get; }
+    public ulong TargetNodeGeneration { get; private set; }
 
-    public ulong AuthorityOwnerGeneration { get; }
+    public ulong AuthorityOwnerGeneration { get; private set; }
 
-    public ulong OwnerLeaseGeneration { get; }
+    public ulong OwnerLeaseGeneration { get; private set; }
+
+    internal void RebindAuthority(
+        ulong targetNodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration
+    )
+    {
+        TargetNodeGeneration = targetNodeGeneration;
+        AuthorityOwnerGeneration = authorityOwnerGeneration;
+        OwnerLeaseGeneration = ownerLeaseGeneration;
+    }
 
     public byte MessageFollowHopCount { get; }
 
@@ -102,6 +115,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     public ZLinkServiceWireCodec.RequestSourceFence? RequestSource { get; }
 
     public ulong DeadlineUnixMs { get; }
+    internal bool InstanceIntent { get; }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
         (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;

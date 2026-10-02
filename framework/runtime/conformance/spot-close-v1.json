@@ -7,19 +7,20 @@
     "framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현"
   ],
   "closeSteps": [
+    "closeItemStarted",
     "closingCommitted",
-    "admissionSealed",
-    "acceptedTurnsDrained",
     "onClosing",
-    "localResourcesReleased",
-    "authorityReleased"
+    "localResourcesReleased"
   ],
   "invariants": {
     "contextCloseReturnsValue": true,
     "onClosingCallsPerAcceptedClose": 1,
     "onClosingFailureChangesCloseResult": false,
     "managerCloseResubmitsToNewOwner": false,
-    "closeRetargetsCurrentIncarnation": false
+    "closeRetargetsCurrentIncarnation": false,
+    "unexecutedTimersCancelled": true,
+    "oldIncarnationPendingHandlerCalls": 0,
+    "messageTerminalsPerRequest": 1
   },
   "scenarios": [
     {
@@ -112,6 +113,212 @@
         "diagnostics": [
           "onClosingFailed"
         ]
+      }
+    }
+  ],
+  "closeBranches": [
+    {
+      "name": "reincarnate-pending-intent",
+      "given": {
+        "host": "Serving",
+        "pendingIntent": true
+      },
+      "expect": {
+        "order": [
+          "authorityReincarnated",
+          "newIncarnationInitialized",
+          "storedStateRestored",
+          "pendingIntentMessagesExecuted"
+        ],
+        "authority": "Ready",
+        "objectGeneration": "storeIssuedDifferent",
+        "authorityOwnerGeneration": "storeIssuedDifferent",
+        "owner": "unchanged",
+        "lease": "unchanged",
+        "capacity": "unchanged",
+        "oldHandlerCalls": 0,
+        "newHandlerCalls": 1,
+        "messageTerminal": "reply",
+        "messageTerminalCount": 1
+      }
+    },
+    {
+      "name": "release-without-pending-intent",
+      "given": {
+        "host": "Serving",
+        "pendingIntent": false
+      },
+      "expect": {
+        "order": [
+          "authorityReleased"
+        ],
+        "authority": "Missing",
+        "oldHandlerCalls": 0,
+        "newHandlerCalls": 0,
+        "factoryCalls": 0
+      }
+    },
+    {
+      "name": "release-during-host-drain-or-relocation",
+      "given": {
+        "host": [
+          "Draining",
+          "Relocating"
+        ],
+        "pendingIntent": true,
+        "relocationSeal": [
+          "before",
+          "after"
+        ]
+      },
+      "expect": {
+        "order": [
+          "authorityReleased",
+          "pendingMessagesTerminated"
+        ],
+        "authority": "Missing",
+        "oldHandlerCalls": 0,
+        "thisHostFactoryCalls": 0,
+        "messageTerminalCount": 1,
+        "missingPlacementCalls": 0,
+        "messageTerminalByHost": {
+          "Draining": "ShuttingDown",
+          "Relocating": "Unavailable"
+        },
+        "sendDiagnosticsByHost": {
+          "Draining": {
+            "kind": "ShuttingDown",
+            "surface": "instance_spot",
+            "reason": "shutdown"
+          },
+          "Relocating": {
+            "kind": "Unavailable",
+            "surface": "instance_spot",
+            "reason": "stale_target"
+          }
+        }
+      }
+    },
+    {
+      "name": "reincarnate-initialization-fails",
+      "given": {
+        "host": "Serving",
+        "pendingIntent": true,
+        "initialization": "fails"
+      },
+      "expect": {
+        "order": [
+          "authorityReincarnated",
+          "newGenerationDeleted",
+          "pendingMessagesTypedFailure"
+        ],
+        "authority": "Missing",
+        "objectGeneration": "storeIssuedDifferent",
+        "oldHandlerCalls": 0,
+        "newHandlerCalls": 0,
+        "messageTerminal": "typedFailure",
+        "messageTerminalCount": 1
+      }
+    },
+    {
+      "name": "closing-message-without-intent",
+      "given": {
+        "authority": "Closing",
+        "messageIntent": false
+      },
+      "expect": {
+        "order": [],
+        "oldHandlerCalls": 0,
+        "newHandlerCalls": 0,
+        "factoryCalls": 0,
+        "messageTerminal": "NotFound",
+        "messageTerminalCount": 1
+      }
+    }
+  ],
+  "readyRouteCases": [
+    {
+      "name": "stale-ready-owner-fence-request",
+      "given": {
+        "authority": "Ready",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "request"
+      },
+      "expect": {
+        "messageTerminal": "Unavailable",
+        "messageTerminalCount": 1,
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-ready-owner-fence-send",
+      "given": {
+        "authority": "Ready",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "send"
+      },
+      "expect": {
+        "diagnostics": [
+          "Unavailable"
+        ],
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0,
+        "surface": "instance_spot",
+        "reason": "stale_target"
+      }
+    },
+    {
+      "name": "stale-released-ready-owner-fence-request",
+      "given": {
+        "authority": "Missing",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "request",
+        "routeKind": "ready"
+      },
+      "expect": {
+        "messageTerminal": "Unavailable",
+        "messageTerminalCount": 1,
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-released-ready-owner-fence-send",
+      "given": {
+        "authority": "Missing",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "send",
+        "routeKind": "ready"
+      },
+      "expect": {
+        "diagnostics": [
+          "Unavailable"
+        ],
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0,
+        "surface": "instance_spot",
+        "reason": "stale_target"
       }
     }
   ]

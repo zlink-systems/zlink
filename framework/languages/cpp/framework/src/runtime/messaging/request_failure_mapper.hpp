@@ -6,8 +6,8 @@
 #include "runtime/foundation/operation_terminal.hpp"
 
 #include <cstdint>
-#include <string>
 #include <optional>
+#include <string>
 
 namespace zlink::framework::runtime::messaging
 {
@@ -28,6 +28,12 @@ enum class request_result_t
     internal_error
 };
 
+struct request_wire_failure_t
+{
+    std::uint32_t terminal_result;
+    std::uint32_t failure_code;
+};
+
 class request_failure_mapper_t
 {
   public:
@@ -42,6 +48,17 @@ class request_failure_mapper_t
     framework_exception_t reply_header_exception (std::uint32_t terminal_result,
                                                   std::uint32_t failure_code,
                                                   const std::string &operation_name) const;
+    // Encodes a target Framework failure; source/native completion uses its own mapper.
+    std::optional<request_wire_failure_t> target_failure_reply (framework_error_kind_t kind,
+                                                                std::uint32_t cause_code = 0) const;
+    std::optional<request_wire_failure_t>
+    target_failure_reply (const framework_exception_t &error) const
+    {
+        return target_failure_reply (error.kind (), detail::failure_code (error));
+    }
+    std::uint32_t target_failure_code (framework_error_kind_t kind,
+                                       std::uint32_t cause_code = 0) const noexcept;
+    framework_error_kind_t failure_code_kind (std::uint32_t failure_code) const noexcept;
 };
 
 } // namespace zlink::framework::runtime::messaging
