@@ -958,7 +958,6 @@ export class ZLinkStreamSessionNodeRuntime {
   private readonly unaddressedMonitorSessions: Array<string | undefined> = [];
   private unaddressedMonitorSessionHead = 0;
   private unaddressedMonitorSessionCount = 0;
-  private readonly disconnectedEndpoints = new Set<string>();
   private pendingEndpointlessDisconnect:
     | {
         readonly session: ZLinkStreamSessionRuntime;
@@ -1240,18 +1239,12 @@ export class ZLinkStreamSessionNodeRuntime {
     }
     switch (event.nativeEvent) {
       case ZLinkSocketNativeEventType.ConnectionReady:
+        if (!event.readyEdge) return;
         this.activityVersion += 1;
-        {
-          const endpointKey = streamMonitorEndpointKey(event.localAddr, event.remoteAddr);
-          if (this.disconnectedEndpoints.delete(endpointKey)) {
-            return;
-          }
-        }
         if (event.routingId === undefined) {
           const endpointKey = streamMonitorEndpointKey(event.localAddr, event.remoteAddr);
           const unaddressed = this.firstUnaddressedSession();
           if (unaddressed !== undefined) {
-            this.disconnectedEndpoints.delete(endpointKey);
             unaddressed.enqueueConnected(event.localAddr, event.remoteAddr);
             this.enqueueUnaddressedMonitorSession(unaddressed.stream.sessionId);
             return;
@@ -1274,7 +1267,6 @@ export class ZLinkStreamSessionNodeRuntime {
       case ZLinkSocketNativeEventType.Disconnected:
         {
           const endpointKey = streamMonitorEndpointKey(event.localAddr, event.remoteAddr);
-          this.disconnectedEndpoints.add(endpointKey);
           this.removePendingConnectionMetadata(endpointKey);
           const session = this.resolveMonitorSession(event);
           const error = new Error(`Stream disconnected: ${event.nativeEvent}/${event.value}`);

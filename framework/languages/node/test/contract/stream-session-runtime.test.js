@@ -50,6 +50,60 @@ test('node monitor adapter preserves the opaque native session routing id', () =
   assert.equal(observed.routingId, routingId);
 });
 
+test('STREAM monitor ready snapshots do not create phantom sessions', async (t) => {
+  const nativeEvents = [];
+  const monitor = nodeMonitorBackend.wrapMonitorSocket({
+    close() {},
+    recv() { return nativeEvents.shift() ?? null; }
+  });
+  const clock = new FakeLivenessClock();
+  const sessions = [];
+  const runtime = createStreamRuntime({
+    socket: new FakeStreamSocket(),
+    monitor,
+    livenessClock: clock,
+    sessionFactory(context) {
+      sessions.push(context.sessionId);
+      return { context };
+    }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  const emitReady = (routingId, flags) => {
+    nativeEvents.push({
+      event: zlink.MonitorEventType.ConnectionReady,
+      routingId,
+      flags,
+      value: 1n,
+      localAddr: 'tcp://local',
+      remoteAddr: 'tcp://remote'
+    });
+    monitor.drain();
+  };
+  emitReady('snapshot-only', 0);
+  await clock.flush();
+  assert.deepEqual(sessions, []);
+  emitReady('edge-session', zlink.MonitorEventFlag.ConnectionReadyEdge);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session']);
+  emitReady('another-snapshot', 0);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session']);
+  nativeEvents.push({
+    event: zlink.MonitorEventType.Disconnected,
+    routingId: 'edge-session',
+    flags: 0,
+    value: 0n,
+    localAddr: 'tcp://local',
+    remoteAddr: 'tcp://remote'
+  });
+  monitor.drain();
+  await clock.flush();
+  emitReady('replacement-edge', zlink.MonitorEventFlag.ConnectionReadyEdge);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session', 'replacement-edge']);
+});
+
 test('STREAM runtime registers its monitor handler once across repeated starts', async () => {
   let monitorRegistrations = 0;
   const runtime = createStreamRuntime({
@@ -113,6 +167,7 @@ test('ConnectionReady before the first packet keeps the native routing id for re
     runtime.start();
     monitorHandler({
       nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+      readyEdge: true,
       routingId,
       localAddr: 'tcp://local',
       remoteAddr: 'tcp://remote',
@@ -1308,6 +1363,7 @@ test('stream session node runtime observes connect and disconnect while the data
 
   queued.push({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://remote-idle',
@@ -1351,6 +1407,7 @@ test('stream session node runtime consumes a removed session tombstone before a 
   runtime.start();
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://old',
@@ -1369,6 +1426,7 @@ test('stream session node runtime consumes a removed session tombstone before a 
 
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://fresh',
@@ -1432,6 +1490,7 @@ test('stream session node runtime cancels endpointless disconnect when connectio
   });
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: undefined,
     remoteAddr: undefined,
