@@ -42,6 +42,8 @@ import java.util.concurrent.TimeUnit;
 final class ZLinkProviderAuthorityRepository {
     private static final int AUTHORITY_RECORD_VERSION = 1;
     private static final String FIELD_RECORD_VERSION = "recordVersion";
+    private static final String OWNER_TRANSITION_PRESERVE = "preserve";
+    private static final String OWNER_TRANSITION_NEW_OWNER = "newOwner";
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
     private static final ZLinkStoreKey OBJECT_COUNTER =
@@ -2905,12 +2907,8 @@ final class ZLinkProviderAuthorityRepository {
     // Top-level: {recordVersion:1, payload(base64), objectGeneration,
     // authorityOwnerGeneration, ownerId, ownerLeaseGeneration, allocation,
     // pendingCreation}. Except for `payload`, integer fields are JSON
-    // strings (64-bit values). `providerExtension` is a java-private,
-    // non-normative addition (permitted -- the spec's field table is "at
-    // least" the listed fields) that carries the aggregate-transaction
-    // marker and visible-store-version bookkeeping; it is present only
-    // while an aggregate transaction is in flight, so a plain reserve/
-    // commit record matches the golden fixture's field set exactly.
+    // strings (64-bit values). Aggregate markers and visibleStoreVersion
+    // use the shared top-level fields during aggregate recovery.
 
     private static byte[] encode(AuthorityRecord value) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
@@ -2930,10 +2928,11 @@ final class ZLinkProviderAuthorityRepository {
         } else {
             root.putNull("pendingCreation");
         }
-        if (value.aggregate() != null || value.visibleStoreVersion() != null) {
-            root.set(
-                    "providerExtension",
-                    encodeExtension(value.aggregate(), value.visibleStoreVersion()));
+        if (value.aggregate() != null) {
+            root.set("aggregate", encodeAggregateMarker(value.aggregate()));
+        }
+        if (value.visibleStoreVersion() != null) {
+            root.put("visibleStoreVersion", value.visibleStoreVersion());
         }
         try {
             return CANONICAL_JSON.writeValueAsBytes(root);
@@ -2984,38 +2983,28 @@ final class ZLinkProviderAuthorityRepository {
         return node;
     }
 
-    private static ObjectNode encodeExtension(
-            AggregateParticipantMarker aggregate, String visibleStoreVersion) {
-        ObjectNode node = CANONICAL_JSON.createObjectNode();
-        if (aggregate != null) {
-            ObjectNode marker = CANONICAL_JSON.createObjectNode();
-            marker.put("aggregateIdMostSigBits", aggregate.aggregateId().getMostSignificantBits());
-            marker.put(
-                    "aggregateIdLeastSigBits", aggregate.aggregateId().getLeastSignificantBits());
-            marker.put(
-                    "aggregateGeneration", Long.toUnsignedString(aggregate.aggregateGeneration()));
-            marker.put("index", aggregate.index());
-            marker.put("expectedStoreVersion", aggregate.expectedStoreVersion());
-            marker.put("ownerTransition", aggregate.ownerTransition().name());
-            marker.put(
-                    "targetAuthorityOwnerGeneration",
-                    Long.toUnsignedString(aggregate.targetAuthorityOwnerGeneration()));
-            marker.put(
-                    "authorityPayloadSha256",
-                    HexFormat.of().formatHex(aggregate.authorityPayloadSha256()));
-            marker.put(
-                    "membershipMutationSha256",
-                    HexFormat.of().formatHex(aggregate.membershipMutationSha256()));
-            node.set("aggregate", marker);
-        } else {
-            node.putNull("aggregate");
-        }
-        if (visibleStoreVersion != null) {
-            node.put("visibleStoreVersion", visibleStoreVersion);
-        } else {
-            node.putNull("visibleStoreVersion");
-        }
-        return node;
+    private static ObjectNode encodeAggregateMarker(AggregateParticipantMarker aggregate) {
+        ObjectNode marker = CANONICAL_JSON.createObjectNode();
+        marker.put("aggregateId", aggregate.aggregateId().toString());
+        marker.put("aggregateGeneration", Long.toUnsignedString(aggregate.aggregateGeneration()));
+        marker.put("index", aggregate.index());
+        marker.put("expectedStoreVersion", aggregate.expectedStoreVersion());
+        marker.put(
+                "ownerTransition",
+                switch (aggregate.ownerTransition()) {
+                    case PRESERVE -> OWNER_TRANSITION_PRESERVE;
+                    case NEW_OWNER -> OWNER_TRANSITION_NEW_OWNER;
+                });
+        marker.put(
+                "targetAuthorityOwnerGeneration",
+                Long.toUnsignedString(aggregate.targetAuthorityOwnerGeneration()));
+        marker.put(
+                "authorityPayloadSha256",
+                HexFormat.of().formatHex(aggregate.authorityPayloadSha256()));
+        marker.put(
+                "membershipMutationSha256",
+                HexFormat.of().formatHex(aggregate.membershipMutationSha256()));
+        return marker;
     }
 
     private static String allocationStateWire(ZLinkPlacementAllocationState state) {
@@ -3162,19 +3151,13 @@ final class ZLinkProviderAuthorityRepository {
                     pendingNode.isMissingNode() || pendingNode.isNull()
                             ? Optional.empty()
                             : Optional.of(decodePendingCreation(pendingNode));
-            AggregateParticipantMarker aggregate = null;
-            String visibleStoreVersion = null;
-            JsonNode extension = root.path("providerExtension");
-            if (!extension.isMissingNode() && !extension.isNull()) {
-                JsonNode markerNode = extension.path("aggregate");
-                aggregate =
-                        markerNode.isMissingNode() || markerNode.isNull()
-                                ? null
-                                : decodeAggregateMarker(markerNode);
-                JsonNode visible = extension.path("visibleStoreVersion");
-                visibleStoreVersion =
-                        visible.isMissingNode() || visible.isNull() ? null : visible.asText();
-            }
+            JsonNode markerNode = root.path("aggregate");
+            AggregateParticipantMarker aggregate =
+                    markerNode.isMissingNode() || markerNode.isNull()
+                            ? null
+                            : decodeAggregateMarker(markerNode);
+            JsonNode visible = root.path("visibleStoreVersion");
+            String visibleStoreVersion = visible.isTextual() ? visible.asText() : null;
             return new AuthorityRecord(
                     payload,
                     objectGeneration,
@@ -3228,13 +3211,15 @@ final class ZLinkProviderAuthorityRepository {
 
     private static AggregateParticipantMarker decodeAggregateMarker(JsonNode node) {
         return new AggregateParticipantMarker(
-                new UUID(
-                        node.path("aggregateIdMostSigBits").asLong(),
-                        node.path("aggregateIdLeastSigBits").asLong()),
+                UUID.fromString(node.path("aggregateId").asText()),
                 Long.parseUnsignedLong(node.path("aggregateGeneration").asText()),
                 node.path("index").asInt(),
                 node.path("expectedStoreVersion").asText(),
-                ZLinkAuthorityGenerationTransition.valueOf(node.path("ownerTransition").asText()),
+                switch (node.path("ownerTransition").asText()) {
+                    case OWNER_TRANSITION_PRESERVE -> ZLinkAuthorityGenerationTransition.PRESERVE;
+                    case OWNER_TRANSITION_NEW_OWNER -> ZLinkAuthorityGenerationTransition.NEW_OWNER;
+                    default -> throw new IllegalStateException("Invalid aggregate ownerTransition");
+                },
                 Long.parseUnsignedLong(node.path("targetAuthorityOwnerGeneration").asText()),
                 HexFormat.of().parseHex(node.path("authorityPayloadSha256").asText()),
                 HexFormat.of().parseHex(node.path("membershipMutationSha256").asText()));
