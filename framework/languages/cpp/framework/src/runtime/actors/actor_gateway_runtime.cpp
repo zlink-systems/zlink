@@ -189,11 +189,14 @@ bool drain_bound_session_sends (
                     detail::trace_detached_bound_session_send_stage (
                       state, actor_id, "send_bound_session_enter", [] { return "entered"; },
                       nullptr, queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                    auto task = std::make_shared<task_t<result_t<void>>> (pending.dispatch ());
+                    // The coroutine retains references to the dispatch closure across
+                    // suspension. Keep the closure at a stable address until terminal.
+                    auto dispatch = std::make_shared<std::function<task_t<result_t<void>> ()>> (
+                      std::move (pending.dispatch));
+                    auto task = std::make_shared<task_t<result_t<void>>> ((*dispatch) ());
                     detail::observe_task_terminal (
-                      *task, [state, queue_key, actor_id, task,
-                              completion_fence = std::move (completion_fence)] (
-                               const result_t<result_t<void>> &terminal) {
+                      *task, [state, queue_key, actor_id, task, dispatch,
+                              completion_fence] (const result_t<result_t<void>> &terminal) {
                           detail::trace_detached_bound_session_send_stage (
                             state, actor_id, "detached_delivery_complete",
                             [&] { return terminal && terminal.value () ? "ok" : "failed"; },
