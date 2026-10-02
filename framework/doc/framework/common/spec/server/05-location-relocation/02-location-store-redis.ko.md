@@ -30,7 +30,7 @@ Framework가 등록된 instance를 사용한다.
 provider(Redis가 아닌 provider 포함)가 지켜야 하는 SPI 계약이다 — 코드가 이와 다르면 코드를
 고친다. §8~§9는 공식 Redis provider가 사용하는 Redis 자체의 key 배치와 data type을 정하는
 구현 계약이다. 이 중 §8~§9에서 서로 다른 언어의 Redis provider가 상호 읽어야 하는
-부분(counter 발급 key, 5개 record의 opaque 저장 형식)은 **MUST-level 공개 계약**이며 코드가
+부분(counter 발급 key, §9 record의 opaque 저장 형식)은 **MUST-level 공개 계약**이며 코드가
 이와 다르면 코드를 고친다 — Redis가 아닌 provider는 이 부분을 따를 필요가 없다. 그 밖에
 Redis provider가 내부적으로 선택하는 세부 구현(Lua script 분할, connection 관리)은 §9
 끝에서 명시적으로 구분하며, 이 부분은 구현이 바뀌면 문서를 코드에 맞춘다.
@@ -122,7 +122,7 @@ Batch에는 다음 bound를 적용한다.
 User Spot participant 전체를 이 batch 하나에 넣지 않는다. Framework는 이동 대상 목록
 페이지 하나당 최대 1,024개 항목과 encoded 1 MiB로 제한한 immutable inventory chunk를
 미리 저장한다 — 이 페이지 상한은 위 CAS batch의 unique key 합계 상한과는 다른 대상에
-적용되는 별개의 수치다. 마지막 batch에는 aggregate authority, inventory root·count·digest와
+적용되는 별개의 수치다. 마지막 batch에는 inventory root·count·digest를 담은 aggregate와
 capacity counter처럼 공개 시점에 함께 바뀌어야 하는 작은 record만 넣는다.
 
 따라서 한 User Spot에 속할 수 있는 Actor 총수는 batch의 2,048-key 제한으로 정하지 않는다.
@@ -226,8 +226,9 @@ Automatic discovery에서 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 자신의 identity와 접속 정보를 다른 node에 알리기 위해
 게시하는 [MeshNode descriptor](../00-foundation/02-glossary.ko.md#meshnode-descriptor), owner lease,
 ClientServer server descriptor, fanout publisher
-descriptor, authority record와 creation terminal은 언어가 달라도 같은 opaque record 표현을
-사용해야 한다 — 그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 여섯 record는
+descriptor, authority record, creation terminal과
+[SpotWide 이동의 진행 record](01-location-runtime.ko.md#35-spotwide-이동의-진행-record)는 언어가 달라도 같은 opaque record 표현을
+사용해야 한다 — 그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 record들은
 다음 저장 방식을
 **반드시** 따른다.
 
@@ -236,7 +237,7 @@ provider가 등록 시 지정하는 key namespace, `preimage`는
 [Location runtime §3.4](01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
 정하는 record별 logical key preimage다(주의 — 이 `sha256hex(preimage)`는 §8의
 `sha256hex(logicalKey)`와 다른 입력을 사용한다. Counter는 짧은 literal logical key를 그대로
-해시하고, 이 여섯 record는 record별로 구성한 preimage 문자열을 해시한다).
+해시하고, 이 record들은 record별로 구성한 preimage 문자열을 해시한다).
 
 `{zlink-location-v3}`을 감싼 중괄호는 Redis Cluster hashtag다 — `Put`이 record·sequence
 counter·index를 같은 script 안에서 함께 바꾸므로(§4), 이 domain 전체를 하나의 hash slot에
@@ -277,7 +278,7 @@ deployment에서 서로 다른 key namespace를 사용할 수도 있고 물리�
 Correctness는 connection 공유나 cross-store
 Redis transaction에 의존하지 않는다.
 
-**여기까지가 MUST-level 공개 계약이다.** 위 여섯 record와 그 opaque record 표현을 제외하면,
+**여기까지가 MUST-level 공개 계약이다.** 위 record들과 그 opaque record 표현을 제외하면,
 다음 항목은 Redis provider가 자유롭게 고르는 implementation detail이며 public contract가
 아니다 — 문서가 코드와 어긋나면 문서를 코드에 맞춘다.
 
@@ -314,8 +315,8 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
 
 **공식 Redis provider의 key·byte 형식**
 
-- §9의 여섯 record는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
-  key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)를, 그중 canonical JSON value를 갖는 다섯
+- §9의 record는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
+  key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)를, 그중 canonical JSON value를 갖는
   record는 value byte 벡터(tombstone·만료 variant 포함)도 그대로 소비하는 conformance test로
   검증한다. Creation terminal의 value byte 형식은 service-wire schema가 소유한다.
 - 인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을
