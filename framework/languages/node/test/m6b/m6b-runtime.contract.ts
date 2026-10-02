@@ -2835,9 +2835,11 @@ test('durable missing Instance authority discards a materialized orphan before r
     beginTerminal: () => undefined,
     completeTerminal: async () => false
   });
+  const originalDeadlineUnixMs = BigInt(Date.now() + 10_000);
   const authority: ServiceAsyncInstanceActivationAuthority = {
     read: async () => ({ kind: 'missing' }),
     reserve: async (activation) => {
+      assert.equal(activation.deadlineUnixMs, originalDeadlineUnixMs);
       events.push('reserve');
       assert.equal(runtime.registry.spot(activation.target.targetSpotId)?.ref.generation, 1n);
       return {
@@ -2850,8 +2852,10 @@ test('durable missing Instance authority discards a materialized orphan before r
       };
     },
     resume: async () => assert.fail('Live activation must not resume a startup reservation'),
-    commit: async (_target, _reservation, spot) => {
+    commit: async (_target, _reservation, spot, ...deadlines: unknown[]) => {
       events.push('commit');
+      assert.equal(typeof deadlines[0], 'bigint');
+      assert.equal(deadlines[0], originalDeadlineUnixMs);
       assert.equal(spot.ref.generation, 2n);
       return {
         kind: 'committed',
@@ -2891,7 +2895,7 @@ test('durable missing Instance authority discards a materialized orphan before r
           undefined,
           'send',
           { high: 7n, low: 45n },
-          BigInt(Date.now() + 10_000)
+          originalDeadlineUnixMs
         ),
         encodeApplicationPayload({
           packetName: 'FirstMessage',

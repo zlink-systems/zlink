@@ -84,9 +84,10 @@ export class ZLinkActorPlacementCoordinator {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkActorCreateResult> {
-    const deadline = createDeadline(timeoutMs, signal);
-    const deadlineMs = performance.now() + timeoutMs;
     const deadlineUnixMs = Date.now() + timeoutMs;
+    const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
+    const deadline = createDeadline(remainingMs, signal);
+    const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
     const excluded = new Set<string>();
@@ -130,7 +131,8 @@ export class ZLinkActorPlacementCoordinator {
             creatingPayload,
             capacity: { actors: 1, spots: 0 }
           },
-          deadline.signal
+          deadline.signal,
+          BigInt(deadlineUnixMs)
         );
         const existing = existingActor(reserved, actorId, stableType);
         if (existing !== undefined) {

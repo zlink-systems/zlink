@@ -11,7 +11,8 @@ const { encodeLocationCreationContent } = require(
   '../../packages/framework/dist/runtime/host/user-spot-creation-coordinator'
 );
 
-test('remote Actor factory failure aborts the exact authority capacity reservation', async () => {
+test('remote Actor factory failure aborts the exact authority capacity reservation', async t => {
+  const timeoutSpy = t.mock.method(globalThis, 'setTimeout');
   const requestPayload = Buffer.from('{}');
   const snapshot = {
     kind: 'snapshot',
@@ -72,6 +73,7 @@ test('remote Actor factory failure aborts the exact authority capacity reservati
     ),
     /factory failed/
   );
+  assert.equal(timeoutSpy.mock.calls[0].arguments[1], 1000);
 
   assert.deepEqual(aborts, [{
     key: { kind: 'actor', globalId: 'failed' },

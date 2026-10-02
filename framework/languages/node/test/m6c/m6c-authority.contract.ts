@@ -1078,7 +1078,8 @@ test('User Spot creation applies one deadline signal through factory and abort c
   assert.equal((await store.readAuthority(authorityKey('deadline-room'))).kind, 'missing');
 });
 
-test('User Spot reconciliation and abort cleanup stop at their bounded cleanup deadline', async () => {
+test('User Spot reconciliation and abort cleanup stop at their bounded cleanup deadline', async (t) => {
+  const timeoutSpy = t.mock.method(globalThis, 'setTimeout');
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   store.abort = async () => await new Promise(() => undefined);
   const coordinator = new ZLinkUserSpotCreationCoordinator({
@@ -1110,6 +1111,7 @@ test('User Spot reconciliation and abort cleanup stop at their bounded cleanup d
     AggregateError
   );
   assert.ok(Date.now() - started < 100);
+  assert.ok(timeoutSpy.mock.calls.some((call) => call.arguments[1] === 5));
 });
 
 test('User Spot reservation maps capacity exhaustion and Pending expiry to exact typed errors', async () => {

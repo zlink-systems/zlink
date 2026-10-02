@@ -36,15 +36,13 @@ export interface ServicePreparedRelocationAggregate {
   readonly plan: ServiceRelocationAggregatePlan;
 }
 
-type AggregateStore = Pick<
-  ZLinkObjectCreationStore,
-  'prepareAggregate' | 'commitAggregate' | 'abortAggregate'
-> &
+type AggregateStore = Pick<ZLinkObjectCreationStore, 'prepareAggregate' | 'abortAggregate'> &
   Pick<ZLinkAuthorityStore, 'readAuthority'>;
 
 const MAX_PREPARE_CONFLICT_ATTEMPTS = 8;
 
-/** Commits every owner and membership row through one Location Store fence. */
+/** Prepares and aborts relocation through one Location Store fence. */
+
 export class ServiceRelocationAggregateCommitter {
   constructor(private readonly store: AggregateStore) {}
 
@@ -109,72 +107,11 @@ export class ServiceRelocationAggregateCommitter {
     return true;
   }
 
-  async commit(
-    prepared: ServicePreparedRelocationAggregate,
-    signal?: AbortSignal
-  ): Promise<ReadonlyMap<string, ZLinkAuthoritySnapshot>> {
-    try {
-      await this.commitFence(prepared.fence, signal);
-    } catch (firstError) {
-      // A lost commit response is reconciled by repeating the exact durable fence.
-      try {
-        await this.commitFence(prepared.fence, signal);
-      } catch {
-        throw firstError;
-      }
-    }
-    return await this.readCommittedParticipants(prepared.plan, signal);
-  }
-
   async abort(prepared: ServicePreparedRelocationAggregate, signal?: AbortSignal): Promise<void> {
     const result = await this.store.abortAggregate(prepared.fence, signal);
     if (result.kind !== 'aborted' && result.kind !== 'alreadyAborted') {
       throw new Error(`Location Store rejected relocation aggregate abort: ${result.kind}.`);
     }
-  }
-
-  private async commitFence(fence: ZLinkAggregateFence, signal?: AbortSignal): Promise<void> {
-    const result = await this.store.commitAggregate(fence, signal);
-    if (result.kind !== 'committed' && result.kind !== 'alreadyCommitted') {
-      throw new Error(`Location Store rejected relocation aggregate commit: ${result.kind}.`);
-    }
-  }
-
-  private async readCommittedParticipants(
-    plan: ServiceRelocationAggregatePlan,
-    signal?: AbortSignal
-  ): Promise<ReadonlyMap<string, ZLinkAuthoritySnapshot>> {
-    const committed = new Map<string, ZLinkAuthoritySnapshot>();
-    for (const participant of plan.participants) {
-      const current = await this.store.readAuthority(participant.key, signal);
-      if (
-        current.kind !== 'snapshot' ||
-        current.objectGeneration !== participant.expected.objectGeneration ||
-        current.storeVersion.value === participant.expected.storeVersion.value ||
-        !Buffer.from(current.payload).equals(Buffer.from(participant.authorityPayload))
-      ) {
-        throw new Error(
-          'Committed relocation aggregate does not match its exact participant plan.'
-        );
-      }
-      if (participant.ownerTransition === 'newOwner') {
-        if (
-          current.ownerId !== plan.targetOwner.ownerId ||
-          current.ownerLeaseGeneration !== plan.targetOwner.leaseGeneration ||
-          current.authorityOwnerGeneration <= participant.expected.authorityOwnerGeneration
-        ) {
-          throw new Error('Committed relocation participant has a different owner fence.');
-        }
-      } else if (
-        current.ownerId !== participant.expected.ownerId ||
-        current.ownerLeaseGeneration !== participant.expected.ownerLeaseGeneration ||
-        current.authorityOwnerGeneration !== participant.expected.authorityOwnerGeneration
-      ) {
-        throw new Error('Preserved relocation participant changed its owner fence.');
-      }
-      committed.set(participant.key.value, current);
-    }
-    return committed;
   }
 }
 
