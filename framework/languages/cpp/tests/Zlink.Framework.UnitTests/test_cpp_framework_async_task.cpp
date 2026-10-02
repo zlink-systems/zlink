@@ -313,6 +313,24 @@ bool verify_stopped_registration_state_lifetime ()
     return true;
 }
 
+// A wait registered outside any execution turn has no owner that can cancel
+// it. When the context that captured its scheduler has stopped, the completing
+// thread delivers the result instead of terminating the process.
+bool verify_ownerless_wait_after_context_stop ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<int> source;
+    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()>) {
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "registered context stopped");
+    });
+    auto waiter = await_shared (view, 1);
+    if (!source.complete (result_t<int>::success (41)))
+        return false;
+    const auto delivered = waiter.result_for (std::chrono::seconds (1));
+    return delivered && delivered->value () == 42;
+}
+
 bool verify_cancelled_registration_lease ()
 {
     using namespace zlink::framework;
@@ -1267,8 +1285,8 @@ int main (int argc, char **argv)
         || !verify_void_completion_rejection_race (true)
         || !verify_void_completion_rejection_race (false) || !verify_rejected_delivery_lifetime ()
         || !verify_rejected_ready_registration () || !verify_rejection_retain_cancellation_race ()
-        || !verify_cancelled_registration_lease ()
-        || !verify_stopped_registration_state_lifetime ())
+        || !verify_cancelled_registration_lease () || !verify_stopped_registration_state_lifetime ()
+        || !verify_ownerless_wait_after_context_stop ())
         return 30;
     return 0;
 }
