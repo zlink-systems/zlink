@@ -456,7 +456,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                                 : null;
                                 if (!stillCurrent) {
                                     return new DispatchResult(
-                                            false, false, null, dispatchCompletion);
+                                            false, null, null, dispatchCompletion);
                                 }
                                 boolean stopped =
                                         error != null && options.stopOnUnhandledException();
@@ -464,19 +464,23 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                     schedule.markDelivered(selected);
                                 }
                                 SchedulePlan next = null;
-                                if (!stopped) {
+                                FinalizationPlan stopFinalization = null;
+                                if (stopped) {
+                                    stopFinalization = finalizationPlanOnLane();
+                                } else {
                                     pendingTick = null;
                                     next = prepareScheduleCore(schedule.delayAfterDispatchNanos());
                                 }
-                                return new DispatchResult(true, stopped, next, dispatchCompletion);
+                                return new DispatchResult(
+                                        true, stopFinalization, next, dispatchCompletion);
                             });
             Throwable completionFailure = null;
             try {
                 if (result.stillCurrent() && error != null) {
-                    if (result.stopped()) {
-                        close();
+                    if (result.stopFinalization() != null && result.stopFinalization().start()) {
+                        completeFinalization(result.stopFinalization());
                     }
-                    publishFailure(this, tick, error, result.stopped());
+                    publishFailure(this, tick, error, result.stopFinalization() != null);
                 }
             } catch (RuntimeException | Error failure) {
                 completionFailure = failure;
@@ -653,7 +657,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private record DispatchResult(
             boolean stillCurrent,
-            boolean stopped,
+            FinalizationPlan stopFinalization,
             SchedulePlan nextSchedule,
             CompletableFuture<Void> dispatchCompletion) {}
 

@@ -17,6 +17,8 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkTimer;
+import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.time.Duration;
@@ -507,6 +509,55 @@ final class ZLinkSpotTimerRegistryTest {
             assertEquals(1, timers.size());
             assertTrue(timers.getFirst().nextScheduledAt().isPresent());
             assertTrue(timers.getFirst().pendingTick().isEmpty());
+        } finally {
+            logger.removeHandler(observer);
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void failureObserverSeesStoppedTimerRemoved() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ThrowingTimerHandler(new AtomicInteger()),
+                        List.of(),
+                        null,
+                        "stop-freeze-observer",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        java.util.logging.Handler observer =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (!record.getMessage().contains("source=stop-freeze-observer")) return;
+                        try {
+                            frozen.complete(registry.freeze());
+                        } catch (RuntimeException failure) {
+                            frozen.completeExceptionally(failure);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(observer);
+        try {
+            registry.add(
+                    "timer",
+                    Duration.ofMillis(1),
+                    ThrowingTimerHandler.class,
+                    new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, true));
+            assertTrue(frozen.get(2, TimeUnit.SECONDS).timers().isEmpty());
         } finally {
             logger.removeHandler(observer);
             registry.close();
