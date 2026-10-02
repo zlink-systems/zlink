@@ -252,7 +252,7 @@
           "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
           "tests": [
             "relocation target binding republish delivers the post-Join bound-session push exactly once",
-            "late predecessor terminal cannot release a successor bound-session queue",
+            "M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact terminal",
             "concurrent identical ownership terminals commit and drain one exact seal once",
             "concurrent identical abort terminals reopen and drain one exact seal once"
           ]
@@ -261,7 +261,7 @@
       "focusedCommands": [
         ["node", "--test", "--test-name-pattern=formal Actor Join runtime port preserves fixture order through target Ready before Session route", "test/contract/spot-manager.test.js"],
         ["node", "--test", "--test-name-pattern=Core source leave submission releases the target fence before its callback result", "test/contract/actor-manager.test.js"],
-        ["node", "--test", "--test-name-pattern=relocation target binding republish delivers the post-Join bound-session push exactly once|late predecessor terminal cannot release a successor bound-session queue|concurrent identical ownership terminals commit and drain one exact seal once|concurrent identical abort terminals reopen and drain one exact seal once", "test/contract/stream-runtime.test.js"]
+        ["node", "--test", "--test-name-pattern=relocation target binding republish delivers the post-Join bound-session push exactly once|M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact terminal|concurrent identical ownership terminals commit and drain one exact seal once|concurrent identical abort terminals reopen and drain one exact seal once", "test/contract/stream-runtime.test.js"]
       ]
     }
   ]
