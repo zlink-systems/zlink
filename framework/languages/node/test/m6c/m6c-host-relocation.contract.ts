@@ -56,6 +56,10 @@ import {
 import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkActivationAdmission } from '../../packages/framework/src/runtime/activation-admission';
+import {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
   ZLinkFrameworkErrorKind,
@@ -2583,6 +2587,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const targetDeliveries: Promise<void>[] = [];
   const sourceDeliveries: Promise<void>[] = [];
   const deliveryErrors: unknown[] = [];
+  const taskShutdown = new AbortController();
+  const taskErrorSink = new ZLinkRuntimeTaskErrorSink();
+  taskErrorSink.onRuntimeTaskException(({ error }) => deliveryErrors.push(error));
+  const detachedTaskRunner = new ZLinkRuntimeTaskRunner(taskErrorSink, taskShutdown.signal);
   const deliver = (
     runtime: ZLinkHostServiceRelocationRuntime,
     sourceNodeRid: string,
@@ -2733,6 +2741,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     resolveRelocationActivation: () => undefined,
     options: {
       entryNodeRid: 'entry-target',
+      detachedTaskRunner,
       canonicalActorJoinResolver: async () => ({ actorType: 'Player' }),
       actorResolver: () => undefined,
       async dispatchEntryActorJoin() {
@@ -3098,6 +3107,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     },
     async dispose() {
       sourceSignal.abort(new Error('ActorJoin harness disposed.'));
+      taskShutdown.abort();
       releaseAccepted();
       releaseSourceLeave();
       admissions.delete(relocationId);
