@@ -3484,21 +3484,24 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             result.outcome = relocation_outcome_t::blocked;
             result.reason = relocation_reason_t::shutdown_requested;
         }
-        if (result.outcome == relocation_outcome_t::relocated && !interrupted) {
-            if (!publish_mesh_descriptor_state (state, framework_runtime_state_t::relocated)) {
-                result.outcome = relocation_outcome_t::blocked;
-                result.reason = relocation_reason_t::store_unavailable;
+        if (!interrupted) {
+            if (result.outcome == relocation_outcome_t::relocated) {
+                if (!publish_mesh_descriptor_state (state, framework_runtime_state_t::relocated)) {
+                    result.outcome = relocation_outcome_t::blocked;
+                    result.reason = relocation_reason_t::store_unavailable;
+                }
             }
-        }
-        if (result.outcome == relocation_outcome_t::relocated) {
-            state.runtime_state.store (framework_runtime_state_t::relocated,
-                                       std::memory_order_release);
-        } else if (authority_split) {
-            state.runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
-        } else if (!interrupted) {
-            (void) publish_mesh_descriptor_state (state, framework_runtime_state_t::serving);
-            state.runtime_state.store (framework_runtime_state_t::serving,
-                                       std::memory_order_release);
+            if (result.outcome == relocation_outcome_t::relocated) {
+                state.runtime_state.store (framework_runtime_state_t::relocated,
+                                           std::memory_order_release);
+            } else if (authority_split) {
+                state.runtime_state.store (framework_runtime_state_t::error,
+                                           std::memory_order_release);
+            } else {
+                (void) publish_mesh_descriptor_state (state, framework_runtime_state_t::serving);
+                state.runtime_state.store (framework_runtime_state_t::serving,
+                                           std::memory_order_release);
+            }
         }
 
         std::vector<std::shared_ptr<detail::app_state_t::relocation_waiter_t>> waiters;
@@ -3788,9 +3791,9 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
             operation.started = true;
             operation.deadline = deadline;
             operation.deadline_at = std::chrono::system_clock::now () + deadline;
-            _state->draining->store (true, std::memory_order_release);
             _state->runtime_state.store (framework_runtime_state_t::draining,
                                          std::memory_order_release);
+            _state->draining->store (true, std::memory_order_release);
             auto *state = _state.get ();
             operation.worker = std::thread ([state] { run_shared_shutdown (*state); });
         }

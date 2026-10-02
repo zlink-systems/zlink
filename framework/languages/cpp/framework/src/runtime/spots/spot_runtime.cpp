@@ -2619,7 +2619,7 @@ void spot_context_state_t::run_local_close_steps (
                                     const auto phase = owner->host_phase
                                                          ? std::optional{owner->host_phase ()}
                                                          : std::nullopt;
-                                    return owner->host_draining ()
+                                    return phase == framework_runtime_state_t::draining
                                              ? std::optional{framework_error_kind_t::shutting_down}
                                            : phase == framework_runtime_state_t::relocating
                                                || phase == framework_runtime_state_t::relocated

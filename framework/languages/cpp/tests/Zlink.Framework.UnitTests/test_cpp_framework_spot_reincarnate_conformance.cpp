@@ -131,6 +131,7 @@ struct evidence_t
     branch_t branch;
     bool relocation_sealed = false;
     bool complete_relocation = false;
+    bool phase_published_before_drain_flag = false;
     std::shared_ptr<zf::detail::spot_context_state_t> activation;
     std::optional<std::promise<void>> send_arrived{std::in_place};
     std::promise<void> send_terminated;
@@ -791,6 +792,15 @@ class exercise_t final : public zf::hosted_service_t
                 (void) _app->shutdown (request_timeout);
                 require_ready (drained, "public runtime observer did not report Draining");
                 observation->close ();
+                if (_evidence->phase_published_before_drain_flag) {
+                    // Reproduce the phase-first publication snapshot at the Close owner.
+                    auto owner = _evidence->activation->lane_owner.lock ();
+                    if (!owner)
+                        owner = _evidence->activation->node;
+                    owner->lane
+                      .run ([&] { owner->drain_flag = std::make_shared<std::atomic_bool> (false); })
+                      .get ();
+                }
             }
             std::optional<zf::task_t<zf::relocation_result_t>> relocation;
             if (_evidence->branch == branch_t::relocating) {
@@ -1016,7 +1026,8 @@ void configure_app (zf::app_t &app,
 void check_branch (branch_t kind,
                    const char *name,
                    bool sealed = false,
-                   bool complete_relocation = false)
+                   bool complete_relocation = false,
+                   bool phase_published_before_drain_flag = false)
 {
     const auto &branch = branch_fixture (name);
     const auto &given = branch.at ("given");
@@ -1033,6 +1044,7 @@ void check_branch (branch_t kind,
     auto evidence = std::make_shared<evidence_t> (kind);
     evidence->relocation_sealed = sealed;
     evidence->complete_relocation = complete_relocation;
+    evidence->phase_published_before_drain_flag = phase_published_before_drain_flag;
     auto store = std::make_shared<observed_store_t> (evidence);
     auto relocations = std::make_shared<zf::runtime::in_memory_relocation_store_t> ();
     auto app = zf::app_t::create ();
@@ -1318,6 +1330,11 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, DrainReleasesInsteadOfReincarnat
             check_branch (hosts.at (host.get<std::string> ()),
                           "release-during-host-drain-or-relocation", seal == "after");
         }
+}
+TEST (ZLinkFrameworkSpotReincarnateConformance, DrainingPhaseAloneForbidsReincarnation)
+{
+    check_branch (branch_t::draining, "release-during-host-drain-or-relocation", false, false,
+                  true);
 }
 TEST (ZLinkFrameworkSpotReincarnateConformance, RelocatedHostDoesNotReincarnateOldOwner)
 {
