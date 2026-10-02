@@ -172,8 +172,6 @@ final class ZLinkAutoConnectReconciler {
                             || !Objects.equals(current.ownerId(), target.ownerId()))
                     && executor.replace(current, target)) {
                 active.put(entry.getKey(), target);
-            } else {
-                executor.ensureConnected(target);
             }
         }
         active.keySet().stream().filter(key -> !desired.containsKey(key)).forEach(toRemove::add);

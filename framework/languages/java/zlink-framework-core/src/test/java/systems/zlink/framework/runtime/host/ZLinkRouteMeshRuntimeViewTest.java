@@ -151,6 +151,22 @@ final class ZLinkRouteMeshRuntimeViewTest {
             sourceNode.channelName("work").client();
             sourceNode.peerConnections().connect(targetRid, endpoint(targetRuntime));
             try (var sourceRuntime = start(source)) {
+                var readyObserved = new CountDownLatch(1);
+                var stoppedObserved = new CountDownLatch(1);
+                sourceRuntime
+                        .routeMeshRuntime()
+                        .observe(MESH, 8)
+                        .subscribe(
+                                subscriber(
+                                        observed -> {
+                                            if (peerState(observed.status(), targetRid)
+                                                    == ZLinkPeerState.READY) {
+                                                readyObserved.countDown();
+                                            } else if (readyObserved.getCount() == 0) {
+                                                stoppedObserved.countDown();
+                                            }
+                                        },
+                                        Long.MAX_VALUE));
                 var snapshot =
                         awaitSnapshot(
                                 sourceRuntime,
@@ -165,6 +181,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
                 assertTrue(snapshot.channels().getFirst().isReady());
                 assertEquals(1, snapshot.channels().getFirst().readyTargetCount());
                 assertEquals(snapshot.peers(), List.copyOf(snapshot.peers()));
+                assertTrue(readyObserved.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+                targetRuntime.close();
+                assertTrue(stoppedObserved.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
             }
         }
     }
@@ -372,6 +391,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
                     .mesh(MESH)
                     .setPlacementWeight(0);
             CountDownLatch received = new CountDownLatch(1);
+            CountDownLatch changed = new CountDownLatch(1);
             AtomicReference<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> first =
                     new AtomicReference<>();
             runtime.routeMeshRuntime()
@@ -379,10 +399,14 @@ final class ZLinkRouteMeshRuntimeViewTest {
                     .subscribe(
                             subscriber(
                                     observed -> {
-                                        first.set(observed);
-                                        received.countDown();
+                                        if (received.getCount() > 0) {
+                                            first.set(observed);
+                                            received.countDown();
+                                        } else if (observed.status().placement().isAvailable()) {
+                                            changed.countDown();
+                                        }
                                     },
-                                    1));
+                                    Long.MAX_VALUE));
 
             assertTrue(received.await(2, TimeUnit.SECONDS));
             assertFalse(first.get().status().placement().isAvailable());
@@ -391,6 +415,10 @@ final class ZLinkRouteMeshRuntimeViewTest {
                     first.get().status().placement().unavailableReason().orElseThrow());
             assertEquals(0, first.get().loss().coalescedCount());
             assertEquals(0, first.get().loss().discardedTerminalCount());
+            ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime())
+                    .mesh(MESH)
+                    .setPlacementWeight(100);
+            assertTrue(changed.await(5, TimeUnit.SECONDS));
         }
     }
 
@@ -432,6 +460,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
 
             CountDownLatch initialized = new CountDownLatch(1);
             CountDownLatch changed = new CountDownLatch(1);
+            CountDownLatch removed = new CountDownLatch(1);
             AtomicReference<ZLinkMeshNodeSnapshot> changedStatus = new AtomicReference<>();
             runtime.routeMeshRuntime()
                     .observe(MESH, 8)
@@ -445,21 +474,27 @@ final class ZLinkRouteMeshRuntimeViewTest {
                                                 && item.placement().activeSpotCount() == 1) {
                                             changedStatus.set(item);
                                             changed.countDown();
+                                        } else if (changed.getCount() == 0
+                                                && item.placement().activeActorCount() == 0
+                                                && item.placement().activeSpotCount() == 0) {
+                                            removed.countDown();
                                         }
                                     },
                                     Long.MAX_VALUE));
             assertTrue(initialized.await(2, TimeUnit.SECONDS));
 
-            runtime.spotManager()
-                    .create("view-room")
-                    .submit()
-                    .toCompletableFuture()
-                    .get(10, TimeUnit.SECONDS);
-            runtime.actorManager()
-                    .create("view-player-1", "view-player")
-                    .submit()
-                    .toCompletableFuture()
-                    .get(10, TimeUnit.SECONDS);
+            var createdSpot =
+                    runtime.spotManager()
+                            .create("view-room")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS);
+            var createdActor =
+                    runtime.actorManager()
+                            .create("view-player-1", "view-player")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS);
 
             assertTrue(changed.await(5, TimeUnit.SECONDS));
             var exhausted = changedStatus.get().placement();
@@ -469,6 +504,20 @@ final class ZLinkRouteMeshRuntimeViewTest {
                     exhausted.unavailableReason().orElseThrow());
             assertEquals(
                     1, runtime.routeMeshRuntime().snapshot(MESH).placement().activeSpotCount());
+            var actor =
+                    ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created) createdActor)
+                            .actor();
+            assertTrue(
+                    runtime.actorManager()
+                            .destroy(actor)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
+            assertTrue(
+                    runtime.spotManager()
+                            .close(createdSpot.spot())
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
+            assertTrue(removed.await(5, TimeUnit.SECONDS));
         }
     }
 

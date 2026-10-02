@@ -39,8 +39,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispatchLine {
@@ -966,35 +964,74 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> awaitRelocationReadySignal(
             Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
-            BooleanSupplier cancelled) {
+            CompletionStage<?> cancellationSignal) {
         Objects.requireNonNull(claim, "claim");
-        Objects.requireNonNull(cancelled, "cancelled");
+        Objects.requireNonNull(cancellationSignal, "cancellationSignal");
         if (relocationCoordinationMode != ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED
                 || executionMode != ZLinkUserSpotExecutionMode.SPOT_WIDE
                 || instanceSpot) {
             return CompletableFuture.failedFuture(
                     invalidRelocationReady("application-signaled relocation is not configured"));
         }
-        RelocationReadyWaiter waiter = new RelocationReadyWaiter(claim, cancelled);
-        CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
-                inRelocationStateLane(
+        RelocationReadyWaiter waiter = new RelocationReadyWaiter(claim, cancellationSignal);
+        return relocationStateLane
+                .runAsync(
                         () -> {
                             if (relocationReadyWaiter != null) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "a relocation readiness waiter is already active"));
+                                return CompletableFuture
+                                        .<Optional<ZLinkUserSpotRelocationBarrier.Seal>>
+                                                failedFuture(
+                                                        new IllegalStateException(
+                                                                "a relocation readiness waiter is already active"));
                             }
-                            if (cancelled.getAsBoolean()) {
-                                return CompletableFuture.completedFuture(Optional.empty());
+                            if (cancellationSignal.toCompletableFuture().isDone()) {
+                                return CompletableFuture.completedFuture(
+                                        Optional.<ZLinkUserSpotRelocationBarrier.Seal>empty());
                             }
                             relocationReadyWaiter = waiter;
                             return waiter.result;
+                        })
+                .thenCompose(
+                        result -> {
+                            if (result != waiter.result) return result;
+                            CompletableFuture<?> listener =
+                                    cancellationSignal
+                                            .whenComplete(
+                                                    (ignored, failure) -> {
+                                                        try {
+                                                            relocationStateLane
+                                                                    .runAsync(
+                                                                            () -> {
+                                                                                if (relocationReadyWaiter
+                                                                                        == waiter) {
+                                                                                    relocationReadyWaiter =
+                                                                                            null;
+                                                                                    waiter.result
+                                                                                            .complete(
+                                                                                                    Optional
+                                                                                                            .empty());
+                                                                                }
+                                                                                return null;
+                                                                            })
+                                                                    .whenComplete(
+                                                                            (unused,
+                                                                                    ownerFailure) -> {
+                                                                                if (ownerFailure
+                                                                                        != null)
+                                                                                    waiter.result
+                                                                                            .completeExceptionally(
+                                                                                                    ownerFailure);
+                                                                            });
+                                                        } catch (RuntimeException ownerFailure) {
+                                                            waiter.result.completeExceptionally(
+                                                                    ownerFailure);
+                                                        }
+                                                    })
+                                            .toCompletableFuture();
+                            waiter.result.whenComplete(
+                                    (ignored, failure) -> listener.cancel(false));
+                            return waiter.result;
                         });
-        if (result != waiter.result) {
-            return result;
-        }
-        pollRelocationReadyCancellation(waiter);
-        return waiter.result;
     }
 
     CompletionStage<Void> runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome outcome) {
@@ -1130,15 +1167,22 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     private CompletionStage<Void> reachRelocationReadyBoundary() {
-        RelocationReadyWaiter waiter;
-        waiter =
-                inRelocationStateLane(
+        CompletionStage<RelocationReadyWaiter> claim =
+                relocationStateLane.tryRunNow(
                         () -> {
                             RelocationReadyWaiter current = relocationReadyWaiter;
                             relocationReadyWaiter = null;
                             return current;
                         });
-        if (waiter == null || waiter.cancelled.getAsBoolean()) {
+        if (claim == null) {
+            return ZLinkSerialExecutionQueue.yieldCurrent(relocationStateLane.runAsync(() -> null))
+                    .thenCompose(ignored -> reachRelocationReadyBoundary());
+        }
+        return claim.thenCompose(this::claimRelocationReadyBoundary);
+    }
+
+    private CompletionStage<Void> claimRelocationReadyBoundary(RelocationReadyWaiter waiter) {
+        if (waiter == null || waiter.cancellationSignal.toCompletableFuture().isDone()) {
             if (waiter != null) {
                 waiter.result.complete(Optional.empty());
             }
@@ -1169,28 +1213,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                         });
     }
 
-    private void pollRelocationReadyCancellation(RelocationReadyWaiter waiter) {
-        CompletableFuture.delayedExecutor(25, TimeUnit.MILLISECONDS)
-                .execute(
-                        () -> {
-                            if (waiter.result.isDone()) {
-                                return;
-                            }
-                            if (waiter.cancelled.getAsBoolean()) {
-                                inRelocationStateLane(
-                                        () -> {
-                                            if (relocationReadyWaiter == waiter) {
-                                                relocationReadyWaiter = null;
-                                            }
-                                            return null;
-                                        });
-                                waiter.result.complete(Optional.empty());
-                                return;
-                            }
-                            pollRelocationReadyCancellation(waiter);
-                        });
-    }
-
     private static ZLinkFrameworkException invalidRelocationReady(String message) {
         return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_CONFIGURED, message);
     }
@@ -1218,15 +1240,15 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private static final class RelocationReadyWaiter {
         private final Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>>
                 claim;
-        private final BooleanSupplier cancelled;
+        private final CompletionStage<?> cancellationSignal;
         private final CompletableFuture<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
                 new CompletableFuture<>();
 
         RelocationReadyWaiter(
                 Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
-                BooleanSupplier cancelled) {
+                CompletionStage<?> cancellationSignal) {
             this.claim = claim;
-            this.cancelled = cancelled;
+            this.cancellationSignal = cancellationSignal;
         }
     }
 }

@@ -723,7 +723,8 @@ final class ZLinkClientServerM6ARuntimeTest {
                                             CompletableFuture.completedFuture(target),
                                     (node, remaining) -> {
                                         throw new AssertionError("expected ClientServer");
-                                    })
+                                    },
+                                    failure -> {})
                             .toCompletableFuture()
                             .join());
             assertEquals(timeoutFirst ? 2 : 1, requests.get());

@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -592,32 +593,46 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         if (state == null) {
             return;
         }
-        retirementsExecutor.shutdownNow();
-        state.retained()
-                .forEach(
-                        retained -> {
-                            ScheduledFuture<?> future = retained.future();
-                            if (future != null) {
-                                future.cancel(false);
-                            }
-                            try {
-                                retained.source().expireMessageFollowNotices();
-                                retained.removal().accept(retained.source());
-                            } catch (RuntimeException ignored) {
-                                // Runtime shutdown must continue retiring the remaining owned
-                                // sources.
-                            }
-                        });
-        state.backlogs().stream()
-                .flatMap(backlog -> backlog.packets.stream())
-                .forEach(
-                        packet -> {
-                            if (packet.fail(
-                                    new IllegalStateException(
-                                            "Actor runtime closed during transfer."))) {
-                                packet.close();
-                            }
-                        });
+        List<Supplier<? extends CompletionStage<Void>>> cleanup = new ArrayList<>();
+        cleanup.add(() -> ZLinkHandlerStages.fromRunnable(retirementsExecutor::shutdownNow));
+        for (Retention retained : state.retained()) {
+            cleanup.add(
+                    () ->
+                            ZLinkHandlerStages.fromRunnable(
+                                    () -> {
+                                        ScheduledFuture<?> future = retained.future();
+                                        if (future != null) future.cancel(false);
+                                    }));
+            cleanup.add(
+                    () ->
+                            ZLinkHandlerStages.fromRunnable(
+                                    retained.source()::expireMessageFollowNotices));
+            cleanup.add(
+                    () ->
+                            ZLinkHandlerStages.fromRunnable(
+                                    () -> retained.removal().accept(retained.source())));
+        }
+        for (Backlog backlog : state.backlogs()) {
+            for (ZLinkActorHandoffPacket packet : backlog.packets) {
+                cleanup.add(
+                        () ->
+                                ZLinkHandlerStages.fromRunnable(
+                                        () -> {
+                                            if (packet.fail(
+                                                    new IllegalStateException(
+                                                            "Actor runtime closed during transfer."))) {
+                                                packet.close();
+                                            }
+                                        }));
+            }
+        }
+        try {
+            ZLinkHandlerStages.completeAll(cleanup).toCompletableFuture().join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException cause) throw cause;
+            if (failure.getCause() instanceof Error cause) throw cause;
+            throw failure;
+        }
     }
 
     private void retire(Retention retained) {

@@ -36,8 +36,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJavaSocketBacked {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
     private final StreamSocket socket;
     private final ZLinkJavaRawMeshNode meshNode;
     private final BoundSessionSink boundSessionSink;
@@ -196,6 +199,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                                                                 event.event()
                                                                                         .name()));
                                             } catch (RuntimeException closedOrFailed) {
+                                                if (!closed.get()) {
+                                                    LOGGER.log(
+                                                            Level.WARNING,
+                                                            "STREAM monitor dispatch failed",
+                                                            closedOrFailed);
+                                                }
                                                 return;
                                             }
                                         }

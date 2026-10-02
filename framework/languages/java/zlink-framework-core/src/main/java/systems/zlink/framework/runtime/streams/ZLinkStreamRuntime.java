@@ -67,7 +67,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -100,7 +99,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkStreamCompressionCodec compressionCodec;
-    private final Predicate<RoutingId> sessionRelayRouteReady;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final ZLinkMetadataPolicyRegistration metadataPolicy;
     private final Duration sessionRelocationSealTimeout;
@@ -154,7 +152,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 serializer,
                 actors,
                 handlerFactory,
-                ignored -> true,
                 null,
                 null,
                 backendFactory.createChannelAdapter(adapterOptions).createContext(),
@@ -169,7 +166,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkMessageSerializer serializer,
             ZLinkActorRuntime actors,
             ZLinkHandlerActivator handlerFactory,
-            Predicate<RoutingId> sessionRelayRouteReady,
             ZLinkSpotRuntime spots) {
         this(
                 backendFactory,
@@ -180,7 +176,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 serializer,
                 actors,
                 handlerFactory,
-                sessionRelayRouteReady,
                 spots,
                 null,
                 backendFactory.createChannelAdapter(adapterOptions).createContext(),
@@ -196,7 +191,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkMessageSerializer serializer,
             ZLinkActorRuntime actors,
             ZLinkHandlerActivator handlerFactory,
-            Predicate<RoutingId> sessionRelayRouteReady,
             ZLinkSpotRuntime spots,
             ZLinkRuntimeEventDispatcher eventDispatcher,
             ZLinkBackendContext context,
@@ -210,7 +204,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 serializer,
                 actors,
                 handlerFactory,
-                sessionRelayRouteReady,
                 spots,
                 eventDispatcher,
                 context,
@@ -231,7 +224,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkMessageSerializer serializer,
             ZLinkActorRuntime actors,
             ZLinkHandlerActivator handlerFactory,
-            Predicate<RoutingId> sessionRelayRouteReady,
             ZLinkSpotRuntime spots,
             ZLinkRuntimeEventDispatcher eventDispatcher,
             ZLinkBackendContext context,
@@ -266,8 +258,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.defaultCodec = defaultCodec(registration);
         this.compressionCodec = registration.streamCompressionCodec();
-        this.sessionRelayRouteReady =
-                sessionRelayRouteReady == null ? ignored -> true : sessionRelayRouteReady;
         this.localActorDispatcher = spots == null ? null : spots::dispatchLocalSessionActor;
         this.metadataPolicy = registration.metadataPolicy();
         this.livenessExecutor =
@@ -376,7 +366,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         sessionRid,
                         actors,
                         serializer,
-                        sessionRelayRouteReady,
                         localActorDispatcher,
                         streamSessionRelayAttached.getOrDefault(streamNodeName, false),
                         defaultCodec,
@@ -1208,7 +1197,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         routingId,
                                         actors,
                                         serializer,
-                                        sessionRelayRouteReady,
                                         localActorDispatcher,
                                         streamSessionRelayAttached.getOrDefault(
                                                 streamNode.name(), false),

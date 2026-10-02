@@ -265,8 +265,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .get();
             Object actorRuntime = readField(runtime.actorSessions(), "actors");
             Object dispatches = readField(actorRuntime, "dispatches");
-            Object spot = ((Map<?, ?>) readField(dispatches, "actorTargets")).get("actor-b");
-            ZLinkStateLane lane = (ZLinkStateLane) readField(spot, "stateLane");
+            ZLinkStateLane lane = (ZLinkStateLane) readField(dispatches, "stateLane");
             CompletableFuture<Void> entered = new CompletableFuture<>();
             CompletableFuture<Void> release = new CompletableFuture<>();
             assertTrue(

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -25,6 +26,206 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorDispatchSerialsTest {
+    @Test
+    void relocationLaneUsesCapturedActivationAfterQueueRemoval() {
+        ZLinkActorDispatchTarget owner = actorTarget();
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(owner));
+        var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        owner.removeActorQueueAsync("actor-1", claim.activation()).toCompletableFuture().join();
+        var recreated = owner.claimActorQueue("actor-1").toCompletableFuture().join();
+        assertNotSame(claim.activation().relocationLane(), recreated.relocationLane());
+        assertSame(claim.activation().relocationLane(), dispatches.relocationLane("actor-1"));
+        assertSame(
+                claim.activation().relocationLane(),
+                dispatches.relocationLaneAsync("actor-1").toCompletableFuture().join());
+    }
+
+    @Test
+    void teardownRetargetDoesNotCreateUnusedTargetQueue() throws Exception {
+        ZLinkActorDispatchTarget source = actorTarget();
+        ZLinkActorDispatchTarget target = actorTarget();
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(source);
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        CompletableFuture<Void> cleanupEntered = new CompletableFuture<>();
+        var teardown =
+                dispatches.beginTeardown(
+                        "actor-1",
+                        () -> {
+                            cleanupEntered.complete(null);
+                            return cleanup;
+                        });
+        cleanupEntered.join();
+        owner.set(target);
+        var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        assertSame(source, claim.target());
+        Field queuesField = ZLinkSpotSerialExecutor.class.getDeclaredField("actorQueues");
+        queuesField.setAccessible(true);
+        Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
+        laneField.setAccessible(true);
+        ZLinkStateLane targetState = (ZLinkStateLane) laneField.get(target);
+        var targetQueues = (java.util.Map<?, ?>) queuesField.get(target);
+        try {
+            assertTrue(
+                    targetState.runNowOrQueue(targetQueues::isEmpty).toCompletableFuture().join());
+        } finally {
+            cleanup.complete(null);
+            teardown.toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    void retiredClaimCannotEnterRecreatedActivation() {
+        ZLinkActorDispatchTarget owner = actorTarget();
+        ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(owner));
+        var retired = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        dispatches
+                .beginTeardown("actor-1", () -> CompletableFuture.completedFuture(null))
+                .toCompletableFuture()
+                .join();
+        var recreated = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        AtomicInteger calls = new AtomicInteger();
+        var stale =
+                dispatches.enqueue(
+                        retired,
+                        () -> {
+                            calls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+        assertThrows(CompletionException.class, () -> stale.toCompletableFuture().join());
+        assertEquals(0, calls.get());
+        dispatches
+                .enqueue(
+                        recreated,
+                        () -> {
+                            calls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void prepareAsyncDoesNotBlockWhenMetadataOwnerIsBusy() throws Exception {
+        ZLinkActorDispatchSerials dispatches = new ZLinkActorDispatchSerials();
+        Field field = ZLinkActorDispatchSerials.class.getDeclaredField("stateLane");
+        field.setAccessible(true);
+        ZLinkStateLane lane = (ZLinkStateLane) field.get(dispatches);
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        lane.runAsync(
+                () -> {
+                    entered.complete(null);
+                    release.join();
+                    return null;
+                });
+        entered.join();
+        try {
+            var prepared = dispatches.prepareAsync("actor-1");
+            assertFalse(prepared.toCompletableFuture().isDone());
+            release.complete(null);
+            assertEquals("actor-1", prepared.toCompletableFuture().join().actorId());
+        } finally {
+            release.complete(null);
+        }
+    }
+
+    @Test
+    void preparedClaimKeepsItsQueueOwnerAfterRetarget() {
+        ZLinkActorDispatchTarget source = actorTarget();
+        ZLinkActorDispatchTarget target = actorTarget();
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(source);
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        owner.set(target);
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        CompletableFuture<Void> held = new CompletableFuture<>();
+        var submitted = dispatches.enqueue(claim, () -> held);
+        assertSame(source, claim.target());
+        assertFalse(source.awaitActorQuiescence("actor-1").toCompletableFuture().isDone());
+        assertTrue(target.awaitActorQuiescence("actor-1").toCompletableFuture().isDone());
+        held.complete(null);
+        submitted.toCompletableFuture().join();
+    }
+
+    @Test
+    void teardownRetargetUsesTheSealedActivationQueue() {
+        ZLinkActorDispatchTarget source = actorTarget();
+        ZLinkActorDispatchTarget target = actorTarget();
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(source);
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        CompletableFuture<Void> cleanupEntered = new CompletableFuture<>();
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        var teardown =
+                dispatches.beginTeardown(
+                        "actor-1",
+                        () -> {
+                            cleanupEntered.complete(null);
+                            return cleanup;
+                        });
+        cleanupEntered.join();
+        try {
+            owner.set(target);
+            // spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md:81:
+            // Actor queue owns payload admission; prepare only captures that queue.
+            // spec/server/00-foundation/06-framework-api.ko.md:926: admission seal -> Rejected.
+            var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+            assertSame(source, claim.target());
+            var submitted =
+                    dispatches.enqueue(claim, () -> CompletableFuture.completedFuture(null));
+            CompletionException failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () -> submitted.toCompletableFuture().join());
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                    ((systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause())
+                            .kind());
+            assertTrue(target.awaitActorQuiescence("actor-1").toCompletableFuture().isDone());
+        } finally {
+            cleanup.complete(null);
+            teardown.toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    void retargetRetainsTheLifecycleBarrierClaim() {
+        ZLinkActorDispatchTarget source = actorTarget();
+        ZLinkActorDispatchTarget target = actorTarget();
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(source);
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> lifecycle = new CompletableFuture<>();
+        var barrier =
+                dispatches.enqueueBarrier(
+                        "actor-1",
+                        () -> {
+                            entered.complete(null);
+                            return lifecycle;
+                        });
+        entered.join();
+        owner.set(target);
+        AtomicInteger handlers = new AtomicInteger();
+        var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        var submitted =
+                dispatches.enqueue(
+                        claim,
+                        () -> {
+                            handlers.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+        assertFalse(submitted.toCompletableFuture().isDone());
+        assertEquals(0, handlers.get());
+        lifecycle.complete(null);
+        barrier.toCompletableFuture().join();
+        submitted.toCompletableFuture().join();
+        assertEquals(1, handlers.get());
+    }
+
     @Test
     void retainedCommitWaitsForBusySpotOwnerWithoutBlockingCaller() throws Exception {
         ZLinkSpotSerialExecutor spot = (ZLinkSpotSerialExecutor) actorTarget();
@@ -104,7 +305,20 @@ final class ZLinkActorDispatchSerialsTest {
         removeEntered.join();
         try {
             assertFalse(teardown.toCompletableFuture().isDone());
-            assertThrows(IllegalStateException.class, () -> dispatches.prepare("actor-1"));
+            // spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md:81:
+            // The sealed Actor queue rejects admission when enqueue is attempted.
+            // spec/server/00-foundation/06-framework-api.ko.md:926: admission seal -> Rejected.
+            var rejected =
+                    dispatches.enqueue(
+                            dispatches.prepare("actor-1"),
+                            () -> CompletableFuture.completedFuture(null));
+            CompletionException rejection =
+                    assertThrows(
+                            CompletionException.class, () -> rejected.toCompletableFuture().join());
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                    ((systems.zlink.framework.errors.ZLinkFrameworkException) rejection.getCause())
+                            .kind());
         } finally {
             removal.complete(null);
         }
@@ -177,7 +391,17 @@ final class ZLinkActorDispatchSerialsTest {
                         });
 
         assertFalse(teardown.toCompletableFuture().isDone());
-        assertThrows(IllegalStateException.class, () -> dispatches.prepare("actor-1"));
+        var rejected =
+                dispatches.enqueue(
+                        dispatches.prepare("actor-1"),
+                        () -> CompletableFuture.completedFuture(null));
+        CompletionException rejection =
+                assertThrows(
+                        CompletionException.class, () -> rejected.toCompletableFuture().join());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException) rejection.getCause())
+                        .kind());
         assertEquals(0, cleanupCount.get());
 
         release.complete(null);
@@ -219,24 +443,18 @@ final class ZLinkActorDispatchSerialsTest {
                 dispatches.enqueue(
                         dispatches.prepare("actor-1"),
                         new byte[] {1},
-                        () ->
-                                dispatches.runTurn(
-                                        "actor-1",
-                                        () -> {
-                                            order.add("first");
-                                            return CompletableFuture.completedFuture(null);
-                                        }));
+                        () -> {
+                            order.add("first");
+                            return CompletableFuture.completedFuture(null);
+                        });
         CompletionStage<Void> second =
                 dispatches.enqueue(
                         dispatches.prepare("actor-1"),
                         new byte[] {2},
-                        () ->
-                                dispatches.runTurn(
-                                        "actor-1",
-                                        () -> {
-                                            order.add("second");
-                                            return CompletableFuture.completedFuture(null);
-                                        }));
+                        () -> {
+                            order.add("second");
+                            return CompletableFuture.completedFuture(null);
+                        });
 
         CompletableFuture.allOf(first.toCompletableFuture(), second.toCompletableFuture()).join();
         assertEquals(List.of("first", "second"), order);
@@ -333,7 +551,13 @@ final class ZLinkActorDispatchSerialsTest {
     private static ZLinkActorDispatchSerials dispatches(
             AtomicReference<ZLinkActorDispatchTarget> owner) {
         return new ZLinkActorDispatchSerials(
-                new Object(), actorId -> actorId, Runnable::run, actorId -> owner.get());
+                new Object(),
+                actorId -> actorId,
+                Runnable::run,
+                actorId ->
+                        CompletableFuture.completedFuture(
+                                new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                        owner.get(), actorId)));
     }
 
     private static ZLinkActorDispatchTarget actorTarget() {

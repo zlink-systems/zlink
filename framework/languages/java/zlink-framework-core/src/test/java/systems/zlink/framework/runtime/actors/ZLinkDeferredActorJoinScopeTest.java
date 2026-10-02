@@ -192,7 +192,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         List<String> order = new ArrayList<>();
 
         serials.runTurn(
-                        "actor-a",
+                        serials.prepare("actor-a"),
                         () -> {
                             order.add("handler");
                             ZLinkDeferredActorJoinScope.register(
@@ -219,7 +219,7 @@ final class ZLinkDeferredActorJoinScopeTest {
 
         CompletableFuture<Void> turn =
                 serials.runTurn(
-                                "actor-a",
+                                serials.prepare("actor-a"),
                                 () ->
                                         awaited.thenRunAsync(
                                                 () -> {
@@ -251,7 +251,7 @@ final class ZLinkDeferredActorJoinScopeTest {
                         CompletionException.class,
                         () ->
                                 serials.runTurn(
-                                                "actor-a",
+                                                serials.prepare("actor-a"),
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
@@ -272,7 +272,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         assertTrue(order.isEmpty());
 
         serials.runTurn(
-                        "actor-a",
+                        serials.prepare("actor-a"),
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",

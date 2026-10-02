@@ -121,6 +121,12 @@ final class ZLinkActorSessionCoordinator {
         return actors == null ? Optional.empty() : actors.localActor(actorId);
     }
 
+    CompletionStage<Optional<ZLinkActor>> localActorAsync(String actorId) {
+        return actors == null
+                ? CompletableFuture.completedFuture(Optional.empty())
+                : actors.localActorAsync(actorId);
+    }
+
     void stageRelocationMessageFollow(
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence

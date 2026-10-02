@@ -235,20 +235,19 @@ final class ZLinkActorLocationCoordinator {
         }
     }
 
-    void bindSessionRoute(RoutingId routeSessionRid, String actorId, RoutingId sourceNodeRid) {
+    CompletionStage<Void> bindSessionRoute(
+            RoutingId routeSessionRid, String actorId, RoutingId sourceNodeRid) {
         if (lifecycle == null || routeSessionRid == null || sourceNodeRid == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        lifecycle
-                .bindActorSessionRoute(routeSessionRid, actorId, sourceNodeRid)
-                .exceptionally(error -> null);
+        return lifecycle.bindActorSessionRoute(routeSessionRid, actorId, sourceNodeRid);
     }
 
-    void removeSessionRoute(RoutingId routeSessionRid) {
+    CompletionStage<Void> removeSessionRoute(RoutingId routeSessionRid) {
         if (lifecycle == null || routeSessionRid == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        lifecycle.removeActorSessionRoute(routeSessionRid).exceptionally(error -> null);
+        return lifecycle.removeActorSessionRoute(routeSessionRid);
     }
 
     private String actorTypeFor(ZLinkActor actor) {

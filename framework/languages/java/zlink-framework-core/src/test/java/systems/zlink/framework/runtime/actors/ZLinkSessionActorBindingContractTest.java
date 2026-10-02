@@ -761,7 +761,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW);
@@ -778,7 +777,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW);
@@ -809,7 +807,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW,

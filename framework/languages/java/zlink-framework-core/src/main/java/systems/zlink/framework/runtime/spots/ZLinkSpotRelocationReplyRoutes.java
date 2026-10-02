@@ -604,16 +604,15 @@ final class ZLinkSpotRelocationReplyRoutes {
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "relocation source owner lease expired before authority settled");
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        List<CompletableFuture<?>> notifications = new ArrayList<>();
         for (Route route : pending) {
-            chain =
-                    chain.thenCompose(
-                            ignored ->
-                                    route.failure
-                                            .apply(unavailable)
-                                            .handle((delivered, failure) -> null));
+            try {
+                notifications.add(route.failure.apply(unavailable).toCompletableFuture());
+            } catch (RuntimeException failure) {
+                notifications.add(CompletableFuture.failedFuture(failure));
+            }
         }
-        return chain;
+        return CompletableFuture.allOf(notifications.toArray(CompletableFuture[]::new));
     }
 
     CompletionStage<Ack> relay(Relay relay, RoutingId transportSource) {

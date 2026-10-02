@@ -6,8 +6,6 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
@@ -39,9 +37,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
-import java.util.function.Predicate;
 
 final class ZLinkBoundActor implements ZLinkSessionActor {
     static final int MAX_ACTOR_SLOT = 0xffff;
@@ -55,7 +51,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final long bindingToken;
     private final long bindingGeneration;
     private final int actorSlot;
-    private final Predicate<RoutingId> routeReady;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final boolean nativeSessionRelayAttached;
     private final ZLinkStreamCodec defaultCodec;
@@ -79,7 +74,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             long bindingToken,
             long bindingGeneration,
             int actorSlot,
-            Predicate<RoutingId> routeReady,
             ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -105,7 +99,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     "bound Session Actor slot must be in 1.." + MAX_ACTOR_SLOT);
         }
         this.actorSlot = actorSlot;
-        this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.localActorDispatcher = localActorDispatcher;
         this.nativeSessionRelayAttached = nativeSessionRelayAttached;
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
@@ -128,7 +121,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             ZLinkMessageSerializer serializer,
             long bindingToken,
             long bindingGeneration,
-            Predicate<RoutingId> routeReady,
             ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -148,7 +140,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 bindingToken,
                 bindingGeneration,
                 1,
-                routeReady,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
                 defaultCodec,
@@ -213,37 +204,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             actors.prepareRelocatedSessionBinding(
                     targetActor, authorityOwnerGeneration, ownerLeaseGeneration);
         }
-        return ZLinkActorRetryScheduler.waitUntilRelay(
-                        timeout,
-                        () -> routeReady.test(targetActor.nodeRid()),
-                        () -> {},
-                        () -> {
-                            String message =
-                                    "remote bound session route was not ready"
-                                            + " before timeout: "
-                                            + targetActor.actorId();
-                            //  Spec 32-framework-error-model:90 — a route wait past
-                            //  its deadline is DeadlineExceeded, not a raw language
-                            //  timeout. The TimeoutException cause is kept for
-                            //  diagnostics.
-                            return new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                    message,
-                                    new TimeoutException(message));
-                        })
-                // Specs 44/52 make command 44 one-way: target restoration already
-                // installed the bound-Session context before publishing the route
-                // update. Waiting for another Actor-mailbox request here can
-                // deadlock behind the application turn whose relocation is being
-                // completed and lets the Session seal deadline win.
-                .thenCompose(
-                        ignored ->
-                                stream.relocateBoundActor(
-                                        sessionRid,
-                                        ref.actorId(),
-                                        bindingGeneration,
-                                        targetActor,
-                                        timeout));
+        return stream.relocateBoundActor(
+                sessionRid, ref.actorId(), bindingGeneration, targetActor, timeout);
     }
 
     void commitPreparedNativeActorRoute(ZLinkBackendActorRef targetActor) {
@@ -399,12 +361,6 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         } finally {
             reply.payload().close();
         }
-    }
-
-    private CompletionStage<Void> awaitRouteReady() {
-        return ZLinkActorRetryScheduler.waitUntilRelayOrContinue(
-                ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
-                () -> routeReady.test(ref.nodeRid()));
     }
 
     private CompletionStage<Void> relayUsingStoredBinding(

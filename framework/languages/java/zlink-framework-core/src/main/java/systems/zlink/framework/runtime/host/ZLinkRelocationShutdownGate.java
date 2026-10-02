@@ -7,19 +7,26 @@ package systems.zlink.framework.runtime.host;
  */
 final class ZLinkRelocationShutdownGate {
     private boolean relocationUnitInProgress;
-    private boolean shutdownRequested;
+    private final java.util.concurrent.CompletableFuture<Void> shutdownRequested =
+            new java.util.concurrent.CompletableFuture<>();
 
     synchronized boolean beginRelocationUnit() {
-        if (shutdownRequested) {
+        if (shutdownRequested.isDone()) {
             return false;
         }
         relocationUnitInProgress = true;
         return true;
     }
 
-    synchronized boolean requestShutdown() {
-        shutdownRequested = true;
-        return !relocationUnitInProgress;
+    boolean requestShutdown() {
+        shutdownRequested.complete(null);
+        synchronized (this) {
+            return !relocationUnitInProgress;
+        }
+    }
+
+    java.util.concurrent.CompletionStage<Void> stopSignal() {
+        return shutdownRequested;
     }
 
     synchronized void finishRelocationUnit() {
@@ -27,6 +34,6 @@ final class ZLinkRelocationShutdownGate {
     }
 
     synchronized boolean stopBeforeNextUnit() {
-        return shutdownRequested;
+        return shutdownRequested.isDone();
     }
 }

@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static systems.zlink.framework.runtime.channels.ZLinkChannelSubmissionAssertions.assertSubmitFailure;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -257,7 +259,7 @@ final class ZLinkChannelSubmissionFailureTest {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
                 IllegalStateException failure =
-                        assertThrows(
+                        assertSubmitFailure(
                                 IllegalStateException.class,
                                 () ->
                                         new RouteSendCall(
@@ -283,7 +285,8 @@ final class ZLinkChannelSubmissionFailureTest {
     }
 
     @Test
-    void meshNodeImmediateAdmissionReturnsTheBindingStageWithoutACompletionGraph() {
+    void meshNodeImmediateAdmissionReturnsTheBindingStageWithoutACompletionGraph()
+            throws Exception {
         CompletionStage<Void> admitted = ZLinkOneWayCalls.immediateAdmission();
         ZLinkInternalSpotNode node = nodeSendThatAdmitsImmediately(admitted);
 
@@ -291,17 +294,30 @@ final class ZLinkChannelSubmissionFailureTest {
                 Message payload = Message.from("node-send-immediate")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
+                ZLinkChannelSocketRegistry registry = sockets(node);
+                var laneField = ZLinkChannelSocketRegistry.class.getDeclaredField("stateLane");
+                laneField.setAccessible(true);
+                var lane =
+                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                                laneField.get(registry);
+                // Preserve the immediate binding-stage fast path when already in the Registry owner
+                // turn.
                 CompletionStage<Void> completion =
-                        new RouteSendCall(
-                                        runtime,
-                                        "orders",
-                                        sockets(node),
-                                        TARGET,
-                                        payload,
-                                        Optional.of("command"),
-                                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-                                        ZLinkApplicationMetadata.empty())
-                                .submit();
+                        lane.runNowOrQueue(
+                                        () ->
+                                                new RouteSendCall(
+                                                                runtime,
+                                                                "orders",
+                                                                registry,
+                                                                TARGET,
+                                                                payload,
+                                                                Optional.of("command"),
+                                                                ZLinkChannelContentTypeFrame
+                                                                        .DEFAULT_CONTENT_TYPE,
+                                                                ZLinkApplicationMetadata.empty())
+                                                        .submit())
+                                .toCompletableFuture()
+                                .join();
 
                 assertSame(admitted, completion);
                 assertTrue(
@@ -324,7 +340,7 @@ final class ZLinkChannelSubmissionFailureTest {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
                 IllegalStateException failure =
-                        assertThrows(
+                        assertSubmitFailure(
                                 IllegalStateException.class,
                                 () ->
                                         new ChannelSendCall(

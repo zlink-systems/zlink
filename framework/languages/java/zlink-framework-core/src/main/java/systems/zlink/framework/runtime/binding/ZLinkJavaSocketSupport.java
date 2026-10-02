@@ -40,9 +40,7 @@ final class ZLinkJavaSocketSupport {
         try {
             return receive.getAsBoolean();
         } catch (ZlinkRecvException ex) {
-            if (ex.getResult() == RecvResult.NO_DATA
-                    || ex.getResult() == RecvResult.BUSY
-                    || ex.getResult() == RecvResult.INTERNAL_ERROR) {
+            if (ex.getResult() == RecvResult.NO_DATA) {
                 return false;
             }
             throw ex;

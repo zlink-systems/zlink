@@ -23,6 +23,39 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkAutoConnectLoopTest {
     @Test
+    void startupUsesConfiguredPollingInterval() throws Exception {
+        PendingResolver resolver = new PendingResolver();
+        ZLinkLocationOptions options = new ZLinkLocationOptions();
+        options.setPollingInterval(java.time.Duration.ofSeconds(30));
+        ZLinkAutoConnectReconciler reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        null,
+                        null,
+                        resolver,
+                        new RecordingExecutor(),
+                        options);
+        ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options);
+        try {
+            loop.start();
+            resolver.complete(List.of());
+            var taskField = ZLinkAutoConnectLoop.class.getDeclaredField("task");
+            taskField.setAccessible(true);
+            var scheduled = (java.util.concurrent.ScheduledFuture<?>) taskField.get(loop);
+            assertTrue(
+                    scheduled.getDelay(TimeUnit.SECONDS) > 20,
+                    "startup must use the configured polling interval");
+        } finally {
+            loop.stop().toCompletableFuture().get(1, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void stopWaitsForInFlightTickBeforeDiscardingReconcilerState() throws Exception {
         PendingResolver resolver = new PendingResolver();
         RecordingExecutor executor = new RecordingExecutor();

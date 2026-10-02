@@ -32,6 +32,207 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpotPublisherRuntimeTest {
     @Test
+    void closeRejectsDroppedPublishAndPreventsNotYetStartedWorker() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var runtime = runtime(calls::incrementAndGet, 1, Duration.ofSeconds(3));
+        var worker =
+                new java.util.concurrent.ThreadPoolExecutor(
+                        1,
+                        1,
+                        0,
+                        TimeUnit.MILLISECONDS,
+                        new java.util.concurrent.LinkedBlockingQueue<Runnable>()) {
+                    @Override
+                    protected void beforeExecute(Thread thread, Runnable task) {
+                        entered.countDown();
+                        awaitUninterruptibly(release);
+                    }
+                };
+        var field = ZLinkSpotPublisherRuntime.class.getDeclaredField("multicastExecutor");
+        field.setAccessible(true);
+        ((java.util.concurrent.ThreadPoolExecutor) field.get(runtime)).shutdownNow();
+        field.set(runtime, worker);
+        try {
+            var held = submit(runtime, "not-started");
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            var dropped = submit(runtime, "dropped");
+            assertFalse(dropped.isDone());
+            runtime.close();
+            assertEquals(5, dropped.get(3, TimeUnit.SECONDS).status());
+            release.countDown();
+            assertEquals(5, held.get(3, TimeUnit.SECONDS).status());
+            assertEquals(0, calls.get());
+        } finally {
+            release.countDown();
+            runtime.close();
+            worker.shutdownNow();
+        }
+    }
+
+    @Test
+    void handoffAdmitsBeforeItsTargetProcessingCompletes() throws Exception {
+        var firstStarted = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var releaseFirst = new CountDownLatch(1);
+        var releaseSecond = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var runtime =
+                runtime(
+                        () -> {
+                            if (calls.incrementAndGet() == 1) {
+                                firstStarted.countDown();
+                                await(releaseFirst);
+                            } else {
+                                secondStarted.countDown();
+                                await(releaseSecond);
+                            }
+                        },
+                        1,
+                        Duration.ofSeconds(3));
+        try {
+            submit(runtime, "first");
+            assertTrue(firstStarted.await(3, TimeUnit.SECONDS));
+            var second =
+                    runtime.call(
+                                    "mesh",
+                                    "channel",
+                                    "topic",
+                                    Message.from(new byte[] {2}),
+                                    Optional.empty())
+                            .submit()
+                            .toCompletableFuture();
+            assertFalse(second.isDone());
+            releaseFirst.countDown();
+            assertTrue(secondStarted.await(3, TimeUnit.SECONDS));
+            second.get(3, TimeUnit.SECONDS);
+            assertFalse(second.cancel(false));
+        } finally {
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            runtime.close();
+        }
+    }
+
+    @Test
+    void publicCancellationBeforeAdmissionDoesNotStartTargetProcessing() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var runtime =
+                runtime(
+                        () -> {
+                            calls.incrementAndGet();
+                            started.countDown();
+                            await(release);
+                        },
+                        1);
+        try {
+            submit(runtime, "first");
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            var second =
+                    runtime.call(
+                                    "mesh",
+                                    "channel",
+                                    "topic",
+                                    Message.from(new byte[] {2}),
+                                    Optional.empty())
+                            .submit()
+                            .toCompletableFuture();
+            assertFalse(second.isDone());
+            assertTrue(second.cancel(false));
+            release.countDown();
+        } finally {
+            release.countDown();
+            runtime.close();
+        }
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void privateAdmissionCancellationHasOneWinnerAcrossRepeatedCallers() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var runtime =
+                runtime(
+                        () -> {
+                            calls.incrementAndGet();
+                            started.countDown();
+                            await(release);
+                        },
+                        1);
+        try {
+            submit(runtime, "first");
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            var queued = submit(runtime, "queued");
+            var race = new CountDownLatch(1);
+            var first =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                await(race);
+                                return queued.cancel(false);
+                            });
+            var second =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                await(race);
+                                return queued.cancel(false);
+                            });
+            race.countDown();
+            assertEquals(
+                    1,
+                    (first.get(3, TimeUnit.SECONDS) ? 1 : 0)
+                            + (second.get(3, TimeUnit.SECONDS) ? 1 : 0));
+            assertFalse(queued.cancel(false));
+            release.countDown();
+        } finally {
+            release.countDown();
+            runtime.close();
+        }
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void manualPublicCompletionDoesNotCompleteThePrivateAdmissionOwner() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var runtime =
+                runtime(
+                        () -> {
+                            if (calls.incrementAndGet() == 1) {
+                                started.countDown();
+                                await(release);
+                            } else secondStarted.countDown();
+                        },
+                        1,
+                        Duration.ofSeconds(3));
+        try {
+            submit(runtime, "first");
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            var second =
+                    runtime.call(
+                                    "mesh",
+                                    "channel",
+                                    "topic",
+                                    Message.from(new byte[] {2}),
+                                    Optional.empty())
+                            .submit()
+                            .toCompletableFuture();
+            assertTrue(second.complete(null));
+            release.countDown();
+            assertTrue(secondStarted.await(3, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
+            runtime.close();
+        }
+        assertEquals(2, calls.get());
+    }
+
+    @Test
     void publishContinuationRetainsSubmittingSerialTurn() throws Exception {
         CountDownLatch firstCoreStarted = new CountDownLatch(1);
         CountDownLatch releaseFirstCore = new CountDownLatch(1);
@@ -202,10 +403,13 @@ final class ZLinkSpotPublisherRuntimeTest {
         CountDownLatch started = new CountDownLatch(workerCount);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger coreCalls = new AtomicInteger();
+        CountDownLatch queuedStarted = new CountDownLatch(1);
         ZLinkSpotPublisherRuntime runtime =
                 runtime(
                         () -> {
-                            coreCalls.incrementAndGet();
+                            if (coreCalls.incrementAndGet() == workerCount + 1) {
+                                queuedStarted.countDown();
+                            }
                             started.countDown();
                             await(release);
                         });
@@ -222,6 +426,7 @@ final class ZLinkSpotPublisherRuntimeTest {
             release.countDown();
             committed.forEach(CompletableFuture::join);
             assertEquals(0, queued.join().status());
+            assertTrue(queuedStarted.await(2, TimeUnit.SECONDS));
             assertEquals(workerCount + 1, coreCalls.get());
         } finally {
             release.countDown();

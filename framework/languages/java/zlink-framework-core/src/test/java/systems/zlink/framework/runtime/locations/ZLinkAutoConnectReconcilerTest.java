@@ -20,6 +20,41 @@ import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkAutoConnectReconcilerTest {
     @Test
+    void unchangedTargetDoesNotResubmitItsConnectionIntent() {
+        MutableResolver resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        java.util.ArrayList<String> connectionOperations = new java.util.ArrayList<>();
+        ZLinkAutoConnectExecutor executor =
+                (ZLinkAutoConnectExecutor)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkAutoConnectExecutor.class.getClassLoader(),
+                                new Class<?>[] {ZLinkAutoConnectExecutor.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("isManual")) return false;
+                                    if (method.getName().equals("observeAdmissionExpectation"))
+                                        return null;
+                                    connectionOperations.add(method.getName());
+                                    return method.getReturnType() == boolean.class ? true : null;
+                                });
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        null,
+                        null,
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions());
+        reconciler.tick().toCompletableFuture().join();
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(List.of("connect"), connectionOperations);
+    }
+
+    @Test
     void storeFailureRetriesOnlyThePreviouslyDesiredPendingTargetWithinGrace() {
         MutableResolver resolver = new MutableResolver();
         RecordingExecutor executor = new RecordingExecutor();

@@ -88,16 +88,24 @@ final class ZLinkChannelSubmitTurnTest {
                     new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
             channel.enableClient();
             f.sockets.registerChannel(channel);
+            // 01-execution/01-submit-and-completion.ko.md:50: admission failure completes submit's
+            // stage.
             for (Map<String, String> values :
                     java.util.List.of(Map.<String, String>of(), Map.of("key", "value"))) {
                 ZLinkSendCall send = f.send().metadata(values);
                 ZLinkRequestCall request = f.request().metadata(values);
                 assertEquals(
                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                        assertThrows(
+                        assertInstanceOf(
                                         systems.zlink.framework.errors.ZLinkFrameworkException
                                                 .class,
-                                        send::submit)
+                                        assertThrows(
+                                                        CompletionException.class,
+                                                        () ->
+                                                                send.submit()
+                                                                        .toCompletableFuture()
+                                                                        .join())
+                                                .getCause())
                                 .kind());
                 assertEquals(
                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
@@ -252,7 +260,8 @@ final class ZLinkChannelSubmitTurnTest {
                                             },
                                             (node, timeout) -> {
                                                 throw new AssertionError("expected ClientServer");
-                                            }));
+                                            },
+                                            failure -> {}));
             try {
                 await(bindingEntered);
                 var removal =

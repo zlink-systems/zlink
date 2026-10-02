@@ -133,13 +133,6 @@ public final class ZLinkChannelRuntime
     private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private volatile Supplier<ZLinkInternalSpotNode> requestSourceMeshOwner;
-    private final ScheduledExecutorService spotRouteBridgeDrainLoopExecutor =
-            Executors.newSingleThreadScheduledExecutor(
-                    task -> {
-                        Thread thread = new Thread(task, "zlink-java-spot-route-bridge-drain");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
     private final ScheduledExecutorService timeoutExecutor;
     // Provider/backend work can block without occupying the deadline thread.
     // Each periodic source below owns one admission bit, so this shared
@@ -462,9 +455,7 @@ public final class ZLinkChannelRuntime
             LongConsumer parkNanos,
             ScheduledExecutorService timeoutExecutor) {
         this.timeoutExecutor = timeoutExecutor;
-        this.sockets =
-                new ZLinkChannelSocketRegistry(
-                        registration.applicationJobQueue(), nanoTime, parkNanos);
+        this.sockets = new ZLinkChannelSocketRegistry(registration.applicationJobQueue());
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
         this.fanoutRuntime =
                 new ZLinkFanoutRuntimeView(
@@ -494,12 +485,7 @@ public final class ZLinkChannelRuntime
         this.receiveLoops =
                 new ZLinkChannelReceiveLoops(() -> running, registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
-        this.spotRouteBridgeDrainer =
-                new ZLinkSpotRouteBridgeDrainer(
-                        sockets.spotRouteBridges(),
-                        spotRouteBridgeDrainLoopExecutor,
-                        () -> running,
-                        this::reportSpotRouteBridgeDrainFailure);
+        this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(sockets.spotRouteBridges());
         this.backendFactory = backendFactory;
         this.adapterOptions = adapterOptions;
         this.channelBackend = Objects.requireNonNull(backend, "backend");
@@ -1209,12 +1195,8 @@ public final class ZLinkChannelRuntime
 
     private static SpotTransportAddressResolver resolveSpotAddressResolver(
             ZLinkHandlerActivator handlerFactory) {
-        try {
-            return (SpotTransportAddressResolver)
-                    handlerFactory.create(SpotTransportAddressResolver.class);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
+        return (SpotTransportAddressResolver)
+                handlerFactory.findService(SpotTransportAddressResolver.class);
     }
 
     public void registerSpotRouteBridgeOwner(Supplier<ZLinkInternalSpotNode> owner) {
@@ -1240,7 +1222,6 @@ public final class ZLinkChannelRuntime
         ZLinkBackendSpotRouteBridge bridge = node.createRouteBridge();
         bridge.attachRouterChannel(channelName, router);
         sockets.registerSpotRouteBridge(channelName, bridge);
-        spotRouteBridgeDrainer.start();
         return true;
     }
 
@@ -1369,7 +1350,6 @@ public final class ZLinkChannelRuntime
                 defaultRequestTimeout,
                 (bridge, resolvedTimeout) -> {
                     Duration timeout = effectiveRouteTimeout(resolvedTimeout);
-                    spotRouteBridgeDrainer.start();
                     return callRuntime.submit(
                             timeout,
                             () -> {
@@ -1451,7 +1431,6 @@ public final class ZLinkChannelRuntime
                 timeout,
                 defaultRequestTimeout,
                 (bridge, effectiveTimeout) -> {
-                    spotRouteBridgeDrainer.start();
                     return operations.submit(
                             operationId,
                             effectiveTimeout,
@@ -1501,12 +1480,10 @@ public final class ZLinkChannelRuntime
         }
         timeoutExecutor.shutdownNow();
         receiveLoops.close();
-        spotRouteBridgeDrainLoopExecutor.shutdownNow();
         awaitInfrastructureSettlement("ClientServer location", clientServerStop);
         awaitInfrastructureSettlement("fanout location", fanoutStop);
         infrastructureExecutor.shutdown();
         receiveLoops.awaitTermination();
-        awaitTerminated(spotRouteBridgeDrainLoopExecutor);
         awaitTerminated(timeoutExecutor);
         awaitTerminated(infrastructureExecutor);
         closeSpotRouteBridges();
@@ -1591,7 +1568,6 @@ public final class ZLinkChannelRuntime
         }
         ZLinkBackendSpotRouteBridge bridge =
                 sockets.requireSpotRouteBridge(channelName, spotRouteBridgeOwner);
-        spotRouteBridgeDrainer.start();
         return bridge;
     }
 
@@ -1717,14 +1693,6 @@ public final class ZLinkChannelRuntime
                                 error));
     }
 
-    private void reportSpotRouteBridgeDrainFailure(String channelName, Throwable error) {
-        reportReceiveFailure(
-                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                ZLinkDispatchMessageKind.REQUEST,
-                channelName,
-                error);
-    }
-
     private void reportReceiveFailure(
             ZLinkDispatchErrorSurface surface,
             ZLinkDispatchMessageKind messageKind,
@@ -1745,7 +1713,7 @@ public final class ZLinkChannelRuntime
         Throwable current = error;
         while (current != null) {
             if (current instanceof ZlinkRecvException ex) {
-                return true;
+                return ex.getResult() == systems.zlink.contracts.sockets.RecvResult.NO_DATA;
             }
             current = current.getCause();
         }
