@@ -1885,36 +1885,27 @@ class provider_location_repository_t final : public location_repository_t
         if (entries.empty ())
             return std::nullopt;
         std::vector<std::vector<aggregate_commit_entry_t>> pages;
-        std::vector<aggregate_commit_entry_t> current;
-        current.reserve (aggregate_commit_page_item_limit);
-        const auto finish = [&] {
-            if (current.empty ())
-                return true;
-            const auto encoded = encode_aggregate_commit_page (pages.size (), current).dump ();
-            if (encoded.size () > aggregate_commit_page_byte_limit)
-                return false;
+        for (std::size_t offset = 0; offset < entries.size ();) {
+            const auto first = entries.begin () + static_cast<std::ptrdiff_t> (offset);
+            std::vector<aggregate_commit_entry_t> current;
+            const auto count = bounded_page_prefix (
+              std::span<const aggregate_commit_entry_t> (entries).subspan (offset),
+              aggregate_commit_page_item_limit, aggregate_commit_page_byte_limit,
+              [] (const aggregate_commit_entry_t &entry) {
+                  return std::array{entry.authority_key.size (), entry.before.size (),
+                                    entry.after.size ()};
+              },
+              [&] (std::size_t candidate_count) {
+                  current.assign (first, first + static_cast<std::ptrdiff_t> (candidate_count));
+                  return encode_aggregate_commit_page (pages.size (), current).dump ().size ()
+                         <= aggregate_commit_page_byte_limit;
+              });
+            if (!count)
+                return std::nullopt;
+            current.resize (*count);
+            offset += *count;
             pages.push_back (std::move (current));
-            current.clear ();
-            current.reserve (aggregate_commit_page_item_limit);
-            return true;
-        };
-        for (const auto &entry : entries) {
-            if (current.size () == aggregate_commit_page_item_limit && !finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                <= aggregate_commit_page_byte_limit)
-                continue;
-            current.pop_back ();
-            if (!finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                > aggregate_commit_page_byte_limit)
-                return std::nullopt;
         }
-        if (!finish ())
-            return std::nullopt;
         return pages;
     }
 
