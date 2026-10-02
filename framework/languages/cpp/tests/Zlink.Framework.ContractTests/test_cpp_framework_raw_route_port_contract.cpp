@@ -103,10 +103,7 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     namespace client_server = zlink::framework::runtime::client_server;
     const auto initial = backend::map_binding_request_submit_result (
       zlink::submit_result_t::backpressured,
-      backend::raw_request_failure_phase_t::initial_admission,
-      [] () -> backend::raw_request_result_t {
-          throw zlink::submit_error_t (zlink::submit_result_t::backpressured, EAGAIN);
-      });
+      backend::raw_request_failure_phase_t::initial_admission);
     assert (initial == backend::raw_request_result_t::failed);
     const auto refused = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::transport_failed, "tokenless capacity");
@@ -115,8 +112,7 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
             != zlink::framework::detail::boundary_error_t::timed_out);
     const auto completion = backend::map_binding_request_submit_result (
       zlink::submit_result_t::backpressured,
-      backend::raw_request_failure_phase_t::completion_terminal,
-      [] { return backend::raw_request_result_t::failed; });
+      backend::raw_request_failure_phase_t::completion_terminal);
     assert (completion == backend::raw_request_result_t::timed_out);
     const auto expired = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::timed_out, "expired WRITABLE token");

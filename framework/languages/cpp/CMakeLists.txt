@@ -959,6 +959,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_submit_result_contract
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_submit_result_contract.cpp
+    framework/src/runtime/backend/raw_dealer_port.cpp
+    framework/src/runtime/dispatch/provider_task_context.cpp
+    framework/src/runtime/messaging/request_failure_mapper.cpp)
+  target_compile_features(test_cpp_framework_submit_result_contract PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_submit_result_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE zlink::cpp Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_submit_result_contract
+    COMMAND test_cpp_framework_submit_result_contract
+    LABELS "framework-contract;framework-unit;framework-foundation;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
     framework/src/runtime/backend/raw_route_port.cpp)

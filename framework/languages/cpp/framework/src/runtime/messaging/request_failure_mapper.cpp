@@ -6,6 +6,31 @@
 namespace zlink::framework::runtime::messaging
 {
 
+std::uint32_t
+request_failure_mapper_t::reply_failure_code (std::uint32_t terminal_result) const noexcept
+{
+    using protocol::framework_error_code;
+    framework_error_code failure;
+    switch (static_cast<protocol::request_terminal_result> (terminal_result)) {
+        case protocol::request_terminal_result::notFound:
+            failure = framework_error_code::requestTargetNotFound;
+            break;
+        case protocol::request_terminal_result::protocolError:
+            failure = framework_error_code::requestProtocolError;
+            break;
+        case protocol::request_terminal_result::internalError:
+            failure = framework_error_code::requestFailed;
+            break;
+        case protocol::request_terminal_result::rejected:
+            failure = framework_error_code::requestRejected;
+            break;
+        default:
+            failure = framework_error_code::none;
+            break;
+    }
+    return static_cast<std::uint32_t> (failure);
+}
+
 framework_exception_t
 request_failure_mapper_t::completion_exception (request_result_t result,
                                                 const std::string &operation_name) const

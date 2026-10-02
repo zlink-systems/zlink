@@ -147,11 +147,7 @@ binding_completion_observer_t observe_request_completion (
     }
     catch (const zlink::submit_error_t &error) {
         const auto result = map_binding_request_submit_result (
-          error.result (), raw_request_failure_phase_t::completion_terminal, [&] {
-              return error.result () == zlink::submit_result_t::terminated
-                       ? raw_request_result_t::terminated
-                       : raw_request_result_t::failed;
-          });
+          error.result (), raw_request_failure_phase_t::completion_terminal);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
           result,
           {},
@@ -387,17 +383,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
     }
     catch (const zlink::submit_error_t &error) {
         const auto phase = raw_request_failure_phase_t::initial_admission;
-        const auto result = map_binding_request_submit_result (error.result (), phase, [&] {
-            if ((error.result () == zlink::submit_result_t::not_connected
-                 && (error.internal_errno () == ENOTCONN
-                     || error.internal_errno () == EHOSTUNREACH))
-                || (error.result () == zlink::submit_result_t::not_admitted
-                    && error.internal_errno () == ECONNREFUSED))
-                return raw_request_result_t::route_unavailable;
-            return error.result () == zlink::submit_result_t::terminated
-                     ? raw_request_result_t::terminated
-                     : raw_request_result_t::failed;
-        });
+        const auto result = map_binding_request_submit_result (error.result (), phase);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
           result,
           {},

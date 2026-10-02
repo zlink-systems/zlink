@@ -28,6 +28,7 @@ enum class request_result_t
 class request_failure_mapper_t
 {
   public:
+    std::uint32_t reply_failure_code (std::uint32_t terminal_result) const noexcept;
     framework_exception_t completion_exception (request_result_t result,
                                                 const std::string &operation_name) const;
     framework_exception_t error_header_exception (const std::string &error_code,

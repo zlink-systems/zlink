@@ -94,8 +94,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
     catch (const zlink::submit_error_t &error) {
         co_return raw_request_completion_t{
           map_binding_request_submit_result (error.result (),
-                                             raw_request_failure_phase_t::initial_admission,
-                                             [] () -> raw_request_result_t { throw; }),
+                                             raw_request_failure_phase_t::initial_admission),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
                                 std::nullopt, error.internal_errno ()}};
@@ -105,19 +104,16 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
         co_return raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)};
     }
     catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{map_binding_request_result (error.result ()), {}};
+        co_return raw_request_completion_t{
+          map_binding_request_result (error.result ()),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
+                                error.result (), error.internal_errno ()}};
     }
     catch (const zlink::submit_error_t &error) {
         co_return raw_request_completion_t{
-          map_binding_request_submit_result (
-            error.result (), raw_request_failure_phase_t::completion_terminal,
-            [&] {
-                return error.result () == zlink::submit_result_t::not_connected
-                         ? raw_request_result_t::not_connected
-                       : error.result () == zlink::submit_result_t::terminated
-                         ? raw_request_result_t::terminated
-                         : raw_request_result_t::failed;
-            }),
+          map_binding_request_submit_result (error.result (),
+                                             raw_request_failure_phase_t::completion_terminal),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
                                 std::nullopt, error.internal_errno ()}};

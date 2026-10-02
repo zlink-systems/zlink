@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/errors/error.hpp>
+#include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <zlink/Contracts/Messaging/request_result.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
@@ -12,64 +13,57 @@
 namespace zlink::framework::runtime::messaging
 {
 
-/* Converts the Core submit result into the Framework public error kind. The
- * submit result remains an internal transport boundary; callers only observe
- * the Framework kind and, where applicable, its boundary error code. */
-inline framework_error_kind_t map_submit_result_error_kind (zlink::submit_result_t result) noexcept
+/* Owns the typed submit projection. Capacity refusal is source-local before
+ * a token is issued and a deadline terminal after WRITABLE admission. */
+inline zlink::request_result_t map_submit_request_result (zlink::submit_result_t result,
+                                                          bool completion_failure) noexcept
 {
     switch (result) {
         case zlink::submit_result_t::ok:
-            return framework_error_kind_t::internal_failure;
+            return zlink::request_result_t::ok;
         case zlink::submit_result_t::backpressured:
-            // Backpressure is never a public terminal: when capacity is not
-            // secured by the send timeout the call completes with
-            // DeadlineExceeded (spec 05-async-execution-policy §"Backpressure
-            // and error classification"; 32-framework-error-model:70).
-            return framework_error_kind_t::deadline_exceeded;
+            return completion_failure ? zlink::request_result_t::timed_out
+                                      : zlink::request_result_t::backpressured;
         case zlink::submit_result_t::not_connected:
-            return framework_error_kind_t::unavailable;
+            return zlink::request_result_t::not_connected;
         case zlink::submit_result_t::not_found:
-            return framework_error_kind_t::not_found;
+            return zlink::request_result_t::not_found;
         case zlink::submit_result_t::not_admitted:
-            return framework_error_kind_t::rejected;
+            return zlink::request_result_t::rejected;
         case zlink::submit_result_t::terminated:
-            return framework_error_kind_t::shutting_down;
+            return zlink::request_result_t::terminated;
+        case zlink::submit_result_t::invalid_state:
+            return zlink::request_result_t::invalid_state;
         case zlink::submit_result_t::invalid_handle:
         case zlink::submit_result_t::invalid_argument:
-        case zlink::submit_result_t::invalid_state:
         case zlink::submit_result_t::thread_violation:
-            return framework_error_kind_t::invalid_operation;
+            return zlink::request_result_t::invalid_argument;
         case zlink::submit_result_t::not_supported:
-        case zlink::submit_result_t::out_of_memory:
-        case zlink::submit_result_t::seq_exhausted:
-        case zlink::submit_result_t::internal_error:
-            return framework_error_kind_t::internal_failure;
+            return zlink::request_result_t::not_supported;
+        default:
+            return zlink::request_result_t::internal_error;
     }
-    return framework_error_kind_t::internal_failure;
 }
 
 inline framework_exception_t map_submit_result_exception (zlink::submit_result_t result,
                                                           std::string message)
 {
-    switch (result) {
-        case zlink::submit_result_t::not_connected:
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    std::move (message));
-        case zlink::submit_result_t::terminated:
-            return detail::make_boundary_exception (detail::boundary_error_t::shutdown,
-                                                    std::move (message));
-        case zlink::submit_result_t::backpressured:
-            // DeadlineExceeded from send-timeout backpressure, represented as a
-            // timeout boundary exception exactly like a request timeout.
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    std::move (message));
-        case zlink::submit_result_t::ok:
-            break;
-        default:
-            return framework_exception_t (map_submit_result_error_kind (result),
-                                          std::move (message));
-    }
-    return framework_exception_t (framework_error_kind_t::internal_failure, std::move (message));
+    const auto terminal = static_cast<std::uint32_t> (map_submit_request_result (result, true));
+    const request_failure_mapper_t mapper;
+    return mapper.reply_header_exception (terminal, mapper.reply_failure_code (terminal), message);
+}
+
+inline framework_error_kind_t map_submit_result_error_kind (zlink::submit_result_t result)
+{
+    return map_submit_result_exception (result, {}).kind ();
+}
+
+inline framework_exception_t map_request_result_exception (zlink::request_result_t result,
+                                                           std::string message)
+{
+    const auto terminal = static_cast<std::uint32_t> (result);
+    const request_failure_mapper_t mapper;
+    return mapper.reply_header_exception (terminal, mapper.reply_failure_code (terminal), message);
 }
 
 /* Select-one channel variant. A channel reports not_found when applying
@@ -87,43 +81,6 @@ inline framework_exception_t map_channel_submit_result_exception (zlink::submit_
                                                 std::move (message));
     }
     return map_submit_result_exception (result, std::move (message));
-}
-
-inline framework_exception_t map_request_result_exception (zlink::request_result_t result,
-                                                           std::string message)
-{
-    switch (result) {
-        case zlink::request_result_t::timed_out:
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    std::move (message));
-        case zlink::request_result_t::not_found:
-            return framework_exception_t (framework_error_kind_t::not_found, std::move (message));
-        case zlink::request_result_t::terminated:
-            return detail::make_boundary_exception (detail::boundary_error_t::shutdown,
-                                                    std::move (message));
-        case zlink::request_result_t::protocol_error:
-            return framework_exception_t (framework_error_kind_t::protocol_error,
-                                          std::move (message));
-        case zlink::request_result_t::rejected:
-            return framework_exception_t (framework_error_kind_t::rejected, std::move (message));
-        case zlink::request_result_t::conflict:
-        case zlink::request_result_t::busy:
-            return framework_exception_t (framework_error_kind_t::unavailable, std::move (message));
-        case zlink::request_result_t::not_connected:
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    std::move (message));
-        case zlink::request_result_t::invalid_argument:
-        case zlink::request_result_t::invalid_state:
-            return framework_exception_t (framework_error_kind_t::invalid_operation,
-                                          std::move (message));
-        case zlink::request_result_t::not_supported:
-        case zlink::request_result_t::internal_error:
-            return framework_exception_t (framework_error_kind_t::internal_failure,
-                                          std::move (message));
-        case zlink::request_result_t::ok:
-            break;
-    }
-    return framework_exception_t (framework_error_kind_t::internal_failure, std::move (message));
 }
 
 } // namespace zlink::framework::runtime::messaging

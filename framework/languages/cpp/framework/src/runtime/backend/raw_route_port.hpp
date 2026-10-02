@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/messaging/submit_result_mapper.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -62,6 +64,14 @@ struct raw_request_failure_t
     std::optional<zlink::submit_result_t> submit_result;
     std::optional<zlink::request_result_t> request_result;
     int internal_errno = 0;
+
+    zlink::request_result_t terminal_result () const noexcept
+    {
+        if (request_result)
+            return *request_result;
+        return runtime::messaging::map_submit_request_result (
+          *submit_result, phase == raw_request_failure_phase_t::completion_terminal);
+    }
 };
 
 struct raw_request_completion_t
@@ -69,6 +79,19 @@ struct raw_request_completion_t
     raw_request_result_t result = raw_request_result_t::failed;
     raw_message_t parts;
     std::optional<raw_request_failure_t> failure;
+
+    bool has_unrepresented_typed_result () const
+    {
+        if (result != raw_request_result_t::failed || !failure)
+            return false;
+        const auto terminal = static_cast<std::uint32_t> (failure->terminal_result ());
+        const runtime::messaging::request_failure_mapper_t mapper;
+        // Compare public meanings before encoding. Legacy Unavailable is kept
+        // as a transport terminal, including Core Conflict with no wire fine code.
+        return mapper.reply_header_exception (terminal, mapper.reply_failure_code (terminal), {})
+                 .kind ()
+               != framework_error_kind_t::unavailable;
+    }
 };
 
 // A send that the binding accepts immediately has its terminal admission

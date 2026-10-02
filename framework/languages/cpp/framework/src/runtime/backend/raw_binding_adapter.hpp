@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/messaging/submit_result_mapper.hpp"
+
 #include "runtime/backend/raw_route_port.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -96,19 +98,13 @@ inline raw_request_result_t map_binding_request_result (zlink::request_result_t 
     }
 }
 
-// The submit phase preserves Core's distinction between a tokenless capacity
-// refusal and the timeout of an issued WRITABLE token (submit-and-completion §5).
-// Other submit results retain the owning port's existing classification.
-template <typename TFallback>
+// Raw transport projection consumes the single submit owner and retains the
+// original typed failure separately for the public request result consumer.
 inline raw_request_result_t map_binding_request_submit_result (zlink::submit_result_t result,
-                                                               raw_request_failure_phase_t phase,
-                                                               TFallback &&fallback)
+                                                               raw_request_failure_phase_t phase)
 {
-    if (result == zlink::submit_result_t::backpressured)
-        return phase == raw_request_failure_phase_t::initial_admission
-                 ? raw_request_result_t::failed
-                 : raw_request_result_t::timed_out;
-    return std::forward<TFallback> (fallback) ();
+    return map_binding_request_result (runtime::messaging::map_submit_request_result (
+      result, phase == raw_request_failure_phase_t::completion_terminal));
 }
 
 } // namespace zlink::framework::detail::backend

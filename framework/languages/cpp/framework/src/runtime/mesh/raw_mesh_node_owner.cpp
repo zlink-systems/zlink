@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -248,13 +249,24 @@ class infrastructure_request_retry_state_t final
             fail (foundation::operation_terminal_t::transport_failed);
             return;
         }
-        auto completion = settled.value ();
+        const auto &completion = settled.value ();
         _admitted |= completion.failure && completion.failure->request_result.has_value ();
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
                     + " result=" + std::to_string (static_cast<int> (completion.result)));
         if (completion.result == detail::backend::raw_request_result_t::route_unavailable
             || completion.result == detail::backend::raw_request_result_t::timed_out) {
             schedule_retry ();
+            return;
+        }
+        if (completion.has_unrepresented_typed_result ()) {
+            const auto &failure = *completion.failure;
+            const auto terminal = failure.terminal_result ();
+            auto payload =
+              _decode_reply (detail::backend::raw_message_t{protocol::encode_reply_header (
+                _correlation, static_cast<std::uint32_t> (terminal),
+                runtime::messaging::request_failure_mapper_t{}.reply_failure_code (
+                  static_cast<std::uint32_t> (terminal)))});
+            (void) _operations->complete (_operation, std::move (payload));
             return;
         }
         if (completion.result != detail::backend::raw_request_result_t::ok) {
@@ -374,9 +386,20 @@ task_t<bool> submit_registered_infrastructure_request (
                                        foundation::operation_terminal_t::transport_failed);
               return;
           }
-          auto completion = settled.value ();
+          const auto &completion = settled.value ();
           trace_mesh ("infrastructure-request-result correlation=" + std::to_string (correlation)
                       + " result=" + std::to_string (static_cast<int> (completion.result)));
+          if (completion.has_unrepresented_typed_result ()) {
+              const auto &failure = *completion.failure;
+              const auto terminal = failure.terminal_result ();
+              auto payload =
+                decode_reply (detail::backend::raw_message_t{protocol::encode_reply_header (
+                  correlation, static_cast<std::uint32_t> (terminal),
+                  runtime::messaging::request_failure_mapper_t{}.reply_failure_code (
+                    static_cast<std::uint32_t> (terminal)))});
+              (void) operations->complete (operation, std::move (payload));
+              return;
+          }
           if (completion.result != detail::backend::raw_request_result_t::ok) {
               const auto terminal =
                 completion.result == detail::backend::raw_request_result_t::timed_out
@@ -1013,9 +1036,13 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
               //  ProtocolError, not a transport failure. Carry a synthesized
               //  protocolError header; complete_operation decodes it into
               //  terminal 104 instead of collapsing to internal_error.
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed,
-                                       protocol::encode_reply_header (correlation, 104, 16));
+              (void) operations->fail (
+                operation, foundation::operation_terminal_t::transport_failed,
+                protocol::encode_reply_header (
+                  correlation,
+                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                  static_cast<std::uint32_t> (
+                    protocol::framework_error_code::requestProtocolError)));
           }
       });
     co_return true;
@@ -2197,7 +2224,18 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
               return;
           }
-          auto completion = settled.value ();
+          const auto &completion = settled.value ();
+          if (completion.has_unrepresented_typed_result ()) {
+              const auto &failure = *completion.failure;
+              const auto terminal = failure.terminal_result ();
+              (void) operations->complete (
+                id, protocol::pack_infrastructure_reply (
+                      detail::backend::raw_message_t{protocol::encode_reply_header (
+                        correlation, static_cast<std::uint32_t> (terminal),
+                        runtime::messaging::request_failure_mapper_t{}.reply_failure_code (
+                          static_cast<std::uint32_t> (terminal)))}));
+              return;
+          }
           if (completion.result != detail::backend::raw_request_result_t::ok) {
               const auto terminal =
                 completion.result == detail::backend::raw_request_result_t::timed_out
@@ -2209,19 +2247,24 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               return;
           }
           try {
-              auto &reply_parts = completion.parts;
-              if (reply_parts.empty () || reply_parts.size () > 2)
+              constexpr std::size_t header_part_count = 1;
+              constexpr std::size_t reply_with_payload_part_count = 2;
+              const auto &reply_parts = completion.parts;
+              if (reply_parts.empty () || reply_parts.size () > reply_with_payload_part_count)
                   throw protocol::service_wire_error_t (
                     "Instance Spot activation reply has an invalid part count");
               const auto reply = protocol::decode_reply_header (reply_parts.front ());
               if (reply.correlation != correlation)
                   throw protocol::service_wire_error_t (
                     "Instance Spot activation reply correlation does not match");
-              if (reply.terminal_result != 0 && reply_parts.size () != 1)
+              if (reply.terminal_result
+                    != static_cast<std::uint32_t> (protocol::request_terminal_result::ok)
+                  && reply_parts.size () != header_part_count)
                   throw protocol::service_wire_error_t (
                     "failed Instance Spot activation reply carries a payload");
-              if (reply_parts.size () == 2)
-                  (void) protocol::decode_application_payload (reply_parts[1], false);
+              if (reply_parts.size () == reply_with_payload_part_count)
+                  (void) protocol::decode_application_payload (reply_parts[header_part_count],
+                                                               false);
               (void) operations->complete (id, protocol::pack_infrastructure_reply (reply_parts),
                                            {}, request_metric_terminal (reply));
           }
@@ -2232,8 +2275,12 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               //  and sink classify it via reply_header_exception.
               (void) operations->complete (
                 id,
-                protocol::pack_infrastructure_reply (detail::backend::raw_message_t{
-                  protocol::encode_reply_header (correlation, 104, 16)}),
+                protocol::pack_infrastructure_reply (
+                  detail::backend::raw_message_t{protocol::encode_reply_header (
+                    correlation,
+                    static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                    static_cast<std::uint32_t> (
+                      protocol::framework_error_code::requestProtocolError))}),
                 {}, foundation::operation_terminal_t::protocol_error);
           }
       });

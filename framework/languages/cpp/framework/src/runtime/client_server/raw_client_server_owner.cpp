@@ -5,6 +5,7 @@
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -1409,6 +1410,11 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
                + " result=" + std::to_string (static_cast<int> (completion.result))
                + " parts=" + std::to_string (completion.parts.size ());
     });
+    if (completion.has_unrepresented_typed_result ()) {
+        const auto &failure = *completion.failure;
+        const auto terminal = failure.terminal_result ();
+        throw messaging::map_request_result_exception (terminal, "ClientServer request");
+    }
     if (completion.result != detail::backend::raw_request_result_t::ok) {
         co_return client_server_request_completion_t{request_failure (completion.result)};
     }

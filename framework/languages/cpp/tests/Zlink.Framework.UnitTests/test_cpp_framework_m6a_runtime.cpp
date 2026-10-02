@@ -3061,38 +3061,21 @@ int main (int argc, char **argv)
     using zlink::framework::detail::backend::map_binding_request_submit_result;
     using zlink::framework::detail::backend::raw_request_failure_phase_t;
     using zlink::framework::detail::backend::raw_request_result_t;
-    assert (map_binding_request_submit_result (
-              zlink::submit_result_t::not_connected, raw_request_failure_phase_t::initial_admission,
-              [] { return raw_request_result_t::route_unavailable; })
+    assert (map_binding_request_submit_result (zlink::submit_result_t::not_connected,
+                                               raw_request_failure_phase_t::initial_admission)
             == raw_request_result_t::route_unavailable);
-    assert (map_binding_request_submit_result (
-              zlink::submit_result_t::not_admitted, raw_request_failure_phase_t::initial_admission,
-              [] { return raw_request_result_t::route_unavailable; })
-            == raw_request_result_t::route_unavailable);
+    assert (map_binding_request_submit_result (zlink::submit_result_t::not_admitted,
+                                               raw_request_failure_phase_t::initial_admission)
+            == raw_request_result_t::failed);
+    assert (zlink::framework::runtime::messaging::map_submit_request_result (
+              zlink::submit_result_t::not_admitted, false)
+            == zlink::request_result_t::rejected);
     assert (map_binding_request_submit_result (zlink::submit_result_t::not_found,
-                                               raw_request_failure_phase_t::completion_terminal,
-                                               [] { return raw_request_result_t::failed; })
+                                               raw_request_failure_phase_t::completion_terminal)
             == raw_request_result_t::failed);
     assert (map_binding_request_submit_result (zlink::submit_result_t::not_connected,
-                                               raw_request_failure_phase_t::completion_terminal,
-                                               [] { return raw_request_result_t::not_connected; })
-            == raw_request_result_t::not_connected);
-    assert (map_binding_request_submit_result (zlink::submit_result_t::not_connected,
-                                               raw_request_failure_phase_t::completion_terminal,
-                                               [] { return raw_request_result_t::failed; })
-            == raw_request_result_t::failed);
-    try {
-        (void) map_binding_request_submit_result (
-          zlink::submit_result_t::not_connected, raw_request_failure_phase_t::initial_admission,
-          [] () -> raw_request_result_t {
-              throw zlink::submit_error_t (zlink::submit_result_t::not_connected, ENOTCONN);
-          });
-        assert (false);
-    }
-    catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::not_connected);
-        assert (error.internal_errno () == ENOTCONN);
-    }
+                                               raw_request_failure_phase_t::completion_terminal)
+            == raw_request_result_t::route_unavailable);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_permanent_absence_is_bounded ();
