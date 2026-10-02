@@ -6542,8 +6542,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         // 0 = open, 1 = a terminal owns the preserved native reply token,
-        // 2 = that terminal reached a final submit result. The native reply
-        // token is one-shot even when Core can no longer submit its terminal.
+        // 2 = that terminal reached a final submit result. Framework consumes
+        // the terminal determined by peer topology and socket SNDTIMEO without
+        // adding another reply budget or queue.
         var replied = 0;
         SubmitResult SubmitReply(IReadOnlyList<ReadOnlyMemory<byte>> wire)
         {
