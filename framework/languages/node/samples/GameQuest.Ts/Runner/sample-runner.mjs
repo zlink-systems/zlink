@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { SampleNames } from '../dist/Shared/Configuration/sample-names.js';
 
 export const sampleName = 'GameQuest.Ts';
 
@@ -74,6 +75,9 @@ export async function runSample(ctx) {
       { prefix: '/api/gamequest/mission-b', target: sample.missionBHttpUrl }
     ]
   });
+  await ctx.waitLog('browser-client', 'gamequest-close awaiting-on-closing player=player-alice');
+  await waitCombinedLog(ctx, ['mission-a', 'mission-b'], 'gamequest-spot closing-entered player=player-alice generation=');
+  browser.observe(SampleNames.closeObservationStage);
   await ctx.waitLog('browser-client', 'gamequest-owner awaiting-termination player=player-alice');
   await waitCombinedLog(ctx, ['mission-a', 'mission-b'], 'gamequest-owner ready player=player-alice node=');
   const owner = ownerRole(ctx, 'player-alice');
@@ -100,6 +104,15 @@ async function verifyEvidence(ctx) {
   const replay = 'gamequest-mission replayed player=player-alice generation=';
   await waitCombinedLog(ctx, ['mission-a', 'mission-b'], replay);
   assertCombinedCount(ctx, ['mission-a', 'mission-b'], replay, 1);
+  const missionLogs = ['mission-a', 'mission-b'].map((role) => logText(ctx, role)).join('\n');
+  const closingGeneration = missionLogs.match(/gamequest-spot closing-entered player=player-alice generation=(\d+)/)?.[1];
+  const replayGeneration = missionLogs.match(/gamequest-mission replayed player=player-alice generation=(\d+)/)?.[1];
+  if (closingGeneration === undefined || replayGeneration === undefined || closingGeneration === replayGeneration) {
+    throw new Error('GameQuest Close replay must use a different runtime ObjectGeneration.');
+  }
+  if (!missionLogs.includes(`gamequest-spot initialize player=player-alice spot=player-quest-player-alice generation=${replayGeneration}`)) {
+    throw new Error('GameQuest replay has no matching initialized runtime generation.');
+  }
   //  Which surviving Api node receives the post-kill call is placement-dependent, so count across
   //  both Api logs rather than pinning one.
   await waitCombinedLog(ctx, ['api-a', 'api-b'], 'gamequest-owner unavailable player=player-alice');

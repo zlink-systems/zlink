@@ -223,6 +223,9 @@ function createContext(redisEndpoint) {
         env
       );
       return {
+        observe(stage) {
+          fs.writeFileSync(`${completionSignalPath}.${stage}`, 'observed\n', { mode: 0o600 });
+        },
         async complete() {
           if (state.status !== undefined) {
             throw new Error(`Browser sample exited before lifecycle evidence completed. See ${state.logPath}.`);

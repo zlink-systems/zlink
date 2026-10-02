@@ -373,6 +373,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       );
       const capacityRead =
         mutation.kind === 'delete' ? await this.provider.read(capacityRowKey, signal) : undefined;
+      const generations =
+        mutation.kind === 'put' && mutation.generationTransition === 'reincarnate'
+          ? await Promise.all([
+              this.provider.read(OBJECT_COUNTER_KEY, signal),
+              this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
+            ])
+          : undefined;
+      if (
+        generations !== undefined &&
+        generations.some((counter) => counterNextValue(counter) >= MAX_GENERATION)
+      ) {
+        return { kind: 'generationExhausted' };
+      }
       const nextRecord: AuthorityRecord | undefined =
         mutation.kind === 'delete'
           ? undefined
@@ -381,6 +394,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               visibleStoreVersion: undefined,
               snapshot: {
                 ...record.snapshot,
+                ...(generations === undefined
+                  ? {}
+                  : {
+                      objectGeneration: counterNextValue(generations[0]),
+                      authorityOwnerGeneration: counterNextValue(generations[1])
+                    }),
                 payload: Buffer.from(mutation.payload)
               }
             };
@@ -396,7 +415,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                     leaseGeneration: record.snapshot.ownerLeaseGeneration
                   })
                 ]),
-            ...(capacityRead === undefined ? [] : [conditionFor(capacityRowKey, capacityRead)])
+            ...(capacityRead === undefined ? [] : [conditionFor(capacityRowKey, capacityRead)]),
+            ...(generations === undefined
+              ? []
+              : [
+                  conditionFor(OBJECT_COUNTER_KEY, generations[0]),
+                  conditionFor(AUTHORITY_OWNER_COUNTER_KEY, generations[1])
+                ])
           ],
           mutations:
             mutation.kind === 'delete'
@@ -419,7 +444,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                     } satisfies CapacityRecord)
                   }
                 ]
-              : [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) }]
+              : [
+                  { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) },
+                  ...(generations === undefined
+                    ? []
+                    : [
+                        {
+                          kind: 'put' as const,
+                          key: OBJECT_COUNTER_KEY,
+                          bytes: encodeText((counterNextValue(generations[0]) + 1n).toString())
+                        },
+                        {
+                          kind: 'put' as const,
+                          key: AUTHORITY_OWNER_COUNTER_KEY,
+                          bytes: encodeText((counterNextValue(generations[1]) + 1n).toString())
+                        }
+                      ])
+                ]
         },
         signal
       );

@@ -120,6 +120,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         try {
           const result = await awaitWithAbort(
             this.options.routed.sendToSpot(existing, message, {
+              instanceSpot: call.instanceSpot,
               timeoutMs: deadline.requireRemaining(),
               signal: deadline.signal,
               metadata: call.metadata
@@ -341,6 +342,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     );
     const reply = await awaitWithAbort(
       this.options.routed.requestToSpot<TReply>(existing, request, {
+        instanceSpot: call.instanceSpot,
         timeoutMs: deadline.requireRemaining(),
         signal: deadline.signal,
         metadata: call.metadata

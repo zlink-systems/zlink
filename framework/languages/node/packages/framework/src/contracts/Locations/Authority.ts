@@ -70,7 +70,7 @@ export type ZLinkAuthorityMutation =
   | {
       readonly kind: 'put';
       readonly payload: Uint8Array;
-      readonly generationTransition: 'preserve';
+      readonly generationTransition: 'preserve' | 'reincarnate';
     }
   | {
       /** Rebinds an authority retained by the same owner after lease recovery. */

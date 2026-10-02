@@ -370,9 +370,10 @@ export class ZLinkSpotActivationLifecycle {
     implementation: Type<TSpot>,
     spotId: RoutingId,
     objectGeneration: bigint,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    serialOwner?: ZLinkSpotActivation
   ): Promise<ZLinkSpotActivation> {
-    const serial = new ZLinkSpotSerialTurnExecutor(true, spotId);
+    const serial = serialOwner?.serial ?? new ZLinkSpotSerialTurnExecutor(true, spotId);
     const serialExecutor = new ZLinkSpotSerialExecutor(
       serial,
       ZLinkUserSpotExecutionMode.SpotWide,
@@ -440,6 +441,7 @@ export class ZLinkSpotActivationLifecycle {
       timers,
       actorHandlers,
       handlers,
+      executionBarrier: serialOwner?.executionBarrier,
       externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0
     });
     try {
@@ -457,7 +459,9 @@ export class ZLinkSpotActivationLifecycle {
           signal
         }
       );
-      await serial.execute(() => instance!.onInitialize?.());
+      await (serialOwner === undefined
+        ? serial.execute(() => instance!.onInitialize?.())
+        : serial.postBarrierTurn(() => instance!.onInitialize?.()));
       this.options.registerActivation(activation);
       return activation;
     } catch (error) {
@@ -840,6 +844,18 @@ export class ZLinkSpotActivationLifecycle {
     );
   }
 
+  async cleanupFailedIncarnation(activation: ZLinkSpotActivation): Promise<void> {
+    await this.cleanupActivation(
+      activation,
+      activation.meshName,
+      false,
+      undefined,
+      ZLinkSpotCloseReason.ExplicitClose,
+      undefined,
+      true
+    );
+  }
+
   async dispatchActorPacket(
     activation: ZLinkSpotActivation,
     actorId: string,
@@ -1080,6 +1096,7 @@ export class ZLinkSpotActivationLifecycle {
     }
     if (
       !state.locationReleased &&
+      !(owningLifecycle && reason === ZLinkSpotCloseReason.ExplicitClose) &&
       state.timersDisposed &&
       state.serialDisposed &&
       state.handlersDisposed &&

@@ -199,10 +199,22 @@ export class ZLinkInMemoryAuthorityStore {
     if (!this.isOwnerLive(row.snapshot)) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
+    if (
+      mutation.generationTransition === 'reincarnate' &&
+      (this.objectGeneration >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION)
+    ) {
+      return { kind: 'generationExhausted' };
+    }
     const nextVersion = this.tryNextStoreVersion();
     if (nextVersion === undefined) return { kind: 'generationExhausted' };
     row.snapshot = {
       ...row.snapshot,
+      ...(mutation.generationTransition === 'reincarnate'
+        ? {
+            objectGeneration: ++this.objectGeneration,
+            authorityOwnerGeneration: ++this.ownerGeneration
+          }
+        : {}),
       storeVersion: version(nextVersion),
       payload: Buffer.from(mutation.payload)
     };
@@ -823,7 +835,7 @@ function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
   }
   const generationTransition = (mutation as { readonly generationTransition?: unknown })
     .generationTransition;
-  if (generationTransition !== 'preserve') {
+  if (generationTransition !== 'preserve' && generationTransition !== 'reincarnate') {
     throw new TypeError('Authority owner transitions require an aggregate CAS.');
   }
 }

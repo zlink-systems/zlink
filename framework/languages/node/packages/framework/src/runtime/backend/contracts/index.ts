@@ -141,14 +141,16 @@ export interface ZLinkBackendMeshNode {
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent?: boolean
   ): Promise<SubmitResult>;
   requestInstanceSpot(
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     timeoutMs?: number,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent?: boolean
   ): MeshOperationId;
   registerUserSpotOperationHandler(handler: ServiceUserSpotOperationHandler): void;
   requestUserSpotCreate(
@@ -249,6 +251,12 @@ export interface ZLinkBackendMeshNode {
         readonly objectGeneration: bigint;
       }
     | undefined;
+  registerInstanceIntent?(
+    instanceType: string,
+    route: import('../../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence,
+    expectedCurrentRoute?:
+      import('../../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence | null
+  ): void;
   waitForInstanceApplicationQuiescence?(spotId: string, signal?: AbortSignal): Promise<void>;
   restoreUserSpotAuthority?(
     spotId: string,
