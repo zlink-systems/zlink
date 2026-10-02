@@ -48,11 +48,13 @@ log와 trace에 기록한다.
 
 ### 2.1 Wire failure code와 ErrorKind
 
-Remote node가 보낸 typed Framework 실패([service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)의 `typedFrameworkFailure`)는
-failure code 하나가 `ErrorKind` 하나를 정한다. 수신자는 그 실패를 받은 command나 경로와 관계없이 아래 표로
-분류한다. `ErrorKind`를 wire로 보낼 때 원인을 나타내는 failure code가 그 kind의 행에 있으면 그 code를 쓰고,
-없으면 대표 code를 쓴다. `ShuttingDown`은 terminal result `terminated`, `InvalidOperation`의 대표는 terminal
-result `invalidState`로 failure code 없이 보낸다. `NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다.
+Remote node가 보낸 Framework 실패의 failure code([service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)의 `framework-error-code` 중
+`none`이 아닌 값) 하나는 `ErrorKind` 하나를 정한다. Terminal result와 함께 온 code(`typedFrameworkFailure`)든,
+relocation 실패(command 53)처럼 code만 온 것이든 수신자는 command나 경로와 관계없이 아래 표로 분류한다.
+`ErrorKind`를 wire로 보낼 때 원인을 나타내는 failure code가 그 kind의 행에 있으면 그 code를 쓰고, 없으면
+대표 code를 쓴다. Terminal result를 담는 reply에서 `ShuttingDown`은 `terminated`, `InvalidOperation`의 대표는
+`invalidState`로 failure code 없이 보내며, 그 조합은 schema의 `terminal-failure-integrity`를 따른다.
+`NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다.
 
 | ErrorKind | 대표 code | 같은 kind로 받는 다른 code |
 |---|---|---|
@@ -94,8 +96,9 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 
 ## 5. Request 완료와 실패
 
-`Request`는 typed reply를 받으면 정상 완료된다. 정상 reply를 만들 수 없으면 다음
-`ErrorKind` 중 하나로 한 번만 완료한다.
+`Request`는 typed reply를 받으면 정상 완료된다. 정상 reply를 만들 수 없으면 `ErrorKind`(§2) 하나로 한 번만
+완료한다. Remote node가 보낸 실패의 kind는 [§2.1](#21-wire-failure-code와-errorkind)이 정한다. 이 node가 직접
+판정하는 경우는 다음과 같다.
 
 - 대상이나 handler가 없으면 `NotFound`다.
 - Route, connection 또는 current owner를 사용할 수 없으면 `Unavailable`이다. 최초 message의

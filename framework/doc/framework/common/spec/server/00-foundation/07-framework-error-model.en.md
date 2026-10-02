@@ -50,13 +50,14 @@ does not add a kind or a retry boolean.
 
 ### 2.1 Wire Failure Codes and `ErrorKind`
 
-A typed Framework failure a remote node sends (`typedFrameworkFailure` of the
-[service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)) maps one failure code to one `ErrorKind`. The receiver classifies it
+Each failure code of a Framework failure a remote node sends (a non-`none` value of `framework-error-code` in the
+[service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)) maps to one `ErrorKind`. Whether the code comes with a terminal
+result (`typedFrameworkFailure`) or alone, as in a relocation failure (command 53), the receiver classifies it
 with the table below, regardless of the command or path it arrived on. To send an `ErrorKind` on the
 wire, use the failure code in that kind's row that names the cause; if there is none, use the
-representative code. `ShuttingDown` is sent as terminal result `terminated`, and the representative of
-`InvalidOperation` as terminal result `invalidState`, both with no failure code. `NotConfigured` has no
-wire form and is sent as `requestFailed`.
+representative code. In a reply that carries a terminal result, `ShuttingDown` is sent as `terminated` and
+the representative of `InvalidOperation` as `invalidState`, both with no failure code, and the combination
+follows the schema's `terminal-failure-integrity`. `NotConfigured` has no wire form and is sent as `requestFailed`.
 
 | ErrorKind | Representative code | Other codes received as the same kind |
 |---|---|---|
@@ -102,7 +103,8 @@ in metrics, logs, and the message-flow trace. The resubmission boundary is defin
 ## 5. `Request` Completion and Failure
 
 `Request` completes normally when it receives a typed reply. When a normal reply can't be
-produced, it completes exactly once with one of the following `ErrorKind`s.
+produced, it completes exactly once with one `ErrorKind` (§2). [§2.1](#21-wire-failure-codes-and-errorkind)
+decides the kind of a failure a remote node sent. The cases this node decides itself are the following.
 
 - `NotFound` if the target or handler doesn't exist.
 - `Unavailable` if the route, connection, or current owner is unavailable. It also means
