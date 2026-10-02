@@ -28,6 +28,16 @@ test('error model fixture owns all 12 public send representatives', () => {
       row.kind
     );
 });
+test('error model fixture owns code-only send representatives', () => {
+  for (const row of fixture.send)
+    assert.equal(
+      f.frameworkRelocationFailureCode(
+        new f.ZLinkFrameworkException(f.ZLinkFrameworkErrorKind[row.kind], 'fixture')
+      ),
+      row.codeOnlyFailureCode ?? row.failureCode,
+      row.kind
+    );
+});
 test('known fine causes survive forwarding and other kinds use representatives', () => {
   for (const row of fixture.receive) {
     const incoming = f.wireReplyFailureException(row.terminalResult, row.failureCode, 'remote');
@@ -47,6 +57,13 @@ test('known fine causes survive forwarding and other kinds use representatives',
         f.internalFrameworkWireReply(wrapper),
         { terminalResult: expected.terminalResult, failureCode: expected.failureCode },
         `${target.kind}/${row.code}`
+      );
+      assert.equal(
+        f.frameworkRelocationFailureCode(wrapper),
+        target.kind === row.kind
+          ? row.failureCode
+          : (target.codeOnlyFailureCode ?? target.failureCode),
+        `code-only ${target.kind}/${row.code}`
       );
     }
   }

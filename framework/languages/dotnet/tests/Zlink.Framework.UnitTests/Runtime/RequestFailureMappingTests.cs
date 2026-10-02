@@ -739,6 +739,7 @@ public sealed class RequestWireFailureTableTests
                 (terminal, (FailureCode)code),
                 ZLinkRequestFailureMapper.TargetFailureReply(incoming)
             );
+            Assert.Equal((FailureCode)code, ZLinkRequestFailureMapper.TargetFailureCode(incoming));
             foreach (var target in fixture.RootElement.GetProperty("send").EnumerateArray())
             {
                 var targetKind = Enum.Parse<ZLinkFrameworkErrorKind>(
@@ -761,6 +762,19 @@ public sealed class RequestWireFailureTableTests
         }
         Assert.Equal(12, fixture.RootElement.GetProperty("send").GetArrayLength());
         foreach (var row in fixture.RootElement.GetProperty("send").EnumerateArray())
+        {
+            var error = new ZLinkFrameworkException(
+                Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!),
+                "fixture"
+            );
+            Assert.Equal(
+                (FailureCode)(
+                    row.TryGetProperty("codeOnlyFailureCode", out var codeOnly)
+                        ? codeOnly.GetInt32()
+                        : row.GetProperty("failureCode").GetInt32()
+                ),
+                ZLinkRequestFailureMapper.TargetFailureCode(error)
+            );
             Assert.Equal(
                 (
                     (RequestResult)row.GetProperty("terminalResult").GetInt32(),
@@ -773,5 +787,6 @@ public sealed class RequestWireFailureTableTests
                     )
                 )
             );
+        }
     }
 }

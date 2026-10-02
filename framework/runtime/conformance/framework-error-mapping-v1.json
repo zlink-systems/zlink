@@ -192,7 +192,8 @@
     {
       "kind": "ShuttingDown",
       "failureCode": 0,
-      "terminalResult": 103
+      "terminalResult": 103,
+      "codeOnlyFailureCode": 13
     },
     {
       "kind": "ProtocolError",
@@ -202,7 +203,8 @@
     {
       "kind": "InvalidOperation",
       "failureCode": 0,
-      "terminalResult": 111
+      "terminalResult": 111,
+      "codeOnlyFailureCode": 17
     },
     {
       "kind": "DataLost",

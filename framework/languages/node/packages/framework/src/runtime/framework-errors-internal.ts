@@ -62,6 +62,7 @@ interface FailureMapping {
   readonly internalValue?: number;
   readonly send?: number;
   readonly sendTerminal?: number;
+  readonly codeOnlySend?: number;
 }
 
 // Error model §2.1 owns the wire codes and public representatives.
@@ -339,6 +340,7 @@ const FAILURE_MAPPINGS: readonly FailureMapping[] = [
   {
     publicKind: ZLinkFrameworkErrorKind.ShuttingDown,
     send: ServiceWireFrameworkErrorCode.none,
+    codeOnlySend: ServiceWireFrameworkErrorCode.routeNotConnected,
     sendTerminal: RequestResult.Terminated
   },
   {
@@ -349,6 +351,7 @@ const FAILURE_MAPPINGS: readonly FailureMapping[] = [
   {
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
     send: ServiceWireFrameworkErrorCode.none,
+    codeOnlySend: ServiceWireFrameworkErrorCode.requestFailed,
     sendTerminal: RequestResult.InvalidState
   },
   {
@@ -388,7 +391,8 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES = Object.freeze(
 export function frameworkRelocationFailureCode(
   error: ZLinkFrameworkErrorKind | ZLinkFrameworkException
 ): number {
-  return internalFrameworkWireReply(error).failureCode;
+  const row = outgoingFailureMapping(error);
+  return row.codeOnlySend ?? row.send!;
 }
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
@@ -516,10 +520,10 @@ export function internalFrameworkErrorCode(error: ZLinkFrameworkException): numb
   return kind === undefined ? error.kind : ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind];
 }
 
-/** Produces the canonical stateful wire terminal without leaking internal kinds. */
-export function internalFrameworkWireReply(
+/** Selects a known cause or the public kind's representative for both wire forms. */
+function outgoingFailureMapping(
   error: ZLinkFrameworkException | ZLinkFrameworkInternalErrorKind | ZLinkFrameworkErrorKind
-): { readonly terminalResult: number; readonly failureCode: number } {
+): FailureMapping {
   const internal = typeof error === 'string' ? INTERNAL_MAPPING.get(error)! : undefined;
   const publicKind =
     internal?.publicKind ??
@@ -531,16 +535,23 @@ export function internalFrameworkWireReply(
         ? (cause as ZLinkFrameworkInternalErrorKind)
         : INTERNAL_KIND.get(cause)!
     );
-    if (row?.send !== undefined && row.publicKind === publicKind)
-      return {
-        terminalResult: WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(row.send)!,
-        failureCode: row.send
-      };
+    if (row?.send !== undefined && row.publicKind === publicKind) return row;
     cause = typeof cause === 'string' ? undefined : cause.cause;
   }
-  const row =
-    PUBLIC_MAPPING.get(publicKind) ?? PUBLIC_MAPPING.get(ZLinkFrameworkErrorKind.InternalFailure)!;
-  return { terminalResult: row.sendTerminal!, failureCode: row.send! };
+  return (
+    PUBLIC_MAPPING.get(publicKind) ?? PUBLIC_MAPPING.get(ZLinkFrameworkErrorKind.InternalFailure)!
+  );
+}
+
+/** Produces the canonical stateful wire terminal without leaking internal kinds. */
+export function internalFrameworkWireReply(
+  error: ZLinkFrameworkException | ZLinkFrameworkInternalErrorKind | ZLinkFrameworkErrorKind
+): { readonly terminalResult: number; readonly failureCode: number } {
+  const row = outgoingFailureMapping(error);
+  return {
+    terminalResult: row.sendTerminal ?? WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(row.send!)!,
+    failureCode: row.send!
+  };
 }
 
 /** Decodes the stateful reply failureCode convention without exposing wire offsets to callers. */

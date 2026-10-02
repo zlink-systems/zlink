@@ -56,6 +56,10 @@ final class ZLinkRequestFailureMappingTest {
                     new int[] {row.get("terminalResult").asInt(), row.get("failureCode").asInt()},
                     ZLinkRequestFailureMapping.outgoing(kind(row)),
                     row.get("kind").asText());
+            assertEquals(
+                    row.path("codeOnlyFailureCode").asInt(row.get("failureCode").asInt()),
+                    ZLinkRequestFailureMapping.outgoingCode(kind(row), 0),
+                    row.get("kind").asText());
         }
     }
 
@@ -67,6 +71,7 @@ final class ZLinkRequestFailureMappingTest {
             assertArrayEquals(
                     new int[] {row.get("terminalResult").asInt(), code},
                     ZLinkRequestFailureMapping.outgoing(kind(row), code));
+            assertEquals(code, ZLinkRequestFailureMapping.outgoingCode(kind(row), code));
             for (JsonNode send : fixture.get("send")) {
                 if (kind(send) == kind(row)) continue;
                 assertArrayEquals(
@@ -74,6 +79,9 @@ final class ZLinkRequestFailureMappingTest {
                             send.get("terminalResult").asInt(), send.get("failureCode").asInt()
                         },
                         ZLinkRequestFailureMapping.outgoing(kind(send), code));
+                assertEquals(
+                        send.path("codeOnlyFailureCode").asInt(send.get("failureCode").asInt()),
+                        ZLinkRequestFailureMapping.outgoingCode(kind(send), code));
             }
             assertTrue(
                     systems.zlink.framework.runtime.protocol.ServiceWireConstants

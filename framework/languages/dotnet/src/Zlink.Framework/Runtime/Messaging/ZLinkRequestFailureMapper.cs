@@ -10,7 +10,8 @@ internal static class ZLinkRequestFailureMapper
         FailureCode Code,
         RequestResult Result,
         bool Receive,
-        bool Send
+        bool Send,
+        FailureCode? CodeOnlyCode = null
     );
 
     // Error model §2.1 owns all receive codes and outgoing representatives.
@@ -203,14 +204,16 @@ internal static class ZLinkRequestFailureMapper
             FailureCode.None,
             RequestResult.Terminated,
             false,
-            true
+            true,
+            FailureCode.RouteNotConnected
         ),
         new(
             ZLinkFrameworkErrorKind.InvalidOperation,
             FailureCode.None,
             RequestResult.InvalidState,
             false,
-            true
+            true,
+            FailureCode.RequestFailed
         ),
     ];
     internal static ReadOnlySpan<WireFailureMapping> Mappings => WireFailureMappings;
@@ -218,6 +221,12 @@ internal static class ZLinkRequestFailureMapper
     public static (RequestResult Result, FailureCode FailureCode) TargetFailureReply(
         Exception error
     )
+    {
+        var row = TargetFailureMapping(error);
+        return (row.Result, row.Code);
+    }
+
+    private static WireFailureMapping TargetFailureMapping(Exception error)
     {
         var framework = error as ZLinkFrameworkException;
         var kind =
@@ -234,17 +243,20 @@ internal static class ZLinkRequestFailureMapper
                         && row.Kind == kind
                         && (int)row.Code == cause.FrameworkFailureCode
                     )
-                        return (row.Result, row.Code);
+                        return row;
             cause = cause.InnerException as ZLinkFrameworkException;
         }
         foreach (var row in WireFailureMappings)
             if (row.Send && row.Kind == kind)
-                return (row.Result, row.Code);
+                return row;
         throw new InvalidOperationException("The failure representative mapping is missing.");
     }
 
-    public static FailureCode TargetFailureCode(Exception error) =>
-        TargetFailureReply(error).FailureCode;
+    public static FailureCode TargetFailureCode(Exception error)
+    {
+        var row = TargetFailureMapping(error);
+        return row.CodeOnlyCode ?? row.Code;
+    }
 
     public static Exception CreateChannelCompletionException(
         RequestResult result,

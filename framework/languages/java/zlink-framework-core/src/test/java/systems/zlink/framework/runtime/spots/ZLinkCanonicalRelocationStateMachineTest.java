@@ -138,7 +138,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         .join();
         var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
         assertEquals(late.id(), failed.id());
-        assertEquals(ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED, failed.failureCode());
+        assertEquals(ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED, failed.failureCode());
         assertEquals(1, fixture.endpoint.staged.get());
 
         fixture.target
@@ -167,7 +167,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                         .join());
         ZLinkFrameworkException frameworkFailure =
                 assertInstanceOf(ZLinkFrameworkException.class, sourceFailure.getCause());
-        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, frameworkFailure.kind());
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, frameworkFailure.kind());
         assertEquals(0, rejectedSource.endpoint.staged.get());
     }
 
