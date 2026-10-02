@@ -3501,17 +3501,30 @@ function validateSpotCloseBranches(fixture) {
           "Draining",
           "Relocating"
         ],
-        "pendingIntent": true
+        "pendingIntent": true,
+        "relocationSeal": [
+          "before",
+          "after"
+        ]
       },
       "expect": {
         "order": [
           "authorityReleased",
-          "missingPlacement"
+          "pendingMessagesTerminated"
         ],
         "authority": "Missing",
         "oldHandlerCalls": 0,
         "thisHostFactoryCalls": 0,
-        "messageTerminalCount": 1
+        "messageTerminalCount": 1,
+        "missingPlacementCalls": 0,
+        "messageTerminalByHost": {
+          "Draining": "ShuttingDown",
+          "Relocating": "Unavailable"
+        },
+        "sendDiagnosticsByHost": {
+          "Draining": "ShuttingDown",
+          "Relocating": "Unavailable"
+        }
       }
     },
     {
@@ -3552,6 +3565,89 @@ function validateSpotCloseBranches(fixture) {
     }
   ];
   assert.deepEqual(fixture.closeBranches, expectedBranches);
+  const expectedReadyRouteCases = [
+    {
+      "name": "stale-ready-owner-fence-request",
+      "given": {
+        "authority": "Ready",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "request"
+      },
+      "expect": {
+        "messageTerminal": "Unavailable",
+        "messageTerminalCount": 1,
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-ready-owner-fence-send",
+      "given": {
+        "authority": "Ready",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "send"
+      },
+      "expect": {
+        "diagnostics": [
+          "Unavailable"
+        ],
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-released-ready-owner-fence-request",
+      "given": {
+        "authority": "Missing",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "request",
+        "routeKind": "ready"
+      },
+      "expect": {
+        "messageTerminal": "Unavailable",
+        "messageTerminalCount": 1,
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-released-ready-owner-fence-send",
+      "given": {
+        "authority": "Missing",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          false,
+          true
+        ],
+        "messageKind": "send",
+        "routeKind": "ready"
+      },
+      "expect": {
+        "diagnostics": [
+          "Unavailable"
+        ],
+        "handlerCalls": 0,
+        "factoryCalls": 0,
+        "missingPlacementCalls": 0
+      }
+    }
+  ];
+  assert.deepEqual(fixture.readyRouteCases, expectedReadyRouteCases);
 }
 validateSpotCloseBranches(spotClose);
 // The validator must reject old Close observations and contradictory results.
@@ -3568,8 +3664,21 @@ for (const corrupt of [
   (fixture) => { delete fixture.closeBranches[4].expect.messageTerminalCount; },
   (fixture) => { fixture.closeBranches[0].given.host = 'Draining'; },
   (fixture) => { fixture.closeBranches[0].given.pendingIntent = false; },
-  (fixture) => { fixture.closeBranches[3].given.initialization = 'succeeds'; }
-
+  (fixture) => { fixture.closeBranches[3].given.initialization = 'succeeds'; },
+  (fixture) => { fixture.closeBranches[2].expect.order.push('missingPlacement'); },
+  (fixture) => { fixture.closeBranches[2].expect.missingPlacementCalls = 1; },
+  (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Draining = 'Unavailable'; },
+  (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Relocating = 'ShuttingDown'; },
+  (fixture) => { delete fixture.closeBranches[2].expect.sendDiagnosticsByHost; },
+  (fixture) => { fixture.closeBranches[2].given.relocationSeal = ['after']; },
+  (fixture) => { fixture.readyRouteCases[0].expect.messageTerminal = 'NotFound'; },
+  (fixture) => { fixture.readyRouteCases[0].expect.missingPlacementCalls = 1; },
+  (fixture) => { delete fixture.readyRouteCases[1].expect.diagnostics; },
+  (fixture) => { fixture.readyRouteCases[1].given.instanceIntent = [false]; },
+  (fixture) => { fixture.readyRouteCases[2].given.authority = 'Ready'; },
+  (fixture) => { fixture.readyRouteCases[2].expect.messageTerminal = 'NotFound'; },
+  (fixture) => { delete fixture.readyRouteCases[3].expect.diagnostics; },
+  (fixture) => { fixture.closeBranches[2].expect.order.reverse(); }
 ]) {
   const invalid = structuredClone(spotClose);
   corrupt(invalid);
