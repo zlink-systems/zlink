@@ -79,8 +79,8 @@ Actor authority `payload`가 담는 현재 Spot이다([§3.4](#34-여러-언어�
 | User Spot 하나에 속한 Actor 총수 | 이 계약에서 고정 상한을 두지 않는다. |
 | 이동 대상 목록 한 페이지 | Actor·Spot 항목 최대 1,024개, 저장 크기 최대 1 MiB. |
 
-목록의 항목 하나는 "어떤 object를 옮겨야 하는가"만 나타낸다. Object identity, generation,
-membership과 relocation 때 적용할 변경 정보를 기록한다. 여기서 generation은 같은 ID로 다시
+목록의 항목 하나는 "어떤 object를 옮겨야 하는가"만 나타낸다. Object identity, generation과
+relocation 때 적용할 변경 정보를 기록한다. 여기서 generation은 같은 ID로 다시
 만든 object나 이전 owner의 늦은 요청을 구분하는 세대 번호다(§3). Actor state나 message
 payload는 넣지 않는다 — 실제 application state와 실행하지 않은 작업은 source가 memory에
 유지하다가 Restore 대화로 target에 직접 전송한다(§8).
@@ -494,7 +494,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | Field | 의미 |
 |---|---|
 | `recordVersion` | 위와 같다. 현재 값은 `1`이다. |
-| `payload` | Framework가 [authority payload 형식](../02-channel-transport/06-wire-protocol.ko.md#location-store-authority-key-형식)으로 encode한 bytes다. Actor의 현재 Spot(membership)도 여기에 들어간다. Location Store provider는 해석하지 않으며, 네 언어 모두 JSON 안에서 base64로 인코딩한다. |
+| `payload` | Framework가 service wire schema의 [durable format](../02-channel-transport/07-schema-dialect.ko.md#71-durableformats)으로 encode한 authority bytes다. Actor의 현재 Spot(membership)도 여기에 들어간다. Location Store provider는 해석하지 않으며, 네 언어 모두 JSON 안에서 base64로 인코딩한다. |
 | `objectGeneration` | 이 object(§3.2)의 현재 generation이다. 위에서 정한 Store 전역 단조 sequence에서 발급한다. |
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
@@ -1207,14 +1207,14 @@ Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록은 여�
 | 저장 위치 | 저장 내용 |
 |---|---|
 | Object별 위치 record | Source와 target, 현재 단계, application version, 완료 기록 payload의 위치와 확인값, 완료 수 |
-| Location Store의 이동 대상 목록 | 정렬된 object ID, generation, membership과 이동할 때 적용할 변경 |
+| Location Store의 이동 대상 목록 | 정렬된 participant authority key, generation과 이동할 때 적용할 변경([§3.5](#35-spotwide-이동의-진행-record)) |
 | `SpotWide` User Spot 전체 이동 record | Owner, 전체 변경 세대, 전체 항목 수, 목록 시작 위치와 내용 확인값 |
 | `PerActor` User Spot 이동 record | Spot authority source·target, relocation operation ID, 전체 Actor 수와 source·target Actor 수 |
 | Relocation Store | Relocation 뒤 완료되는 pending request의 reply payload와 object별 완료 결과 |
 
 복원할 application state·queue·timer는 source memory에만 있으며 어느 Store에도 저장하지
-않는다. 어떤 Actor가 User Spot에 속하는지는 Location Store의 전체 항목 수와 목록 내용
-확인값으로 판단한다.
+않는다. 전체 항목 수와 목록 내용 확인값은 이동 대상 목록이 빠짐없고 바뀌지 않았는지 확인한다.
+Membership의 기준은 §1.2가 정한다.
 
 Target 공간을 확보할 때는 object ID, `StoreVersion`, 종류와 stable type, source와 target의
 host 실행 세대, owner 정보와 필요한 공간을 모두 고정한다.

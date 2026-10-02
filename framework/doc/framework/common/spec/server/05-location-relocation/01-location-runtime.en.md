@@ -89,7 +89,7 @@ splits this list into multiple pages.
 | One page of the relocation target list | At most 1,024 Actor/Spot entries; stored size at most 1 MiB. |
 
 One entry in the list only states "which object needs to move." It records object
-identity, generation, membership, and the change to apply during relocation. Here,
+identity, generation, and the change to apply during relocation. Here,
 generation is the generation number distinguishing an object re-created under the same ID
 from a previous owner's belated request (§3). Actor state and message payload aren't
 included — the actual application state and unexecuted work are kept in source memory and
@@ -539,7 +539,7 @@ number precision).
 | Field | Meaning |
 |---|---|
 | `recordVersion` | Same as above. The current value is `1`. |
-| `payload` | Bytes the Framework encodes in the [authority payload format](../02-channel-transport/06-wire-protocol.en.md#location-store-authority-key-format). An Actor's current Spot (membership) is also in it. The Location Store provider doesn't interpret it, and all four languages encode it in JSON as base64. |
+| `payload` | Authority bytes the Framework encodes in a service wire schema [durable format](../02-channel-transport/07-schema-dialect.en.md#71-durableformats). An Actor's current Spot (membership) is also in it. The Location Store provider doesn't interpret it, and all four languages encode it in JSON as base64. |
 | `objectGeneration` | The object's (§3.2) current generation. Issued from the Store-wide monotonic sequence defined above. |
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
@@ -1334,14 +1334,14 @@ into multiple records, and completion-record payloads are stored in the Relocati
 | Storage location | Content stored |
 |---|---|
 | Per-object location record | Source and target, current stage, application version, completion-record payload location and checksum, completion count |
-| Location Store's relocation target list | Sorted object ID, generation, membership, and the change to apply during the move |
+| Location Store's relocation target list | Sorted participant authority keys, generations, and the change to apply during the move ([§3.5](#35-progress-records-of-a-spotwide-relocation)) |
 | `SpotWide` User Spot whole-move record | Owner, whole-change generation, total entry count, list start position, and content checksum |
 | `PerActor` User Spot move record | Spot authority source/target, relocation operation ID, total Actor count, and source/target Actor counts |
 | Relocation Store | The reply payload and per-object completion result of pending requests that finish after relocation |
 
 The application state, queue, and timers to restore exist only in source memory and
-aren't stored in either Store. Which Actor belongs to which User Spot is judged by the
-Location Store's total entry count and list content checksum.
+aren't stored in either Store. The total entry count and list content checksum confirm that the
+relocation target list is complete and unchanged. §1.2 defines the source of truth for membership.
 
 Securing target space fixes together the object ID, `StoreVersion`, kind and stable type,
 source's and target's host run generation, owner information, and needed capacity.
