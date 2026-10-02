@@ -222,6 +222,8 @@ connector는 connector instance별 typed codec option
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시
 올려주는 축으로만 제한한다.
 
+서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙을 같은 기본값으로 따른다. 서버도 지정 주기마다 control ping을 보내고, 마지막 inbound frame 뒤 지정 timeout 동안 inbound frame이 없으면 `heartbeat_timeout`으로 session을 닫는다.
+
 세션이 닫힐 때의 종료 사유는
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의
 닫힌 집합과 정합하며, 계기는
