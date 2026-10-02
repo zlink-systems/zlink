@@ -270,36 +270,33 @@ inline std::optional<tree_t> build_tree (const std::vector<aggregate_participant
     tree_t tree;
     std::vector<aggregate_participant_t> current;
     current.reserve (page_item_limit);
-    const auto finish_page = [&tree, &current] (std::size_t index) {
+    std::size_t current_bytes = encode_page (0, {}).size ();
+    const auto finish_page = [&tree, &current, &current_bytes] (std::size_t index) {
         page_t page;
         page.participants = std::move (current);
         page.encoded = encode_page (index, page.participants);
-        if (page.encoded.size () > page_byte_limit)
-            return false;
         page.digest = sha256 (page.encoded);
         tree.pages.push_back (std::move (page));
         current.clear ();
         current.reserve (page_item_limit);
-        return true;
+        current_bytes = encode_page (tree.pages.size (), {}).size ();
     };
     for (const auto &participant : participants) {
-        if (current.size () == page_item_limit) {
-            if (!finish_page (tree.pages.size ()))
-                return std::nullopt;
+        if (current.size () == page_item_limit)
+            finish_page (tree.pages.size ());
+        const auto entry_bytes = encode_participant (participant).dump ().size ();
+        auto next_bytes = current_bytes + entry_bytes + (current.empty () ? 0 : 1);
+        if (next_bytes > page_byte_limit && !current.empty ()) {
+            finish_page (tree.pages.size ());
+            next_bytes = current_bytes + entry_bytes;
         }
-        current.push_back (participant);
-        const auto candidate = encode_page (tree.pages.size (), current);
-        if (candidate.size () <= page_byte_limit)
-            continue;
-        current.pop_back ();
-        if (current.empty () || !finish_page (tree.pages.size ()))
+        if (next_bytes > page_byte_limit)
             return std::nullopt;
         current.push_back (participant);
-        if (encode_page (tree.pages.size (), current).size () > page_byte_limit)
-            return std::nullopt;
+        current_bytes = next_bytes;
     }
-    if (!current.empty () && !finish_page (tree.pages.size ()))
-        return std::nullopt;
+    if (!current.empty ())
+        finish_page (tree.pages.size ());
     tree.participant_count = participants.size ();
     tree.root = tree_root (tree.pages, tree.participant_count);
     if (tree.pages.size () > index_item_limit) {
