@@ -9,6 +9,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/session_liveness.hpp"
 #include "../support/loopback_tcp_endpoint.hpp"
 
 
@@ -315,6 +316,37 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
     zlink::framework::task_completion_source_t<void> _resume;
 };
 
+class pending_connected_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
+    {
+        entered.set_value ();
+        co_await resume.task ();
+        connected.set_value ();
+    }
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        packet.set_value ();
+        co_return;
+    }
+    zlink::framework::task_completion_source_t<void> resume;
+    std::promise<void> entered;
+    std::promise<void> connected;
+    std::promise<void> packet;
+};
+
 class shutdown_session_control_t final
 {
   public:
@@ -349,6 +381,7 @@ class shutdown_session_control_t final
     void record_disconnected () { record (_disconnected, "disconnected"); }
     void record_destroyed () { record (_destroyed, "destroyed"); }
 
+    bool wait_connected () { return wait_for (_connected, 1); }
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
     std::size_t connected () const noexcept { return _connected.load (std::memory_order_acquire); }
@@ -913,6 +946,16 @@ int main ()
     using zlink::framework::detail::stream_header_flags_t;
     using zlink::framework::detail::stream_message_kind_t;
 
+    zlink::monitor_event_t ready_snapshot;
+    ready_snapshot.event = zlink::monitor_event::connection_ready;
+    ready_snapshot.routing_id = zlink::routing_id_t::from (std::uint32_t{1});
+    if (zlink::framework::runtime::stream_host_connection_ready (ready_snapshot))
+        return 321;
+    ready_snapshot.flags =
+      static_cast<std::uint32_t> (zlink::monitor_event_flag_t::connection_ready_edge);
+    if (!zlink::framework::runtime::stream_host_connection_ready (ready_snapshot))
+        return 322;
+
     const auto codec_mapping_is_consistent = [] (stream_codec_t codec,
                                                  std::string_view content_type) {
         return zlink::framework::detail::stream_content_type (codec) == content_type
@@ -1432,7 +1475,11 @@ int main ()
     }
 
     auto heartbeat_stream = runtime.open_session ("client-stream");
-    runtime.send_heartbeat_pong (heartbeat_stream);
+    runtime.dispatch_control_frame (
+      heartbeat_stream, zlink::framework::detail::stream_header_t (
+                          stream_message_kind_t::control, stream_codec_t::raw,
+                          zlink::framework::detail::stream_header_flags_t::none, std::nullopt,
+                          zlink::framework::detail::heartbeat_ping_name, {}));
     const auto heartbeat_headers = runtime.written_headers (heartbeat_stream);
     if (heartbeat_headers.size () != 1
         || heartbeat_headers[0].kind () != stream_message_kind_t::control
@@ -1440,6 +1487,66 @@ int main ()
         || heartbeat_headers[0].request_seq ()
         || heartbeat_headers[0].packet_name () != "$zlink.heartbeat.pong") {
         return 235;
+    }
+
+    {
+        pending_connected_session_t pending_connected;
+        auto pending_stream = runtime.open_session ("client-stream");
+        auto entered = pending_connected.entered.get_future ();
+        auto connected = pending_connected.connected.get_future ();
+        auto packet = pending_connected.packet.get_future ();
+        const auto submitted =
+          runtime.dispatch_connected_async (pending_connected, pending_stream, {});
+        if (!submitted || entered.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+            return 323;
+        using liveness = zlink::framework::runtime::session_liveness_t;
+        const auto established = liveness::clock_t::time_point{};
+        liveness pending_policy (established, established + std::chrono::seconds (10));
+        if (pending_policy.evaluate (established + std::chrono::seconds (5))
+            != liveness::decision_t::heartbeat_timeout)
+            return 324;
+        bool closed_while_connected_pending = false;
+        runtime.send_session_closing (
+          pending_stream, zlink::framework::stream_close_reason_t::heartbeat_timeout,
+          "timeout during on_connected", [&] { closed_while_connected_pending = true; });
+        if (!closed_while_connected_pending
+            || connected.wait_for (std::chrono::seconds (0)) == std::future_status::ready)
+            return 328;
+        if (!runtime.dispatch_packet_async (pending_connected, pending_stream, request_header,
+                                            zlink::message_t::from ("queued"), {}))
+            return 325;
+        if (packet.wait_for (std::chrono::seconds (0)) == std::future_status::ready)
+            return 326;
+        pending_connected.resume.complete (zlink::framework::result_t<void>::success ());
+        if (connected.wait_for (std::chrono::seconds (2)) != std::future_status::ready
+            || packet.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+            return 327;
+    }
+
+    // Physical close follows control-frame completion, including send failure.
+    for (const bool success : {true, false}) {
+        auto closing_stream = runtime.open_session ("client-stream");
+        zlink::framework::task_completion_source_t<void> admission;
+        runtime.attach_transport_writer (
+          closing_stream,
+          [&admission] (const auto &, const auto &, auto) { return admission.task (); });
+        bool physically_closed = false;
+        auto lifetime = std::make_shared<int> (0);
+        std::weak_ptr<int> retained = lifetime;
+        runtime.send_session_closing (
+          closing_stream, zlink::framework::stream_close_reason_t::heartbeat_timeout,
+          "no inbound frame", [&, lifetime] { physically_closed = true; });
+        lifetime.reset ();
+        if (retained.expired ())
+            return 329;
+        if (physically_closed)
+            return 319;
+        admission.complete (
+          success ? zlink::framework::result_t<void>::success ()
+                  : zlink::framework::result_t<void>::failure (
+                      zlink::framework::framework_error_kind_t::unavailable, "send rejected"));
+        if (!physically_closed || !retained.expired ())
+            return 320;
     }
 
     auto delayed_stream = runtime.open_session ("client-stream");
@@ -2316,7 +2423,7 @@ int main ()
     core_connector_options.reconnect.enabled = false;
     auto core_connector =
       zlink::stream_connector::connector_factory_t::create (core_connector_options);
-    if (!core_connector.connect ()) {
+    if (!core_connector.connect () || !shutdown_session_control->wait_connected ()) {
         core_host.stop ();
         core_mesh->stop ();
         return 292;

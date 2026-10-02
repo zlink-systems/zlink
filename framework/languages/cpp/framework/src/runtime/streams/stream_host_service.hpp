@@ -10,6 +10,8 @@
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include <zlink/Contracts/Eventing/events.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -28,6 +30,13 @@ class mesh_node_runtime_t;
 
 namespace zlink::framework::runtime
 {
+
+inline bool stream_host_connection_ready (const zlink::monitor_event_t &event) noexcept
+{
+    return event.event == zlink::monitor_event::connection_ready
+           && zlink::has_flag (event.flags, zlink::monitor_event_flag_t::connection_ready_edge)
+           && event.routing_id.has_value ();
+}
 
 /* Test-only fault injection for the Core STREAM host. Production code never
  * sets these flags; unit tests use them to force the rare failure shapes
