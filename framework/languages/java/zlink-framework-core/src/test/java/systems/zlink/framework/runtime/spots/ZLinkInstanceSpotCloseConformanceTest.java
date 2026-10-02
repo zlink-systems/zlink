@@ -63,6 +63,16 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         run(null, "Serving", true, false, true, true);
     }
 
+    @Test
+    void pendingIntentRequestDuringHostDrainEndsWithShuttingDown() throws Exception {
+        run(null, "Draining", true, false, false);
+    }
+
+    @Test
+    void pendingIntentRequestDuringRelocationEndsWithUnavailable() throws Exception {
+        run(null, "Relocating", true, false, false);
+    }
+
     static void runBranch(JsonNode branch) throws Exception {
         String name = branch.path("name").asText();
         assertTrue(BRANCHES.contains(name), "unknown close branch " + name);
@@ -166,6 +176,16 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 if (intent && !queuedBeforeClose) {
                     pending = pending(runtime, spotId, true);
                     flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    if (branch == null && host.equals("Draining")) {
+                        runtime.route()
+                                .sendToSpot(spotId, new PendingProbe())
+                                .instanceSpot(TYPE)
+                                .inMesh(MESH)
+                                .submit()
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        flow.sendArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    }
                 } else if (name.equals("closing-message-without-intent")) {
                     pending = pending(runtime, spotId, false);
                     assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure(pending).kind());
@@ -227,6 +247,12 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                             assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, terminal.kind());
                             assertInstanceOf(IllegalStateException.class, terminal.getCause());
                             assertTrue(terminal.metadata().isEmpty());
+                        } else if (!host.equals("Serving")) {
+                            assertEquals(
+                                    host.equals("Draining")
+                                            ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                            : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    terminal.kind());
                         }
                     }
                     assertEquals(1, observation.terminals.get());
@@ -292,10 +318,14 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         assertEquals(1, observation.initializations.size());
                         assertTrue(observation.events.contains("authorityReleased"));
                     }
-                    if (!host.equals("Serving")) {
-                        assertTrue(
+                    if (!host.equals("Serving"))
+                        assertFalse(
                                 missingPlacementBeforeInspection,
-                                "pending intent must enter existing Missing placement after release");
+                                "accepted intent must not enter Missing placement after release");
+                    if (branch == null && host.equals("Draining")) {
+                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        assertTrue(dropped.contains("action=drop"));
+                        assertTrue(dropped.contains("reason=shutdown"));
                     }
                 }
                 if (branch != null) {
@@ -757,6 +787,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private final Logger logger = Logger.getLogger(FLOW_LOGGER);
         private final String spotId;
         final CompletableFuture<String> ownerArrival = new CompletableFuture<>();
+        final CompletableFuture<Void> sendArrival = new CompletableFuture<>();
+        final CompletableFuture<String> sendDropped = new CompletableFuture<>();
         final CompletableFuture<Void> missingPlacement = new CompletableFuture<>();
         private final java.io.BufferedWriter writer;
 
@@ -783,6 +815,17 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     && PendingProbe.class.getSimpleName().equals(fields.get("packet"))
                     && fields.containsKey("corr")) {
                 ownerArrival.complete(fields.get("corr"));
+            }
+            if ("received".equals(fields.get("phase"))
+                    && spotId.equals(fields.get("spot"))
+                    && "send".equals(fields.get("kind"))
+                    && PendingProbe.class.getSimpleName().equals(fields.get("packet"))) {
+                sendArrival.complete(null);
+            }
+            if (line.contains("event_id=zlink.dispatch_error")
+                    && spotId.equals(fields.get("spot"))
+                    && "send".equals(fields.get("kind"))) {
+                sendDropped.complete(line);
             }
             if (spotId.equals(fields.get("spot"))
                     && PendingProbe.class.getSimpleName().equals(fields.get("packet"))

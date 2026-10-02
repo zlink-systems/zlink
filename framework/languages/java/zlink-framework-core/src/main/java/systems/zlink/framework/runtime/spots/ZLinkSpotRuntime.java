@@ -5011,7 +5011,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 activation.context.ownerQueue().pendingMessages().stream()
                         .map(ZLinkBackendReceived.class::cast)
                         .anyMatch(received -> received.activationMessage().isPresent());
-        if (!hasIntent || closing || draining || relocating) {
+        if (!hasIntent || instanceCloseReleaseFailure() != null) {
             return releaseInstanceSpotAuthority(activation)
                     .thenApply(
                             released -> {
@@ -5050,7 +5050,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     () ->
                                                             new IllegalStateException(
                                                                     "Instance Spot factory is not registered"));
-                            if (closing || draining || relocating) {
+                            if (instanceCloseReleaseFailure() != null) {
                                 return releaseInstanceSpotAuthority(activation)
                                         .thenApply(
                                                 released -> {
@@ -5432,12 +5432,36 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         previous.transferRouteReceived(received);
         ZLinkInstanceSpotActivation fresh = instanceSpotActivations.get(previous.context.spotId());
         if (received.activationMessage().isEmpty() || fresh == null || fresh == previous) {
-            received.close();
-            return CompletableFuture.failedFuture(
+            ZLinkFrameworkErrorKind releaseFailure =
+                    received.activationMessage().isPresent() ? instanceCloseReleaseFailure() : null;
+            ZLinkFrameworkException failure =
                     ZLinkFrameworkErrorOrigin.framework(
-                            ZLinkFrameworkErrorKind.NOT_FOUND, "Spot incarnation was closed"));
+                            releaseFailure == null
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : releaseFailure,
+                            "Spot incarnation was closed");
+            if (releaseFailure != null && !received.isRequest()) {
+                reportDispatchError(
+                        DispatchFailureReport.of(
+                                        ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                        ZLinkDispatchMessageKind.SEND,
+                                        releaseFailure == ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                                ? ZLinkDispatchErrorReason.SHUTDOWN
+                                                : ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE,
+                                        ZLinkDispatchErrorAction.DROP)
+                                .spotId(previous.context.spotId())
+                                .sourceRid(received.routingId().orElse(null))
+                                .error(failure));
+            }
+            received.close();
+            return CompletableFuture.failedFuture(failure);
         }
         return fresh.replayMessage(received);
+    }
+
+    private ZLinkFrameworkErrorKind instanceCloseReleaseFailure() {
+        if (relocating) return ZLinkFrameworkErrorKind.UNAVAILABLE;
+        return draining || closing ? ZLinkFrameworkErrorKind.SHUTTING_DOWN : null;
     }
 
     void retireInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
