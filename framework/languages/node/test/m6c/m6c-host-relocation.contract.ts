@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
@@ -848,19 +849,7 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
 });
 
 test('relocation failure codes use the shared error model fixture', () => {
-  const fixture = require(
-    require('node:path').resolve(
-      __dirname,
-      '../../../../../../../../runtime/conformance/framework-error-mapping-v1.json'
-    )
-  ) as {
-    send: {
-      kind: keyof typeof ZLinkFrameworkErrorKind;
-      failureCode: number;
-      codeOnlyFailureCode?: number;
-    }[];
-  };
-  for (const row of fixture.send)
+  for (const row of frameworkErrorMappingFixture.send)
     assert.equal(
       relocationFailedFailureCode(
         new ZLinkFrameworkException(ZLinkFrameworkErrorKind[row.kind], 'fixture')
