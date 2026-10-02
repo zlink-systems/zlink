@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -11,7 +12,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     internal static readonly TimeSpan SessionForceCleanupUpperBound = TimeSpan.FromMilliseconds(
         100
     );
-    private const int ReceiveBatchSize = 64;
     private static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkStreamSessionTable _sessions;
     private readonly ZLinkSessionSerialExecutor _sessionIngress;
@@ -46,7 +46,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         bool actorDispatchEnabled = false,
         string? boundEndpoint = null,
         string? advertisedEndpoint = null,
-        long maxMessageSize = 64L * 1024L,
+        long maxMessageSize = ZLinkSocketConfig.DefaultStreamMaxMessageSize,
         ZLinkApplicationJobQueue? applicationJobQueue = null
     )
     {
@@ -372,7 +372,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 long batchBytes = 0;
                 for (
                     var receivedCount = 0;
-                    receivedCount < ReceiveBatchSize && !stop.IsCancellationRequested;
+                    receivedCount < ZLinkReceiveBatchBudget.MaximumRecords
+                        && !stop.IsCancellationRequested;
                     receivedCount++
                 )
                 {

@@ -5,6 +5,7 @@
 #include <zlink/framework/detail/utf8.hpp>
 
 #include "runtime/protocol/metadata_codec.hpp"
+#include <zlink/detail/stream_packet_name.hpp>
 
 #include <limits>
 
@@ -135,13 +136,14 @@ result_t<void> validate_header (const stream_header_t &header)
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Response and error packet names must be empty.");
     }
-    if ((!is_reply && header.name.empty ())
-        || header.name.size () > std::numeric_limits<std::uint8_t>::max ()) {
+    const auto name_error = is_reply ? zlink::detail::stream_wire::packet_name_error_t::none
+                                     : zlink::detail::stream_wire::validate_packet_name (
+                                         header.name, header.kind == message_kind_t::control);
+    if (name_error == zlink::detail::stream_wire::packet_name_error_t::invalid) {
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Packet name length is invalid.");
     }
-    if (!is_reply && header.name.starts_with (reserved_control_prefix)
-        && header.kind != message_kind_t::control) {
+    if (name_error == zlink::detail::stream_wire::packet_name_error_t::reserved) {
         return result_t<void>::failure (
           error_code_t::frame_decode_failed,
           "Reserved packet names are only valid for control packets.");

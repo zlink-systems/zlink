@@ -258,12 +258,16 @@ test('location runtime claims on the next heartbeat after startup Store recovery
   await runtime.stop();
 });
 
-test('location runtime installs the same late-committed lease after heartbeat Conflict', async () => {
+test('location runtime installs the same late-committed lease after heartbeat Conflict', async t => {
+  let now = performance.now();
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   let claimCalls = 0;
   let commitFirstClaim;
   let releaseCalls = 0;
+  let confirmationReads = 0;
   const leaseStore = {
     async claimOwnerLease(ownerId, leaseTtlMs, signal) {
       claimCalls += 1;
@@ -276,7 +280,10 @@ test('location runtime installs the same late-committed lease after heartbeat Co
       }
       return await store.claimOwnerLease(ownerId, leaseTtlMs, signal);
     },
-    readOwnerLease: store.readOwnerLease.bind(store),
+    async readOwnerLease(ownerId, signal) {
+      confirmationReads += 1;
+      return await store.readOwnerLease(ownerId, signal);
+    },
     renewOwnerLease: store.renewOwnerLease.bind(store),
     async releaseOwnerLease(token, signal) {
       releaseCalls += 1;
@@ -292,20 +299,24 @@ test('location runtime installs the same late-committed lease after heartbeat Co
       ownerLeaseRenewTimeoutMs: 5
     }
   });
-  const keepAlive = setTimeout(() => {}, 100);
-
-  await runtime.start(rid('node-late-conflict'));
+  const startup = runtime.start(rid('node-late-conflict'));
+  assert.equal(typeof commitFirstClaim, 'function');
+  now += 5;
+  t.mock.timers.tick(5);
+  await startup;
   assert.equal(runtime.currentOwnerToken, undefined);
   await commitFirstClaim();
+  const renewed = new Promise(resolve => runtime.addOwnerLeaseRenewedHandler(resolve));
   timers.shift().callback();
-  await waitForCondition(() => runtime.ownerLeaseUsable);
+  await renewed;
+  assert.equal(runtime.ownerLeaseUsable, true);
 
   assert.equal(claimCalls, 2);
+  assert.equal(confirmationReads, 1);
   assert.equal(runtime.currentOwnerToken?.ownerId, 'owner-late-conflict');
   assert.equal(runtime.currentOwnerToken?.leaseGeneration, 1n);
   assert.equal(releaseCalls, 0);
   await runtime.stop();
-  clearTimeout(keepAlive);
 });
 
 test('location runtime does not start confirmation read after claim consumes renew deadline', async () => {
@@ -1423,23 +1434,22 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
   assert.equal(row.ownerId, 'owner-b');
 });
 
-test('location lifecycle retries source actor cleanup without losing the tracked generation', async () => {
+test('location lifecycle reports source actor cleanup failure without resubmitting release', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
   await node.lifecycle.claimActor('player', 'actor-retry', rid('node-a'));
-  const removeActor = node.runtime.removeActor.bind(node.runtime);
+  const failure = new Error('store release failure');
   let attempts = 0;
-  node.runtime.removeActor = async (...args) => {
+  node.runtime.removeActor = async () => {
     attempts += 1;
-    if (attempts === 1) throw new Error('temporary store failure');
-    return await removeActor(...args);
+    throw failure;
   };
 
-  await node.lifecycle.releaseActorEventually('player', 'actor-retry');
+  await assert.rejects(node.lifecycle.releaseActor('player', 'actor-retry'), (error) => error === failure);
 
-  assert.equal(attempts, 2);
-  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), false);
-  assert.equal(await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' }), undefined);
+  assert.equal(attempts, 1);
+  assert.equal(node.lifecycle.ownsActor('player', 'actor-retry'), true);
+  assert.equal((await store.resolveActor({ meshName: 'play', actorId: 'actor-retry' })).ownerId, 'owner-a');
 });
 
 test('location lifecycle releases placement Actor authority for the exact native ref', async () => {
@@ -2879,7 +2889,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
 test('production repository does not delete a row after its owner lease is replaced', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const ownerRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const leaseRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
   let ownerToken;
   let replaced = false;
   const provider = {
@@ -2888,8 +2898,8 @@ test('production repository does not delete a row after its owner lease is repla
     async write(request, signal) {
       if (!replaced && request.mutations.some(mutation => mutation.kind === 'delete')) {
         replaced = true;
-        assert.equal(await ownerRepository.releaseOwnerLease(ownerToken), 'released');
-        assert.equal((await ownerRepository.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
+        assert.equal(await leaseRepository.releaseOwnerLease(ownerToken), 'released');
+        assert.equal((await leaseRepository.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
       }
       return await inner.write(request, signal);
     }
@@ -2908,29 +2918,57 @@ test('production repository does not delete a row after its owner lease is repla
   assert.equal((await repository.listMeshNodes('play')).items.length, 1);
 });
 
-test('production repository reconciles an opaque write applied before its response is lost', async () => {
+test('location runtime reconciles an opaque write applied before its response is lost', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
   const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, {
+    ownerId: 'owner-ambiguous',
+    locationOptions: { ownerLeaseTtlMs: 30_000 }
+  });
 
   provider.loseNextResponse = true;
-  const claimed = await repository.claimOwnerLease('owner-ambiguous', 30_000);
+  await runtime.start(rid('node-ambiguous'));
 
-  assert.equal(claimed.kind, 'claimed');
+  assert.equal((await runtime.getStatus()).ownerLeaseHealthy, true);
   assert.equal(provider.observedWrites, 1);
   assert.deepEqual(
     await repository.readOwnerLease('owner-ambiguous'),
     {
       kind: 'found',
-      token: claimed.token,
+      token: { ownerId: 'owner-ambiguous', leaseGeneration: 1n },
       leaseExpiresAt: new Date(now.getTime() + 30_000),
       storeNow: now
     }
   );
+  await runtime.stop();
 });
 
-test('production repository classifies a changed ambiguous write as conflict', async () => {
+test('location runtime preserves a corrupt owner lease error during claim confirmation', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const provider = new ReplyLossLocationStore(inner);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, { ownerId: 'owner-corrupt' });
+
+  provider.loseNextResponse = true;
+  provider.replaceFirstMutationBeforeFailure = true;
+  await runtime.start(rid('node-corrupt'));
+
+  const status = await runtime.getStatus();
+  assert.equal(status.ownerLeaseHealthy, false);
+  assert.match(status.lastError, /Location Store owner lease record is invalid/);
+  assert.equal(provider.observedWrites, 2);
+  await assert.rejects(repository.readOwnerLease('owner-corrupt'), /invalid/);
+  await assert.rejects(runtime.stop(), (error) => {
+    assert.equal(error.name, 'ZLinkOwnerCleanupError');
+    assert.match(error.cause.message, /Location Store owner lease record is invalid/);
+    return true;
+  });
+});
+
+test('production repository rejects an ambiguous owner lease without an expiry as corrupt', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
@@ -2938,10 +2976,35 @@ test('production repository classifies a changed ambiguous write as conflict', a
 
   provider.loseNextResponse = true;
   provider.replaceFirstMutationBeforeFailure = true;
+  await assert.rejects(
+    repository.claimOwnerLease('owner-conflict', 30_000),
+    { name: 'TimeoutError' }
+  );
+
+  await assert.rejects(repository.readOwnerLease('owner-conflict'), /invalid/);
+  assert.equal(provider.observedWrites, 2);
+});
+
+test('production repository reports conflict for a live owner lease with an expiry', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-conflict', 30_000);
 
-  assert.deepEqual(claimed, { kind: 'conflict' });
-  assert.equal(provider.observedWrites, 2);
+  assert.equal(claimed.kind, 'claimed');
+  assert.deepEqual(
+    await repository.readOwnerLease('owner-conflict'),
+    {
+      kind: 'found',
+      token: claimed.token,
+      leaseExpiresAt: new Date(now.getTime() + 30_000),
+      storeNow: now
+    }
+  );
+  assert.deepEqual(
+    await repository.claimOwnerLease('owner-conflict', 30_000),
+    { kind: 'conflict' }
+  );
 });
 
 test('production repository shares ClientServer and fanout discovery through only opaque Store primitives', async () => {
@@ -3054,7 +3117,7 @@ class ReplyLossLocationStore {
       assert.notEqual(version, undefined);
       await this.inner.write({
         conditions: [{ kind: 'version', key: mutation.key, expected: version }],
-        mutations: [{ kind: 'put', key: mutation.key, bytes: Buffer.from('changed') }]
+        mutations: [{ kind: 'put', key: mutation.key, bytes: mutation.bytes }]
       });
       this.observedWrites += 1;
     }

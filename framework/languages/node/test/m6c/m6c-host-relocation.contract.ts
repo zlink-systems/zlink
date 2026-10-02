@@ -60,6 +60,7 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
+import { ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE } from '../../packages/framework/src/runtime/host/relocation-integrity-fault-gate';
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -547,10 +548,11 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     const first = dispatch(prepare);
     const second = dispatch(prepare);
     assert.equal(prepareCalls, 1);
-    await assert.rejects(
-      dispatch({ ...prepare, applicationVersion: 5n }),
-      /repeated Prepare with different bytes/
+    assert.equal(
+      await dispatch({ ...prepare, coordinator: { ...coordinator, leaseGeneration: 4n } }),
+      true
     );
+    assert.equal(sent.length, 0, 'a different exact identity must not receive the active reply');
     release();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     assert.equal(prepareCalls, 1);
@@ -605,6 +607,154 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     );
     assert.deepEqual(oneWay, ['data', 'cutover']);
     assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+for (const restoreOutcome of ['ready', 'failed'] as const) {
+  test(`Prepare manifest conflict preserves the original ${restoreOutcome} replay`, async () => {
+    const prepare: ServiceMaintenanceRelocationPrepare = {
+      kind: 'prepare',
+      relocation: { high: 107n, low: 109n },
+      targetAttemptGeneration: 1n,
+      coordinator,
+      target,
+      initiatorRole: 'source',
+      object,
+      sourceNodeRid: 'source',
+      sourceNodeGeneration: 2n,
+      payloadTotalLength: 24n,
+      payloadChunkCount: 1,
+      payloadChecksumCrc32c: 123,
+      applicationVersion: 4n
+    };
+    const sent: Buffer[] = [];
+    let prepareCalls = 0;
+    let readySubmitted = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
+    const internals = runtime as unknown as {
+      handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
+    };
+    internals.handlePrepareControl = async () => {
+      prepareCalls += 1;
+      await held;
+      if (restoreOutcome === 'failed') {
+        throw new ServiceRelocationDataLostError('restore manifest failed');
+      }
+      return {
+        kind: 'ready',
+        relocation: prepare.relocation,
+        targetAttemptGeneration: prepare.targetAttemptGeneration,
+        coordinator,
+        target,
+        object,
+        senderRole: 'target'
+      };
+    };
+    const dispatch = async (request: ServiceMaintenanceRelocationPrepare) => {
+      const part = Message.from(encodeServiceRelocationControlRequest(request));
+      try {
+        return await runtime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts: [part],
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            const bytes = Buffer.from(Array.isArray(reply) ? reply[0]! : reply);
+            sent.push(bytes);
+            if (decodeServiceRelocationControlResponse(bytes).kind === 'ready' && !readySubmitted) {
+              readySubmitted = true;
+              return SubmitResult.NotConnected;
+            }
+            return SubmitResult.Ok;
+          }
+        } as never);
+      } finally {
+        part.close();
+      }
+    };
+    try {
+      await dispatch(prepare);
+      await dispatch({ ...prepare, payloadChecksumCrc32c: 124 });
+      await waitUntil(() => sent.length === 1);
+      const conflict = decodeServiceRelocationControlResponse(sent[0]!);
+      assert.equal(conflict.kind, 'failed');
+      assert.equal((conflict as ServiceMaintenanceRelocationFailed).failureCode, 35);
+      assert.equal(prepareCalls, 1, 'conflict must not restart the existing restore');
+      release();
+      await waitUntil(() => sent.length === 2);
+      const originalTerminal = sent[1]!;
+      assert.equal(decodeServiceRelocationControlResponse(originalTerminal).kind, restoreOutcome);
+      await dispatch({ ...prepare, sourceNodeGeneration: 3n });
+      assert.equal(sent.length, 2, 'stale identity must not change the terminal reply');
+      await dispatch(prepare);
+      assert.equal(sent.length, 3);
+      assert.deepEqual(sent[2], originalTerminal, 'the accepted restore outcome must still replay');
+      assert.equal(prepareCalls, 1);
+    } finally {
+      release();
+      await runtime.dispose();
+    }
+  });
+}
+
+test('the integrity fault gate fails the original Prepare with replayable DataLost', async () => {
+  const prepare: ServiceMaintenanceRelocationPrepare = {
+    kind: 'prepare',
+    relocation: { high: 127n, low: 131n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object,
+    sourceNodeRid: 'source',
+    sourceNodeGeneration: 2n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
+    applicationVersion: 4n
+  };
+  const gate = {
+    consumeChecksumMismatch: () => false,
+    consumeIdentityConflict: () => true
+  };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({}),
+    providerResolver: {
+      get: (token: unknown) =>
+        token === ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE ? gate : undefined
+    }
+  } as never);
+  const sent: Buffer[] = [];
+  const dispatch = async () => {
+    const part = Message.from(encodeServiceRelocationControlRequest(prepare));
+    try {
+      await runtime.tryHandleControl('mesh-a', {
+        kind: ReceiveKind.NodeRequest,
+        sourceNodeRid: 'source',
+        parts: [part],
+        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
+          return SubmitResult.Ok;
+        }
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  try {
+    await dispatch();
+    await waitUntil(() => sent.length === 1);
+    const terminal = decodeServiceRelocationControlResponse(sent[0]!);
+    assert.equal(terminal.kind, 'failed');
+    assert.equal((terminal as ServiceMaintenanceRelocationFailed).failureCode, 35);
+    await dispatch();
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1], sent[0], 'fault terminal must replay without attempting Restore');
   } finally {
     await runtime.dispose();
   }
@@ -2041,7 +2191,106 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
   }
 });
 
+test('post-commit route cleanup failure preserves Accepted and is diagnosed once', async (t) => {
+  const failure = new Error('route cleanup failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  const harness = createActorJoinHostHarness({
+    reconcileStatefulAuthorityRoutes: async () => {
+      attempts++;
+      throw failure;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(diagnostics.length, 1);
+    assert.strictEqual(diagnostics[0]![1], failure);
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(attempts, 1);
+    const authority = await harness.location.readAuthority();
+    assert.equal(authority.kind, 'snapshot');
+    if (authority.kind === 'snapshot') assert.equal(authority.ownerId, 'target-owner');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('source retirement completes registry removal and reports all failed stages once', async (t) => {
+  const leaveFailure = new Error('source leave failed');
+  const retireFailure = new Error('source registry cleanup failed');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retireFailure
+  });
+  try {
+    await harness.relocate();
+    await harness.sourceLeaveIdle();
+    // The retirement diagnostic follows the asynchronous manager completion.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [leaveFailure, retireFailure]);
+    assert.equal(await harness.deliverSourceLeaveAgain(), true);
+    harness.completeSourceCleanup();
+    await Promise.resolve();
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('post-commit source cleanup failure preserves Accepted and reports all failures once', async (t) => {
+  const failure = new Error('source cleanup failed after target commit');
+  const leaveFailure = new Error('source leave failed after target commit');
+  const retirementFailure = new Error('source disposal failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  let routeAttempts = 0;
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retirementFailure,
+    commitSource: async () => {
+      attempts++;
+      throw failure;
+    },
+    reconcileStatefulAuthorityRoutes: async () => {
+      routeAttempts++;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    assert.equal(attempts, 1);
+    assert.equal(routeAttempts, 0);
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [
+      failure,
+      leaveFailure,
+      retirementFailure
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 interface ActorJoinHarnessOptions {
+  readonly sourceLeaveFailure?: Error;
+  readonly sourceRetirementFailure?: Error;
+  readonly commitSource?: () => Promise<void>;
+  readonly reconcileStatefulAuthorityRoutes?: () => Promise<void>;
   readonly holdAccepted?: boolean;
   readonly holdSourceLeave?: boolean;
   readonly readyResult?: number;
@@ -2153,6 +2402,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceCleanupRefs.push(sourceRef);
       events.push('source:removed');
       sourceLeaveDone();
+      if (options.sourceRetirementFailure !== undefined) throw options.sourceRetirementFailure;
     }
   };
   const sourceActorTransfer = {
@@ -2171,6 +2421,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setReplayResults() {},
         async commit() {
           events.push('source:committed');
+          await options.commitSource?.();
         },
         async rollback() {
           events.push('source:rolled-back');
@@ -2184,6 +2435,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceLeaveSpotIds.push(sourceSpotId);
       events.push('source:onLeave:started');
       await sourceLeaveGate;
+      if (options.sourceLeaveFailure !== undefined) throw options.sourceLeaveFailure;
       events.push('source:onLeave:completed');
     }
   };
@@ -2207,16 +2459,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       _actorType: string,
       objectGeneration: bigint,
       authorityOwnerGeneration: bigint,
-      spotId: string,
+      spotId: string | undefined,
       spotGeneration: bigint,
       membershipEpoch: bigint
     ) {
+      assert.equal(
+        spotId,
+        undefined,
+        'Entry relocation preserves logical membership at the native boundary'
+      );
       events.push('restore:hidden');
       targetNativeAuthority = {
         actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
         authorityOwnerGeneration,
-        spotId,
-        spotGeneration,
+        spotId: spotId ?? String(targetDescriptor.rid),
+        spotGeneration:
+          spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
         membershipEpoch
       };
       targetState = {
@@ -2619,6 +2877,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
     meshNode: () => sourceNode,

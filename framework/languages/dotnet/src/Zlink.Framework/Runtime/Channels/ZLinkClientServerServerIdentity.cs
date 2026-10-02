@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -13,8 +14,6 @@ internal sealed class ZLinkClientServerServerIdentity(
     string advertisedEndpoint
 )
 {
-    private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan PeerDeadline = TimeSpan.FromSeconds(15);
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
@@ -101,8 +100,8 @@ internal sealed class ZLinkClientServerServerIdentity(
             _peers[routingId] = new Peer(
                 routingId,
                 normalizedEffectiveMaxMessageBytes,
-                now + ProbeInterval,
-                now + PeerDeadline
+                now + ZLinkServiceLiveness.ProbeInterval,
+                now + ZLinkServiceLiveness.PeerTimeout
             );
         });
     }
@@ -122,7 +121,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             if (!_peers.TryGetValue(routingId, out var peer) || peer.OutstandingProbeId != probeId)
                 return;
             peer.OutstandingProbeId = null;
-            peer.Deadline = Stopwatch.GetElapsedTime(0) + PeerDeadline;
+            peer.Deadline = Stopwatch.GetElapsedTime(0) + ZLinkServiceLiveness.PeerTimeout;
             Interlocked.Increment(ref _livenessAckCount);
         });
 
@@ -226,7 +225,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             }
             if (now < peer.NextProbe)
                 continue;
-            peer.NextProbe = now + ProbeInterval;
+            peer.NextProbe = now + ZLinkServiceLiveness.ProbeInterval;
             peer.OutstandingProbeId ??= AllocateProbeId();
             probes.Add((peer.RoutingId, peer.OutstandingProbeId.Value));
         }

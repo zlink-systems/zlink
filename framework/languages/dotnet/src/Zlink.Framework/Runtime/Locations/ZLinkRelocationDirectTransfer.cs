@@ -1,5 +1,4 @@
 using Zlink.Framework.Runtime.Execution;
-using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -149,9 +148,6 @@ internal sealed class ZLinkRelocationChunkAssembler
     /// <summary>Poisons the assembly so a waiting prepare fails explicitly.</summary>
     internal void Fail(Exception failure) =>
         AwaitStateLane(_lane.RunAsync(() => _completed.TrySetException(failure)));
-
-    internal bool MatchesManifest(ulong totalLength, uint chunkCount, uint checksumCrc32c) =>
-        totalLength == TotalLength && chunkCount == ChunkCount && checksumCrc32c == ChecksumCrc32c;
 
     /// <summary>
     /// Copies one chunk into the assembly buffer. Chunks must arrive in

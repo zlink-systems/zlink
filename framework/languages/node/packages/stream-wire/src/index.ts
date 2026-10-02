@@ -49,6 +49,8 @@ export enum ZlinkStreamCloseReasonCode {
 
 export type ZlinkStreamCloseReason = keyof typeof ZlinkStreamCloseReasonCode;
 
+const unicodeWhiteSpaceOnly = /^\p{White_Space}*$/u;
+
 const validMessageKinds = new Set(
   Object.values(ZlinkStreamMessageKind).filter((value) => typeof value === 'number')
 );
@@ -202,11 +204,14 @@ export function splitStreamWireFrames(chunk: Uint8Array): readonly Uint8Array[] 
   return frames;
 }
 
+/** @internal Reserved packet name prefix owned by the stream protocol. */
+export const ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX = '$zlink.';
+
 export const ZlinkStreamControlPacket = Object.freeze({
-  HeartbeatPing: '$zlink.heartbeat.ping',
-  HeartbeatPong: '$zlink.heartbeat.pong',
-  ActorBound: '$zlink.actor.bound',
-  ActorUnbound: '$zlink.actor.unbound',
+  HeartbeatPing: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.ping`,
+  HeartbeatPong: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.pong`,
+  ActorBound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.bound`,
+  ActorUnbound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.unbound`,
   SessionClosing: 'session-closing'
 } as const);
 
@@ -333,8 +338,7 @@ export function encodeStreamWireHeader(
   const flags = flagOverrides ?? defaultHeaderFlags;
   const reply = isReplyKind(header.kind);
   const packetName = reply ? '' : header.name;
-  if (!reply) validateStreamWirePacketName(packetName);
-  const nameBytes = utf8Encode(packetName);
+  const nameBytes = reply ? new Uint8Array() : validateStreamWirePacketName(packetName);
   const hasRequestSeq = header.requestSeq !== undefined;
   const hasMetadata = header.metadata.size > 0;
   const correlationBytes =
@@ -663,11 +667,13 @@ function decodeStreamWireMetadataAt(
   return { metadata, offset };
 }
 
-function validateStreamWirePacketName(name: string): void {
+/** @internal Shared packet name structure validation for the connector. */
+export function validateStreamWirePacketName(name: string): Uint8Array {
   const nameBytes = utf8Encode(name);
-  if (name.trim().length === 0 || nameBytes.length > 255) {
+  if (unicodeWhiteSpaceOnly.test(name) || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
     throw new Error('Stream packet name is invalid.');
   }
+  return nameBytes;
 }
 
 function isReplyKind(kind: number): boolean {

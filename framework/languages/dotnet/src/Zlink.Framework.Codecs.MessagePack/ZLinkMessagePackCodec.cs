@@ -9,6 +9,8 @@ public sealed class ZLinkMessagePackCodec
         IZlinkStreamPayloadCodec,
         IZlinkStreamCodecRegistration
 {
+    private const string CodecContentType = "application/x-msgpack";
+
     private ZLinkMessagePackCodec() { }
 
     public static ZLinkMessagePackCodec Default { get; } = new();
@@ -17,13 +19,13 @@ public sealed class ZLinkMessagePackCodec
     {
         ArgumentNullException.ThrowIfNull(codecs);
         codecs.AddSerializer(
-            "application/x-msgpack",
+            CodecContentType,
             MessagePackSerializerAdapter.Instance,
             type => type.GetCustomAttributes(typeof(MessagePackObjectAttribute), true).Length > 0
         );
     }
 
-    string IZlinkStreamCodecRegistration.ContentType => "application/x-msgpack";
+    string IZlinkStreamCodecRegistration.ContentType => CodecContentType;
 
     ZlinkStreamCodec IZlinkStreamCodecRegistration.Codec => ZlinkStreamCodec.MessagePack;
 

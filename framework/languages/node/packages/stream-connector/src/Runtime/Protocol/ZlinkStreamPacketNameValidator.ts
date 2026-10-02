@@ -1,21 +1,20 @@
-import { ZLINK_STREAM_MAX_PACKET_NAME_BYTES } from '@zlink-systems/stream-wire';
+import {
+  validateStreamWirePacketName,
+  ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX
+} from '@zlink-systems/stream-wire';
 import { ZlinkStreamErrorCode } from '../../Contracts';
-import { connectorError, utf8Encode } from '../ZlinkStreamSupport';
+import { connectorError } from '../ZlinkStreamSupport';
 
 export function validateName(name: string, allowReserved = false): void {
-  if (name.length === 0) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name must not be empty.');
+  try {
+    validateStreamWirePacketName(name);
+  } catch (cause) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name is invalid.', cause);
   }
-  if (!allowReserved && name.startsWith('$zlink.')) {
+  if (!allowReserved && name.startsWith(ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX)) {
     throw connectorError(
       ZlinkStreamErrorCode.ValidationFailed,
       'Message name uses a reserved zlink prefix.'
-    );
-  }
-  if (utf8Encode(name).length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
-    throw connectorError(
-      ZlinkStreamErrorCode.ValidationFailed,
-      `Message name must not exceed ${ZLINK_STREAM_MAX_PACKET_NAME_BYTES} UTF-8 bytes.`
     );
   }
 }

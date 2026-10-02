@@ -1,4 +1,5 @@
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -226,7 +227,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     )
     {
         ArgumentNullException.ThrowIfNull(prefix);
-        if (limit is < 1 or > 1000)
+        if (limit is < 1 or > ZLinkPageRequestPolicy.MaximumPageSize)
             throw new ArgumentOutOfRangeException(nameof(limit));
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkAuthorityScanResult>(() =>
@@ -1224,7 +1225,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
     private static void ValidateAuthorityPayload(ReadOnlyMemory<byte> payload)
     {
-        if (payload.Length > 1024 * 1024)
+        if (payload.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new ArgumentOutOfRangeException(nameof(payload));
     }
 
@@ -1272,8 +1273,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CreationIntentReference);
         if (
             request.CreationIntentHash.Length != 32
-            || request.CreationIntentEncodedSize is < 0 or > 1024 * 1024
-            || request.CreatingPayload.Length > 1024 * 1024
+            || request.CreationIntentEncodedSize
+                is < 0
+                    or > (int)ServiceWireConstants.CreationIntentBytes
+            || request.CreatingPayload.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes
             || !IsAllocationCapacityValid(request.ObjectKind, request.StableType, request.Capacity)
             || request.TargetNodeLifecycleGeneration == 0
             || request.TargetOwner.LeaseGeneration <= 0
@@ -1299,7 +1302,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ArgumentNullException.ThrowIfNull(publication);
         ValidateCreationOperation(publication.Operation);
-        if (publication.TerminalEnvelope.Length > 1024 * 1024)
+        if (
+            publication.TerminalEnvelope.Length
+            > (int)ServiceWireConstants.CreationTerminalEnvelopeBytes
+        )
             throw new ArgumentException(
                 "The creation terminal publication does not match its reservation.",
                 nameof(publication)

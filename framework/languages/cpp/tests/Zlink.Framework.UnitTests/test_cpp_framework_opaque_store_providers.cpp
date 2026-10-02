@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <future>
+#include <functional>
 #include <limits>
 #include <span>
 #include <string>
@@ -700,6 +701,66 @@ class reject_next_authority_capacity_write_store_t final : public location_store
     std::size_t rejected_capacity_mutations = 0;
 };
 
+class aggregate_commit_contention_store_t final : public location_store_t
+{
+  public:
+    enum class phase_t
+    {
+        transition,
+        page,
+        terminal,
+        lease_loss,
+        counter_race
+    };
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        if (on_counter_read && key.value == "zlink:v11:authority-owner-counter"
+            && ++counter_reads == 2) {
+            auto action = std::move (on_counter_read);
+            action ();
+        }
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        bool counter = false;
+        bool page = false;
+        bool capacity = false;
+        for (const auto &mutation : request.mutations) {
+            const auto &key = std::visit (
+              [] (const auto &value) -> const store_key_t & { return value.key; }, mutation);
+            counter |= key.value == "zlink:v11:authority-owner-counter";
+            page |= key.value.starts_with ("zlink:v11:aggregate-commit:");
+            capacity |= key.value.starts_with ("zlink:v11:capacity:");
+        }
+        const bool matching = phase == phase_t::transition ? counter
+                              : phase == phase_t::page     ? page
+                                                           : capacity;
+        if (remaining != 0 && matching) {
+            --remaining;
+            ++rejected;
+            if (on_conflict) {
+                auto action = std::move (on_conflict);
+                action ();
+            }
+            return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
+              store_write_result_t{store_write_conflict_t{std::chrono::system_clock::now ()}}));
+        }
+        return inner.write (std::move (request));
+    }
+    in_memory_location_store_t inner;
+    phase_t phase = phase_t::transition;
+    std::size_t remaining = 0;
+    std::size_t rejected = 0;
+    std::function<void ()> on_conflict;
+    std::function<void ()> on_counter_read;
+    std::size_t counter_reads = 0;
+};
+
 class aggregate_lock_contention_store_t final : public location_store_t
 {
   public:
@@ -873,8 +934,7 @@ TEST (CppFrameworkOpaqueRelocationStore, ExpiredOperationDoesNotStartProviderIo)
         FAIL () << "expired operation did not throw its typed failure";
     }
     catch (...) {
-        const auto failure =
-          detail::current_exception_result<void> ("expired operation lost its typed failure");
+        const auto failure = detail::current_exception_result<void> ();
         EXPECT_EQ (failure.error_kind (), framework_error_kind_t::deadline_exceeded);
     }
 }
@@ -1520,6 +1580,124 @@ TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterCondit
     const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
     EXPECT_TRUE (provider.peer_marker_published);
     ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared));
+}
+
+TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransientConflicts)
+{
+    using phase_t = aggregate_commit_contention_store_t::phase_t;
+    for (const auto phase : {phase_t::transition, phase_t::page, phase_t::terminal,
+                             phase_t::lease_loss, phase_t::counter_race}) {
+        SCOPED_TRACE (static_cast<int> (phase));
+        aggregate_commit_contention_store_t provider;
+        provider_location_repository_t repository (provider);
+        const auto claim =
+          repository.claim_owner_lease ("aggregate-contention-owner", 30s).result ().value ();
+        const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
+        ASSERT_NE (claimed, nullptr);
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "aggregate-contention";
+        descriptor.rid = zlink::routing_id_t::from (std::string{"aggregate-contention-node"});
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = claimed->token.owner_id;
+        descriptor.lease_generation = claimed->token.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                   maintenance_policy_kind_t::recreate, false, 0});
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot, "room",
+                                                   maintenance_policy_kind_t::snapshot, true, 10});
+        descriptor.capacity.actors.limit = 10;
+        descriptor.capacity.spots.limit = 10;
+        descriptor.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "room", {0, 0, 10}});
+        ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        object_creation_target_t target{descriptor.mesh_name,
+                                        node_rid_t::from_string ("aggregate-contention-node"), 1,
+                                        claimed->token};
+        aggregate_prepare_request_t aggregate;
+        aggregate.aggregate_id.value[15] = std::byte{0x55};
+        aggregate.aggregate_generation = 1;
+        aggregate.target_descriptor = {descriptor.mesh_name, descriptor.rid};
+        aggregate.target_descriptor_lifecycle_generation = 1;
+        aggregate.target_owner = claimed->token;
+        aggregate.capacity_bundle.actor_slots = 2;
+        aggregate.capacity_bundle.spot_slots = 1;
+        aggregate.capacity_bundle.spot_type =
+          spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
+        for (const auto &[kind, id] :
+             {std::pair{placement_object_kind_t::actor, "aggregate-contention-actor-a"},
+              std::pair{placement_object_kind_t::actor, "aggregate-contention-actor-b"},
+              std::pair{placement_object_kind_t::user_spot, "aggregate-contention-spot"}}) {
+            object_reserve_request_t request;
+            request.key = {kind, id};
+            request.intent.stable_type = kind == placement_object_kind_t::actor ? "player" : "room";
+            request.target = target;
+            request.creating_payload = bytes ("creating");
+            if (kind == placement_object_kind_t::actor) {
+                request.capacity_bundle.actor_slots = 1;
+            } else {
+                request.capacity_bundle.spot_slots = 1;
+                request.capacity_bundle.spot_type = spot_type_capacity_delta_t{kind, "room", 1};
+            }
+            const auto reserved = repository.reserve (request).result ().value ();
+            const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+            ASSERT_NE (reservation, nullptr);
+            const auto committed =
+              repository.commit ({request.key, reservation->fence, bytes ("ready")})
+                .result ()
+                .value ();
+            const auto *ready = std::get_if<object_committed_t> (&committed);
+            ASSERT_NE (ready, nullptr);
+            aggregate.participants.push_back ({kind == placement_object_kind_t::actor
+                                                 ? actor_authority_key (id)
+                                                 : spot_authority_key (id),
+                                               ready->ready.store_version,
+                                               authority_generation_transition_t::new_owner,
+                                               bytes ("aggregate-ready"),
+                                               {}});
+        }
+        const auto prepared = repository.prepare_aggregate (aggregate).result ().value ();
+        const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
+        ASSERT_NE (fence, nullptr);
+        provider.phase = phase;
+        provider.remaining = phase == phase_t::counter_race ? 0 : 65;
+        if (phase == phase_t::counter_race) {
+            provider.on_counter_read = [&] {
+                object_reserve_request_t peer;
+                peer.key = {placement_object_kind_t::actor, "aggregate-contention-peer"};
+                peer.intent.stable_type = "player";
+                peer.target = target;
+                peer.creating_payload = bytes ("peer-creating");
+                peer.capacity_bundle.actor_slots = 1;
+                EXPECT_TRUE (std::holds_alternative<object_reserved_t> (
+                  repository.reserve (peer).result ().value ()));
+            };
+        }
+        if (phase == phase_t::lease_loss) {
+            provider.on_conflict = [&] {
+                EXPECT_TRUE (std::holds_alternative<owner_lease_released_t> (
+                  repository.release_owner_lease (claimed->token).result ().value ()));
+            };
+            EXPECT_EQ (repository.commit_aggregate (fence->fence).result ().value (),
+                       aggregate_commit_result_t::stale);
+            EXPECT_EQ (provider.rejected, 1u);
+            provider.remaining = 0;
+            EXPECT_EQ (repository.abort_aggregate (fence->fence).result ().value (),
+                       aggregate_abort_result_t::aborted);
+        } else {
+            EXPECT_EQ (repository.commit_aggregate (fence->fence).result ().value (),
+                       aggregate_commit_result_t::committed);
+            EXPECT_EQ (provider.rejected, phase == phase_t::counter_race ? 0u : 65u);
+            EXPECT_EQ (repository.commit_aggregate (fence->fence).result ().value (),
+                       aggregate_commit_result_t::already_committed);
+        }
+    }
 }
 
 TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecycleThroughProvider)

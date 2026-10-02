@@ -4126,26 +4126,11 @@ public sealed partial class EntrySpotActorDispatchTests
 
             Assert.False(result.Completed);
             Assert.Equal(expectedKnowledge, result.CommitKnowledge);
+            Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
+            Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.TerminalReason);
             if (expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed)
             {
-                Assert.True(
-                    result.SourceTerminalized
-                        || result.TerminalReason == ZLinkFrameworkRelocationReason.DeadlineExceeded
-                );
-                Assert.True(
-                    result.TerminalReason
-                        is ZLinkFrameworkRelocationReason.RelocationFailed
-                            or ZLinkFrameworkRelocationReason.DeadlineExceeded
-                );
                 Assert.Empty(runtime.GetSpotNodeRuntime("entry").Spots);
-            }
-            else
-            {
-                Assert.Equal(expectedSourceTerminalized, result.SourceTerminalized);
-                Assert.Equal(
-                    ZLinkFrameworkRelocationReason.RelocationFailed,
-                    result.TerminalReason
-                );
             }
             Assert.Equal(
                 expectedKnowledge == ZLinkRelocationCommitKnowledge.Committed ? 1UL : 0UL,

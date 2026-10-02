@@ -81,7 +81,9 @@ internal sealed class ZLinkHandlerRegistry
             channelName,
             mappedGroups,
             messageName,
-            "request",
+            Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                ZLinkDispatchMessageKind.Request
+            ),
             "No request handler is registered"
         );
     }
@@ -99,7 +101,9 @@ internal sealed class ZLinkHandlerRegistry
             channelName,
             mappedGroups,
             messageName,
-            "request",
+            Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                ZLinkDispatchMessageKind.Request
+            ),
             out descriptor
         );
     }
@@ -116,7 +120,9 @@ internal sealed class ZLinkHandlerRegistry
             channelName,
             mappedGroups,
             messageName,
-            "send",
+            Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                ZLinkDispatchMessageKind.Send
+            ),
             "No send handler is registered"
         );
     }
@@ -134,7 +140,9 @@ internal sealed class ZLinkHandlerRegistry
             channelName,
             mappedGroups,
             messageName,
-            "send",
+            Zlink.Framework.Runtime.Diagnostics.ZLinkTraceFormat.MessageKindKey(
+                ZLinkDispatchMessageKind.Send
+            ),
             out descriptor
         );
     }

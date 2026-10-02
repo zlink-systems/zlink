@@ -400,8 +400,8 @@ class app_state_t
 
         void cancel ()
         {
-            completion.complete (detail::boundary_failure<TResult> (
-              detail::boundary_error_t::cancelled, "lifecycle waiter was cancelled"));
+            completion.complete (detail::result_access_t::failure<TResult> (
+              detail::make_cancellation_exception ("lifecycle waiter was cancelled")));
         }
     };
 

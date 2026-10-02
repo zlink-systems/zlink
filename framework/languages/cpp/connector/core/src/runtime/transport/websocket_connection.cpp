@@ -120,31 +120,33 @@ template <typename TStream> class websocket_stream_connection_t final : public s
         });
     }
 
-    void shutdown_and_close () override
+    boost::system::error_code shutdown_and_close () override
     {
-        run_serialized_sync (_io_context, _strand, [this] {
+        return run_serialized_sync (_io_context, _strand, [this] {
             boost::system::error_code ignored;
             auto &socket = beast::get_lowest_layer (_stream);
             socket.shutdown (tcp::socket::shutdown_both, ignored);
-            socket.close (ignored);
+            boost::system::error_code error;
+            socket.close (error);
+            return error;
         });
     }
 
-    void shutdown_and_close_async () override
+    void
+    shutdown_and_close_async (std::function<void (boost::system::error_code)> completion) override
     {
         std::shared_ptr<stream_connection_t> self;
         try {
             self = shared_from_this ();
         }
         catch (const std::bad_weak_ptr &) {
-            shutdown_and_close ();
+            auto error = shutdown_and_close ();
+            completion (error);
             return;
         }
-        asio::post (_strand, [this, self] {
-            boost::system::error_code ignored;
-            auto &socket = beast::get_lowest_layer (_stream);
-            socket.shutdown (tcp::socket::shutdown_both, ignored);
-            socket.close (ignored);
+        asio::post (_strand, [this, self, completion = std::move (completion)] {
+            auto error = shutdown_and_close ();
+            completion (error);
         });
     }
 
@@ -202,16 +204,20 @@ void connect_websocket_async (
   boost::asio::io_context &io_context,
   websocket_endpoint_parts_t endpoint,
   std::shared_ptr<transport_connect_control_t> control,
+  std::function<void (boost::system::error_code)> close_completion,
   std::function<void (boost::system::error_code, std::unique_ptr<stream_connection_t>)> callback)
 {
     auto resolver = std::make_shared<tcp::resolver> (io_context);
     auto stream = std::make_shared<websocket::stream<tcp::socket>> (io_context);
-    control->set_cancel_handler ([resolver, stream] {
-        boost::system::error_code ignored;
-        resolver->cancel ();
-        stream->next_layer ().cancel (ignored);
-        stream->next_layer ().close (ignored);
-    });
+    control->set_cancel_handler (
+      [resolver, stream, close_completion = std::move (close_completion)] {
+          boost::system::error_code ignored;
+          resolver->cancel ();
+          stream->next_layer ().cancel (ignored);
+          boost::system::error_code close_error;
+          stream->next_layer ().close (close_error);
+          close_completion (close_error);
+      });
     const auto host = endpoint.host;
     const auto port = endpoint.port;
     resolver->async_resolve (
@@ -266,6 +272,7 @@ void connect_websocket_secure_async (
   websocket_endpoint_parts_t endpoint,
   bool skip_server_certificate_validation,
   std::shared_ptr<transport_connect_control_t> control,
+  std::function<void (boost::system::error_code)> close_completion,
   std::function<void (boost::system::error_code, std::unique_ptr<stream_connection_t>)> callback)
 {
     auto context = std::make_shared<ssl::context> (ssl::context::tls_client);
@@ -283,12 +290,15 @@ void connect_websocket_secure_async (
     const auto host = endpoint.host;
     const auto port = endpoint.port;
     auto resolver = std::make_shared<tcp::resolver> (io_context);
-    control->set_cancel_handler ([resolver, stream] {
-        boost::system::error_code ignored;
-        resolver->cancel ();
-        beast::get_lowest_layer (*stream).cancel (ignored);
-        beast::get_lowest_layer (*stream).close (ignored);
-    });
+    control->set_cancel_handler (
+      [resolver, stream, close_completion = std::move (close_completion)] {
+          boost::system::error_code ignored;
+          resolver->cancel ();
+          beast::get_lowest_layer (*stream).cancel (ignored);
+          boost::system::error_code close_error;
+          beast::get_lowest_layer (*stream).close (close_error);
+          close_completion (close_error);
+      });
     resolver->async_resolve (
       host, port,
       [&io_context, resolver, context, stream, control, endpoint = std::move (endpoint),

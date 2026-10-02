@@ -5,7 +5,11 @@ import {
   ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
-import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
+import {
+  ZLinkExecutionBarrier,
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import {
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
@@ -15,6 +19,11 @@ import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 interface Deferred {
   readonly promise: Promise<void>;
@@ -190,6 +199,7 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
     handlers: {} as never
   });
   const lifecycle = new ZLinkSpotActivationLifecycle({
+    detachedTaskRunner: detachedTaskRunner,
     locationClaim: {
       async release() {
         assert.fail('The lifecycle release port owns location cleanup.');

@@ -6,8 +6,10 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/host/bound_session_send_stage_trace.hpp"
+#include "runtime/client_server/client_server_failure_mapper.hpp"
 
 #include <zlink.hpp>
+#include <zlink/framework/contracts/errors/result.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -63,6 +65,7 @@ using namespace std::chrono_literals;
 
 constexpr auto raw_route_fixture_timeout = 2s;
 constexpr auto raw_route_fixture_poll_interval = 10ms;
+constexpr auto raw_request_capacity_timeout = 25ms;
 constexpr std::size_t raw_route_backpressure_hwm_bytes = 16;
 constexpr std::size_t raw_route_backpressure_attempt_limit = 256;
 constexpr std::size_t deferred_trace_payload_size = 1024;
@@ -92,6 +95,104 @@ bool wait_for_monitor_event (zlink::socket_monitor_t &monitor,
 backend::raw_message_t request_parts ()
 {
     return backend::raw_message_t{backend::raw_bytes_t{'r', 'e', 'q', 'u', 'e', 's', 't'}};
+}
+
+void verify_capacity_refusal_phase_controls_public_terminal ()
+{
+    using zlink::framework::framework_error_kind_t;
+    namespace foundation = zlink::framework::runtime::foundation;
+    namespace client_server = zlink::framework::runtime::client_server;
+    const auto initial = backend::map_binding_request_submit_result (
+      zlink::submit_result_t::backpressured,
+      backend::raw_request_failure_phase_t::initial_admission,
+      [] () -> backend::raw_request_result_t {
+          throw zlink::submit_error_t (zlink::submit_result_t::backpressured, EAGAIN);
+      });
+    assert (initial == backend::raw_request_result_t::failed);
+    const auto refused = client_server::client_server_operation_exception (
+      foundation::operation_terminal_t::transport_failed, "tokenless capacity");
+    const auto *refused_error = zlink::framework::detail::framework_error (refused);
+    assert (refused_error != nullptr);
+    assert (refused_error->kind () == framework_error_kind_t::unavailable);
+    assert (zlink::framework::detail::boundary_state (*refused_error)
+            != zlink::framework::detail::boundary_error_t::timed_out);
+    const auto completion = backend::map_binding_request_submit_result (
+      zlink::submit_result_t::backpressured,
+      backend::raw_request_failure_phase_t::completion_terminal,
+      [] { return backend::raw_request_result_t::failed; });
+    assert (completion == backend::raw_request_result_t::timed_out);
+    const auto expired = client_server::client_server_operation_exception (
+      foundation::operation_terminal_t::timed_out, "expired WRITABLE token");
+    const auto *expired_error = zlink::framework::detail::framework_error (expired);
+    assert (expired_error != nullptr);
+    assert (expired_error->kind () == framework_error_kind_t::deadline_exceeded);
+    std::cout << "f20 tokenless=Unavailable writable_timeout=DeadlineExceeded" << std::endl;
+}
+
+void verify_writable_request_timeout_remains_deadline_exceeded ()
+{
+    zlink::context_t context;
+    context.options ().auto_hwm_enabled (false);
+    zlink::router_socket_t source (context), target (context);
+    const auto source_rid = zlink::routing_id_t::from ("f20-writable-source");
+    const auto target_rid = zlink::routing_id_t::from ("f20-writable-target");
+    source.set_routing_id (source_rid);
+    target.set_routing_id (target_rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    source.options ().send_timeout (raw_request_capacity_timeout);
+    source.options ().send_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+    target.options ().recv_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+    target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
+    target.bind ("inproc://framework-f20-writable-request-timeout");
+    auto ready = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect ("inproc://framework-f20-writable-request-timeout");
+    assert (wait_for_monitor_event (ready, zlink::monitor_event::connection_ready,
+                                    raw_route_fixture_timeout));
+    backend::raw_route_port_t port (source), target_port (target);
+    const auto pause_deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
+    while (ready.status ().flow_paused_connections == 0
+           && std::chrono::steady_clock::now () < pause_deadline) {
+        (void) target_port.poll (raw_route_fixture_poll_interval);
+        (void) port.poll (raw_route_fixture_poll_interval);
+    }
+    assert (ready.status ().flow_paused_connections == 1);
+    std::optional<zlink::framework::task_t<zlink::submit_result_t>> blocked_send;
+    for (std::size_t attempt = 0; attempt < raw_route_backpressure_attempt_limit && !blocked_send;
+         ++attempt) {
+        auto sent = port.send_result (target_rid.to_bytes (), request_parts ());
+        if (!sent.await_ready ())
+            blocked_send.emplace (std::move (sent));
+        else
+            assert (sent.result () && sent.result ().value () == zlink::submit_result_t::ok);
+    }
+    assert (blocked_send);
+    auto pending =
+      port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout);
+    assert (!pending.await_ready ());
+    const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+        (void) port.poll (raw_route_fixture_poll_interval);
+    assert (pending.await_ready ());
+    assert (pending.result ());
+    const auto &completion = pending.result ().value ();
+    assert (completion.failure);
+    std::cout << "f20 phase=" << static_cast<int> (completion.failure->phase) << " submit="
+              << (completion.failure->submit_result
+                    ? static_cast<int> (*completion.failure->submit_result)
+                    : -1)
+              << " request="
+              << (completion.failure->request_result
+                    ? static_cast<int> (*completion.failure->request_result)
+                    : -1)
+              << " raw_result=" << static_cast<int> (completion.result) << std::endl;
+    assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
+    assert (completion.failure->submit_result == zlink::submit_result_t::backpressured);
+    assert (completion.result == backend::raw_request_result_t::timed_out);
+    port.close ();
+    target_port.close ();
+    ready.close ();
 }
 
 zlink::framework::task_t<zlink::submit_result_t>
@@ -545,6 +646,8 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 
 int main ()
 {
+    verify_capacity_refusal_phase_controls_public_terminal ();
+    verify_writable_request_timeout_remains_deadline_exceeded ();
     verify_deferred_send_trace_owns_its_context ();
     verify_binding_completion_bypasses_handler_executor ();
     verify_completion_only_wait_keeps_ordinary_record_unclaimed ();

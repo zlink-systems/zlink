@@ -26,7 +26,7 @@ import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 interface ZLinkEntrySpotContextOptions {
   readonly spotId: SpotId;
-  readonly objectGeneration: number;
+  readonly objectGeneration: bigint;
   readonly nodeRid: RoutingId;
   readonly handlers: ZLinkSpotHandlerRegistry;
   readonly outbound: ZLinkSpotOutbound;
@@ -47,7 +47,7 @@ interface ZLinkEntrySpotContextOptions {
 interface ZLinkSpotContextOptions {
   readonly meshName: string;
   readonly spotId: SpotId;
-  readonly objectGeneration: number;
+  readonly objectGeneration: bigint;
   readonly handlers: ZLinkSpotHandlerRegistry;
   readonly outbound: ZLinkSpotOutbound;
   readonly timers: ZLinkSpotTimerRegistry;
@@ -263,7 +263,7 @@ function withImmutableSpotIdentity<
   T extends {
     readonly meshName: string;
     readonly spotId: SpotId;
-    readonly objectGeneration: number;
+    readonly objectGeneration: bigint;
     readonly nodeRid: RoutingId;
   }
 >(context: T): T {

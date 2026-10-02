@@ -7,6 +7,9 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const { Message, RequestResult } = require('@zlink-systems/zlink');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { ZLinkAbortError } = require('../../packages/framework/dist/runtime/abort');
+const { createHook } = require('node:async_hooks');
+const { waitActorReply } = require('../../packages/framework/dist/runtime/actors/actor-request-deadline');
 
 class ActorNotify { constructor(value) { this.value = value; } }
 class ActorAsk { constructor(value) { this.value = value; } }
@@ -63,8 +66,11 @@ function actorLocation(actorId = 'actor-1', generation = 1n, meshName = 'play-me
 
 function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
   return {
-    async resolveDirectActorRoute(actorId, signal) {
-      const route = await resolve({ actorId }, signal);
+    async resolveDirectActorRoute(actorId, signal, deadlineMs) {
+      // This adapter has no cache: its complete resolution is an external wait.
+      const route = await waitActorReply(
+        Promise.resolve().then(() => resolve({ actorId }, signal)), actorId, deadlineMs, signal
+      );
       return route === undefined
         ? { kind: 'missing' }
         : { kind: 'ready', route };
@@ -89,6 +95,38 @@ function createStoreResolver(authority, remainingLeaseMs) {
     }
   });
 }
+
+test('cached actor request allocates no deadline timer or race promise', async t => {
+  const resolver = createStoreResolver({
+    kind: 'snapshot', allocation: {
+      objectKind: 'actor', state: 'active', stableType: 'Player',
+      descriptor: { meshName: 'play-mesh', rid: 'node-a' }, descriptorLifecycleGeneration: 7n
+    }, payload: Buffer.alloc(0), objectGeneration: 1n, ownerId: 'owner-a',
+    ownerLeaseGeneration: 3n, authorityOwnerGeneration: 4n, storeVersion: { value: 'v1' }
+  }, 10000);
+  assert.equal((await resolver.resolveDirectActorRoute('actor-1')).kind, 'ready');
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { return operationId; } }),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    locationResolver: () => resolver
+  });
+  let timers = 0;
+  let promises = 0;
+  const hook = createHook({ init(_id, type) {
+    if (type === 'Timeout') timers++;
+    if (type === 'PROMISE') promises++;
+  } });
+  const race = t.mock.method(Promise, 'race');
+  hook.enable();
+  try {
+    for (let index = 0; index < 100; index++) {
+      assert.equal(await client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit(), 'pong');
+    }
+  } finally { hook.disable(); }
+  console.log(`cached_actor_requests=100 timers=${timers} races=${race.mock.callCount()} promises=${promises}`);
+  assert.equal(timers, 0);
+  assert.equal(race.mock.callCount(), 0);
+});
 
 const operationId = Object.freeze({ high: 1n, low: 2n });
 function createActorClient(options) {
@@ -634,4 +672,238 @@ test('direct actor resolver maps a missing authority snapshot to NotFound', asyn
       && framework.internalFrameworkErrorKind(error)
         === framework.ZLinkFrameworkInternalErrorKind.ActorRouteNotFound
   );
+});
+
+test('actor request deadline ends the caller wait before a slow route returns', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  let resolveRoute;
+  const route = new Promise(resolve => { resolveRoute = resolve; });
+  let submits = 0;
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { submits++; return operationId; } }),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    locationResolver: () => createResolver(() => route)
+  });
+  let terminal;
+  const request = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit();
+  const observed = request.then(
+    value => { terminal = value; },
+    error => { terminal = error; }
+  );
+  try {
+    t.mock.timers.tick(20);
+    await new Promise(setImmediate);
+    assert.equal(terminal?.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+    assert.equal(submits, 0);
+    resolveRoute(actorLocation());
+    await observed;
+    await new Promise(setImmediate);
+    assert.equal(submits, 0, 'late route completion cannot submit a timed-out request');
+  } finally {
+    resolveRoute(actorLocation());
+    await observed;
+  }
+});
+
+test('expired actor resolution observes a late Store rejection without submission', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  let rejectStore;
+  const blocked = new Promise((_resolve, reject) => { rejectStore = reject; });
+  const resolver = new framework.ZLinkStoreLocationResolvers({
+    stores: {
+      authorityStore: { readAuthority() { now = 100; return blocked; } },
+      locationStore: {}, peerStore: {}, spotStore: {}, actorStore: {}, routeStore: {}
+    }, leaseTracker: {}
+  });
+  let submits = 0;
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { submits++; return operationId; } }),
+    completionTableProvider: () => undefined, locationResolver: () => resolver
+  });
+  await assert.rejects(
+    client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
+  rejectStore(new Error('late Store failure'));
+  await new Promise(setImmediate);
+  assert.equal(submits, 0);
+});
+
+test('Store abort during actor resolution observes its rejected result', async () => {
+  const controller = new AbortController();
+  const resolver = new framework.ZLinkStoreLocationResolvers({
+    stores: {
+      authorityStore: { readAuthority() {
+        controller.abort();
+        return Promise.reject(new Error('Store cancelled'));
+      } },
+      locationStore: {}, peerStore: {}, spotStore: {}, actorStore: {}, routeStore: {}
+    }, leaseTracker: {}
+  });
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { assert.fail('aborted Store cannot submit'); } }),
+    completionTableProvider: () => undefined, locationResolver: () => resolver
+  });
+  await assert.rejects(client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal), ZLinkAbortError);
+  await new Promise(setImmediate);
+  assert.equal(require('node:events').getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('actor handoff expiry uses the request DeadlineExceeded terminal kind', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  let reply;
+  const captured = new Promise(resolve => { reply = resolve; });
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { assert.fail('captured handoff must not submit'); } }),
+    completionTableProvider: () => undefined,
+    locationResolver: () => createResolver(),
+    handoffCapture: () => captured
+  });
+  const request = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit();
+  const terminal = assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+  try {
+    await new Promise(setImmediate);
+    t.mock.timers.tick(20);
+    await terminal;
+  } finally {
+    reply('late');
+  }
+});
+
+for (const stage of ['route', 'handoff', 'native']) {
+  test(`actor request cancellation ends the ${stage} wait and removes its listener`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+    const { getEventListeners } = require('node:events');
+    const controller = new AbortController();
+    let release;
+    const blocked = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    let submits = 0;
+    let routeSignal;
+    let nativeSignal;
+    const nativeTable = new (require('../../packages/framework/dist/runtime/backend').ZLinkMeshCompletionTable)();
+    const nativeSubmit = nativeTable.submit.bind(nativeTable);
+    nativeTable.submit = (operation, signal) => {
+      nativeSignal = signal;
+      const result = nativeSubmit(operation, signal);
+      started();
+      return result;
+    };
+    const client = createActorClient({
+      nodeProvider: () => ({ requestToActor() { submits++; return operationId; } }),
+      completionTableProvider: () => nativeTable,
+      locationResolver: () => createResolver((_actor, signal) => {
+        routeSignal = signal;
+        if (stage === 'route') { started(); return blocked; }
+        return actorLocation();
+      }),
+      handoffCapture: stage === 'handoff' ? () => { started(); return blocked; } : undefined
+    });
+    const scheduled = t.mock.method(globalThis, 'setTimeout');
+    const clear = t.mock.method(globalThis, 'clearTimeout');
+    const request = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal);
+    const terminal = assert.rejects(request, error => stage === 'native' ? error === controller.signal.reason : error instanceof ZLinkAbortError);
+    await entered;
+    controller.abort();
+    await terminal;
+    assert.equal(routeSignal, controller.signal);
+    if (stage === 'native') assert.equal(nativeSignal, controller.signal);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    assert.deepEqual(
+      clear.mock.calls.map(call => call.arguments[0]),
+      scheduled.mock.calls.map(call => call.result),
+      'every actual wait releases its deadline timer'
+    );
+    if (stage === 'route') {
+      release(actorLocation());
+      await new Promise(setImmediate);
+      assert.equal(submits, 0);
+    } else if (stage === 'native') {
+      nativeTable.complete({ operationId, terminalResult: require('../../packages/framework/dist/runtime/backend/runtime-values').RequestResult.TimedOut, failureErrno: 0, parts: [] });
+      assert.equal(nativeTable.pendingCount, 0);
+    } else release('late');
+    t.mock.timers.tick(20);
+    await new Promise(setImmediate);
+  });
+}
+
+test('actor request without a deadline remains cancellable during handoff', async () => {
+  const controller = new AbortController();
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const client = createActorClient({
+    nodeProvider: () => undefined, completionTableProvider: () => undefined,
+    locationResolver: () => createResolver(),
+    handoffCapture: () => { started(); return blocked; }
+  });
+  const terminal = assert.rejects(client.requestToActor('actor-1', new ActorAsk('ping')).submit(controller.signal), ZLinkAbortError);
+  await entered;
+  controller.abort();
+  await terminal;
+  release('late');
+});
+
+test('actor request clears its sole deadline timer after route failure and success', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const clear = t.mock.method(globalThis, 'clearTimeout');
+  const cause = new Error('route failed');
+  const failed = createActorClient({
+    nodeProvider: () => undefined, completionTableProvider: () => undefined,
+    locationResolver: () => createResolver(() => { throw cause; })
+  });
+  await assert.rejects(failed.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(), error => error === cause);
+  assert.equal(clear.mock.callCount(), 1);
+  const ready = createActorClient({
+    nodeProvider: () => ({ requestToActor() { return operationId; } }),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    locationResolver: () => createResolver()
+  });
+  assert.equal(await ready.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(), 'pong');
+  assert.equal(clear.mock.callCount(), 2);
+  t.mock.timers.tick(20);
+  await new Promise(setImmediate);
+});
+
+
+test('actor native deadline preserves one terminal and releases the lower completion listener', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const { getEventListeners } = require('node:events');
+  const backend = require('../../packages/framework/dist/runtime/backend');
+  const values = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const controller = new AbortController();
+  const table = new backend.ZLinkMeshCompletionTable();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const submit = table.submit.bind(table);
+  table.submit = (operation, signal) => {
+    const result = submit(operation, signal);
+    entered();
+    return result;
+  };
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor() { return operationId; } }),
+    completionTableProvider: () => table,
+    locationResolver: () => createResolver()
+  });
+  const terminal = assert.rejects(client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+  await started;
+  t.mock.timers.tick(20);
+  table.complete({ operationId, terminalResult: values.RequestResult.TimedOut, failureErrno: 0, parts: [] });
+  await terminal;
+  await new Promise(setImmediate);
+  assert.equal(table.pendingCount, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  table.complete({ operationId, terminalResult: values.RequestResult.Ok, failureErrno: 0, parts: [] });
+  assert.equal(table.pendingCount, 0);
+  table.dispose();
 });

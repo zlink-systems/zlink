@@ -272,14 +272,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
                                               const zlink::message_t &payload) override
     {
         _entered.set_value ();
-        co_await zlink::framework::detail::with_task_resume_scheduler (
-          _resume.task (), [this] (std::function<void ()> continuation) {
-              {
-                  std::lock_guard lock (_mutex);
-                  _continuations.push_back (std::move (continuation));
-              }
-              _continuation_ready.notify_one ();
-          });
+        co_await _resume.task ();
         try {
             (void) co_await stream.reply_packet (payload).async ();
             reply_result = zlink::framework::result_t<void>::success ();
@@ -291,57 +284,22 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
 
     void wait_until_suspended () { _entered_future.wait (); }
 
-    void resume ()
-    {
-        _resume.complete (zlink::framework::result_t<void>::success ());
-        std::function<void ()> continuation;
-        {
-            std::unique_lock lock (_mutex);
-            _continuation_ready.wait (lock, [this] { return !_continuations.empty (); });
-            continuation = std::move (_continuations.front ());
-            _continuations.pop_front ();
-        }
-        continuation ();
-    }
+    void resume () { _resume.complete (zlink::framework::result_t<void>::success ()); }
 
     std::optional<zlink::framework::result_t<void>> reply_result;
 
   private:
     std::promise<void> _entered;
     std::future<void> _entered_future;
-    std::mutex _mutex;
-    std::condition_variable _continuation_ready;
-    std::deque<std::function<void ()>> _continuations;
     zlink::framework::task_completion_source_t<void> _resume;
 };
 
 class shutdown_session_control_t final
 {
   public:
-    zlink::framework::task_t<void> wait_for_release ()
-    {
-        return zlink::framework::detail::with_task_resume_scheduler (
-          _resume.task (), [this] (std::function<void ()> continuation) {
-              {
-                  const std::lock_guard lock (_mutex);
-                  _continuations.push_back (std::move (continuation));
-              }
-              _changed.notify_all ();
-          });
-    }
+    zlink::framework::task_t<void> wait_for_release () { return _resume.task (); }
 
-    void release ()
-    {
-        _resume.complete (zlink::framework::result_t<void>::success ());
-        std::function<void ()> continuation;
-        {
-            std::unique_lock lock (_mutex);
-            _changed.wait (lock, [this] { return !_continuations.empty (); });
-            continuation = std::move (_continuations.front ());
-            _continuations.pop_front ();
-        }
-        continuation ();
-    }
+    void release () { _resume.complete (zlink::framework::result_t<void>::success ()); }
 
     void record_connected () { record (_connected, "connected"); }
     void record_packet_entered () { record (_packet_entered, "packet-entered"); }
@@ -397,7 +355,6 @@ class shutdown_session_control_t final
 
     mutable std::mutex _mutex;
     std::condition_variable _changed;
-    std::deque<std::function<void ()>> _continuations;
     std::vector<std::string> _lifecycle;
     zlink::framework::task_completion_source_t<void> _resume;
     std::atomic_size_t _connected{0};
@@ -495,6 +452,11 @@ class oversized_stream_compression_codec_t final
 class transport_error_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
+    static constexpr char async_write_probe_name[] = "async-write-probe";
+    static constexpr std::size_t async_write_probe_size = 8 * 1024 * 1024;
+    static constexpr int async_write_receive_buffer_size = 4096;
+    std::promise<void> async_write_submitted;
+
     zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
     {
         {
@@ -534,6 +496,15 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
                const zlink::message_t &payload) override
     {
         record (_packets);
+        if (dispatch.packet_name == async_write_probe_name) {
+            auto writing =
+              stream
+                .reply_packet (zlink::message_t::from (std::string (async_write_probe_size, 'x')))
+                .async ();
+            async_write_submitted.set_value ();
+            co_await std::move (writing);
+            co_return;
+        }
         if (dispatch.can_reply) {
             (void) co_await stream.reply_packet (payload).async ();
         }
@@ -608,6 +579,42 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
     std::string _last_remote;
     zlink::framework::stream_session_error_t _last_error =
       zlink::framework::stream_session_error_t::internal;
+};
+
+class permit_wait_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
+    {
+        connected.set_value ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        disconnected.set_value ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        ++errors;
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        ++packets;
+        co_return;
+    }
+
+    std::promise<void> connected;
+    std::promise<void> disconnected;
+    std::atomic_int packets{0};
+    std::atomic_int errors{0};
 };
 
 class rejected_connected_session_t final : public zlink::framework::packet_stream_session_t
@@ -1025,14 +1032,14 @@ int main ()
 
     zlink::framework::detail::stream_header_t reserved (
       stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none, std::nullopt,
-      "__zlink.internal");
+      "$zlink.internal");
     if (runtime.validate_header (reserved)) {
         return 5;
     }
 
     zlink::framework::detail::stream_header_t valid_control (
       stream_message_kind_t::control, stream_codec_t::raw, stream_header_flags_t::none,
-      std::nullopt, "__zlink.ping");
+      std::nullopt, "$zlink.ping");
     if (!runtime.validate_header (valid_control)) {
         return 6;
     }
@@ -1947,6 +1954,8 @@ int main ()
         [&transport_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return transport_session; }}},
       std::chrono::milliseconds{30'000}, nullptr, {}, transport_listeners);
+    auto transport_drain = std::make_shared<std::atomic_bool> (false);
+    transport_host.bind_drain_flag (transport_drain);
     transport_host.start (transport_provider);
     const auto transport_endpoint = listener_endpoint (
       *transport_listeners, zlink::framework::listener_kind_t::stream, "transport-stream");
@@ -2175,7 +2184,118 @@ int main ()
         return 329;
     }
 
+    // The peer deliberately does not read a reply larger than the socket
+    // buffers. async() must return a pending task before transport completion;
+    // otherwise the application worker becomes a second connection io pump.
+    auto async_write_client = connect_loopback (transport_port);
+    if (!async_write_client) {
+        transport_host.stop ();
+        return 330;
+    }
+    async_write_client->socket.set_option (boost::asio::socket_base::receive_buffer_size (
+      transport_error_session_t::async_write_receive_buffer_size));
+    auto async_write_submitted = transport_session.async_write_submitted.get_future ();
+    const zlink::framework::detail::stream_header_t async_write_header (
+      stream_message_kind_t::request, stream_codec_t::raw,
+      zlink::framework::detail::stream_header_flags_t::has_request_seq, 1,
+      transport_error_session_t::async_write_probe_name);
+    send_native_bytes (async_write_client,
+                       make_native_stream_frame (transport_runtime, async_write_header,
+                                                 zlink::message_t::from ("probe")));
+    const bool submission_returned =
+      async_write_submitted.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    close_native_client (async_write_client);
+    if (!submission_returned || !transport_session.wait_disconnected (8)) {
+        transport_host.stop ();
+        return 331;
+    }
+
+    transport_drain->store (true, std::memory_order_release);
+    auto draining_client = connect_loopback (transport_port);
+    const auto draining_bytes = read_until_peer_close (draining_client, std::chrono::seconds (5));
+    const zlink::framework::detail::stream_header_t draining_header (
+      stream_message_kind_t::control, stream_codec_t::raw, stream_header_flags_t::none,
+      std::nullopt, "session-closing", {});
+    const auto draining_payload =
+      zlink::framework::detail::stream_runtime_t::encode_session_closing_payload (
+        zlink::framework::stream_close_reason_t::server_drain, "node is draining");
+    const auto expected_draining_bytes =
+      transport_runtime.encode_frame (draining_header, zlink::message_t::from (draining_payload));
+    close_native_client (draining_client);
+    if (!draining_bytes || !expected_draining_bytes
+        || *draining_bytes != expected_draining_bytes.value ()) {
+        transport_host.stop ();
+        return 332;
+    }
+
     transport_host.stop ();
+
+    // Permit 대기를 확정한 뒤 종료합니다. 시간 임계값 대신 completion을
+    // 관찰하며, io가 깨지 않는 결함은 CTest의 deadlock 제한이 검출합니다.
+    enum class permit_wait_end_t
+    {
+        host_stop,
+        source_close
+    };
+    constexpr auto permit_stream_name = "permit-wait-stream";
+    constexpr auto permit_session_name = "permit-wait-session";
+    for (const auto end : {permit_wait_end_t::host_stop, permit_wait_end_t::source_close}) {
+        zlink::framework::zlink_builder_t permit_zlink;
+        zlink::framework::zlink_framework_options_t permit_options (
+          transport_services, transport_handlers, transport_serializers, permit_zlink);
+        permit_options.add_stream_node (permit_stream_name)
+          .bind (loopback_tcp_any_port)
+          .register_session (permit_session_name);
+        permit_options.apply ();
+        zlink::framework::detail::apply_dispatch_options (permit_zlink, transport_dispatch_options);
+        auto permit_runtime = zlink::framework::detail::stream_runtime_t::from (permit_zlink);
+        auto application_jobs =
+          std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+            zlink::framework::runtime::application_job_queue_configuration_t{});
+        auto held_permit = application_jobs->try_reserve_supply ();
+        if (!held_permit)
+            return 333;
+        permit_wait_session_t permit_session;
+        auto connected = permit_session.connected.get_future ();
+        auto disconnected = permit_session.disconnected.get_future ();
+        auto permit_listeners =
+          std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
+        zlink::framework::runtime::stream_host_service_t permit_host (
+          permit_runtime, permit_runtime.snapshots (),
+          {{permit_session_name,
+            [&permit_session] (zlink::framework::service_provider_t &)
+              -> zlink::framework::packet_stream_session_t & { return permit_session; }}},
+          permit_options.session_replacement_callback_timeout (), nullptr, {}, permit_listeners,
+          application_jobs);
+        permit_host.start (transport_provider);
+        const auto permit_port = endpoint_port (listener_endpoint (
+          *permit_listeners, zlink::framework::listener_kind_t::stream, permit_stream_name));
+        auto permit_client = connect_loopback (permit_port);
+        if (!permit_client) {
+            permit_host.stop ();
+            return 334;
+        }
+        connected.wait ();
+        const zlink::framework::detail::stream_header_t permit_header (
+          stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none,
+          std::nullopt, "permit-wait", {});
+        send_native_bytes (permit_client,
+                           make_native_stream_frame (permit_runtime, permit_header,
+                                                     zlink::message_t::from ("pending")));
+        while (application_jobs->snapshot ().capacity_waiters != 1)
+            std::this_thread::yield ();
+        if (end == permit_wait_end_t::source_close) {
+            permit_host.force_close_sessions (zlink::framework::stream_close_reason_t::server_drain,
+                                              "permit wait close");
+            disconnected.wait ();
+        }
+        permit_host.stop ();
+        disconnected.wait ();
+        close_native_client (permit_client);
+        if (permit_session.packets.load () != 0 || permit_session.errors.load () != 0
+            || application_jobs->snapshot ().capacity_waiters != 0)
+            return 335;
+    }
 
     zlink::framework::zlink_builder_t limited_zlink;
     zlink::framework::zlink_framework_options_t limited_options (

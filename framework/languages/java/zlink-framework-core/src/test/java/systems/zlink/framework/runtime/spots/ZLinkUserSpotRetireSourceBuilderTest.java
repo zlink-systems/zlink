@@ -15,6 +15,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -30,6 +31,7 @@ import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome;
 
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -42,7 +44,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkUserSpotRetireSourceBuilderTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
@@ -216,7 +222,17 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
+    void confirmedTargetCommitReportsCleanupFailuresOnceWithoutChangingSettlement()
+            throws Exception {
+        exercisePreparedSource(true);
+    }
+
+    @Test
     void capturesLiveSpotAndPreparesVerifiedImmutableRootBeforeSourceCommit() throws Exception {
+        exercisePreparedSource(false);
+    }
+
+    private void exercisePreparedSource(boolean failingPostCommitCleanup) throws Exception {
         SnapshotAdapter.captured.set(null);
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         ZLinkLocationRepository repository = new ZLinkProviderLocationRepository(locations);
@@ -276,13 +292,114 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             new ZLinkRelocationAdapterRegistry(
                                     registration, ZLinkHandlerActivator.reflection()),
                             nodeRegistration.relocatableSpotFactories(),
-                            nodeRegistration.relocatableActorFactories());
+                            nodeRegistration.relocatableActorFactories(),
+                            runtime);
 
             ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
                     builder.prepare(SPOT_ID, rollingToVersionOne(), NEVER)
                             .toCompletableFuture()
                             .get();
 
+            if (failingPostCommitCleanup) {
+                var reports = new AtomicInteger();
+                var cleanupAttempts = new AtomicInteger();
+                var completed = new AtomicInteger();
+                var aborts = new AtomicInteger();
+                var diagnosticFailure = new AtomicReference<Throwable>();
+                var settlement =
+                        new CompletableFuture<ZLinkRelocationTransitionClient.Settlement>();
+                var logger = Logger.getLogger(ZLinkRelocationHandOff.class.getName());
+                var diagnostics =
+                        new Handler() {
+                            @Override
+                            public void publish(LogRecord record) {
+                                if (record.getMessage()
+                                        .startsWith("Relocation source cleanup failed:")) {
+                                    reports.incrementAndGet();
+                                    diagnosticFailure.set(record.getThrown());
+                                }
+                            }
+
+                            @Override
+                            public void flush() {}
+
+                            @Override
+                            public void close() {}
+                        };
+                ZLinkRelocationTransitionClient client =
+                        (ZLinkRelocationTransitionClient)
+                                Proxy.newProxyInstance(
+                                        ZLinkRelocationTransitionClient.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkRelocationTransitionClient.class},
+                                        (proxy, method, arguments) -> {
+                                            if (method.getName().equals("settle"))
+                                                return settlement;
+                                            if (method.getName().equals("publish"))
+                                                settlement.complete(
+                                                        ZLinkRelocationTransitionClient.Settlement
+                                                                .TARGET_COMMITTED);
+                                            if (method.getName().equals("abort"))
+                                                aborts.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        });
+                logger.addHandler(diagnostics);
+                try {
+                    var request =
+                            new ZLinkUserSpotRetireScheduler.RemoteRequest(
+                                    prepared,
+                                    client,
+                                    Duration.ofSeconds(1),
+                                    Instant.now().plusSeconds(5),
+                                    () -> {
+                                        cleanupAttempts.incrementAndGet();
+                                        return ZLinkHandlerStages.completeAll(
+                                                List.of(
+                                                        () ->
+                                                                CompletableFuture.failedFuture(
+                                                                        new IllegalStateException(
+                                                                                "first committed cleanup failure")),
+                                                        () ->
+                                                                CompletableFuture.failedFuture(
+                                                                        new IllegalStateException(
+                                                                                "second committed cleanup failure")),
+                                                        () ->
+                                                                prepared.cleanupLocal(
+                                                                                Instant.now()
+                                                                                        .plusSeconds(
+                                                                                                5))
+                                                                        .thenRun(
+                                                                                completed
+                                                                                        ::incrementAndGet)));
+                                    });
+                    assertDoesNotThrow(
+                            () ->
+                                    new ZLinkUserSpotRetireScheduler()
+                                            .executeRemote(request, NEVER)
+                                            .toCompletableFuture()
+                                            .join());
+                    assertEquals(1, reports.get());
+                    assertEquals(1, cleanupAttempts.get());
+                    assertEquals(1, completed.get());
+                    assertNull(
+                            runtime.spotFor(SPOT_ID),
+                            "source Spot registry must retire after earlier cleanup failures");
+                    assertEquals(
+                            0,
+                            aborts.get(),
+                            "confirmed target commit must not abort after source cleanup failure");
+                    assertEquals(
+                            "first committed cleanup failure",
+                            diagnosticFailure.get().getMessage());
+                    assertEquals(1, diagnosticFailure.get().getSuppressed().length);
+                    assertThrows(
+                            CompletionException.class,
+                            () -> prepared.discardInitialAfterCommit().toCompletableFuture().join(),
+                            "discardInitialAfterCommit must already have run after cleanup failure");
+                } finally {
+                    logger.removeHandler(diagnostics);
+                }
+                return;
+            }
             assertSame(LiveSpot.last.get(), SnapshotAdapter.captured.get());
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
             var envelope =

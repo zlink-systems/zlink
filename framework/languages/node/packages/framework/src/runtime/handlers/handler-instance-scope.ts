@@ -1,7 +1,7 @@
 import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import type { Type, ZLinkMessageContext } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkStateLane } from '../execution/state-lane';
+import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
 
 export interface ZLinkHandlerInstanceScope {
   resolve<T>(type: Type<T>): Promise<T>;
@@ -22,16 +22,6 @@ interface Deferred<T> {
   readonly reject: (error: unknown) => void;
 }
 
-interface HandlerResolution<T> {
-  readonly promise: Promise<T>;
-  readonly activation?: Deferred<unknown>;
-}
-
-interface HandlerScopeDisposal {
-  readonly pending: readonly Promise<unknown>[];
-  readonly owned: readonly unknown[];
-}
-
 interface LifecycleScopeDisposal {
   readonly completion: Promise<void>;
   readonly deferred?: Deferred<void>;
@@ -41,9 +31,9 @@ interface LifecycleScopeDisposal {
 const HANDLER_SCOPE_FACTORY = Symbol.for('@zlink-systems/framework.handler-instance-scope-factory');
 const activeHandlerScope = new AsyncLocalStorage<ActiveHandlerScope>();
 const activeLifecycleScope = new AsyncLocalStorage<LifecycleHandlerInstanceScope>();
-const detachedStateLaneResource = new AsyncResource('zlink:handler-instance-scope');
+const detachedLifecycleResource = new AsyncResource('zlink:handler-instance-scope');
 const dispatchScopes = new WeakMap<object, ZLinkHandlerInstanceScope>();
-const lifecycleScopes = new WeakMap<object, Promise<LifecycleHandlerInstanceScope>>();
+const lifecycleScopes = new WeakMap<object, LifecycleHandlerInstanceScope>();
 
 export async function runInHandlerInstanceScope<T>(
   providerResolver: ZLinkProviderResolver | undefined,
@@ -80,14 +70,7 @@ export async function resolveLifecycleHandler<T>(
   type: Type<T>,
   providerResolver?: ZLinkProviderResolver
 ): Promise<T> {
-  let scope = lifecycleScopes.get(owner);
-  if (scope === undefined) {
-    scope = Promise.resolve(
-      new LifecycleHandlerInstanceScope(createHandlerInstanceScope(providerResolver))
-    );
-    lifecycleScopes.set(owner, scope);
-  }
-  return (await scope).resolve(type);
+  return lifecycleHandlerScope(owner, providerResolver).resolve(type);
 }
 
 export async function runWithLifecycleHandler<THandler, TResult>(
@@ -96,25 +79,34 @@ export async function runWithLifecycleHandler<THandler, TResult>(
   providerResolver: ZLinkProviderResolver | undefined,
   callback: (handler: THandler) => Promise<TResult>
 ): Promise<TResult> {
-  let scope = lifecycleScopes.get(owner);
-  if (scope === undefined) {
-    scope = Promise.resolve(
-      new LifecycleHandlerInstanceScope(createHandlerInstanceScope(providerResolver))
-    );
-    lifecycleScopes.set(owner, scope);
-  }
-  return (await scope).run(type, callback);
+  return lifecycleHandlerScope(owner, providerResolver).run(type, callback);
 }
 
-export async function disposeLifecycleHandlers(owner: object): Promise<void> {
+function lifecycleHandlerScope(
+  owner: object,
+  providerResolver?: ZLinkProviderResolver
+): LifecycleHandlerInstanceScope {
+  let scope = lifecycleScopes.get(owner);
+  if (scope === undefined) {
+    scope = new LifecycleHandlerInstanceScope(createHandlerInstanceScope(providerResolver));
+    lifecycleScopes.set(owner, scope);
+  }
+  return scope;
+}
+
+export async function disposeLifecycleHandlers(
+  owner: object,
+  detachedTaskRunner: ZLinkDetachedTaskRunner
+): Promise<void> {
+  if ((detachedTaskRunner as unknown) === undefined) {
+    throw new Error('Lifecycle handler disposal requires a detached task runner.');
+  }
   const scope = lifecycleScopes.get(owner);
   if (scope === undefined) return;
-  const resolved = await scope;
-  await resolved.dispose();
+  await scope.dispose(detachedTaskRunner);
   // Keep the closed scope as a tombstone for the lifetime of the owner object.
   // A late dispatch must fail instead of creating a second activation.
 }
-
 function createHandlerInstanceScope(
   providerResolver?: ZLinkProviderResolver,
   context?: ZLinkMessageContext
@@ -138,72 +130,47 @@ function isHandlerInstanceScopeFactory(value: unknown): value is ZLinkHandlerIns
 }
 
 class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
-  private readonly lane = new ZLinkStateLane();
   private readonly instances = new Map<Type, Promise<unknown>>();
   private readonly owned: unknown[] = [];
   private disposed = false;
 
   constructor(private readonly providerResolver?: ZLinkProviderResolver) {}
 
-  async resolve<T>(type: Type<T>): Promise<T> {
-    const resolution = await this.lane.run(() => this.resolveCore(type));
-    if (resolution.activation !== undefined) {
-      startOutsideStateLane(() => {
-        void this.activate(type, resolution.activation!);
-      });
+  resolve<T>(type: Type<T>): Promise<T> {
+    if (this.disposed) {
+      return Promise.reject(new Error('Handler instance scope is already disposed.'));
     }
-    return await resolution.promise;
+    const existing = this.instances.get(type) as Promise<T> | undefined;
+    if (existing !== undefined) return existing;
+    const activation = createDeferred<unknown>();
+    this.instances.set(type, activation.promise);
+    void this.activate(type, activation);
+    return activation.promise as Promise<T>;
   }
 
   async dispose(): Promise<void> {
-    const disposal = await this.lane.run(() => this.beginDisposeCore());
-    if (disposal === undefined) return;
-
-    await Promise.allSettled(disposal.pending);
-    for (const instance of disposal.owned) {
-      await disposeOwnedInstance(instance);
-    }
-    await this.lane.run(() => this.completeDisposeCore());
-  }
-
-  private resolveCore<T>(type: Type<T>): HandlerResolution<T> {
-    if (this.disposed) {
-      throw new Error('Handler instance scope is already disposed.');
-    }
-    let instance = this.instances.get(type) as Promise<T> | undefined;
-    if (instance !== undefined) return { promise: instance };
-
-    const activation = createDeferred<unknown>();
-    instance = activation.promise as Promise<T>;
-    this.instances.set(type, activation.promise);
-    return { promise: instance, activation };
-  }
-
-  private beginDisposeCore(): HandlerScopeDisposal | undefined {
-    if (this.disposed) return undefined;
+    if (this.disposed) return;
     this.disposed = true;
-    return {
-      pending: [...this.instances.values()],
-      owned: [...this.owned].reverse()
-    };
+    await Promise.allSettled(this.instances.values());
+    try {
+      await disposeOwnedInstances(this.owned);
+    } finally {
+      this.owned.length = 0;
+      this.instances.clear();
+    }
   }
-
-  private completeDisposeCore(): void {
-    this.owned.length = 0;
-    this.instances.clear();
-  }
-
   private async activate<T>(type: Type<T>, activation: Deferred<unknown>): Promise<void> {
     let instance: T;
     try {
-      instance = (await this.providerResolver?.create?.(type)) ?? new type();
+      const created = this.providerResolver?.create?.(type);
+      instance = created === undefined ? new type() : await created;
     } catch (error) {
       activation.reject(error);
       return;
     }
 
-    const accepted = await this.lane.run(() => this.acceptActivationCore(instance));
-    if (accepted) {
+    if (!this.disposed) {
+      this.owned.push(instance);
       activation.resolve(instance);
       return;
     }
@@ -214,16 +181,9 @@ class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
       activation.reject(error);
     }
   }
-
-  private acceptActivationCore(instance: unknown): boolean {
-    if (this.disposed) return false;
-    this.owned.push(instance);
-    return true;
-  }
 }
 
 class LifecycleHandlerInstanceScope {
-  private readonly lane = new ZLinkStateLane();
   private activeInvocations = 0;
   private closing = false;
   private idle?: Promise<void>;
@@ -232,12 +192,7 @@ class LifecycleHandlerInstanceScope {
 
   constructor(private readonly instances: ZLinkHandlerInstanceScope) {}
 
-  async resolve<T>(type: Type<T>): Promise<T> {
-    const resolution = await this.lane.run(() => ({ promise: this.resolveCore(type) }));
-    return await resolution.promise;
-  }
-
-  private resolveCore<T>(type: Type<T>): Promise<T> {
+  resolve<T>(type: Type<T>): Promise<T> {
     this.throwIfClosingCore();
     return this.instances.resolve(type);
   }
@@ -246,29 +201,34 @@ class LifecycleHandlerInstanceScope {
     type: Type<THandler>,
     callback: (handler: THandler) => Promise<TResult>
   ): Promise<TResult> {
-    await this.lane.run(() => this.beginInvocationCore());
+    this.beginInvocationCore();
     try {
       return await activeLifecycleScope.run(this, async () =>
         callback(await this.instances.resolve(type))
       );
     } finally {
-      await this.lane.run(() => this.completeInvocationCore());
+      this.completeInvocationCore();
     }
   }
 
-  async dispose(): Promise<void> {
+  async dispose(detachedTaskRunner: ZLinkDetachedTaskRunner): Promise<void> {
     const disposeFromActiveInvocation = activeLifecycleScope.getStore() === this;
-    const disposal = await this.lane.run(() => this.beginDisposeCore());
+    const disposal = this.beginDisposeCore();
     if (disposal.deferred !== undefined) {
-      startOutsideStateLane(() => {
+      startOutsideLifecycleInvocation(() => {
         void this.disposeWhenIdle(disposal);
+        if (disposeFromActiveInvocation) {
+          detachedTaskRunner.runDetached(
+            LifecycleHandlerInstanceScope.name,
+            () => disposal.completion
+          );
+        }
       });
     }
     if (disposeFromActiveInvocation) {
       // Waiting here would make the current handler wait for its own terminal
       // completion. The same disposal promise continues after run() releases
       // the final active invocation.
-      void disposal.completion.catch(() => undefined);
       return;
     }
     await disposal.completion;
@@ -318,7 +278,7 @@ class LifecycleHandlerInstanceScope {
       await this.instances.dispose();
       deferred.resolve();
     } catch (error) {
-      await this.lane.run(() => this.failDisposalCore(deferred.promise));
+      this.failDisposalCore(deferred.promise);
       deferred.reject(error);
     }
   }
@@ -340,8 +300,8 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
+function startOutsideLifecycleInvocation<T>(work: () => T): T {
+  return detachedLifecycleResource.runInAsyncScope(work);
 }
 
 export async function disposeOwnedInstance(instance: unknown): Promise<void> {
@@ -358,4 +318,17 @@ export async function disposeOwnedInstance(instance: unknown): Promise<void> {
   } else if (typeof value.onModuleDestroy === 'function') {
     await value.onModuleDestroy();
   }
+}
+
+export async function disposeOwnedInstances(instances: readonly unknown[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (let index = instances.length - 1; index >= 0; index -= 1) {
+    try {
+      await disposeOwnedInstance(instances[index]);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'Handler scope cleanup failed.');
 }

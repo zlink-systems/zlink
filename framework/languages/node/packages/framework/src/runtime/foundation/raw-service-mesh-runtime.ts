@@ -99,6 +99,7 @@ export type RawServiceIngressHandler = (
 ) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
+  readonly onPendingOperationsChanged?: () => void;
   readonly descriptor: ServiceNodeDescriptor;
   readonly resolveAdvertisedEndpoint?: (boundEndpoint: string) => string;
   readonly probeIntervalMs?: number;
@@ -126,7 +127,7 @@ export interface RawServiceMeshRuntimeOptions {
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const RAW_MESH_RECEIVE_RECORD_BUDGET = 64;
 const RAW_MESH_RECEIVE_BYTE_BUDGET = 4 * 1024 * 1024;
-const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
+export const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
 
 const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = ServiceWireFrameworkErrorCode.requestTargetNotFound;
 
@@ -145,7 +146,7 @@ export class RawServiceMeshRuntime {
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;
 
-  private readonly operations = new OperationRegistry<RawServiceRequestResult>();
+  private readonly operations: OperationRegistry<RawServiceRequestResult>;
   private readonly expectedPeers = new Map<
     string,
     {
@@ -154,6 +155,7 @@ export class RawServiceMeshRuntime {
       readonly endpoint?: string;
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
+      helloSubmittedGeneration?: bigint;
     }
   >();
   private readonly endpointOnlyPeers = new Set<string>();
@@ -180,6 +182,7 @@ export class RawServiceMeshRuntime {
   private closed = false;
 
   constructor(options: RawServiceMeshRuntimeOptions) {
+    this.operations = new OperationRegistry(undefined, options.onPendingOperationsChanged);
     this.descriptor = options.descriptor;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
     this.mailbox = new ServiceMailbox(options.onMailboxReady);
@@ -234,13 +237,16 @@ export class RawServiceMeshRuntime {
 
   connectPeer(endpoint: string, expected: ServiceNodeDescriptor): void {
     this.requireStarted().connectToRoutingId(expected.nodeRoutingId, endpoint);
-    this.expectedPeers.set(expected.nodeRoutingId, {
-      meshName: expected.meshName,
-      nodeRoutingId: expected.nodeRoutingId,
-      endpoint,
-      securityIdentity: expected.securityIdentity,
-      lifecycleGeneration: expected.lifecycleGeneration
-    });
+    this.expectedPeers.set(
+      expected.nodeRoutingId,
+      Object.assign(this.expectedPeers.get(expected.nodeRoutingId) ?? {}, {
+        meshName: expected.meshName,
+        nodeRoutingId: expected.nodeRoutingId,
+        endpoint,
+        securityIdentity: expected.securityIdentity,
+        lifecycleGeneration: expected.lifecycleGeneration
+      })
+    );
   }
 
   connectPeerByRoutingId(
@@ -250,13 +256,16 @@ export class RawServiceMeshRuntime {
     lifecycleGeneration?: bigint
   ): void {
     this.requireStarted().connectToRoutingId(nodeRoutingId, endpoint);
-    this.expectedPeers.set(nodeRoutingId, {
-      meshName: this.topology.localDescriptor().meshName,
+    this.expectedPeers.set(
       nodeRoutingId,
-      endpoint,
-      securityIdentity,
-      lifecycleGeneration
-    });
+      Object.assign(this.expectedPeers.get(nodeRoutingId) ?? {}, {
+        meshName: this.topology.localDescriptor().meshName,
+        nodeRoutingId,
+        endpoint,
+        securityIdentity,
+        lifecycleGeneration
+      })
+    );
   }
 
   expectPeerByRoutingId(
@@ -265,13 +274,16 @@ export class RawServiceMeshRuntime {
     securityIdentity?: string,
     lifecycleGeneration?: bigint
   ): void {
-    this.expectedPeers.set(nodeRoutingId, {
-      meshName: this.topology.localDescriptor().meshName,
+    this.expectedPeers.set(
       nodeRoutingId,
-      endpoint,
-      securityIdentity,
-      lifecycleGeneration
-    });
+      Object.assign(this.expectedPeers.get(nodeRoutingId) ?? {}, {
+        meshName: this.topology.localDescriptor().meshName,
+        nodeRoutingId,
+        endpoint,
+        securityIdentity,
+        lifecycleGeneration
+      })
+    );
   }
 
   connectPeerEndpoint(endpoint: string): void {
@@ -359,11 +371,25 @@ export class RawServiceMeshRuntime {
   }
 
   async announcePeer(nodeRoutingId: string): Promise<boolean> {
-    if (!this.expectedPeers.has(nodeRoutingId) || this.peerAdmissionSealed?.() === true)
+    const expected = this.expectedPeers.get(nodeRoutingId);
+    const generation = this.selectedRoutes.get(nodeRoutingId);
+    if (
+      expected === undefined ||
+      generation === undefined ||
+      expected.helloSubmittedGeneration === generation ||
+      this.peerAdmissionSealed?.() === true
+    )
       return false;
-    return this.send(nodeRoutingId, [
+    const accepted = await this.send(nodeRoutingId, [
       encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
     ]);
+    if (
+      accepted &&
+      this.expectedPeers.get(nodeRoutingId) === expected &&
+      this.selectedRoutes.get(nodeRoutingId) === generation
+    )
+      expected.helloSubmittedGeneration = generation;
+    return accepted;
   }
 
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
@@ -381,11 +407,6 @@ export class RawServiceMeshRuntime {
   async announceExpectedPeers(): Promise<number> {
     let accepted = 0;
     for (const nodeRoutingId of this.expectedPeers.keys()) {
-      // Admission is a one-time fence for the current selected route.
-      // Re-sending Hello after the peer is admitted would re-run admission on
-      // every poll and reset the liveness record before application traffic
-      // can use the route. A peer whose selected route ended is removed by the
-      // route observer and remains eligible for the next admission attempt.
       if (this.topology.peer(nodeRoutingId) !== undefined) continue;
       if (await this.announcePeer(nodeRoutingId)) accepted++;
     }
@@ -429,7 +450,6 @@ export class RawServiceMeshRuntime {
     for (const peer of this.topology.peers()) {
       await this.send(peer.descriptor.nodeRoutingId, [update]);
     }
-    await this.announceExpectedPeers();
   }
 
   replaceDiscoveredNotRequired(descriptors: readonly ServiceNodeDescriptor[]): void {
@@ -945,6 +965,14 @@ export class RawServiceMeshRuntime {
     }
   }
 
+  expireOperations(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
+  get pendingOperationCount(): number {
+    return this.operations.size;
+  }
+
   async tickLiveness(nowMs = performance.now()): Promise<ServiceLivenessTick> {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
@@ -982,6 +1010,8 @@ export class RawServiceMeshRuntime {
     for (const [nodeRoutingId, generation] of this.selectedRoutes) {
       if (observed.get(nodeRoutingId) === generation) continue;
       changes++;
+      const expected = this.expectedPeers.get(nodeRoutingId);
+      if (expected !== undefined) delete expected.helloSubmittedGeneration;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer !== undefined && peer.connectionId === routeConnectionId(generation)) {
         this.removePeer(peer);

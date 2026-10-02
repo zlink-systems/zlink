@@ -15,6 +15,72 @@ using Xunit;
 public sealed partial class StreamConnectorTests
 {
     [Fact]
+    public async Task UnicodeWhiteSpacePacketNamesMatchCommonFixture()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (
+            directory is not null
+            && !File.Exists(
+                Path.Combine(
+                    directory.FullName,
+                    "framework/test/fixtures/stream-packet-name-whitespace.tsv"
+                )
+            )
+        )
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var fixture = Path.Combine(
+            directory!.FullName,
+            "framework/test/fixtures/stream-packet-name-whitespace.tsv"
+        );
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+        );
+        var rows = File.ReadLines(fixture)
+            .Where(row => row.Length != 0 && !row.StartsWith('#'))
+            .ToArray();
+        Assert.NotEmpty(rows);
+        foreach (var row in rows)
+        {
+            var fields = row.Split('\t');
+            Assert.Equal(2, fields.Length);
+            Assert.Matches(@"^(?:EMPTY|[0-9A-F]{4,6}(?:,[0-9A-F]{4,6})*)$", fields[0]);
+            Assert.Contains(fields[1], new[] { "true", "false" });
+            var name =
+                fields[0] == "EMPTY"
+                    ? ""
+                    : string.Concat(
+                        fields[0]
+                            .Split(',')
+                            .Select(point => char.ConvertFromUtf32(Convert.ToInt32(point, 16)))
+                    );
+            if (fields[1] == "true")
+            {
+                var failure = Assert.Throws<ZlinkStreamException>(() =>
+                    connector.On(name, (_, _) => ValueTask.CompletedTask)
+                );
+                Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, failure.Error.Code);
+            }
+            else
+                connector.On(name, (_, _) => ValueTask.CompletedTask).Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task AssertionHelpersPropagateUncodedTimeoutFailure()
+    {
+        var failure = new TimeoutException("request timed out");
+        var actualFailure = await Assert.ThrowsAsync<TimeoutException>(() =>
+            ZlinkStreamAssert.ExpectFailureAsync(_ => ValueTask.FromException(failure)).AsTask()
+        );
+        Assert.Same(failure, actualFailure);
+        var actualTimeout = await Assert.ThrowsAsync<TimeoutException>(() =>
+            ZlinkStreamAssert.ExpectTimeoutAsync(_ => ValueTask.FromException(failure)).AsTask()
+        );
+        Assert.Same(failure, actualTimeout);
+    }
+
+    [Fact]
     public async Task DisposingAConnectionEventRegistrationStopsTheHandler()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

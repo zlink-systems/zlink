@@ -11,8 +11,11 @@ import type {
 } from '../../contracts';
 import {
   ZLINK_PROVIDER_MAX_KEY_BYTES,
+  ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES,
   ZLINK_PROVIDER_MAX_PAGE_SIZE,
+  ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES,
   ZLINK_PROVIDER_MAX_VALUE_BYTES,
+  ZLINK_PROVIDER_MAX_VERSION_BYTES,
   ZLINK_PROVIDER_MAX_WRITE_BYTES,
   ZLINK_PROVIDER_MAX_WRITE_KEYS
 } from '../../contracts/Locations/Stores';
@@ -85,7 +88,8 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
         this.values.delete(mutation.key.value);
         continue;
       }
-      const retentionMs = requireValue(mutation.bytes, mutation.retentionMs);
+      const retentionMs =
+        mutation.retentionMs === undefined ? undefined : Math.ceil(mutation.retentionMs);
       const version = storeVersion((++this.nextVersion).toString());
       const expiresAt =
         retentionMs === undefined ? undefined : new Date(storeNow.getTime() + retentionMs);
@@ -118,13 +122,26 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
       };
       this.scans.set(snapshotId, snapshot);
     } else {
-      [snapshotId, offset] = parseCursor(request.cursor);
+      const cursor = parseCursor(request.cursor);
+      snapshotId = cursor?.[0] ?? '';
+      offset = cursor?.[1] ?? 0;
       snapshot = this.scans.get(snapshotId);
-      if (snapshot === undefined) return { kind: 'expired' };
+      if (snapshot === undefined || offset > snapshot.items.length) return { kind: 'expired' };
     }
 
-    const selected = snapshot.items.slice(offset, offset + request.limit);
-    const nextOffset = offset + selected.length;
+    let nextOffset = offset;
+    let encodedBytes = 0;
+    while (nextOffset < snapshot.items.length && nextOffset - offset < request.limit) {
+      const item = snapshot.items[nextOffset];
+      const itemBytes =
+        Buffer.byteLength(item.key.value, 'utf8') +
+        Buffer.byteLength(item.value.version.value, 'utf8') +
+        item.value.bytes.byteLength;
+      if (encodedBytes + itemBytes > ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES) break;
+      encodedBytes += itemBytes;
+      nextOffset += 1;
+    }
+    const selected = snapshot.items.slice(offset, nextOffset);
     const nextCursor =
       nextOffset < snapshot.items.length ? scanCursor(`${snapshotId}:${nextOffset}`) : undefined;
     if (nextCursor === undefined) this.scans.delete(snapshotId);
@@ -168,12 +185,13 @@ function scanCursor(value: string): ZLinkStoreScanCursor {
   return { value } as ZLinkStoreScanCursor;
 }
 
-function parseCursor(cursor: ZLinkStoreScanCursor): [string, number] {
+function parseCursor(cursor: ZLinkStoreScanCursor): [string, number] | undefined {
   const separator = cursor.value.indexOf(':');
   const snapshotId = cursor.value.slice(0, separator);
-  const offset = Number(cursor.value.slice(separator + 1));
-  if (separator < 1 || !Number.isSafeInteger(offset) || offset < 0) {
-    throw new RangeError('Location Store scan cursor is invalid.');
+  const encodedOffset = cursor.value.slice(separator + 1);
+  const offset = Number(encodedOffset);
+  if (separator < 1 || !/^(0|[1-9][0-9]*)$/.test(encodedOffset) || !Number.isSafeInteger(offset)) {
+    return undefined;
   }
   return [snapshotId, offset];
 }
@@ -194,14 +212,26 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
   for (const key of keys) requireKey(key);
   const encodedSize =
     request.conditions.reduce((sum, condition) => {
-      if (condition.kind !== 'value') return sum;
-      requireValue(condition.expected, undefined);
-      return sum + condition.expected.byteLength;
+      const keyBytes = Buffer.byteLength(condition.key.value, 'utf8');
+      if (condition.kind === 'missing') return sum + keyBytes;
+      if (condition.kind === 'value') {
+        requireValue(condition.expected, undefined);
+        return sum + keyBytes + condition.expected.byteLength;
+      }
+      const versionBytes = Buffer.byteLength(condition.expected.value, 'utf8');
+      if (versionBytes < 1 || versionBytes > ZLINK_PROVIDER_MAX_VERSION_BYTES) {
+        throw new RangeError(
+          `Location Store version must contain 1..${ZLINK_PROVIDER_MAX_VERSION_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+        );
+      }
+      return sum + keyBytes + versionBytes;
     }, 0) +
-    request.mutations.reduce(
-      (sum, mutation) => sum + (mutation.kind === 'put' ? mutation.bytes.byteLength : 0),
-      0
-    );
+    request.mutations.reduce((sum, mutation) => {
+      const keyBytes = Buffer.byteLength(mutation.key.value, 'utf8');
+      if (mutation.kind !== 'put') return sum + keyBytes;
+      requireValue(mutation.bytes, mutation.retentionMs);
+      return sum + keyBytes + mutation.bytes.byteLength;
+    }, 0);
   if (encodedSize > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
     throw new RangeError(
       `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_BYTES / (1024 * 1024)} MiB.`
@@ -210,6 +240,14 @@ function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
 }
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
+  if (request.cursor !== undefined) {
+    const bytes = Buffer.byteLength(request.cursor.value, 'utf8');
+    if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES) {
+      throw new RangeError(
+        `Location Store cursor must contain 1..${ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
+      );
+    }
+  }
   if (Buffer.byteLength(request.prefix, 'utf8') > ZLINK_PROVIDER_MAX_KEY_BYTES) {
     throw new RangeError(
       `Location Store scan prefix exceeds ${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`

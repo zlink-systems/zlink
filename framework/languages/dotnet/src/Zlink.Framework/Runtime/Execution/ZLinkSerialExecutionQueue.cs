@@ -5,6 +5,8 @@ namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 {
+    private const string AdmissionOperationName = "execution";
+
     private const int RelocationJournalRecordHeaderBytes = sizeof(ulong) + sizeof(int);
     private readonly object _admissionGate = new();
     private readonly object _disposeGate = new();
@@ -206,7 +208,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             out var item
         );
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            throw CreateAdmissionException("execution", admission);
+            throw CreateAdmissionException(AdmissionOperationName, admission);
         return ValueTask.FromResult(item);
     }
 
@@ -858,7 +860,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             out drain
         );
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            throw CreateAdmissionException("execution", admission);
+            throw CreateAdmissionException(AdmissionOperationName, admission);
         return new ValueTask(item.Completion.WaitAsync(cancellationToken));
     }
 

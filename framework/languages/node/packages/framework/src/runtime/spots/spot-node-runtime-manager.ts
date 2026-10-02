@@ -132,7 +132,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly applicationJobQueue?: ApplicationJobQueue;
   readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
   readonly peerAdmissionSealed?: (meshName: string) => boolean;
@@ -173,6 +173,9 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly applicationJobQueue: ApplicationJobQueue;
 
   constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException('Spot node runtime requires a detached task runner.');
+    }
     this.applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
@@ -735,14 +738,10 @@ export class ZLinkSpotNodeRuntimeManager {
         await this.publishMeshNodeState(state, undefined, meshName);
       });
     this.runtimeWeightPublication = publish;
-    if (this.options.detachedTaskRunner !== undefined) {
-      this.options.detachedTaskRunner.runDetached(
-        `RouteMesh '${meshName}' runtime weight publication`,
-        async () => await publish
-      );
-    } else {
-      void publish.catch(() => undefined);
-    }
+    this.options.detachedTaskRunner.runDetached(
+      `RouteMesh '${meshName}' runtime weight publication`,
+      async () => await publish
+    );
   }
 
   get primaryMeshCompletions(): ZLinkMeshCompletionTable | undefined {

@@ -29,26 +29,7 @@ result_t<void> terminal_result (const result_t<void> &result)
 {
     if (result)
         return result_t<void>::success ();
-    const auto *error = result.error ();
-    if (error == nullptr) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                        "one-way submit failed");
-    }
-    switch (boundary_state (*error)) {
-        case boundary_error_t::timed_out:
-            return result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
-                                            error->what ());
-        case boundary_error_t::shutdown:
-            return result_t<void>::failure (framework_error_kind_t::shutting_down, error->what ());
-        case boundary_error_t::disconnected:
-            return result_t<void>::failure (framework_error_kind_t::unavailable, error->what ());
-        case boundary_error_t::none:
-        case boundary_error_t::closed:
-        case boundary_error_t::cancelled:
-        case boundary_error_t::stale_generation:
-            return result_access_t::failure<void> (*error);
-    }
-    return result_access_t::failure<void> (*error);
+    return propagate_failure<void> (result, "one-way submit failed");
 }
 
 } // namespace
@@ -87,16 +68,8 @@ task_t<void> submit_one_way_task (std::function<result_t<void> ()> submit)
     try {
         return task_t<void> (terminal_result (submit ()));
     }
-    catch (const framework_exception_t &error) {
-        return task_t<void> (result_access_t::failure<void> (error));
-    }
-    catch (const std::exception &error) {
-        return task_t<void> (
-          result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ()));
-    }
     catch (...) {
-        return task_t<void> (result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                      "one-way submit failed"));
+        return task_t<void> (current_exception_result<void> ());
     }
 }
 

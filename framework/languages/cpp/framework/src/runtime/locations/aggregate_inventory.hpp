@@ -15,10 +15,56 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace zlink::framework::runtime
+{
+
+template <typename Entry, typename RawFieldSizes, typename Fits>
+std::optional<std::size_t> bounded_page_prefix (std::span<const Entry> entries,
+                                                std::size_t item_limit,
+                                                std::size_t byte_limit,
+                                                RawFieldSizes raw_field_sizes,
+                                                Fits fits)
+{
+    const auto limit = std::min (item_limit, entries.size ());
+    std::size_t count = 0;
+    std::size_t raw_bytes = 0;
+    while (count < limit) {
+        const auto fields = raw_field_sizes (entries[count]);
+        auto remaining = byte_limit - raw_bytes;
+        auto field = fields.begin ();
+        for (; field != fields.end (); ++field) {
+            if (*field > remaining)
+                break;
+            remaining -= *field;
+        }
+        if (field != fields.end ())
+            break;
+        raw_bytes = byte_limit - remaining;
+        ++count;
+    }
+    if (count == 0)
+        return std::nullopt;
+    if (fits (count))
+        return count;
+    std::size_t lower = 0;
+    auto upper = count - 1;
+    while (lower < upper) {
+        const auto candidate = lower + (upper - lower + 1) / 2;
+        if (fits (candidate))
+            lower = candidate;
+        else
+            upper = candidate - 1;
+    }
+    return lower == 0 ? std::nullopt : std::optional{lower};
+}
+
+} // namespace zlink::framework::runtime
 
 namespace zlink::framework::runtime::aggregate_inventory
 {
@@ -270,36 +316,33 @@ inline std::optional<tree_t> build_tree (const std::vector<aggregate_participant
     tree_t tree;
     std::vector<aggregate_participant_t> current;
     current.reserve (page_item_limit);
-    const auto finish_page = [&tree, &current] (std::size_t index) {
+    std::size_t current_bytes = encode_page (0, {}).size ();
+    const auto finish_page = [&tree, &current, &current_bytes] (std::size_t index) {
         page_t page;
         page.participants = std::move (current);
         page.encoded = encode_page (index, page.participants);
-        if (page.encoded.size () > page_byte_limit)
-            return false;
         page.digest = sha256 (page.encoded);
         tree.pages.push_back (std::move (page));
         current.clear ();
         current.reserve (page_item_limit);
-        return true;
+        current_bytes = encode_page (tree.pages.size (), {}).size ();
     };
     for (const auto &participant : participants) {
-        if (current.size () == page_item_limit) {
-            if (!finish_page (tree.pages.size ()))
-                return std::nullopt;
+        if (current.size () == page_item_limit)
+            finish_page (tree.pages.size ());
+        const auto entry_bytes = encode_participant (participant).dump ().size ();
+        auto next_bytes = current_bytes + entry_bytes + (current.empty () ? 0 : 1);
+        if (next_bytes > page_byte_limit && !current.empty ()) {
+            finish_page (tree.pages.size ());
+            next_bytes = current_bytes + entry_bytes;
         }
-        current.push_back (participant);
-        const auto candidate = encode_page (tree.pages.size (), current);
-        if (candidate.size () <= page_byte_limit)
-            continue;
-        current.pop_back ();
-        if (current.empty () || !finish_page (tree.pages.size ()))
+        if (next_bytes > page_byte_limit)
             return std::nullopt;
         current.push_back (participant);
-        if (encode_page (tree.pages.size (), current).size () > page_byte_limit)
-            return std::nullopt;
+        current_bytes = next_bytes;
     }
-    if (!current.empty () && !finish_page (tree.pages.size ()))
-        return std::nullopt;
+    if (!current.empty ())
+        finish_page (tree.pages.size ());
     tree.participant_count = participants.size ();
     tree.root = tree_root (tree.pages, tree.participant_count);
     if (tree.pages.size () > index_item_limit) {

@@ -35,7 +35,6 @@ import {
   ownerFence,
   type ZLinkActorMessageFollowOwnerFence
 } from '../actors/actor-message-follow-context';
-import { ZLinkActorRetryDelay } from '../actors/actor-retry-delay';
 import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
@@ -169,7 +168,7 @@ export interface ZLinkActorTransferRuntimeActorManager {
     actorType: string,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
+    spotId: RoutingId | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint,
     signal?: AbortSignal,
@@ -216,7 +215,6 @@ export interface ZLinkActorTransferRuntimeOptions {
 }
 
 export class ZLinkActorTransferRuntime {
-  private readonly sourceDepartureTasks = new Map<string, Promise<void>>();
   private readonly coreSourceLeaves = new Map<
     string,
     {
@@ -683,8 +681,7 @@ export class ZLinkActorTransferRuntime {
               void sourceLeaveCompletion.then(
                 () => this.scheduleSourceDeparture(actor, sourceSpotId, true),
                 (error) => {
-                  this.options.reportPostCommitError?.(error);
-                  this.scheduleSourceDeparture(actor, sourceSpotId, true);
+                  this.scheduleSourceDeparture(actor, sourceSpotId, true, [error]);
                 }
               );
             } else {
@@ -787,8 +784,10 @@ export class ZLinkActorTransferRuntime {
           if (terminal === 'prepared') replayResults = [...results];
         },
         commit: async (target, targetActorRef, targetOwnerFence) => {
-          if (terminal === 'rolledBack') return;
-          if (terminal === 'prepared') {
+          if (terminal !== 'prepared') return;
+          terminal = 'committed';
+          const failures: unknown[] = [];
+          try {
             this.options.actorHandoff.complete(
               actor.context.actorId,
               target,
@@ -796,13 +795,27 @@ export class ZLinkActorTransferRuntime {
               replayResults,
               targetOwnerFence
             );
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
             if (manageMembership && state.spotId !== undefined) {
               await this.options
                 .spotManager()
                 ?.commitActorLeaveAfterTransfer(state.spotId, actor.context.actorId);
             }
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
             state.endMove();
-            terminal = 'committed';
+          } catch (error) {
+            failures.push(error);
+          }
+          if (failures.length > 0) {
+            throw failures.length === 1
+              ? failures[0]
+              : new AggregateError(failures, 'Actor source retirement failed.');
           }
         },
         discard: (reason) => {
@@ -1141,48 +1154,57 @@ export class ZLinkActorTransferRuntime {
   private scheduleSourceDeparture(
     actor: ZLinkActor,
     sourceSpotId: RoutingId | undefined,
-    releaseLocation: boolean
+    releaseLocation: boolean,
+    failures: unknown[] = []
   ): void {
-    if (this.sourceDepartureTasks.has(actor.context.actorId)) return;
-    const task = this.finishSourceDeparture(actor, sourceSpotId, releaseLocation).finally(() =>
-      this.sourceDepartureTasks.delete(actor.context.actorId)
-    );
-    this.sourceDepartureTasks.set(actor.context.actorId, task);
+    void this.finishSourceDeparture(actor, sourceSpotId, releaseLocation, failures);
   }
 
   private async finishSourceDeparture(
     actor: ZLinkActor,
     sourceSpotId: RoutingId | undefined,
-    releaseLocation: boolean
+    releaseLocation: boolean,
+    failures: unknown[]
   ): Promise<void> {
-    const retry = new ZLinkActorRetryDelay();
-    while (this.options.shutdownSignal?.()?.aborted !== true) {
+    if (sourceSpotId !== undefined) {
       try {
-        if (sourceSpotId !== undefined) {
-          await this.options
-            .spotManager()
-            ?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
-        }
-        if (releaseLocation) {
-          const state = this.options.actorManager()?.getState(actor.context.actorId);
-          if (state?.actorType !== undefined && state.ownsLocation) {
-            await this.options
-              .locationLifecycle()
-              ?.releaseActor(state.actorType, actor.context.actorId);
-            state.markLocationReleased();
-          }
-          // Message Follow owns the bounded stale route after the native leave.
-          // The source Actor shell must therefore be removed from the process
-          // registry so a later relocation can materialize the same Actor ID on
-          // this node without colliding with its previous incarnation.
-          await this.options.actorManager()?.completeCoreRelocationSource(actor.context.actorId);
-        }
-        this.options.onSourceDepartureCompleted?.(actor.context.actorId);
-        return;
+        await this.options
+          .spotManager()
+          ?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
       } catch (error) {
-        this.options.reportPostCommitError?.(error);
-        if (!(await retry.wait(this.options.shutdownSignal?.()))) return;
+        failures.push(error);
       }
+    }
+    if (releaseLocation) {
+      try {
+        const state = this.options.actorManager()?.getState(actor.context.actorId);
+        if (state?.actorType !== undefined && state.ownsLocation) {
+          await this.options
+            .locationLifecycle()
+            ?.releaseActor(state.actorType, actor.context.actorId);
+          state.markLocationReleased();
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    try {
+      // Message Follow keeps its route separately from the retired application instance.
+      await this.options.actorManager()?.completeCoreRelocationSource(actor.context.actorId);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      this.options.onSourceDepartureCompleted?.(actor.context.actorId);
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      this.options.reportPostCommitError?.(
+        failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, 'Actor source retirement failed.')
+      );
     }
   }
 
@@ -1613,7 +1635,6 @@ export class ZLinkActorTransferRuntime {
         state.markLocationReleased();
       } catch (error) {
         locationError = error;
-        void lifecycle.releaseActorEventually(actorType, actor.context.actorId);
       }
     }
     try {

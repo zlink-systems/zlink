@@ -37,6 +37,7 @@ export interface ZLinkActorPacketDescriptor {
   readonly packetName: string;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
+  readonly methodName?: string;
 }
 
 export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRegistry {
@@ -59,7 +60,8 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
           : ZLinkActorPacketKind.Request,
       packetName: resolvedPacketName,
       actorType: Object as unknown as Type<ZLinkActor>,
-      handlerType
+      handlerType,
+      methodName: metadata.methodName
     });
   }
 
@@ -70,7 +72,16 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
         `Actor packet '${descriptor.packetName}' for '${descriptor.actorType.name}' is already registered.`
       );
     }
-    this.packets.set(key, descriptor);
+    const metadata = readZLinkDecoratorMetadata(descriptor.handlerType).find(
+      (entry) =>
+        entry.kind ===
+          (descriptor.kind === ZLinkActorPacketKind.Send ? 'spotActorSend' : 'spotActorRequest') &&
+        entry.packetName === descriptor.packetName
+    );
+    this.packets.set(key, {
+      ...descriptor,
+      methodName: descriptor.methodName ?? metadata?.methodName
+    });
     return this;
   }
 
@@ -147,9 +158,10 @@ export class ZLinkSpotActorDispatcher {
       await this.invokeHandler<ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>, void>(
         actor,
         descriptor,
-        (handler) =>
+        (handler, method) =>
           runActorHandlerWithDeferredJoins(() =>
-            handler.handle(
+            method.call(
+              handler,
               this.options.spot,
               actor,
               this.createContext(packetName, context),
@@ -235,10 +247,11 @@ export class ZLinkSpotActorDispatcher {
       return await this.invokeHandler<
         ZLinkSpotActorRequestHandler<ZLinkSpot, ZLinkActor, TRequest, TReply>,
         TResult
-      >(actor, descriptor, (handler) =>
+      >(actor, descriptor, (handler, method) =>
         runActorHandlerWithDeferredJoins(
           () =>
-            handler.handle(
+            method.call(
+              handler,
               this.options.spot,
               actor,
               this.createContext(packetName, context),
@@ -340,14 +353,29 @@ export class ZLinkSpotActorDispatcher {
 
   private async invokeHandler<THandler, TResult>(
     actor: ZLinkActor,
-    descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType'>,
-    callback: (handler: THandler) => Promise<TResult>
+    descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType' | 'methodName'>,
+    callback: (
+      handler: THandler,
+      method: THandler extends { handle: infer TMethod } ? TMethod : never
+    ) => Promise<TResult>
   ): Promise<TResult> {
     return await runWithLifecycleHandler(
       actor,
       descriptor.handlerType,
       this.options.providerResolver,
-      (resolved) => callback(resolved as THandler)
+      (resolved) => {
+        const methodName = descriptor.methodName ?? 'handle';
+        const method = (resolved as Record<string, unknown>)[methodName];
+        if (typeof method !== 'function') {
+          throw new ZLinkConfigurationException(
+            `Actor handler '${descriptor.handlerType.name}.${methodName}' is not callable.`
+          );
+        }
+        return callback(
+          resolved as THandler,
+          method as THandler extends { handle: infer TMethod } ? TMethod : never
+        );
+      }
     );
   }
 

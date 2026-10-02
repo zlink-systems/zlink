@@ -314,11 +314,6 @@ class spot_node_builder_state_t
      * authority/owner check; the local transfer coordinator may allow a
      * committed source route to enter Message Follow first. */
     std::function<bool (const runtime::protocol::actor_route_fence_t &)> actor_route_admission;
-    std::function<result_t<actor_join_reply_t> (const actor_ref_t &,
-                                                node_rid_t,
-                                                const zlink::message_t &,
-                                                const std::optional<zlink::message_t> &)>
-      actor_entry_spot_join;
     std::map<std::string, actor_factory_registration_t> actor_factories;
     std::map<std::string, factory_relocation_configuration_t> spot_factory_relocations;
     std::map<std::string, std::int32_t> spot_stable_type_limits;
@@ -1717,11 +1712,6 @@ class spot_node_runtime_t
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
-    void on_actor_entry_spot_join (
-      std::function<result_t<actor_join_reply_t> (const actor_ref_t &,
-                                                  node_rid_t,
-                                                  const zlink::message_t &,
-                                                  const std::optional<zlink::message_t> &)> join);
     void on_actor_packet_relay (std::function<task_t<std::optional<zlink::message_t>> (
                                   const actor_ref_t &,
                                   actor_context_t,

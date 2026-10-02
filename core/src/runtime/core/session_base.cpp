@@ -163,13 +163,14 @@ void zlink::session_base_t::snapshot_peer_routing_id (blob_t *routing_id_) const
         routing_id_->clear ();
 }
 
-bool zlink::session_base_t::try_claim_transport_disconnected_event ()
+bool zlink::session_base_t::try_claim_transport_disconnected_event (
+  uint64_t connection_id_)
 {
-    // Every established transport shares the socket endpoint's claim with
-    // pipe termination. A failed handshake may not have created a pipe yet.
+    // Claim the engine's physical connection even before READY publishes its
+    // identity on the socket pipe. A failed handshake may have no pipe yet.
     if (!_socket_pipe)
         return true;
-    return _socket_pipe->try_claim_transport_disconnected_event ();
+    return _socket_pipe->try_claim_transport_disconnected_event (connection_id_);
 }
 
 int zlink::session_base_t::set_peer_transport_pair (transport_lane_t lane_,

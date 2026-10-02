@@ -3130,7 +3130,7 @@ export class ZLinkFrameworkRuntimeHost
     return reporter;
   }
 
-  private detachedTaskRunner(): ZLinkDetachedTaskRunner {
+  detachedTaskRunner(): ZLinkDetachedTaskRunner {
     return {
       runDetached: (taskName, callback) => {
         const runner = this.executionState?.taskRunner;

@@ -2,7 +2,8 @@ namespace Zlink.Framework.Runtime.Locations;
 
 internal static class ZLinkPageRequestPolicy
 {
-    public const int MaximumPageSize = 1000;
+    internal const int DiscoveryPageSize = 256;
+    public const int MaximumPageSize = Internal.ZLinkLocationStoreLimits.MaximumPageItems;
 
     public static ZLinkPageRequest Normalize(ZLinkPageRequest request)
     {
@@ -10,10 +11,7 @@ internal static class ZLinkPageRequestPolicy
             throw new ArgumentOutOfRangeException(nameof(request));
 
         return request.PageSize == 0
-            ? request with
-            {
-                PageSize = ZLinkPageRequest.DefaultPageSize,
-            }
+            ? new ZLinkPageRequest(ContinuationToken: request.ContinuationToken)
             : request;
     }
 }

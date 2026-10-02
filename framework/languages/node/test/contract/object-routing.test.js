@@ -956,7 +956,10 @@ for (const nextAuthority of ['changed', 'missing', 'unchanged']) {
   });
 }
 
-test('Missing Instance synchronous rejection is preserved without a second submission', async () => {
+test('Missing Instance synchronous rejection is preserved without a second submission', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => ++now);
+  t.after(() => t.mock.restoreAll());
   class Lookup {}
   const terminal = internal.createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,

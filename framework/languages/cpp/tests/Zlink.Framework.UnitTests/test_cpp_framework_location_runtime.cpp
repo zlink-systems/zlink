@@ -568,8 +568,13 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesCommittedClaimWhenStartupIsCancelle
                          .owner_lease_ttl = std::chrono::seconds (15)},
       "owner-a");
 
-    EXPECT_THROW (runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ()),
-                  zlink::framework::framework_exception_t);
+    try {
+        runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ());
+        FAIL () << "startup cancellation was not propagated";
+    }
+    catch (const std::system_error &error) {
+        EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
+    }
     EXPECT_EQ (1, store.release_calls ());
     EXPECT_FALSE (runtime.current_owner_token ().has_value ());
     std::this_thread::sleep_for (std::chrono::milliseconds (10));
@@ -595,7 +600,7 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeClaimAndPreservesCancel
         runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ());
         FAIL () << "startup cancellation was not propagated";
     }
-    catch (const zlink::framework::framework_exception_t &error) {
+    catch (const std::system_error &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
     EXPECT_LT (std::chrono::steady_clock::now () - started_at, renew_timeout);
@@ -623,7 +628,7 @@ TEST (ZLinkFrameworkLocationRuntime, RecordsCleanupFailureAndPreservesCancellati
         runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ());
         FAIL () << "startup cancellation was not propagated";
     }
-    catch (const zlink::framework::framework_exception_t &error) {
+    catch (const std::system_error &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
     ASSERT_TRUE (runtime.last_error ().has_value ());
@@ -654,7 +659,7 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeCancellationRelease)
         runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ());
         FAIL () << "startup cancellation was not propagated";
     }
-    catch (const zlink::framework::framework_exception_t &error) {
+    catch (const std::system_error &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
     EXPECT_LT (std::chrono::steady_clock::now () - started_at,
@@ -682,7 +687,7 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesLateCommitWithoutInstalledTokenOnCa
         runtime.start (zlink::routing_id_t::from ("node-a"), cancellation.get_token ());
         FAIL () << "startup cancellation was not propagated";
     }
-    catch (const zlink::framework::framework_exception_t &error) {
+    catch (const std::system_error &error) {
         EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), error.code ());
     }
     EXPECT_EQ (1, store.read_calls ());

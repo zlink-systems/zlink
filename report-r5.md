@@ -168,3 +168,72 @@ Java fixture 다섯 곳은 테스트 입력의 기존 startup 완료 단계를 �
 최종 Java fixture 두 건의 Ready 선행조건을 추가한 직후 D: 공간이 0이 되어 WSL Ubuntu-24.04가 `Wsl/Service/CreateInstance/E_FAIL`로 중지됐다. 이 job의 중복 source archive를 제거하여 D: 여유를 확보했고 변경 source와 기존 로그는 보존했다. Ubuntu는 서비스 재시작 없이 정상 진입으로 회복됐다. 진단 사본의 중복 build만 realpath 확인 뒤 정리했고(`r5-logs/java-cleanup-diagnostic-build-prune.log`), WSL에서 runner 두 개의 `bash -n`을 통과했다. Java 수정 전/후 반복과 전체 gate, C++ main 동일 build/ctest를 이어서 완료했다. 이 환경 중단은 제품 테스트 실패로 해석하지 않는다.
 
 WSL 복구 직후 .NET·Node TicTacToe 원본 runner는 `/var/run/docker.sock` 부재로 scoped Redis container를 만들지 못했다. 기존 Docker Desktop proxy socket을 `DOCKER_HOST`로 지정하고 동일한 root 접근을 양쪽에 적용하여 실제 sample을 비교했다(`r5-logs/redis-diagnosis-summary.md`). socket 권한·서비스·runner·fixture·제품 timeout은 바꾸지 않았다. 다음 Ubuntu 인스턴스 재시작으로 Java stock 5-branch가 Gradle 시작 후 중단됐고, 이 미완료 실행은 결과에 넣지 않고 own run ID의 exited Redis container만 정리한 뒤 재개했다(`r5-logs/java-stock-final-5-branch.interrupted.log`).
+
+---
+
+## 병합된 main의 기존 #1083 .NET magic R5 보고
+
+# #1083 .NET magic r5 — origin/main 병합 충돌 해소
+
+기준: main의 공개 status 구조를 유지했다. main에서 삭제한 관찰 event DTO, 별도 sequence 상태, `LocationSnapshot` 경로는 되살리지 않았다. 브랜치의 상수화는 main 구조에서 계속 사용하는 값에만 적용했다.
+
+| 충돌 파일 | 해소 |
+|---|---|
+| `ZLinkClientServerClientRuntime.cs` | main의 `ProcessLocalOwnerId`를 사용하고 중복 이름 `ProcessLocalOwner`를 버렸다. 계속 사용하는 `manual:`·`local:`·`auto:` 연결 키 접두사와 기존 service liveness 상수 참조는 유지했다. |
+| `ZLinkClientServerRuntimeService.cs` | main의 공개 `ZLinkClientServerStatus` 비교·발행과 sequence 소유자를 유지하고, 삭제된 event DTO·`RetainedObservation`·별도 `Sequence`·`LocationSnapshot`을 되살리지 않았다. |
+| `ZLinkMeshMonitoringModels.cs` | main의 `ZLinkLocationRuntimeSnapshot` 상태 상수 집합을 유지해 `HealthyState`를 포함하고 같은 값의 상수를 중복 정의하지 않았다. |
+| `ZLinkRouteMeshRuntimeService.cs` | main의 `MeshPeerState` 기반 공개 status projection과 lane 내부 sequence 발행을 유지했다. 삭제된 `LocationSnapshot`·상태 event 경로와 사용되지 않는 admission 문자열 상수는 남기지 않았다. |
+| `ZLinkFanoutMonitoringModels.cs` | main이 제거한 `ZLinkFanoutRuntimeEvent` 계층을 되살리지 않고 공개 status model만 유지했다. |
+| `ZLinkFanoutRuntimeService.cs` | main의 `ZLinkLocationStoreHealth.ProjectSnapshot` 경로를 유지해 location 상태 결정을 한 소유자에 두었다. |
+
+충돌 처리 후 `git diff origin/main`에서 위 여섯 파일의 추가 변경은 `ZLinkClientServerClientRuntime.cs`의 연결 키 접두사와 service liveness 상수 참조뿐이다. 공개 status 구조의 판정 위치 수는 main과 동일하며, 별도 event·sequence·location 판정 위치를 추가하지 않았다(추가 전/후 0→0).
+
+## 검증
+
+| 검사 | 로그 | 결과 |
+|---|---|---|
+| .NET 빌드 | `.artifacts/1083-magic-r5/build.log` | WSL `dotnet build src/Zlink.Framework/Zlink.Framework.csproj --nologo`: 경고 13건, 오류 0건, 통과. |
+| ClientServer·RouteMesh·Fanout 관련 unit | `.artifacts/1083-magic-r5/related-unit.log` | `ClientServerChannelRuntimeTests`, `RouteMeshRuntimeServiceTests`, `FanoutAutomaticDiscoveryTests`, `CapacityMonitoringProjectionTests` 필터: 129/129 통과. |
+| `scripts/format/format.sh --check dotnet` | `.artifacts/1083-magic-r5/format.log`, `format-lf.log` | 첫 검사는 Windows→WSL 복사에서 48개 `.cs` 파일의 CRLF가 보존되어 9개 파일의 줄바꿈 차이만 보고했다(`format.log`: 1,152개 검사, 9개 사유 모두 line endings). Windows 작업 파일은 변경하지 않고 WSL 사본만 LF로 정규화한 뒤 동일 검사를 재실행해 1,152개 검사, exit 0으로 통과했다. |
+
+리팩토링 점검: 성능 0건·POSDDD 0건·불필요 코드 7건 발견, 사용되지 않는 admission 문자열 상수 7개를 제거하고 main이 삭제한 event·sequence·location 코드를 되살리지 않았으며 넘긴 항목은 0건이다.
+
+## R6 — `origin/main` 병합 및 회귀 대조
+
+`72975da14d`에서 `origin/main` `c95ae23587`을 병합했다. 충돌은 main의 검토된 구조를 기준으로 해소했으며, 이 절의 빌드·테스트는 WSL 사본에서 실행했다. Core·binding 1.13.0 release package가 아직 없어 병합된 Core 소스로 `.artifacts/wsl-r6`의 Core와 C++·Java·Node local package를 만들었다(`r6-logs/cpp-local-package.log`, `java-binding-package.log`, `node-binding-package.log`). Node HTTP client local package도 같은 작업용 경로에서 만들었다. Windows 원본과 다른 job의 package cache는 변경하지 않았다.
+
+| 병합 또는 발견 | 원인과 해소 | 소유·스펙·분류 |
+|---|---|---|
+| C++ 예외 결과 | #1347의 인자 없는 `current_exception_result<T>()`에 맞춰 `public_host_runtime.cpp:1960,5574`, `test_cpp_framework_opaque_store_providers.cpp:938`을 적응했다. 일반 `std::exception`에 `error_kind()`를 호출하면 `result has no Framework error`가 다시 발생하여 `m6b_runtime.cpp:5966`과 RouteMesh placement가 branch에서만 실패했다(`r6-logs/cpp-ctest-after-claim-fix.log`). `public_host_runtime.cpp:1961–1962,5575–5577`에서 기존 `result_t::error()`의 Framework 오류 여부를 확인하여 일반 오류는 기존 transport/internal terminal로, 명시적 deadline 오류만 timeout terminal로 보낸다. 수정 후 두 테스트 모두 통과했다(`r6-logs/cpp-two-after-error-fix.log`). | Framework host terminal, Location Runtime §10의 operation deadline; B. 새 판정 위치 없음. |
+| C++ main 테스트 호출 | main의 `client_server_operation_exception`은 `exception_ptr`, `server.reply`는 `task_t<bool>`인데 테스트가 이전 동기 반환값으로 검사하여 원본 main 빌드가 실패했다(`r6-logs/main-cpp-build.log:118–137`). `test_cpp_framework_raw_route_port_contract.cpp:112–129`, `test_cpp_framework_m6a_runtime.cpp:1480–1550`, `test_cpp_framework_reply_submit_claim.cpp:68–73`에서 기존 기대값을 유지하고 반환된 결과를 검사한다. 비교용 main WSL 사본에는 이 세 테스트 파일만 동일하게 적용했고 제품 소스는 변경하지 않았다. | C++ 테스트의 현행 public 반환 계약 적응 A; 계약 기대값 변경 없음. |
+| Node owner cleanup | main의 단일 owner-lease 확인 경로와 R5 종료 실패 분류를 `locations/runtime.ts:590–623`에 결합했다. 이전 중복 확인에 맞춰 2·4회 읽기를 기대한 테스트는 단일 확인의 정확한 횟수 1·2회를 요구하도록 `location-host.test.js:226`에서 강화했다. 수정 전 새 실패 2건(`r6-logs/branch-node-test.log:6598,6620`), 수정 후 해당 파일 22/22와 전체 gate의 branch 추가 실패 0건(`r6-logs/node-location-host-after-fix.log`, `node-test-after-host-fix.log`). | Framework LocationRuntime, Location Runtime §5:701의 host 종료 deadline; B. 확인 재시도는 추가하지 않음. |
+| 페이지 기본값 | main의 `.NET` `ZLinkPageRequestPolicy.cs:5–10`에 있는 discovery·상한 소유를 유지했다. Node `location-store-repository.ts:95–98,1745,2465,2608`는 사용되지 않는 `DEFAULT_REPOSITORY_PAGE_SIZE`를 제거하고 기존 `zlinkRuntimeDefaultLocationOptions.listPageSize`를 참조한다. 제거 전 TypeScript `TS6133`은 `r6-logs/node-http-client-package.log:3`, 수정 후 package build 통과는 `node-http-client-package-after-fix.log:57`에 있다. | Framework Location Store 목록 기본값, Location Runtime §5; B. 중복된 기본값 사본 2→1. |
+| Conformance 증거 | `relocation-conformance-adapters-v1.json:255–265`의 Node focused test 이름 세 개가 main에서 교체된 뒤에도 이전 이름을 가리켰다. main·branch의 동일 검증 모두 첫 이름에서 실패했다(`main-conformance-validation.log`, `conformance-validation.log`). 같은 선행 terminal·후속 seal 및 동일 terminal의 한 번만 처리하는 현행 테스트 이름으로 증거 목록과 실행 명령을 함께 갱신했다. `conformance-validation-final.log` 통과, 실제 focused 명령 4/4 통과(`conformance-node-focused.log`). | Framework relocation conformance 증거 목록의 기존 누락 B. 테스트 기대값·스펙 수정 없음; 제품 판정 위치 0→0. |
+
+교차언어 대조: C++의 위 예외 분류는 `public_host_runtime.cpp:1960–1965,5574–5584`에서 일반 provider 오류를 deadline으로 오인하지 않는다. 같은 provider 실패 경계에서 Java는 `ZLinkProviderRelocationRepository.java:52–66`의 비동기 실패를 Store 확인으로 보내며, .NET은 `ZLinkProviderRelocationRepository.cs:76–95`에서 취소와 일반 실패를 분리하고, Node는 `relocation-blob.ts:25–36`에서 abort를 먼저 확인한 뒤 Store 결과를 확인한다. 네 언어의 Relocation Store 결정 자체는 R5의 §10 표와 동일하다. 이번 병합의 runtime 판정 위치는 C++ 예외 terminal 2→2, Node owner 확인 1→1, Node 페이지 fallback 3→3, .NET 페이지 상한 1→1로 합계 7→7이며, Node 기본값의 중복 소유 값은 2→1이다. R5에서 승인된 전체 판정 위치 31개에 새 위치를 추가하지 않았다.
+
+| 동일 명령의 결과 | main | branch | 판정 |
+|---|---|---|---|
+| C++ unit·contract `ctest -L 'framework-unit|framework-contract' -j2` | 원본 main은 테스트 API 컴파일 오류(`main-cpp-build.log`); 세 테스트 호출만 적응한 진단 사본은 99/103 통과, 4실패(`main-cpp-ctest-adapted.log`) | 초기 97/103, 위 일반 오류 분류 수정 뒤 99/103 통과·같은 4실패(`cpp-final-ctest.log`); Relocation Store 집중 8/8(`cpp-relocation-focused.log`) | branch 전용 실패 0 |
+| .NET UnitTests·ContractTests | 2433/2433, 81/81(`main-dotnet-unit.log`, `main-dotnet-contract.log`) | 2443/2443, 82/82(`dotnet-unit.log`, `dotnet-contract.log`) | 추가 실패 0 |
+| Java `:zlink-framework-core:test` | 1773건 중 1실패(`main-java-full.log`) | 1809건 중 같은 1실패(`java-test-after-package.log`) | 추가 실패 0 |
+| Node `npm test` | 2083건 중 2실패(`main-node-test.log`) | 수정 전 2109건 중 4실패(`branch-node-test.log`), 수정 후 2109건 중 같은 2실패(`node-test-after-host-fix.log`) | 추가 실패 0 |
+| `scripts/format/format.sh --check` | cpp·dotnet·java·node 모두 exit 0(`main-format-*.log`) | 모두 exit 0(`format-cpp-after-regression-fix.log`, `format-dotnet.log`, `format-java.log`, `format-node-after-fix.log`) | 일치 |
+| Service Wire schema·runtime conformance | schema 통과(`main-schema-validation.log`); conformance의 이전 테스트 이름에서 실패(`main-conformance-validation.log`) | schema 통과(`schema-validation.log`); 증거 목록 갱신 후 conformance 통과·Node focused 4/4(`conformance-validation-final.log`, `conformance-node-focused.log`) | 기존 검증 누락 해소 |
+
+공통 기존 실패는 C++ `test_cpp_framework_m6a_runtime.cpp:1475`, `test_cpp_framework_host_lifecycle.cpp:2144`, `test_cpp_framework_opaque_store_providers.cpp:1370·2432`, `test_cpp_framework_handler_registry.cpp:404`의 4개 실행 파일이다. Java는 `ZLinkJavaRawServicePortContractTest.java:254`의 요청 예외 기대, Node는 `actor-manager.test.js:3782·3791`의 native Entry Spot generation과 `node-test-gate.test.js:55`의 Bingo.Ts package-mode source 대조가 양쪽에서 동일하게 실패했다. 이들은 main에서도 재현된 기준선이며 branch 회귀로 계산하지 않았다.
+
+R5의 Node 공통 실패 7건은 당시 `node-test-gate.test.js:55` 1건, `same-node-actor-join.test.js:104,110,134,143,153` 5건, `stream-runtime.test.js:5591` 1건이었다(`report-r5.md`의 R5 대조 표). 병합된 main에서 해당 테스트 구조가 바뀌어 같은 명령의 현행 공통 실패는 위 2건이다. 기존 flaky 목록에는 일곱 건의 이전 위치와 현재 결과를 함께 보존하며, 현행 2건을 일곱 건으로 잘못 집계하지 않는다.
+
+| supervisor-guide §2 기준 | R6 판정 |
+|---|---|
+| 스펙 gap | 새 gap 없음. 확정 Location §5·§10을 적용하고 보호 스펙은 직접 수정하지 않음 |
+| 불필요한 규칙 | Node 페이지 기본값 사본을 제거함 |
+| 제어 분산 | 위 판정 위치 7→7, owner cleanup의 확인 경로 1개 유지 |
+| 동기화 | 새 queue·lock·timer·retry 없음. 기존 host deadline 경로 유지 |
+| hot path | C++ 예외 catch의 rare 경로에서만 `error()` 확인; 정상 처리·trace-off 경로 추가 비용 없음 |
+| 리팩토링 잔여 | 이번 수정 경로에는 없음. R5의 범위 밖 세 위치는 그대로 둠 |
+| 매직 값 | Node의 중복 `100` 기본값을 제거하고 기존 옵션 소유 값을 사용함 |
+| 계층 소유 | Relocation Store·host terminal·Location Store 기본값을 Framework 기존 소유자에 둠 |
+
+리팩토링 점검: 성능 0건·POSDDD 1건·불필요 코드 1건 발견, Node 페이지 기본값의 중복 소유와 미사용 상수를 제거함; 넘긴 항목 `ZLinkSpotTimerRegistry.java:688–690`, `locations/resolvers.ts:895–906`, `ZLinkClientServerRuntimeService.cs:296–301`.

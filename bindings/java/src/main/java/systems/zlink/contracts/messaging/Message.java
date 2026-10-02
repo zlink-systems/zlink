@@ -2,10 +2,12 @@
 
 package systems.zlink.contracts.messaging;
 
+import io.netty.buffer.ByteBuf;
+
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.internal.ContractAccess;
-import io.netty.buffer.ByteBuf;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -913,39 +915,39 @@ public final class Message implements AutoCloseable {
     public static void closeAll(Message[] parts) {
         if (parts == null)
             return;
+        RuntimeException failure = null;
         for (Message part : parts) {
-            if (part != null && part.isReusable()) {
-                try {
-                    part.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
+            failure = closeOwnedPart(part, failure);
         }
+        if (failure != null) throw failure;
     }
 
     public static void closeAll(Iterable<? extends Message> parts) {
         if (parts == null)
             return;
+        RuntimeException failure = null;
         if (parts instanceof java.util.List<? extends Message> list) {
             for (int index = 0; index < list.size(); index++) {
-                Message part = list.get(index);
-                if (part != null && part.isReusable()) {
-                    try {
-                        part.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
+                failure = closeOwnedPart(list.get(index), failure);
             }
-            return;
-        }
-        for (Message part : parts) {
-            if (part != null && part.isReusable()) {
-                try {
-                    part.close();
-                } catch (RuntimeException ignored) {
-                }
+        } else {
+            for (Message part : parts) {
+                failure = closeOwnedPart(part, failure);
             }
         }
+        if (failure != null) throw failure;
+    }
+
+    private static RuntimeException closeOwnedPart(Message part, RuntimeException failure) {
+        if (part != null && part.isReusable()) {
+            try {
+                part.close();
+            } catch (RuntimeException closeFailure) {
+                if (failure == null) return closeFailure;
+                if (closeFailure != failure) failure.addSuppressed(closeFailure);
+            }
+        }
+        return failure;
     }
 
     Object handle() {
@@ -1005,7 +1007,11 @@ public final class Message implements AutoCloseable {
         if (closed)
             return;
         if (valid) {
-            NATIVE_ACCESS.close(msg);
+            int result = NATIVE_ACCESS.close(msg);
+            if (result != ConfigResult.OK.value()) {
+                throw new ZlinkConfigException(
+                        ConfigResult.fromValue(result), ContractAccess.nativeErrno());
+            }
             valid = false;
         }
         recvArmed = false;

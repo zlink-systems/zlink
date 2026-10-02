@@ -200,24 +200,10 @@ internal sealed class ZLinkProviderRelocationRepository(IZLinkRelocationStore pr
         return ZLinkRelocationDeleteResult.Deleted;
     }
 
-    private static uint ComputeCrc32C(ReadOnlySpan<byte> payload)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in payload)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc >> 1) ^ (0x82f63b78U & (uint)-(int)(crc & 1));
-            }
-        }
-        return ~crc;
-    }
-
     private static ZLinkRelocationStored Stored(
         ZLinkBlobReference reference,
         ReadOnlySpan<byte> payload,
         DateTimeOffset expiresAt,
         DateTimeOffset storeNow
-    ) => new(reference.Value, ComputeCrc32C(payload), expiresAt, storeNow);
+    ) => new(reference.Value, ZLinkCrc32C.Compute(payload), expiresAt, storeNow);
 }

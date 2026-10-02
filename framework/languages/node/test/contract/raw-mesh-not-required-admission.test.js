@@ -41,7 +41,7 @@ test('NotRequired Admit conveys the peer descriptor before the connector closes'
   const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
   const { left, right, disconnected } = pair;
   try {
-    assert.equal(await left.announceExpectedPeers(), 1);
+    assert.equal(await left.observeSelectedRoutes(), 1);
     assert.equal(await right.pumpOne(), 'infrastructure');
     assert.equal(right.topology.notRequiredPeers().length, 1);
     assert.equal(left.topology.notRequiredPeers().length, 0);
@@ -76,12 +76,85 @@ async function assertTerminalPair({ left, right, disconnected, sent, selectRoute
   assert.equal(right.topology.notRequiredPeers().length, 1);
 }
 
+test('HELLO is submitted once per selected route before admission', async () => {
+  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const { left, right, sent, selectRoute } = pair;
+  try {
+    assert.equal(await left.observeSelectedRoutes(), 1);
+    assert.equal(sent.length, 1);
+    await left.pumpBatch(false);
+    await left.pumpBatch(false);
+    assert.equal(sent.length, 1, 'idle pumps must preserve the accepted HELLO');
+    assert.equal(await left.announcePeer('right'), false);
+    const descriptor = right.topology.localDescriptor();
+    left.connectPeer(descriptor.advertisedEndpoint, descriptor);
+    left.connectPeerByRoutingId(descriptor.advertisedEndpoint, descriptor.nodeRoutingId);
+    left.expectPeerByRoutingId(descriptor.advertisedEndpoint, descriptor.nodeRoutingId);
+    assert.equal(await left.announceExpectedPeers(), 0);
+    assert.equal(sent.length, 1, 'intent refresh must preserve the accepted HELLO');
+    selectRoute(17n);
+    assert.equal(await left.observeSelectedRoutes(), 1);
+    assert.equal(sent.length, 2, 'a replacement route needs one new HELLO');
+    await left.pumpBatch(false);
+    assert.equal(sent.length, 2);
+    left.disconnectPeer(right.topology.localDescriptor().advertisedEndpoint, 'right');
+    left.connectPeer(
+      right.topology.localDescriptor().advertisedEndpoint,
+      right.topology.localDescriptor()
+    );
+    await left.observeSelectedRoutes();
+    await left.announceExpectedPeers();
+    assert.equal(sent.length, 3, 'a removed intent must forget its accepted HELLO');
+  } finally {
+    left.close();
+    right.close();
+  }
+});
+
+test('a rejected HELLO does not record acceptance for its selected route', async () => {
+  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const { left, right, sent, rejectNextSubmit } = pair;
+  try {
+    rejectNextSubmit();
+    await left.observeSelectedRoutes();
+    assert.equal(sent.length, 0);
+    assert.equal(await left.announceExpectedPeers(), 1);
+    assert.equal(sent.length, 1);
+    assert.equal(await left.announceExpectedPeers(), 0);
+    assert.equal(sent.length, 1);
+  } finally {
+    left.close();
+    right.close();
+  }
+});
+
+test('late HELLO acceptance belongs to the route generation submitted', async () => {
+  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const { left, right, sent, selectRoute, holdNextSubmit } = pair;
+  try {
+    const accept = holdNextSubmit();
+    const oldObservation = left.observeSelectedRoutes();
+    selectRoute(17n);
+    await left.observeSelectedRoutes();
+    accept();
+    await oldObservation;
+    assert.equal(sent.length, 2);
+    assert.equal(await left.announceExpectedPeers(), 0);
+    assert.equal(sent.length, 2, 'old acceptance must not overwrite the new route acceptance');
+  } finally {
+    left.close();
+    right.close();
+  }
+});
+
 function createPair({ endpointOnly, hostAttached, notify }) {
   const queues = { left: [], right: [] };
   let routeGeneration = 1n;
   const disconnected = [];
   const sent = [];
   let connected = false;
+  let rejectSubmit = false;
+  let heldSubmit;
   const descriptors = Object.fromEntries(['left', 'right'].map((rid, index) => [rid, {
     meshName: 'not-required-mesh', nodeRoutingId: rid,
     lifecycleGeneration: BigInt(index + 41), descriptorRevision: 7n,
@@ -118,7 +191,16 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       async send(target, parts) {
         assert.equal(target, remote);
         assert.equal(connected, true);
+        if (rejectSubmit) {
+          rejectSubmit = false;
+          throw new Error('Controlled submit refusal');
+        }
         const record = { sourceRid: rid, routeGeneration, parts: parts.map(part => Buffer.from(part)) };
+        if (heldSubmit !== undefined) {
+          const held = heldSubmit;
+          heldSubmit = undefined;
+          await held;
+        }
         sent.push(record);
         queues[remote].push(record);
       },
@@ -150,5 +232,12 @@ function createPair({ endpointOnly, hostAttached, notify }) {
     routeGeneration = generation;
     connected = true;
   };
-  return { left, right, sent, disconnected, selectRoute };
+  return { left, right, sent, disconnected, selectRoute,
+    rejectNextSubmit() { rejectSubmit = true; },
+    holdNextSubmit() {
+      let accept;
+      heldSubmit = new Promise(resolve => { accept = resolve; });
+      return accept;
+    }
+  };
 }

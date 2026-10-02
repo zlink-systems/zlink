@@ -51,7 +51,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
     entrySpot: () => ({ routingId: 'node-a', status: () => ({ lifecycleGeneration: 1n }) }),
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
-      location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };
+      location = { actor: actorRef, spotId: spotId ?? 'node-a', spotGeneration, membershipEpoch };
       return actorRef;
     }
   };

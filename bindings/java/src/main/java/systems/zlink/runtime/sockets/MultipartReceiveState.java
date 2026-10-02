@@ -4,6 +4,7 @@ package systems.zlink.runtime.sockets;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.runtime.nativeapi.InternalAccess;
+
 final class MultipartReceiveState {
     private static final Message[] NO_FRAMES = new Message[0];
 
@@ -19,7 +20,8 @@ final class MultipartReceiveState {
     }
 
     Message poll() {
-        Message frame = frames[index++];
+        Message frame = frames[index];
+        frames[index++] = null;
         InternalAccess.messageSetMore(frame, index < frames.length);
         if (!hasPending()) {
             frames = NO_FRAMES;
@@ -43,14 +45,7 @@ final class MultipartReceiveState {
             index = 0;
             return;
         }
-        for (int i = index; i < frames.length; i++) {
-            if (frames[i] != null) {
-                try {
-                    frames[i].close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
+        Message.closeAll(frames);
         frames = NO_FRAMES;
         index = 0;
     }

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -958,7 +959,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.Target.OwnerLeaseGeneration,
             prepare.Object.ObjectId,
             stableType,
-            prepare.Object.Kind == 3,
+            prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot,
             string.Empty,
             prepare.PayloadChecksumCrc32c,
             actors,
@@ -1006,7 +1007,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     internal void ScheduleCanonicalCutoverWarning(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
-    ) => _ = RunCanonicalCutoverWarningAsync(prepare);
+    )
+    {
+        var fence = new ZLinkAggregateFence(
+            DecodeRelocationId(prepare.RelocationId),
+            prepare.TargetAttemptGeneration
+        );
+        if (_staged.TryGetValue(fence, out var entry) && entry is TargetStage stage)
+            _ = stage.RunCanonicalCutoverWarningAsync(() =>
+                RunCanonicalCutoverWarningAsync(prepare)
+            );
+    }
 
     internal async ValueTask AbortCanonicalPreparedTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -1065,7 +1076,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return;
         ZLinkFrameworkDebugLog.SpotDiscovery($"cutover_timeout object=spot");
         ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
-            prepare.Object.Kind == 3 ? "instance_spot" : "user_spot"
+            prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
+                : ZLinkRuntimeMetrics.NormalizedUserSpotKind
         );
         //  Location runtime §10: from here the target also reads its source
         //  fence. Only a confirmed source Preserve (the fence moved to another
@@ -1167,7 +1180,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             data.SenderRole,
             data.Object,
             sourceNodeRid,
-            "31"
+            ServiceWireConstants.Command.RelocationData
         );
         return stage.AppendCanonicalInboundDataAsync(data);
     }
@@ -1188,7 +1201,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 cutover.SenderRole,
                 cutover.Object,
                 sourceNodeRid,
-                "34"
+                ServiceWireConstants.Command.RelocationCutover
             );
         }
         catch (ZLinkFrameworkException exception)
@@ -1246,7 +1259,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordRelocationTargetResume(
             System.Diagnostics.Stopwatch.GetElapsedTime(resumeStartedTimestamp),
-            cutover.Object.Kind == 3 ? "instance_spot" : "user_spot"
+            cutover.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
+                : ZLinkRuntimeMetrics.NormalizedUserSpotKind
         );
         runtime.ScheduleRelocationSessionRouteConvergence(stage);
     }
@@ -1258,7 +1273,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         byte senderRole,
         ZLinkServiceWireCodec.RelocationObjectRecord relocationObject,
         RoutingId sourceNodeRid,
-        string command
+        ServiceWireConstants.Command command
     )
     {
         var fence = new ZLinkAggregateFence(
@@ -1268,7 +1283,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         if (!_staged.TryGetValue(fence, out var entry) || entry is not TargetStage stage)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"Command {command} has no prepared target.",
+                $"Command {(byte)command} has no prepared target.",
                 ZLinkRetryAdvice.DoNotRetry
             );
         var spot = stage.SpotParticipant;
@@ -1302,7 +1317,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || relocationObject.ObjectGeneration != spot.ObjectGeneration
             || relocationObject.ExpectedAuthorityOwnerGeneration != expectedAuthorityOwnerGeneration
         )
-            throw new InvalidDataException($"Command {command} changed its prepared SPOT attempt.");
+            throw new InvalidDataException(
+                $"Command {(byte)command} changed its prepared SPOT attempt."
+            );
         return stage;
     }
 
@@ -2828,9 +2845,18 @@ internal sealed record TargetStage(
     public int RelocationReadyDelivered;
     public int RelocatedInitializationCompleted;
     private readonly ZLinkStateLane _lane = new();
+    private Lazy<Task>? _canonicalCutoverWarning;
     private int _sessionRouteConvergenceRunning;
     private ZLinkRelocationParticipantEnvelope? _spotParticipant;
     public SemaphoreSlim PublishGate { get; } = new(1, 1);
+
+    internal async Task RunCanonicalCutoverWarningAsync(Func<Task> warning)
+    {
+        var operation = await _lane
+            .RunAsync(() => _canonicalCutoverWarning ??= new Lazy<Task>(warning))
+            .ConfigureAwait(false);
+        await operation.Value.ConfigureAwait(false);
+    }
 
     //  The stage's SPOT participant is fixed once the immutable Envelope is
     //  staged — resolve the single-scan once and reuse the materialized
@@ -2876,7 +2902,7 @@ internal sealed record TargetStage(
                     || cutover.BoundaryChecksumCrc32c != ~_relayCrcState
                 )
                     throw new InvalidDataException(
-                        "Command 34 boundary values do not match the staged relay span."
+                        $"Command {(byte)ServiceWireConstants.Command.RelocationCutover} boundary values do not match the staged relay span."
                     );
             })
         );
@@ -3042,7 +3068,9 @@ internal sealed record TargetStage(
         _lane.RunAsync(() =>
         {
             if (Volatile.Read(ref AuthorityPublished) != 0)
-                throw new InvalidDataException("Command 31 arrived after target cutover.");
+                throw new InvalidDataException(
+                    $"Command {(byte)ServiceWireConstants.Command.RelocationData} arrived after target cutover."
+                );
             var spot = SpotParticipant;
             var previous =
                 HeldRecords.Count == 0

@@ -603,7 +603,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     } catch (confirmationError) {
       this.recordFailure(errorMessage(confirmationError), 'owner_lease_claim_confirmation');
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
-      throw originalError;
+      throw confirmationError;
     }
     if (confirmed.kind !== 'found' || confirmed.token.ownerId !== this.ownerId) {
       throw originalError;

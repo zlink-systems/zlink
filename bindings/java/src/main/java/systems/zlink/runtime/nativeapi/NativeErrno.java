@@ -24,11 +24,6 @@ public final class NativeErrno {
     public static final int ETIMEDOUT = NativeErrorCodes.ETIMEDOUT;
     public static final int ECANCELED = NativeErrorCodes.ECANCELED;
     public static final int ETERM = NativeErrorCodes.ETERM;
-    public static final int EWOULDBLOCK_WIN = NativeErrorCodes.EWOULDBLOCK_WIN;
-    public static final int ECONNREFUSED_WIN = NativeErrorCodes.ECONNREFUSED_WIN;
-    public static final int ENOTCONN_WIN = NativeErrorCodes.ENOTCONN_WIN;
-    public static final int EHOSTUNREACH_WIN = NativeErrorCodes.EHOSTUNREACH_WIN;
 
-    private NativeErrno() {
-    }
+    private NativeErrno() {}
 }

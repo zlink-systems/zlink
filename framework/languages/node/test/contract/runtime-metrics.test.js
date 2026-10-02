@@ -5,6 +5,15 @@ const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 function collector() {
   const records = [];
@@ -301,6 +310,7 @@ test('RMETRIC Entry Spot activation records entry count and lifecycle counters',
     async onLeaveActor() {}
   }
   const activation = new framework.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot: {
       routingId: 'entry-spot',

@@ -1244,8 +1244,8 @@ class in_memory_location_repository_t : public location_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "location store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
     bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const

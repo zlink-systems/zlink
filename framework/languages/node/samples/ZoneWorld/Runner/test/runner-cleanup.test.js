@@ -101,8 +101,21 @@ for (const mode of ['normal', 'sigterm', 'sigterm-b8']) {
     });
     const observe = () => {
       descendants(root, observed);
-      for (const entry of fs.readdirSync(tempRoot)) {
-        if (entry.startsWith('zlink-zoneworld-')) runDirs.add(path.join(tempRoot, entry));
+      const directories = fs.readdirSync(tempRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith('zlink-zoneworld-'))
+        .map((entry) => path.join(tempRoot, entry.name));
+      for (const directory of directories) runDirs.add(directory);
+      while (directories.length > 0) {
+        const directory = directories.pop();
+        let entries;
+        try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const childDirectory = path.join(directory, entry.name);
+          if (entry.name.startsWith('zlink-zoneworld-')) runDirs.add(childDirectory);
+          directories.push(childDirectory);
+        }
       }
       for (const entry of observed.values()) {
         // The runner spawns the preview through Vite's CLI entry point

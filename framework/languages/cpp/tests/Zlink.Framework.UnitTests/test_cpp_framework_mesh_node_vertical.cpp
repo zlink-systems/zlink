@@ -1477,11 +1477,16 @@ void verify_public_runtime_surface ()
     assert (work_initial != first.channels.end ());
     assert (work_initial->ready_target_count == 1);
     assert (work_initial->is_ready);
-    assert (second.sequence > first.sequence);
+    assert (first.sequence == 1);
+    assert (second.sequence == first.sequence);
+    assert (second.observed_at == first.observed_at);
     auto &channel_options = runtime_options.channel ("work");
     channel_options.weight (0);
     assert (channel_options.weight () == 0);
-    assert (!runtime->snapshot ("vertical-mesh").channels.front ().is_ready);
+    const auto without_work = runtime->snapshot ("vertical-mesh");
+    assert (!without_work.channels.front ().is_ready);
+    assert (without_work.sequence == second.sequence + 1);
+    assert (runtime->snapshot ("vertical-mesh").sequence == without_work.sequence);
     channel_options.weight (100);
     assert (channel_options.weight () == 100);
     runtime_options.mesh ("vertical-mesh").placement_weight (0);
@@ -1670,6 +1675,14 @@ void verify_public_runtime_surface ()
     assert (!runtime->is_ready ("vertical-mesh"));
     assert (runtime->snapshot ("vertical-mesh").state
             == zlink::framework::topology_state_t::stopped);
+    const auto terminal = runtime->snapshot ("vertical-mesh");
+    assert (runtime->snapshot ("vertical-mesh").sequence == terminal.sequence);
+    assert (runtime->snapshot ("vertical-mesh").observed_at == terminal.observed_at);
+    {
+        std::lock_guard lock (event_mutex);
+        assert (received.back ().sequence == terminal.sequence);
+        assert (received.back ().observed_at == terminal.observed_at);
+    }
     observation->close ();
     node->stop ();
 }

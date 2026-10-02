@@ -188,15 +188,15 @@ class location_runtime_t
         static_cast<void> (node_rid);
         try {
             if (cancellation.stop_requested ())
-                throw detail::make_boundary_exception (detail::boundary_error_t::cancelled,
-                                                       "location runtime startup was cancelled");
+                std::rethrow_exception (
+                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
             const auto deadline_at =
               std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout;
             renew_owner_lease_once (deadline_at, cancellation);
             if (cancellation.stop_requested ()) {
                 release_cancelled_claim (deadline_at);
-                throw detail::make_boundary_exception (detail::boundary_error_t::cancelled,
-                                                       "location runtime startup was cancelled");
+                std::rethrow_exception (
+                  detail::make_cancellation_exception ("location runtime startup was cancelled"));
             }
         }
         catch (...) {

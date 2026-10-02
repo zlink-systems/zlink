@@ -57,16 +57,6 @@ export interface ZLinkMeshDispatchFailureContext {
   readonly commandId?: number;
 }
 
-class ZLinkMeshDispatchFailure extends Error {
-  constructor(
-    readonly context: ZLinkMeshDispatchFailureContext,
-    readonly dispatchCause: unknown
-  ) {
-    super('Mesh record dispatch failed.', { cause: dispatchCause });
-    this.name = 'ZLinkMeshDispatchFailure';
-  }
-}
-
 export class ZLinkMeshDispatchPump {
   private pendingDomains: number = ReadyDomain.None;
   private infrastructureScheduled = false;
@@ -190,12 +180,8 @@ export class ZLinkMeshDispatchPump {
     return new Promise((resolve) => this.idleApplicationWorkers.add(resolve));
   }
 
-  private reportDispatchError(error: unknown): void {
-    if (error instanceof ZLinkMeshDispatchFailure) {
-      this.options.reportError?.(error.dispatchCause, error.context);
-      return;
-    }
-    this.options.reportError?.(error);
+  private reportDispatchError(error: unknown, context?: ZLinkMeshDispatchFailureContext): void {
+    this.options.reportError?.(error, context);
   }
 
   /**
@@ -322,13 +308,10 @@ export class ZLinkMeshDispatchPump {
                       const dispatch = async () => {
                         try {
                           await this.options.dispatch(owner, record);
+                          await record.onTerminalCompletion?.();
                         } catch (error) {
-                          throw new ZLinkMeshDispatchFailure(
-                            meshDispatchFailureContext(record),
-                            error
-                          );
+                          this.reportDispatchError(error, meshDispatchFailureContext(record));
                         }
-                        await record.onTerminalCompletion?.();
                       };
                       if (permit === undefined) {
                         await dispatch();

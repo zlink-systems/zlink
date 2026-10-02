@@ -1966,49 +1966,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return sourceActorLeaver.leave(actor, source);
     }
 
-    CompletionStage<Void> leaveSourceForRemoteMove(ZLinkActor actor) {
-        DefaultActorContext context = requireContext(actor);
-        String currentSpotId = context.joinedSpotId();
-        return sourceActorLeaver
-                .leave(actor)
-                .thenCompose(
-                        ignored -> {
-                            return currentSpotId == null
-                                            || actorRegistry.isRoutedTransfer(
-                                                    actor.context().actorId())
-                                    ? CompletableFuture.completedFuture(null)
-                                    : spotNode.leaveActor(
-                                                    context.actorRef(),
-                                                    currentSpotId,
-                                                    defaultRequestTimeout)
-                                            .thenAccept(parts -> parts.forEach(Message::close));
-                        })
-                .thenRun(context::markLeft);
-    }
-
-    CompletionStage<Void> leaveSourceForCoreRemoteMove(ZLinkActor actor) {
-        DefaultActorContext context = requireContext(actor);
-        return sourceActorLeaver.leave(actor).thenRun(context::markLeft);
-    }
-
-    /**
-     * Dispatches the source lifecycle notification after the remote location commit. The
-     * notification is deliberately one-way: the source context must stop advertising its old
-     * membership without making the committed target wait for the callback result.
-     */
-    void notifySourceForCoreRemoteMove(ZLinkActor actor) {
-        DefaultActorContext context = requireContext(actor);
-        try {
-            CompletionStage<Void> notification = sourceActorLeaver.leave(actor);
-            if (notification != null) {
-                notification.exceptionally(ignored -> null);
-            }
-        } catch (Throwable ignored) {
-            // Source OnLeaveActor is a one-way notification after commit.
-        }
-        context.markLeft();
-    }
-
     void cancelRemoteMove(ZLinkActor actor) {
         failTransferBacklog(actor, new ZLinkConfigurationException("actor transfer was cancelled"));
         requireContext(actor).endMove();
@@ -4829,18 +4786,49 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         ZLinkActor actor = check.actor();
         DefaultActorContext context = check.context();
-        return dispatches.beginTeardown(
-                actorId,
-                () -> {
-                    inStateLane(
-                            () -> {
-                                actorRegistry.remove(actorId, actor);
-                                return null;
-                            });
-                    removeActorSessionRouteForContext(context);
-                    context.clearAfterDestroy();
-                    return CompletableFuture.completedFuture(null);
-                });
+        CompletableFuture<Throwable> cleanupFailure = new CompletableFuture<>();
+        CompletionStage<Void> teardown =
+                dispatches.beginTeardown(
+                        actorId,
+                        () ->
+                                ZLinkHandlerStages.completeAll(
+                                                List.of(
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        () ->
+                                                                                inStateLane(
+                                                                                        () -> {
+                                                                                            actorRegistry
+                                                                                                    .remove(
+                                                                                                            actorId,
+                                                                                                            actor);
+                                                                                            return null;
+                                                                                        })),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        () ->
+                                                                                removeActorSessionRouteForContext(
+                                                                                        context)),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        context
+                                                                                ::closeHandlerInstances),
+                                                        () ->
+                                                                ZLinkHandlerStages.fromRunnable(
+                                                                        context.state
+                                                                                ::clearAfterDestroy)))
+                                        .handle(
+                                                (ignored, failure) -> {
+                                                    cleanupFailure.complete(failure);
+                                                    return null;
+                                                }));
+        return teardown.thenCompose(
+                ignored ->
+                        cleanupFailure.thenCompose(
+                                failure ->
+                                        failure == null
+                                                ? CompletableFuture.completedFuture(null)
+                                                : CompletableFuture.failedFuture(unwrap(failure))));
     }
 
     private CompletionStage<Void> closeActorEntry(ActorEntry entry) {

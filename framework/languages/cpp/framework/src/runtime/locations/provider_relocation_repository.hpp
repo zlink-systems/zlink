@@ -179,8 +179,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "relocation Store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("relocation Store operation was cancelled")));
     }
 
     static std::string make_reference ()

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -14,6 +15,14 @@ internal sealed class ZLinkSpotRuntimeManager(
     ZLinkDispatchErrorReporter dispatchErrors
 )
 {
+    private static readonly TimeSpan LocationConvergencePollInterval = TimeSpan.FromMilliseconds(
+        10
+    );
+    private const int MaximumReservationRefreshExponent = 6;
+
+    private static TimeSpan NextReservationRefreshDelay(ref int attempt) =>
+        TimeSpan.FromMilliseconds(1 << Math.Min(attempt++, MaximumReservationRefreshExponent));
+
     private readonly ZLinkFrameworkRegistration _frameworkRegistration = registration;
     private readonly IZLinkLocationRepository? _locationStore =
         registration.Locations.ResolveStore();
@@ -233,9 +242,8 @@ internal sealed class ZLinkSpotRuntimeManager(
                 }
                 if (selectedTarget is null)
                 {
-                    var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
                     await Task.Delay(
-                            TimeSpan.FromMilliseconds(backoffMilliseconds),
+                            NextReservationRefreshDelay(ref reservationRefreshAttempt),
                             deadlineToken.Token
                         )
                         .ConfigureAwait(false);
@@ -339,9 +347,8 @@ internal sealed class ZLinkSpotRuntimeManager(
                 }
                 if (reserved is ZLinkObjectReserveResult.Conflict(ZLinkAuthorityReadResult.Missing))
                 {
-                    var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
                     await Task.Delay(
-                            TimeSpan.FromMilliseconds(backoffMilliseconds),
+                            NextReservationRefreshDelay(ref reservationRefreshAttempt),
                             deadlineToken.Token
                         )
                         .ConfigureAwait(false);
@@ -590,7 +597,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     );
                 if (
                     current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    && relocation.Phase >= 4
+                    && relocation.Phase >= (byte)ServiceWireCodec.RelocationPhase.Committed
                     && !string.IsNullOrWhiteSpace(relocation.State.TargetNodeRid)
                 )
                     return new ZLinkSpotCreateResult(
@@ -609,7 +616,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                         $"Timed out while joining relocating User Spot '{spotId}'.",
                         ZLinkRetryAdvice.RetryAfterBackoff
                     );
-                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
+                await Task.Delay(LocationConvergencePollInterval, cancellationToken)
                     .ConfigureAwait(false);
                 var relocatingRead = await _locationStore!
                     .ReadAuthorityAsync(
@@ -663,7 +670,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
 
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
+            await Task.Delay(LocationConvergencePollInterval, cancellationToken)
                 .ConfigureAwait(false);
             var read = await _locationStore!
                 .ReadAuthorityAsync(
@@ -830,7 +837,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 );
                 if (Stopwatch.GetElapsedTime(0) >= deadlineAt)
                     throw CloseDeadlineElapsed(spotId);
-                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
+                await Task.Delay(LocationConvergencePollInterval, cancellationToken)
                     .ConfigureAwait(false);
             }
         }

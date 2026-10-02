@@ -1957,9 +1957,9 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
               completion (terminal, result);
           }
           catch (...) {
-              const auto failure =
-                detail::current_exception_result<void> ("Session journal Store operation failed");
-              completion (failure.error_kind () == framework_error_kind_t::deadline_exceeded
+              const auto failure = detail::current_exception_result<void> ();
+              const auto *error = failure.error ();
+              completion (error && error->kind () == framework_error_kind_t::deadline_exceeded
                             ? foundation::operation_terminal_t::timed_out
                             : foundation::operation_terminal_t::transport_failed,
                           std::nullopt);
@@ -5571,10 +5571,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         protocol::framework_error_code::requestProtocolError));
             }
             catch (const std::exception &) {
-                const auto failure =
-                  detail::current_exception_result<void> ("Store operation failed");
+                const auto failure = detail::current_exception_result<void> ();
+                const auto *error = failure.error ();
                 const auto terminal =
-                  failure.error_kind () == framework_error_kind_t::deadline_exceeded
+                  error && error->kind () == framework_error_kind_t::deadline_exceeded
                     ? std::pair{protocol::request_terminal_result::timedOut,
                                 protocol::framework_error_code::none}
                     : std::pair{protocol::request_terminal_result::internalError,
