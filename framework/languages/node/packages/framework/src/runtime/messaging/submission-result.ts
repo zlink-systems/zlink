@@ -1,8 +1,10 @@
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
+  createInternalFrameworkException,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
-import { SubmitResult } from '../backend/runtime-values';
+import { ZLinkFrameworkException } from '../../contracts';
+import { RequestResult, SubmitResult } from '../backend/runtime-values';
 export enum ZLinkSubmitStatus {
   Submitted = 'submitted',
   Backpressured = 'backpressured',
@@ -16,40 +18,54 @@ export interface ZLinkSubmitResult {
   readonly status: ZLinkSubmitStatus;
 }
 
-/**
- * The single owner that classifies a binding SubmitResult as a Framework submit status.
- * NotConnected is a route that cannot be used (Unavailable); it is never a backpressure signal.
- */
-export function classifySubmitResult(result: number, operation: string): ZLinkSubmitResult {
+/** Projects the Core submit result once; phase only determines capacity refusal meaning. */
+export function submitToRequestResult(result: number, phase: 'submit' | 'completion'): number {
   switch (result) {
     case SubmitResult.Ok:
-      return { status: ZLinkSubmitStatus.Submitted };
+      return RequestResult.Ok;
     case SubmitResult.Backpressured:
-      return { status: ZLinkSubmitStatus.Backpressured };
-    case SubmitResult.NotAdmitted:
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        `${operation} was not admitted.`
-      );
-    case SubmitResult.NotFound:
-      return { status: ZLinkSubmitStatus.TargetNotFound };
+      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.TimedOut;
     case SubmitResult.NotConnected:
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
-    case SubmitResult.Terminated:
-      return { status: ZLinkSubmitStatus.Shutdown };
-    case SubmitResult.InvalidState:
-    case SubmitResult.InvalidArgument:
+      return RequestResult.NotConnected;
+    case SubmitResult.NotFound:
+      return RequestResult.NotFound;
+    case SubmitResult.NotAdmitted:
+      return RequestResult.Rejected;
     case SubmitResult.InvalidHandle:
+    case SubmitResult.InvalidArgument:
     case SubmitResult.ThreadViolation:
-      // Spec 07-framework-error-model §2: a submit in the wrong state or with a bad handle or
-      // argument is an invalid operation, not a missing target.
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidOperation,
-        `${operation} failed with submit result ${result}.`
-      );
+      return RequestResult.InvalidArgument;
+    case SubmitResult.InvalidState:
+      return RequestResult.InvalidState;
+    case SubmitResult.NotSupported:
+      return RequestResult.NotSupported;
+    case SubmitResult.Terminated:
+      return RequestResult.Terminated;
     default:
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
+      return RequestResult.InternalError;
+  }
+}
+
+export function classifySubmitResult(
+  result: number,
+  operation: string,
+  phase: 'submit' | 'completion' = 'completion'
+): ZLinkSubmitResult {
+  const terminal = submitToRequestResult(result, phase);
+  switch (terminal) {
+    case RequestResult.Ok:
+      return { status: ZLinkSubmitStatus.Submitted };
+    case RequestResult.TimedOut:
+      return { status: ZLinkSubmitStatus.TimedOut };
+    case RequestResult.NotFound:
+      return { status: ZLinkSubmitStatus.TargetNotFound };
+    case RequestResult.NotConnected:
+      return { status: ZLinkSubmitStatus.RouteNotConnected };
+    case RequestResult.Terminated:
+      return { status: ZLinkSubmitStatus.Shutdown };
+    default:
+      throw new ZLinkFrameworkException(
+        requestResultToPublicErrorKind(terminal),
         `${operation} failed with submit result ${result}.`
       );
   }

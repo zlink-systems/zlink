@@ -4,10 +4,6 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal static class ZLinkStreamControlFrames
 {
-    public static bool IsHeartbeatPong(ZlinkStreamHeader header) =>
-        header.Kind == ZlinkStreamMessageKind.Control
-        && header.Name == ZlinkStreamControlProtocol.HeartbeatPongName;
-
     public static void SendHeartbeatPing(ZLinkManagedStream stream)
     {
         var ping = new ZlinkStreamHeader(

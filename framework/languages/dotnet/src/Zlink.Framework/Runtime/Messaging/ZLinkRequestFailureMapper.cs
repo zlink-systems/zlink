@@ -119,7 +119,11 @@ internal static class ZLinkRequestFailureMapper
         };
     }
 
-    public static Exception CreateCompletionException(RequestResult result, string operationName)
+    public static ZLinkFrameworkException CreateCompletionException(
+        RequestResult result,
+        string operationName,
+        Exception? cause = null
+    )
     {
         return result switch
         {
@@ -127,18 +131,18 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 $"{operationName} timed out.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                CreateRequestException(result)
+                cause ?? CreateRequestException(result)
             ),
             RequestResult.NotConnected => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the target route is not connected.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                CreateRequestException(result)
+                cause ?? CreateRequestException(result)
             ),
             RequestResult.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the target was not found.",
-                innerException: CreateRequestException(result)
+                innerException: cause ?? CreateRequestException(result)
             ),
             //  Spec 32-framework-error-model:99-103 — a terminal-only `Conflict`/
             //  `Busy` on a remote request reply reflects the target's queue/owner
@@ -148,41 +152,41 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} was refused with a transient result '{result}'.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                CreateRequestException(result)
+                cause ?? CreateRequestException(result)
             ),
             RequestResult.Rejected => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 $"{operationName} was rejected with result '{result}'.",
                 ZLinkRetryAdvice.DoNotRetry,
-                CreateRequestException(result)
+                cause ?? CreateRequestException(result)
             ),
             RequestResult.Backpressured => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 $"{operationName} exceeded its admission deadline.",
                 ZLinkRetryAdvice.DoNotRetry,
-                CreateRequestException(result)
+                cause ?? CreateRequestException(result)
             ),
             RequestResult.ProtocolError => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"{operationName} failed with a protocol error.",
-                innerException: CreateRequestException(result)
+                innerException: cause ?? CreateRequestException(result)
             ),
             RequestResult.Terminated => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 $"{operationName} failed because the runtime is shutting down.",
-                innerException: CreateRequestException(result)
+                innerException: cause ?? CreateRequestException(result)
             ),
             RequestResult.InvalidArgument or RequestResult.InvalidState =>
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"{operationName} failed because the operation is invalid in the current state.",
-                    innerException: CreateRequestException(result)
+                    innerException: cause ?? CreateRequestException(result)
                 ),
             RequestResult.NotSupported or RequestResult.InternalError =>
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.InternalFailure,
                     $"{operationName} failed with result '{result}'.",
-                    innerException: CreateRequestException(result)
+                    innerException: cause ?? CreateRequestException(result)
                 ),
             _ => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
@@ -216,70 +220,7 @@ internal static class ZLinkRequestFailureMapper
         ZlinkSubmitException error,
         string operationName,
         bool completionFailure = true
-    )
-    {
-        // A synchronous refusal of an async call has no wait token, while a
-        // completion task failure can be a real WRITABLE timeout.
-        return error.Result switch
-        {
-            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"{operationName} failed because the target route is not connected.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                error
-            ),
-            ZlinkSubmitException.ErrorCode.NotFound => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"{operationName} failed because the target was not found.",
-                innerException: error
-            ),
-            ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkFrameworkException(
-                completionFailure
-                    ? ZLinkFrameworkErrorKind.DeadlineExceeded
-                    : ZLinkFrameworkErrorKind.Unavailable,
-                completionFailure
-                    ? $"{operationName} timed out while the socket was backpressured."
-                    : $"{operationName} was refused before admission.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                error
-            ),
-            ZlinkSubmitException.ErrorCode.Terminated => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                $"{operationName} failed because the runtime is shutting down.",
-                innerException: error
-            ),
-            ZlinkSubmitException.ErrorCode.NotAdmitted => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                $"{operationName} submit was rejected with result '{error.Result}'.",
-                innerException: error
-            ),
-            //  Spec 32-framework-error-model:51-56 — an invalid argument, a
-            //  closed/invalid handle, a wrong-state submit, or a thread-affinity
-            //  violation is an InvalidOperation, not a policy Rejected or an
-            //  InternalFailure. Matches C++ submit_result_mapper.
-            ZlinkSubmitException.ErrorCode.InvalidState
-            or ZlinkSubmitException.ErrorCode.InvalidArgument
-            or ZlinkSubmitException.ErrorCode.InvalidHandle
-            or ZlinkSubmitException.ErrorCode.ThreadViolation => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"{operationName} submit failed because the operation is invalid in the current state.",
-                innerException: error
-            ),
-            ZlinkSubmitException.ErrorCode.NotSupported
-            or ZlinkSubmitException.ErrorCode.OutOfMemory
-            or ZlinkSubmitException.ErrorCode.SeqExhausted
-            or ZlinkSubmitException.ErrorCode.InternalError => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InternalFailure,
-                $"{operationName} submit failed with result '{error.Result}'.",
-                innerException: error
-            ),
-            _ => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InternalFailure,
-                $"{operationName} submit failed with result '{error.Result}'.",
-                innerException: error
-            ),
-        };
-    }
+    ) => ZLinkSubmitFailureMapper.CreateException(error, operationName, completionFailure);
 
     public static Exception CreateSubmitTimeoutException(
         Exception? lastSubmitFailure,

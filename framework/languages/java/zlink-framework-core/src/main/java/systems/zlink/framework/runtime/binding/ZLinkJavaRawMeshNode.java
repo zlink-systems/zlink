@@ -316,7 +316,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -2046,7 +2046,7 @@ final class ZLinkJavaRawMeshNode
                                                                 targetNodeRid,
                                                                 targetSpotId,
                                                                 correlation,
-                                                                requestResult(failure, false),
+                                                                requestTerminal(failure, false),
                                                                 List.of())),
                         ZLinkBackendReceived::close);
             } finally {
@@ -2176,7 +2176,7 @@ final class ZLinkJavaRawMeshNode
                             (replyFrames, requestFailure) ->
                                     forwardRelocationReply(
                                             stale.correlation(),
-                                            requestResult(requestFailure, false),
+                                            requestTerminal(requestFailure, false),
                                             replyFrames == null ? List.of() : replyFrames,
                                             reply,
                                             onFailure));
@@ -2724,7 +2724,7 @@ final class ZLinkJavaRawMeshNode
         requestApplication(route.targetNodeRid(), frames, remainingTimeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure, false);
+                            RequestResult result = requestTerminal(failure, false);
                             List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
@@ -2966,7 +2966,7 @@ final class ZLinkJavaRawMeshNode
                                         operation.id(),
                                         actor,
                                         correlation,
-                                        requestResult(failure, false),
+                                        requestTerminal(failure, false),
                                         replyFrames == null ? List.of() : replyFrames));
         return operation
                 .completion()
@@ -3585,7 +3585,7 @@ final class ZLinkJavaRawMeshNode
                         timeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure, false);
+                            RequestResult result = requestTerminal(failure, false);
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
                             }
@@ -3610,6 +3610,12 @@ final class ZLinkJavaRawMeshNode
                                         : ZLinkTerminalWinner.Cause.FAILURE;
     }
 
+    static RequestResult requestTerminal(Throwable failure, boolean initialSubmission) {
+        RequestResult result = requestResult(failure, initialSubmission);
+        return result == null ? RequestResult.INTERNAL_ERROR : result;
+    }
+
+    /** Returns null when the original failure has no typed request projection. */
     static RequestResult requestResult(Throwable failure, boolean initialSubmission) {
         Throwable current = unwrap(failure);
         if (current == null) {
@@ -3618,14 +3624,13 @@ final class ZLinkJavaRawMeshNode
         if (current instanceof ZlinkRequestException requestFailure) {
             return requestFailure.getResult();
         }
-        if (current instanceof ZlinkSubmitException submitFailure
-                && submitFailure.getResult() == SubmitResult.BACKPRESSURED) {
-            return initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT;
+        if (current instanceof ZlinkSubmitException submitFailure) {
+            return ZLinkOneWayCalls.toRequestResult(submitFailure.getResult(), initialSubmission);
         }
         if (current instanceof TimeoutException) {
             return RequestResult.TIMED_OUT;
         }
-        return RequestResult.INTERNAL_ERROR;
+        return null;
     }
 
     private static ZLinkTerminalWinner.Cause completionTerminalCause(Throwable failure) {
@@ -3707,7 +3712,7 @@ final class ZLinkJavaRawMeshNode
                         timeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure, false);
+                            RequestResult result = requestTerminal(failure, false);
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
                             }
@@ -4109,7 +4114,7 @@ final class ZLinkJavaRawMeshNode
                                                 decodeRequestReply(
                                                         target,
                                                         correlation,
-                                                        requestResult(failure, false),
+                                                        requestTerminal(failure, false),
                                                         List.of())),
                 ZLinkBackendReceived::close);
     }

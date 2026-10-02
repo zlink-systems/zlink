@@ -31,6 +31,7 @@ final class ZLinkSocketMonitorDrainLoopTest {
 
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
         assertEquals(0, monitor.recvCalls.get());
+        assertEquals(1, monitor.waitCalls.get());
 
         monitor.emit("CONNECT_DELAYED", "CONNECTION_READY");
         awaitCondition(() -> dispatched.size() == 2);
@@ -54,11 +55,12 @@ final class ZLinkSocketMonitorDrainLoopTest {
                         "monitor-drain-cancellation", monitor, event -> {});
 
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
+        monitor.close();
         loop.interrupt();
         loop.join(1_000);
 
         assertFalse(loop.isAlive());
-        assertFalse(monitor.isClosed());
+        assertTrue(monitor.isClosed());
     }
 
     @Test
@@ -100,6 +102,7 @@ final class ZLinkSocketMonitorDrainLoopTest {
         private final Semaphore readable = new Semaphore(0);
         private final CountDownLatch waitEntered = new CountDownLatch(1);
         private final AtomicInteger recvCalls = new AtomicInteger();
+        private final AtomicInteger waitCalls = new AtomicInteger();
         private volatile RuntimeException receiveFailure;
         private volatile boolean closed;
 
@@ -112,9 +115,12 @@ final class ZLinkSocketMonitorDrainLoopTest {
 
         @Override
         public boolean waitForReadable(Duration timeout) {
+            assertEquals(ZLinkBackendSocketMonitor.WAIT_UNTIL_EVENT, timeout);
+            waitCalls.incrementAndGet();
             waitEntered.countDown();
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                readable.acquire();
+                return !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;

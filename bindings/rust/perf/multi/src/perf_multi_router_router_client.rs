@@ -51,7 +51,7 @@ fn main() {
         let sock = ctx.router_socket().expect("router");
         common::apply_multi_hwm(&sock, &settings);
         sock.common_options()
-            .set_receive_timeout(Duration::from_millis(1))
+            .set_receive_timeout(1)
             .expect("recv timeout");
         let rid = RoutingId::from(format!("CLIENT-{index}").as_bytes());
         sock.set_routing_id(&rid).expect("set rid");

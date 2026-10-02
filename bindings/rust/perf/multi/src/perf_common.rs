@@ -21,6 +21,8 @@ use zlink::{
     SocketMonitorOpenOptions, StreamSocket, SubSocket, SubmitError, SubmitResult, ZlinkError,
 };
 
+const DEFAULT_TIMEOUT_MS: usize = 200;
+
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
 pub const HEADER_SIZE: usize = 29;
 pub const PHASE_WARMUP: u8 = 0;
@@ -1183,8 +1185,8 @@ pub struct MultiSettings {
     pub duration_seconds: u64,
     pub send_high_water_mark: u64,
     pub receive_high_water_mark: u64,
-    pub send_timeout_ms: u64,
-    pub receive_timeout_ms: u64,
+    pub send_timeout_ms: i32,
+    pub receive_timeout_ms: i32,
 }
 
 impl MultiSettings {
@@ -1197,8 +1199,10 @@ impl MultiSettings {
                 "PERF_MULTI_RCVHWM",
                 env_or_u64("PERF_MULTI_HWM", 0),
             ),
-            send_timeout_ms: env_or("PERF_MULTI_SNDTIMEO_MS", 200) as u64,
-            receive_timeout_ms: env_or("PERF_MULTI_RCVTIMEO_MS", 200) as u64,
+            send_timeout_ms: env_or("PERF_MULTI_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS)
+                .try_into().expect("PERF_MULTI_SNDTIMEO_MS exceeds Core milliseconds"),
+            receive_timeout_ms: env_or("PERF_MULTI_RCVTIMEO_MS", DEFAULT_TIMEOUT_MS)
+                .try_into().expect("PERF_MULTI_RCVTIMEO_MS exceeds Core milliseconds"),
         }
     }
 }
@@ -1278,7 +1282,7 @@ pub fn resolve_multi_monitor_hwm_bytes() -> u64 {
 }
 
 pub fn resolve_multi_reqrep_timeout() -> Duration {
-    Duration::from_millis(env_or("PERF_MULTI_REQREP_TIMEOUT_MS", 200).max(1) as u64)
+    Duration::from_millis(env_or("PERF_MULTI_REQREP_TIMEOUT_MS", DEFAULT_TIMEOUT_MS).max(1) as u64)
 }
 
 pub fn resolve_multi_reqrep_drain_timeout(request_timeout: Duration) -> Duration {

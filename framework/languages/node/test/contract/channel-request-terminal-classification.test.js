@@ -86,7 +86,7 @@ test('request failures retain the Core terminal and classify submit results by m
   const submitted = (result) =>
     requestFailureResult(new ZLinkBackendResultError('submit', result, 2));
   assert.deepEqual(submitted(SubmitResult.Backpressured), {
-    terminalResult: RequestResult.Backpressured,
+    terminalResult: RequestResult.TimedOut,
     failureCode: 0
   });
   assert.deepEqual(submitted(SubmitResult.NotConnected), {
@@ -156,10 +156,49 @@ test('tokenless submit refusal is Unavailable while writable completion timeout 
     framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.notEqual(immediate.terminalResult, RequestResult.Backpressured);
+  assert.equal(expired.terminalResult, RequestResult.TimedOut);
   assert.equal(
     requestResultToPublicErrorKind(expired.terminalResult),
     framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
+});
+
+test('one-way typed rejection and caller faults match request classification', async () => {
+  const zlink = require('@zlink-systems/zlink');
+  const { SubmitResult } = zlink;
+  for (const [result, kind] of [
+    [SubmitResult.NotAdmitted, framework.ZLinkFrameworkErrorKind.Rejected],
+    [SubmitResult.InvalidState, framework.ZLinkFrameworkErrorKind.InvalidOperation],
+    [SubmitResult.InvalidArgument, framework.ZLinkFrameworkErrorKind.InvalidOperation],
+    [SubmitResult.InvalidHandle, framework.ZLinkFrameworkErrorKind.InvalidOperation],
+    [SubmitResult.ThreadViolation, framework.ZLinkFrameworkErrorKind.InvalidOperation]
+  ]) {
+    const socket = {
+      sendTimeoutMs: 10,
+      sendHighWaterMark: 16,
+      onSendReady() {},
+      send() {
+        return true;
+      },
+      async submit() {
+        throw new ZLinkBackendResultError('submit', result);
+      },
+      disconnectPeer() {},
+      recv() {
+        return undefined;
+      }
+    };
+    const stream = new framework.ZLinkManagedStream(socket, 'typed-submit-session');
+    const message = zlink.Message.from('payload');
+    try {
+      await assert.rejects(
+        () => stream.submitRaw(message),
+        (error) => error.kind === kind
+      );
+    } finally {
+      message.close();
+    }
+  }
 });
 
 test('raw router and dealer requests preserve the binding failure phase', async (t) => {
@@ -215,7 +254,7 @@ test('raw router and dealer requests preserve the binding failure phase', async 
   ]) {
     for (const [nextPhase, expected] of [
       ['submit', RequestResult.NotConnected],
-      ['completion', RequestResult.Backpressured]
+      ['completion', RequestResult.TimedOut]
     ]) {
       phase = nextPhase;
       const error = await request().then(
@@ -226,3 +265,69 @@ test('raw router and dealer requests preserve the binding failure phase', async 
     }
   }
 });
+
+test('Logical Multicast preserves source refusal and zero-recipient statuses', () => {
+  const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const {
+    ZLinkSubmitStatus
+  } = require('../../packages/framework/dist/runtime/messaging/submission-result');
+  const {
+    ZLinkSpotNodeRuntimeManager
+  } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
+  const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
+  for (const [result, expected] of [
+    [SubmitResult.NotAdmitted, ZLinkSubmitStatus.Backpressured],
+    [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured],
+    [SubmitResult.NotFound, ZLinkSubmitStatus.Submitted]
+  ]) {
+    manager.publishers.set('test.mesh', {
+      publish() {
+        throw new ZLinkBackendResultError('submit', result);
+      }
+    });
+    assert.equal(
+      manager.tryPublish('test.mesh', 'events', 'topic', 'PublicationEvent', { value: 1 }).status,
+      expected
+    );
+  }
+});
+
+for (const [phase, expectedStatus, expectedKind] of [
+  ['submit', 'routeNotConnected', framework.ZLinkFrameworkErrorKind.Unavailable],
+  ['completion', 'timedOut', framework.ZLinkFrameworkErrorKind.DeadlineExceeded]
+]) {
+  test(`STREAM capacity ${phase} preserves its public status and error kind`, async () => {
+    const zlink = require('@zlink-systems/zlink');
+    const {
+      DefaultZLinkSessionSendCall
+    } = require('../../packages/framework/dist/runtime/streams/session-calls');
+    const socket = {
+      onSendReady() {},
+      async submit() {
+        throw new ZLinkBackendResultError('submit', zlink.SubmitResult.Backpressured, undefined, {
+          phase
+        });
+      }
+    };
+    const stream = new framework.ZLinkManagedStream(socket, 'capacity-phase-session');
+    const message = zlink.Message.from('payload');
+    try {
+      assert.equal((await stream.submitRaw(message)).status, expectedStatus);
+    } finally {
+      message.close();
+    }
+    const call = new DefaultZLinkSessionSendCall(
+      {
+        stream,
+        createJsonFrameMessage() {
+          return zlink.Message.from('payload');
+        }
+      },
+      { value: 'payload' }
+    ).packetName('CapacityPhaseEvent');
+    await assert.rejects(
+      () => call.submit(),
+      (error) => error.kind === expectedKind
+    );
+  });
+}

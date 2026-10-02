@@ -87,21 +87,19 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             var framework =
                     (systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause();
             assertEquals(
-                    switch (rejected) {
-                        case NOT_CONNECTED ->
-                                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE;
-                        case NOT_ADMITTED ->
-                                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED;
-                        default ->
-                                systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                                        .DEADLINE_EXCEEDED;
-                    },
+                    rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
+                            ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
+                            : rejected == SubmitResult.NOT_ADMITTED
+                                    ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                            .REJECTED
+                                    : systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                            .DEADLINE_EXCEEDED,
                     framework.kind());
         }
     }
 
     @Test
-    void oneWayAdapterUsesTypedNotAdmittedRegardlessOfNativeErrno() {
+    void oneWayAdapterPreservesTypedRejectionAcrossErrnos() {
         var routeLoss =
                 assertThrows(
                         ExecutionException.class,
@@ -1784,7 +1782,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         return node;
     }
 
-    static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node) throws InterruptedException {
+    private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
+            throws InterruptedException {
         return awaitState(node, MeshPeerState.ADMITTED);
     }
 
