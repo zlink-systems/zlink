@@ -530,9 +530,7 @@ SHA-256이 `requestSha256`과 같은지 확인한다. Record가 없거나 어느
 **Capacity counter**는 한 MeshNode(`MeshName`, `RoutingId`)의 수용 공간 사용량(§3.3)을 담는 record
 하나다. 생성의 예약·완료·취소, object 삭제와 relocation이 사용량을
 바꾸면, 그 변경을 담는 Store write가 바뀌는 host의 capacity counter를 함께 쓴다. 조건은 읽은 version이며,
-record가 없으면 없음을 조건으로 하고 사용량을 0으로 읽는다. 사용량을 0 아래로 내려야 한다고 계산되면 그 write가 조건으로
-삼는 authority·aggregate record를 다시 읽는다. 처음 읽은 version 그대로면 Store의 사용량이 authority와 어긋난
-손상이므로 아무것도 쓰지 않고 `InternalFailure`로 끝내고, 바뀌었으면 [§6.1](#61-read와-cas)의 `Conflict` 처리를 따른다. Descriptor의 `capacity`(§4)는 이 record의
+record가 없으면 없음을 조건으로 하고 사용량을 0으로 읽는다. Descriptor의 `capacity`(§4)는 이 record의
 복사본이다. Value는 아래 field를 이 순서로 담으며, byte 표현은 [§3.5](#35-spotwide-이동의-진행-record)의
 Canonical JSON 규칙을 따른다.
 
