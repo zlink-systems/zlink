@@ -493,8 +493,8 @@ Close 절차는 다음 순서로 진행한다.
    [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
    `Reincarnate`로 authority를 같은 node의 새 `ObjectGeneration`으로 바꾼다. 새 incarnation은 초기화와
    저장 상태 복원이 끝난 뒤 그 Instance intent message만 도착 순서대로 실행한다. 초기화나 복원이 실패하면
-   그 generation을 `Delete`하고 기다리던 message는 typed 실패로 끝난다. 그 밖의 경우에는 같은 fence로
-   authority를 해제한다. 이때 기다리던 Instance intent request는 이 host가 drain 중이면 `ShuttingDown`,
+   그 generation을 `Delete`하고 기다리던 message는 typed 실패로 끝난다. 이 단계의 `Reincarnate` 조건(Instance intent
+   message가 있고 drain이나 relocation 중이 아님)을 만족하지 않으면 같은 fence로 authority를 해제한다. 이때 기다리던 Instance intent request는 이 host가 drain 중이면 `ShuttingDown`,
    relocation 중이면(seal 전후 모두) `Unavailable`로 끝나며 send는 diagnostics에 남는다. 이미 수락한 message를
    다시 배치하지 않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
 
