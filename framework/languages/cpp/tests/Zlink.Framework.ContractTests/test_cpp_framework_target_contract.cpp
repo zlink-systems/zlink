@@ -1053,9 +1053,10 @@ int main ()
      * absence of an application logger never falls back to a process console. */
     gate.require (
       message_flow_tracer.find ("sample_current (") != std::string::npos
-        && message_flow_tracer.find ("add (\"event_id\", \"zlink.message_flow\")")
+        && message_flow_tracer.find ("add (dispatch_event_field::event_id, \"zlink.message_flow\")")
              != std::string::npos
-        && dispatch_error_reporter.find ("add (\"event_id\", \"zlink.dispatch_error\")")
+        && dispatch_error_reporter.find (
+             "add (dispatch_event_field::event_id, \"zlink.dispatch_error\")")
              != std::string::npos
         && message_flow_unit.find ("built.load (std::memory_order_relaxed) != 0")
              != std::string::npos
@@ -1117,15 +1118,17 @@ int main ()
     /* CPP-WIRE-005 — RelocationId is an opaque random 128-bit identity. The
      * process retains issued IDs for the relocation-root retention window and
      * regenerates zero or colliding candidates. */
-    gate.require (relocation_id_generator.find ("getrandom") != std::string::npos
-                    && relocation_id_generator.find ("BCryptGenRandom") != std::string::npos
-                    && relocation_id_generator.find ("arc4random_buf") != std::string::npos
-                    && relocation_id_generator.find ("attempt != 64") != std::string::npos
-                    && relocation_id_generator.find ("std::chrono::hours (24)") != std::string::npos
-                    && relocation_id_generator.find ("_issued.emplace") != std::string::npos,
-                  "CPP-WIRE-005",
-                  "Relocation ID generation is not CSPRNG-gated, non-zero, collision-retrying, and "
-                  "retention-bounded");
+    gate.require (
+      relocation_id_generator.find ("getrandom") != std::string::npos
+        && relocation_id_generator.find ("BCryptGenRandom") != std::string::npos
+        && relocation_id_generator.find ("arc4random_buf") != std::string::npos
+        && relocation_id_generator.find ("attempt != collision_attempt_limit") != std::string::npos
+        && relocation_id_generator.find ("collision_attempt_limit = 64") != std::string::npos
+        && relocation_id_generator.find ("std::chrono::hours (24)") != std::string::npos
+        && relocation_id_generator.find ("_issued.emplace") != std::string::npos,
+      "CPP-WIRE-005",
+      "Relocation ID generation is not CSPRNG-gated, non-zero, collision-retrying, and "
+      "retention-bounded");
     gate.require (mesh_node_runtime.find ("relocation_ids ().issue ()") != std::string::npos
                     && mesh_node_runtime.find ("next_relocation") == std::string::npos,
                   "CPP-WIRE-005",

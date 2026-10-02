@@ -27,6 +27,8 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 final class ZLinkActorSessionCoordinator {
+    private static final long RELOCATION_RECORD_OVERHEAD_BYTES = 512L;
+
     record ActorRoute(
             Optional<String> joinedSpotId,
             ZLinkBackendActorRef actorRef,
@@ -573,7 +575,7 @@ final class ZLinkActorSessionCoordinator {
                         : runtime.submitActorDispatchLazyRecord(
                                 actorId,
                                 relocationRecord,
-                                headerPart.message().size() + 512L,
+                                headerPart.message().size() + RELOCATION_RECORD_OVERHEAD_BYTES,
                                 turn,
                                 () -> {
                                     relocationRelease.run();

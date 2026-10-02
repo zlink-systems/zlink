@@ -1,4 +1,5 @@
 module zlink.framework.json.internal {
+    requires systems.zlink;
     requires com.fasterxml.jackson.databind;
     requires com.fasterxml.jackson.datatype.jsr310;
 

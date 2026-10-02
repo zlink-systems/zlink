@@ -37,24 +37,3 @@ internal sealed record ZLinkClientServerChannelSnapshot(
     IReadOnlyList<ZLinkClientServerServerSnapshot> Servers,
     ZLinkLocationRuntimeSnapshot Location
 );
-
-internal sealed record ZLinkClientServerRuntimeEvent(
-    string Identifier,
-    ulong Sequence,
-    DateTimeOffset Timestamp,
-    string ChannelName,
-    RoutingId? ServerRid,
-    ulong? LifecycleGeneration,
-    ulong? DescriptorRevision,
-    int? Weight,
-    bool? Ready,
-    ZLinkClientServerServerState? State,
-    string? Reason,
-    bool IsTerminal = false
-)
-{
-    internal string SourceKey =>
-        ServerRid is { } serverRid && LifecycleGeneration is { } lifecycleGeneration
-            ? $"{Identifier}:{serverRid.ToHex()}:{lifecycleGeneration}"
-            : Identifier;
-}

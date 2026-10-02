@@ -23,6 +23,8 @@ namespace zlink::framework::detail
  * boundary explicit at every framework call site. */
 class core_timer_drain_loop_t
 {
+    static constexpr std::chrono::milliseconds poll_interval{50};
+
   public:
     core_timer_drain_loop_t () = default;
 
@@ -98,8 +100,7 @@ class core_timer_drain_loop_t
         std::array<zlink::poll_event_t, 1> events{};
         while (!_stop.load (std::memory_order_acquire)) {
             try {
-                if (_poller.wait (events.data (), events.size (), std::chrono::milliseconds (50))
-                    == 0)
+                if (_poller.wait (events.data (), events.size (), poll_interval) == 0)
                     continue;
                 const auto fire_count = _timer.recv ();
                 if (fire_count && _drain)

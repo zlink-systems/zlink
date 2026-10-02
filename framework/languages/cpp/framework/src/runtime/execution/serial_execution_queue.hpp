@@ -207,7 +207,8 @@ class serial_execution_queue_t
     void run (std::string name, std::function<void ()> work);
     void drain ();
     void close ();
-    void cancel_pending ();
+    void cancel_waits () noexcept;
+    void cancel_pending () noexcept;
 
     std::size_t pending_count () const;
     std::size_t pending_count (serial_work_lane_t lane) const;

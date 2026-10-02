@@ -32,6 +32,12 @@ import java.util.function.LongSupplier;
  * live waiter; a new caller cannot barge ahead of an existing waiter.
  */
 public final class ZLinkApplicationJobQueue implements AutoCloseable {
+    public static final int DEFAULT_PAUSE_THRESHOLD_PERCENT = 80;
+    public static final int DEFAULT_RESUME_THRESHOLD_PERCENT = 60;
+    private static final int PERCENT_SCALE = 100;
+    private static final String CPU_AFFINITY_FIELD = "Cpus_allowed_list:";
+    private static final String UNLIMITED_CPU_QUOTA = "max";
+
     private static final Path PROC_STATUS = Path.of("/proc/self/status");
     private static final List<Path> CPUSET_PATHS =
             List.of(
@@ -75,7 +81,13 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             ZLinkApplicationJobQueueProfile profile,
             OptionalLong manualMax,
             ProcessorCandidates processorCandidates) {
-        this(profile, manualMax, processorCandidates, 80, 60, System::nanoTime);
+        this(
+                profile,
+                manualMax,
+                processorCandidates,
+                DEFAULT_PAUSE_THRESHOLD_PERCENT,
+                DEFAULT_RESUME_THRESHOLD_PERCENT,
+                System::nanoTime);
     }
 
     public ZLinkApplicationJobQueue(
@@ -98,7 +110,13 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             OptionalLong manualMax,
             ProcessorCandidates processorCandidates,
             LongSupplier nanoTime) {
-        this(profile, manualMax, processorCandidates, 80, 60, nanoTime);
+        this(
+                profile,
+                manualMax,
+                processorCandidates,
+                DEFAULT_PAUSE_THRESHOLD_PERCENT,
+                DEFAULT_RESUME_THRESHOLD_PERCENT,
+                nanoTime);
     }
 
     ZLinkApplicationJobQueue(
@@ -466,13 +484,14 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private static void validateThresholds(int pause, int resume) {
-        if (pause < 1 || pause > 100) {
+        if (pause < 1 || pause > PERCENT_SCALE) {
             throw new ZLinkConfigurationException(
-                    "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
+                    "ApplicationJobQueuePauseThresholdPercent must be in 1.." + PERCENT_SCALE);
         }
-        if (resume < 0 || resume > 99) {
+        if (resume < 0 || resume >= PERCENT_SCALE) {
             throw new ZLinkConfigurationException(
-                    "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
+                    "ApplicationJobQueueResumeThresholdPercent must be in 0.."
+                            + (PERCENT_SCALE - 1));
         }
         if (resume >= pause) {
             throw new ZLinkConfigurationException(
@@ -482,11 +501,12 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private static long ceilPercent(long value, int percent) {
-        return Math.addExact(Math.multiplyExact(value, percent), 99L) / 100L;
+        return Math.addExact(Math.multiplyExact(value, percent), PERCENT_SCALE - 1L)
+                / PERCENT_SCALE;
     }
 
     private static long floorPercent(long value, int percent) {
-        return Math.multiplyExact(value, percent) / 100L;
+        return Math.multiplyExact(value, percent) / PERCENT_SCALE;
     }
 
     private Permit reserveUnderLock() {
@@ -626,7 +646,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private static Integer readAffinityCount() {
         try {
             for (String line : Files.readAllLines(PROC_STATUS)) {
-                if (line.startsWith("Cpus_allowed_list:")) {
+                if (line.startsWith(CPU_AFFINITY_FIELD)) {
                     return parseCpuList(line.substring(line.indexOf(':') + 1));
                 }
             }
@@ -650,7 +670,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private static Integer readQuotaCount() {
         try {
             String[] fields = Files.readString(CPU_MAX).trim().split("\\s+");
-            if (fields.length >= 2 && !"max".equals(fields[0])) {
+            if (fields.length >= 2 && !UNLIMITED_CPU_QUOTA.equals(fields[0])) {
                 return quotaCount(Long.parseLong(fields[0]), Long.parseLong(fields[1]));
             }
         } catch (IOException | RuntimeException ignored) {

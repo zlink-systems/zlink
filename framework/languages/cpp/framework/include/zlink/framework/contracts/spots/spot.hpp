@@ -43,6 +43,11 @@
 namespace zlink::framework
 {
 
+namespace runtime
+{
+class serial_execution_queue_t;
+}
+
 namespace runtime::protocol
 {
 struct actor_route_fence_t;
@@ -56,7 +61,9 @@ class spot_context_access_t;
 class actor_dispatch_admission_token_t;
 struct mesh_node_builder_state_t;
 void drain_spot_node_executors (spot_node_builder_state_t &node);
-void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node);
+void visit_spot_node_dispatch_queues (
+  spot_node_builder_state_t &node,
+  const std::function<void (runtime::serial_execution_queue_t &)> &visitor);
 
 template <typename THandler> struct timer_handler_factory_t
 {
@@ -558,7 +565,7 @@ task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t
         }
     }
     catch (...) {
-        co_return current_exception_to_message_result ("spot handler threw an exception");
+        co_return current_exception_result<zlink::message_t> ("spot handler threw an exception");
     }
 }
 
@@ -993,33 +1000,20 @@ class spot_context_t
                     framework_error_kind_t::internal_failure, "worker runtime is not configured"));
               }
 
-              detail::task_completion_source_t<result_type> completion;
-              auto task = completion.task ();
+              auto completion = std::make_shared<task_completion_source_t<result_type>> ();
+              auto task = completion->task ();
               auto shared_work = std::make_shared<TWork> (std::move (work));
-              auto completed = std::make_shared<std::atomic_bool> (false);
-              const auto scheduled =
-                scheduler->try_schedule ([scheduler, shared_work, completion, completed,
-                                          cancellation] (std::stop_token) mutable {
+              const auto scheduled = scheduler->try_schedule (
+                [shared_work, completion, cancellation] (std::stop_token) mutable {
                     auto result = detail::run_worker_body<result_type> (*shared_work, cancellation);
                     if (cancellation.stop_requested ()) {
-                        completed->store (true);
                         return;
                     }
-                    if (!completed->exchange (true)) {
-                        auto complete_result = [completion,
-                                                result = std::move (result)] () mutable {
-                            completion.complete (std::move (result));
-                        };
-                        scheduler->post_owner (std::move (complete_result));
-                    }
+                    completion->complete (std::move (result));
                 });
               if (!scheduled) {
-                  completed->store (true);
-                  auto complete_full = [completion] () mutable {
-                      completion.complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  };
-                  scheduler->post_owner (std::move (complete_full));
+                  completion->complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return task;
           },
@@ -1048,7 +1042,7 @@ class spot_context_t
                   return task_t<result_type> (result_t<result_type>::failure (
                     framework_error_kind_t::internal_failure, "worker runtime is not configured"));
               }
-              auto completion = std::make_shared<detail::task_completion_source_t<result_type>> ();
+              auto completion = std::make_shared<task_completion_source_t<result_type>> ();
               auto result = completion->task ();
               auto completed = std::make_shared<std::atomic_bool> (false);
               auto shared_work = std::make_shared<TWork> (std::move (work));
@@ -1060,17 +1054,17 @@ class spot_context_t
                          * pending in the observer would make an incomplete
                          * I/O task retain its own state after the wrapper has
                          * timed out. */
-                        observe_task_completion (pending,
-                                                 [completion, completed, cancellation] (
-                                                   const result_t<result_type> &value) mutable {
-                                                     if (cancellation.stop_requested ()) {
-                                                         completed->store (true);
-                                                         return;
-                                                     }
-                                                     if (!completed->exchange (true)) {
-                                                         completion->complete (value);
-                                                     }
-                                                 });
+                        detail::observe_task_completion (
+                          pending, [completion, completed,
+                                    cancellation] (const result_t<result_type> &value) mutable {
+                              if (cancellation.stop_requested ()) {
+                                  completed->store (true);
+                                  return;
+                              }
+                              if (!completed->exchange (true)) {
+                                  completion->complete (value);
+                              }
+                          });
                     }
                     catch (const framework_exception_t &error) {
                         if (!completed->exchange (true)) {
@@ -1093,10 +1087,8 @@ class spot_context_t
                 });
               if (!scheduled) {
                   completed->store (true);
-                  scheduler->post_owner ([completion] {
-                      completion->complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  });
+                  completion->complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return result;
           },
@@ -1254,7 +1246,9 @@ class spot_context_t
     task_t<bool> close_erased ();
 
     friend void detail::drain_spot_node_executors (detail::spot_node_builder_state_t &node);
-    friend void detail::cancel_spot_node_dispatch_queues (detail::spot_node_builder_state_t &node);
+    friend void detail::visit_spot_node_dispatch_queues (
+      detail::spot_node_builder_state_t &node,
+      const std::function<void (runtime::serial_execution_queue_t &)> &visitor);
 
     std::shared_ptr<detail::spot_context_state_t> _state;
     std::shared_ptr<detail::worker_scheduler_t> _worker_scheduler;

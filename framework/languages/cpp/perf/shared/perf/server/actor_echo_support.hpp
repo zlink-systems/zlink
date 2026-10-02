@@ -199,6 +199,8 @@ class session_actor_setup_t
     }
 
   private:
+    friend class perf_actor_relay_session_t;
+
     void record (bool was_created, std::int64_t create, std::int64_t bind)
     {
         {
@@ -215,24 +217,32 @@ class session_actor_setup_t
     void publish ()
     {
         std::lock_guard lock (_gate);
-        _role.objects->set (
-          _bound > 0 && _failed == 0, _failed > 0 ? "Actor create or bind failed." : "No Actor is bound to a session yet.",
-          json::array ({{{"kind", "actorCreateAndBind"}, {"source", "actor_manager_t.get_or_create + session_actor_manager_t.bind_or_get"},
-                         {"observedValue", {{"created", _created}, {"existing", _existing}, {"bound", _bound}, {"failed", _failed},
-                                            {"expectedActors", _role.config.actor_ids.size ()},
-                                            {"createMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_create_ns) / 1e6 / static_cast<double> (_bound)},
-                                            {"createMaxMs", static_cast<double> (_create_max_ns) / 1e6},
-                                            {"bindMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_bind_ns) / 1e6 / static_cast<double> (_bound)},
-                                            {"bindMaxMs", static_cast<double> (_bind_max_ns) / 1e6}}}}}));
-        // The Session role has no typed reply of its own: its setup probe is the admitted relay of a bound Actor.
-        if (_bound > 0)
-            _role.measurement.set_setup_evidence (json::array ({{{"kind", "relayAdmission"}, {"source", "session_actor_t.relay_request.async"},
-                                                                 {"observedValue", {{"bound", _bound}}}}}));
+        json evidence = json::array ({{{"kind", "actorCreateAndBind"},
+                                       {"source", "actor_manager_t.get_or_create + session_actor_manager_t.bind_or_get"},
+                                       {"observedValue", {{"created", _created}, {"existing", _existing}, {"bound", _bound}, {"failed", _failed},
+                                                          {"expectedActors", _role.config.actor_ids.size ()},
+                                                          {"createMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_create_ns) / 1e6 / static_cast<double> (_bound)},
+                                                          {"createMaxMs", static_cast<double> (_create_max_ns) / 1e6},
+                                                          {"bindMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_bind_ns) / 1e6 / static_cast<double> (_bound)},
+                                                          {"bindMaxMs", static_cast<double> (_bind_max_ns) / 1e6}}}}});
+        _role.objects->set (true, "", std::move (evidence));
+        if (_relay_probes > 0)
+            _role.measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeRelay"}, {"source", "session_actor_t.relay_request.async -> stream.reply_packet.async"},
+                                                               {"observedValue", {{"completed", _relay_probes}}}}}));
+    }
+
+    void record_relay_probe ()
+    {
+        {
+            std::lock_guard lock (_gate);
+            ++_relay_probes;
+        }
+        publish ();
     }
 
     role_t &_role;
     std::mutex _gate;
-    std::uint64_t _created = 0, _existing = 0, _bound = 0, _failed = 0;
+    std::uint64_t _created = 0, _existing = 0, _bound = 0, _failed = 0, _relay_probes = 0;
     std::int64_t _create_ns = 0, _create_max_ns = 0, _bind_ns = 0, _bind_max_ns = 0;
 };
 
@@ -256,6 +266,7 @@ class perf_actor_relay_session_t final : public fw::packet_stream_session_t
         auto &measurement = _role.measurement;
         try {
             zlink::message_t reply;
+            const bool setup_probe = measurement.phase () == "setup";
             if (dispatch.actor || _binding) {
                 if (dispatch.actor)
                     _binding = *dispatch.actor;
@@ -267,6 +278,8 @@ class perf_actor_relay_session_t final : public fw::packet_stream_session_t
                 reply = co_await _binding->relay_request (dispatch.packet_name, payload).async ();
             }
             co_await stream.reply_packet (reply).async ();
+            if (setup_probe)
+                _setup.record_relay_probe ();
         }
         catch (...) {
             measurement.record_diagnostic (std::current_exception ());

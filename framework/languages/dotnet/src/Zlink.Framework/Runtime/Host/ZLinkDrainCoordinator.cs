@@ -533,7 +533,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
                 ? MinimumForceStopTeardown
                 : deadline;
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"force_stop_begin reason={reason} deadline={deadline} " + $"budget={teardownBudget}"
+            $"force_stop_begin reason={reason} deadline={deadline} budget={teardownBudget}"
         );
         using var teardownBound = new CancellationTokenSource(teardownBudget);
         try

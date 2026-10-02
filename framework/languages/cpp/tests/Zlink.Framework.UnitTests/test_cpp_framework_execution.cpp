@@ -107,12 +107,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         return true;
     }
 
-    void post_owner (std::function<void ()> work) override
-    {
-        std::lock_guard lock (mutex);
-        owner_jobs.push (std::move (work));
-    }
-
     void run_worker_job ()
     {
         std::function<void (std::stop_token)> job;
@@ -124,27 +118,10 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         job (cancellation.get_token ());
     }
 
-    void run_owner_job ()
-    {
-        std::function<void ()> job;
-        {
-            std::lock_guard lock (mutex);
-            job = std::move (owner_jobs.front ());
-            owner_jobs.pop ();
-        }
-        job ();
-    }
-
     std::size_t worker_job_count () const
     {
         std::lock_guard lock (mutex);
         return worker_jobs.size ();
-    }
-
-    std::size_t owner_job_count () const
-    {
-        std::lock_guard lock (mutex);
-        return owner_jobs.size ();
     }
 
     std::stop_token stop_token () const noexcept override { return cancellation.get_token (); }
@@ -154,7 +131,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
     bool queue_full = false;
     mutable std::mutex mutex;
     std::queue<std::function<void (std::stop_token)>> worker_jobs;
-    std::queue<std::function<void ()>> owner_jobs;
     std::stop_source cancellation;
 };
 
@@ -1003,6 +979,48 @@ class serial_test_signal_t
     bool _set = false;
 };
 
+bool verify_cpu_worker_completes_in_ordinary_turn ()
+{
+    using namespace zlink::framework;
+    runtime::offload_executor_t executor (1);
+    runtime::serial_execution_queue_t queue (executor, {}, {},
+                                             runtime::serial_lane_policy_t::spot_wide ());
+    auto scheduler = std::make_shared<controlled_worker_scheduler_t> ();
+    auto context = context_with_scheduler (scheduler);
+    serial_test_signal_t submitted;
+    std::atomic_bool follower_ran = false;
+    std::atomic_bool succeeded = false;
+    auto handler = [&] () -> task_t<void> {
+        const auto turn = detail::capture_current_serial_turn ();
+        auto call = context.run_cpu_worker ([] { return 42; });
+        auto pending = call.timeout (std::chrono::seconds (1)).async ();
+        submitted.set ();
+        const auto result = co_await pending;
+        succeeded = result == 42 && !follower_ran.load ()
+                    && detail::capture_current_serial_turn () == turn && !turn->released ();
+        co_return;
+    };
+    if (!queue.try_post_async ("ordinary-worker-handler",
+                               [&] (auto complete) {
+                                   auto task = handler ();
+                                   detail::observe_task_completion (
+                                     task, [complete] (const result_t<void> &) mutable {
+                                         complete ([] {});
+                                     });
+                               })
+        || !submitted.wait_for ()) {
+        queue.cancel_pending ();
+        return false;
+    }
+    if (!queue.try_post ("ordinary-worker-follower", [&] { follower_ran = true; })) {
+        queue.cancel_pending ();
+        return false;
+    }
+    scheduler->run_worker_job ();
+    queue.drain ();
+    return succeeded.load () && follower_ran.load ();
+}
+
 class serial_test_blocker_t
 {
   public:
@@ -1134,11 +1152,11 @@ class reentry_probe_actor_client_t final : public zlink::framework::actor_client
     zlink::framework::serializer_registry_t serializers;
 };
 
-zlink::framework::task_t<void> run_request_turn_probe (
-  std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply,
-  std::shared_ptr<std::vector<int>> order,
-  std::shared_ptr<std::mutex> order_gate,
-  bool release_turn)
+zlink::framework::task_t<void>
+run_request_turn_probe (std::shared_ptr<zlink::framework::task_completion_source_t<int>> reply,
+                        std::shared_ptr<std::vector<int>> order,
+                        std::shared_ptr<std::mutex> order_gate,
+                        bool release_turn)
 {
     {
         std::lock_guard lock (*order_gate);
@@ -1163,14 +1181,14 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
     zlink::framework::runtime::serial_execution_queue_t queue (
       executor, {}, zlink::framework::runtime::serial_execution_queue_t::error_handler_t{},
       zlink::framework::runtime::serial_lane_policy_t::spot_wide ());
-    auto reply = std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+    auto reply = std::make_shared<zlink::framework::task_completion_source_t<int>> ();
     auto order = std::make_shared<std::vector<int>> ();
     auto order_gate = std::make_shared<std::mutex> ();
 
     queue.post_async ("request", [reply, order, order_gate, release_turn] (auto complete) {
         auto task = std::make_shared<zlink::framework::task_t<void>> (
           run_request_turn_probe (reply, order, order_gate, release_turn));
-        zlink::framework::observe_task_completion (
+        zlink::framework::detail::observe_task_completion (
           *task, [task, complete = std::move (complete)] (const auto &result) mutable {
               complete ([task, result] {
                   if (!result) {
@@ -1224,7 +1242,7 @@ bool verify_serial_resume_waits_behind_queued_work ()
     serial_execution_queue_options_t options;
     serial_execution_queue_t queue (executor, options, {}, serial_lane_policy_t::spot_wide ());
 
-    auto reply = std::make_shared<detail::task_completion_source_t<int>> ();
+    auto reply = std::make_shared<task_completion_source_t<int>> ();
     auto task_finished = std::make_shared<std::atomic_bool> (false);
     auto observed_kind = std::make_shared<std::atomic_int> (-1);
 
@@ -1234,7 +1252,7 @@ bool verify_serial_resume_waits_behind_queued_work ()
               auto task = std::make_shared<task_t<void>> (
                 run_request_turn_probe (reply, std::make_shared<std::vector<int>> (),
                                         std::make_shared<std::mutex> (), true));
-              observe_task_completion (
+              detail::observe_task_completion (
                 *task, [task, task_finished, observed_kind,
                         complete = std::move (complete)] (const auto &result) mutable {
                     if (!result) {
@@ -1953,7 +1971,7 @@ struct spot_wide_yield_probe_state_t
 };
 
 zlink::framework::task_t<void> run_spot_wide_actor_yield_probe (
-  std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply,
+  std::shared_ptr<zlink::framework::task_completion_source_t<int>> reply,
   std::shared_ptr<spot_wide_yield_probe_state_t> state)
 {
     state->record ("actor-a:start");
@@ -1974,14 +1992,14 @@ bool verify_spot_wide_yield_retains_actor_claim ()
 
     auto fixture =
       std::make_unique<serial_executor_test_fixture_t> (serial_lane_policy_t::spot_wide ());
-    auto reply = std::make_shared<detail::task_completion_source_t<int>> ();
+    auto reply = std::make_shared<task_completion_source_t<int>> ();
     auto state = std::make_shared<spot_wide_yield_probe_state_t> ();
 
     const auto first_accepted = fixture->serial.execute_actor (
       "actor-a", "yield-first", [reply, state] (auto complete) mutable {
           auto task =
             std::make_shared<task_t<void>> (run_spot_wide_actor_yield_probe (reply, state));
-          observe_task_completion (
+          detail::observe_task_completion (
             *task, [task, state, complete = std::move (complete)] (const auto &result) mutable {
                 if (!result)
                     state->failed.store (true, std::memory_order_release);
@@ -2045,8 +2063,8 @@ bool verify_spot_wide_yield_retains_actor_claim ()
 
 struct spot_wide_yield_idle_eviction_probe_t
 {
-    std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply =
-      std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+    std::shared_ptr<zlink::framework::task_completion_source_t<int>> reply =
+      std::make_shared<zlink::framework::task_completion_source_t<int>> ();
     serial_test_signal_t handler_entered;
     serial_test_signal_t handler_resumed;
     serial_test_signal_t follower_ran;
@@ -2871,8 +2889,8 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
         }
     }
 
-    // Active cancellation is cooperative: the owner remains valid and the
-    // observer remains pending until the callback task acknowledges terminal.
+    // Shutdown settles the owned waiter while preserving its pending source.
+    // The terminal callback releases the owner before late source completion.
     {
         auto executor =
           std::make_shared<runtime::offload_executor_t> (1, "spot-serial-active-cancel");
@@ -2882,6 +2900,7 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
           *executor, runtime::serial_execution_queue_options_t{});
         auto queue = owner->serial_queue;
         auto callback_terminal = std::make_shared<task_completion_source_t<void>> ();
+        auto source_task = callback_terminal->task ();
         std::mutex gate;
         std::condition_variable changed;
         bool entered = false;
@@ -2916,28 +2935,21 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
         owner.reset ();
         {
             std::unique_lock lock (gate);
-            if (changed.wait_for (lock, std::chrono::milliseconds (50),
-                                  [&] { return result.has_value (); })
-                || weak_owner.expired ()) {
-                return false;
-            }
-        }
-        callback_terminal->complete (result_t<void>::success ());
-        {
-            std::unique_lock lock (gate);
             if (!changed.wait_for (lock, std::chrono::seconds (1),
                                    [&] { return result.has_value (); })) {
                 return false;
             }
         }
+        if (source_task.result_for (std::chrono::milliseconds (0)) || completion_calls.load () != 1
+            || !callback_terminal->complete (result_t<void>::success ())
+            || callback_terminal->complete (result_t<void>::success ())
+            || !source_task.result_for (std::chrono::milliseconds (0))
+            || completion_calls.load () != 1) {
+            return false;
+        }
         queue->drain ();
         queue.reset ();
-        // The worker releases the finished turn's completion, which holds the
-        // owner, after the queue reports itself empty: a completion may own the
-        // queue itself, so the queue cannot release it earlier.
-        const auto owner_released_by = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-        while (!weak_owner.expired () && std::chrono::steady_clock::now () < owner_released_by)
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        executor->drain ();
         if (*result || result->error_kind () != framework_error_kind_t::shutting_down
             || completion_calls.load () != 1 || !weak_owner.expired ()) {
             return false;
@@ -4374,13 +4386,28 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       canonical_actor_join_handoff_id (source_rid.to_bytes (), "actor-2", 7, 3, 4220);
     node->actor_transfer_coordinator.fail_commit (second_transfer_id, false);
     store->snapshot = actor_snapshot;
+    service_collection_t unavailable_services;
+    auto unavailable_provider = unavailable_services.build_provider ();
+    owner.bind_service_provider (unavailable_provider);
+    const auto unavailable =
+      admit_wire_actor_join (node, local_rid, make_request (4221), std::nullopt, &serializers);
+    const bool unavailable_kind_preserved =
+      unavailable.terminal_result == 105
+      && unavailable.failure_code
+           == static_cast<std::uint32_t> (
+             runtime::protocol::framework_error_code::routeNotConnected)
+      && runtime::protocol::valid_terminal_failure (
+        unavailable.terminal_result,
+        static_cast<runtime::protocol::framework_error_code> (unavailable.failure_code))
+      && runtime::host::classify_relocation_failure_code (unavailable.failure_code)
+           == framework_error_kind_t::unavailable;
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return reply_round_trip && first_approved && approval_only && duplicate_parked
            && reply_requires_serializers && later_attempt_wins && unknown_not_found
            && stale_protocol_error && stale_target_store_fence_protocol_error && malformed_typed
-           && second_completed;
+           && second_completed && unavailable_kind_preserved;
 }
 
 bool verify_wire_join_requires_active_local_target ()
@@ -4861,7 +4888,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
     node->actor_factories.emplace ("player", std::move (factory));
     std::promise<void> joined_started;
     auto started = joined_started.get_future ();
-    auto release_joined = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto release_joined = std::make_shared<task_completion_source_t<void>> ();
     spot_actor_admission_callbacks_t callbacks;
     callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
                          serializer_registry_t &) { return spot_actor_join_result_t::accept (); };
@@ -5005,9 +5032,8 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         source_leave_before_target_joined.store (false, std::memory_order_release);
         source_leave_calls.store (0, std::memory_order_release);
         target_completion_gate =
-          std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
-        source_leave_gate =
-          std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+        source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     }
 
     static inline std::atomic_int source_completions{0};
@@ -5025,12 +5051,11 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
     static inline std::atomic_bool source_leave_entered{false};
     static inline std::atomic_bool source_leave_before_target_joined{false};
     static inline std::atomic_int source_leave_calls{0};
-    static inline std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>>
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
       target_completion_gate =
-        std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
-    static inline std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>>
-      source_leave_gate =
-        std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
+        std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
+      source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
 
   private:
     zlink::framework::actor_context_t _context;
@@ -5166,7 +5191,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     factory.actor_type = std::type_index (typeid (int));
     factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
     factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
-    auto join_completion = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto join_completion = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool join_completion_entered{false};
     std::atomic_int join_completion_calls{0};
     std::atomic_uint64_t join_completion_operation_high{0};
@@ -5192,7 +5217,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("actor-finalize-node"), "player", "actor-c2", 7);
     actor_gateway_runtime_t gateway;
     gateway.bind_serializers (serializers);
-    auto joined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto joined_bound_delivery = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool joined_bound_delivery_started{false};
     std::atomic_bool joined_bound_push_submitted{false};
     spot_actor_admission_callbacks_t callbacks;
@@ -5279,7 +5304,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     std::atomic_int replayed{0};
     std::atomic_bool successor_join_reserved{false};
-    auto first_replay = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto first_replay = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool first_replay_entered{false};
     std::mutex delivery_order_mutex;
     std::vector<std::string> delivery_order;
@@ -5498,7 +5523,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
           zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29)
         .result ();
-    auto combined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto combined_bound_delivery = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool combined_bound_delivery_started{false};
     const auto combined_bound = gateway.bind_session_sink (
       combined_actor,
@@ -5745,7 +5770,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     // keeps its terminal owner until that callback settles. The callback's
     // terminal is converted into the admitted Join failure completion before
     // the transfer enters reconciliation.
-    auto active_lifecycle = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto active_lifecycle = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool active_lifecycle_entered{false};
     std::atomic_int active_lifecycle_failure_calls{0};
     node->actor_factories.at ("player").on_join_completed =
@@ -5833,10 +5858,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    // Host shutdown uses the same cooperative lifecycle cancellation seam but
-    // keeps its own terminal reason. It must not be rewritten as a deadline,
-    // and the terminal owner remains held until the active callback settles.
-    auto shutdown_lifecycle = std::make_shared<detail::task_completion_source_t<void>> ();
+    // Host shutdown ends the registered source waiter once with ShuttingDown.
+    // Its original source remains pending until the application completes it.
+    auto shutdown_lifecycle = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool shutdown_lifecycle_entered{false};
     std::atomic_int shutdown_lifecycle_failure_calls{0};
     node->actor_factories.at ("player").on_join_completed =
@@ -5878,12 +5902,15 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex shutdown_lifecycle_mutex;
     std::condition_variable shutdown_lifecycle_changed;
     std::optional<result_t<actor_join_reply_t>> shutdown_lifecycle_result;
+    std::atomic_int shutdown_lifecycle_terminals{0};
+    auto shutdown_source_task = shutdown_lifecycle->task ();
     owner.finalize_remote_actor_to_spot_async (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
       [&] (result_t<actor_join_reply_t> result) {
           {
               std::lock_guard lock (shutdown_lifecycle_mutex);
+              ++shutdown_lifecycle_terminals;
               shutdown_lifecycle_result.emplace (std::move (result));
           }
           shutdown_lifecycle_changed.notify_all ();
@@ -5899,20 +5926,19 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->serial_queue->cancel_pending ();
     {
         std::unique_lock lock (shutdown_lifecycle_mutex);
-        if (shutdown_lifecycle_changed.wait_for (lock, std::chrono::milliseconds (40), [&] {
-                return shutdown_lifecycle_result.has_value ();
-            })) {
-            return false;
-        }
-    }
-    shutdown_lifecycle->complete (result_t<void>::success ());
-    {
-        std::unique_lock lock (shutdown_lifecycle_mutex);
         if (!shutdown_lifecycle_changed.wait_for (lock, std::chrono::seconds (1), [&] {
                 return shutdown_lifecycle_result.has_value ();
             })) {
             return false;
         }
+    }
+    if (shutdown_source_task.result_for (std::chrono::milliseconds (0))
+        || shutdown_lifecycle_terminals.load () != 1
+        || !shutdown_lifecycle->complete (result_t<void>::success ())
+        || shutdown_lifecycle->complete (result_t<void>::success ())
+        || !shutdown_source_task.result_for (std::chrono::milliseconds (0))
+        || shutdown_lifecycle_terminals.load () != 1) {
+        return false;
     }
     if (*shutdown_lifecycle_result
         || shutdown_lifecycle_result->error_kind () != framework_error_kind_t::shutting_down
@@ -6040,7 +6066,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex leave_order_mutex;
     std::condition_variable leave_order_changed;
     std::optional<result_t<actor_join_reply_t>> leave_order_result;
-    detail::task_completion_source_t<void> leave_submit_terminal;
+    task_completion_source_t<void> leave_submit_terminal;
     owner.finalize_remote_actor_to_spot_async (
       leave_order_transfer_id, leave_order_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
@@ -6413,7 +6439,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         return false;
     }
     const auto actor = created_actor.value ();
-    auto bound_delivery_gate = std::make_shared<detail::task_completion_source_t<void>> ();
+    auto bound_delivery_gate = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool bound_delivery_started{false};
     std::atomic_int bound_delivery_calls{0};
     auto &binding_gateway = location_provider.get_required<actor_gateway_runtime_t> ();
@@ -6885,6 +6911,10 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main ()
 {
+    if (!verify_cpu_worker_completes_in_ordinary_turn ()) {
+        std::cerr << "CPU worker did not complete while the ordinary handler retained its turn\n";
+        return 141;
+    }
     if (!verify_idle_timer_closes_before_executor_releases_last_node_reference ()) {
         return 138;
     }
@@ -7135,10 +7165,10 @@ int main ()
     std::atomic_bool abandoned_deadline_fired = false;
     const auto deadline_owner_start = std::chrono::steady_clock::now ();
     {
-        auto control =
-          std::make_shared<zlink::framework::detail::worker_control_t> (std::stop_token{});
+        auto control = std::make_shared<zlink::framework::detail::worker_control_t> (
+          std::stop_token{}, std::chrono::hours (1));
         control->arm_deadline (std::chrono::hours (1),
-                               [&] { abandoned_deadline_fired.store (true); });
+                               [&] { return [&] { abandoned_deadline_fired.store (true); }; });
     }
     const auto deadline_owner_elapsed = std::chrono::steady_clock::now () - deadline_owner_start;
     if (abandoned_deadline_fired.load ()
@@ -7467,14 +7497,13 @@ int main ()
         return 42;
     });
     auto submit_task = submit_call.async ();
-    if (scheduler->worker_job_count () != 1 || scheduler->owner_job_count () != 0) {
+    if (scheduler->worker_job_count () != 1 || submit_task.await_ready ()) {
         return 10;
     }
     scheduler->run_worker_job ();
-    if (scheduler->owner_job_count () != 1) {
+    if (!submit_task.await_ready ()) {
         return 11;
     }
-    scheduler->run_owner_job ();
     const auto submit_result = submit_task.result ();
     if (worker_thread == std::thread::id{} || !submit_result || submit_result.value () != 42) {
         return 12;
@@ -7485,7 +7514,6 @@ int main ()
     auto worker_call = async_context.run_cpu_worker ([] { return 7; });
     auto worker_task = worker_call.async ();
     async_scheduler->run_worker_job ();
-    async_scheduler->run_owner_job ();
     const auto worker_result = worker_task.result ();
     if (!worker_result || worker_result.value () != 7) {
         return 13;
@@ -7496,14 +7524,25 @@ int main ()
     auto full_context = context_with_scheduler (full_scheduler);
     auto full_call = full_context.run_cpu_worker ([] { return 3; });
     auto full_task = full_call.async ();
-    if (full_scheduler->worker_job_count () != 0 || full_scheduler->owner_job_count () != 1) {
+    if (full_scheduler->worker_job_count () != 0 || !full_task.await_ready ()) {
         return 14;
     }
-    full_scheduler->run_owner_job ();
     const auto full_result = full_task.result ();
     if (full_result
         || full_result.error_kind () != zlink::framework::framework_error_kind_t::shutting_down) {
         return 15;
+    }
+    auto full_io_call = full_context.run_io_worker (
+      [] { return zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (3)); });
+    auto full_io_task = full_io_call.async ();
+    if (full_scheduler->worker_job_count () != 0 || !full_io_task.await_ready ()) {
+        return 16;
+    }
+    const auto full_io_result = full_io_task.result ();
+    if (full_io_result
+        || full_io_result.error_kind ()
+             != zlink::framework::framework_error_kind_t::shutting_down) {
+        return 17;
     }
 
     auto timeout_scheduler = std::make_shared<controlled_worker_scheduler_t> ();
@@ -7527,7 +7566,9 @@ int main ()
         return 19;
     }
     timeout_scheduler->run_worker_job ();
-    if (timeout_scheduler->owner_job_count () != 0 || !timeout_saw_cancellation.load ()) {
+    if (!timeout_saw_cancellation.load ()
+        || timeout_task.result ().error_kind ()
+             != zlink::framework::framework_error_kind_t::deadline_exceeded) {
         return 20;
     }
 
@@ -7550,22 +7591,23 @@ int main ()
         return 22;
     }
     shutdown_scheduler->run_worker_job ();
-    if (!shutdown_saw_cancellation.load () || shutdown_scheduler->owner_job_count () != 0) {
+    if (!shutdown_saw_cancellation.load ()
+        || shutdown_task.result ().error_kind ()
+             != zlink::framework::framework_error_kind_t::shutting_down) {
         return 23;
     }
 
     auto io_scheduler = std::make_shared<controlled_worker_scheduler_t> ();
     auto io_context = context_with_scheduler (io_scheduler);
-    std::vector<std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>>>
-      io_sources;
+    std::vector<std::shared_ptr<zlink::framework::task_completion_source_t<int>>> io_sources;
     std::vector<zlink::framework::task_t<int>> io_tasks;
     for (int value = 0; value < 8; ++value) {
-        auto source = std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+        auto source = std::make_shared<zlink::framework::task_completion_source_t<int>> ();
         auto call = io_context.run_io_worker ([source] { return source->task (); });
         io_tasks.push_back (call.async ());
         io_sources.push_back (std::move (source));
     }
-    if (io_scheduler->worker_job_count () != 8 || io_scheduler->owner_job_count () != 0) {
+    if (io_scheduler->worker_job_count () != 8) {
         return 27;
     }
     for (int value = 0; value < 8; ++value) {
@@ -7582,8 +7624,7 @@ int main ()
         }
     }
 
-    auto io_thread_source =
-      std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+    auto io_thread_source = std::make_shared<zlink::framework::task_completion_source_t<int>> ();
     std::thread::id io_thread;
     auto io_thread_call =
       io_context.run_io_worker ([io_thread_source, &io_thread] (std::stop_token) {
@@ -7601,8 +7642,7 @@ int main ()
         return 25;
     }
 
-    auto io_timeout_source =
-      std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+    auto io_timeout_source = std::make_shared<zlink::framework::task_completion_source_t<int>> ();
     auto io_timeout_call =
       io_context.run_io_worker ([io_timeout_source] { return io_timeout_source->task (); });
     auto io_timeout_task = io_timeout_call.timeout (std::chrono::milliseconds (5)).async ();
@@ -7711,7 +7751,7 @@ int main ()
 
         int completion_callback_count = 0;
         auto suspended_completion =
-          std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
         std::promise<void> suspended_completion_entered;
         bool fail_completion_once = false;
         auto completion_error_kind = zlink::framework::framework_error_kind_t::internal_failure;

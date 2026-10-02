@@ -477,9 +477,7 @@ internal sealed class ZLinkSessionActorBindingTable
             entry.RouteAvailableSignal?.TrySetResult();
         }
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"session_relocation_seal_timeout "
-                + $"actor={key.ActorId.Value} "
-                + $"relocation={timeout.Seal.RelocationId}"
+            $"session_relocation_seal_timeout actor={key.ActorId.Value} relocation={timeout.Seal.RelocationId}"
         );
         try
         {
@@ -751,9 +749,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (entry.RelocationHandoffId is not null || entry.CanonicalRelocationSeal is not null)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"session_frame_refused reason=route_sealed actor={actorId} "
-                        + $"handoff={entry.RelocationHandoffId} "
-                        + $"accepted_high_water={entry.AcceptedHighWater}"
+                    $"session_frame_refused reason=route_sealed actor={actorId} handoff={entry.RelocationHandoffId} accepted_high_water={entry.AcceptedHighWater}"
                 );
                 return new ZLinkSessionFrameAcceptance(false, entry.AcceptedHighWater);
             }
@@ -1290,8 +1286,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (!_entries.TryGetValue(key, out var current))
                 {
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"route_seal_refused actor={request.ActorId} entry=false "
-                            + "binding=false route=false session_owner=false after_drain=true"
+                        $"route_seal_refused actor={request.ActorId} entry=false binding=false route=false session_owner=false after_drain=true"
                     );
                     return new ZLinkSessionRouteSealResult(false, acceptedHighWater);
                 }
@@ -1303,9 +1298,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (!handoffMatches || current.ActiveFrames != 0)
                 {
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"route_seal_refused actor={request.ActorId} entry=true "
-                            + "binding=true route=true session_owner=true after_drain=true "
-                            + $"handoff={handoffMatches} active_frames={current.ActiveFrames}"
+                        $"route_seal_refused actor={request.ActorId} entry=true binding=true route=true session_owner=true after_drain=true handoff={handoffMatches} active_frames={current.ActiveFrames}"
                     );
                     return new ZLinkSessionRouteSealResult(false, acceptedHighWater);
                 }
@@ -1326,8 +1319,7 @@ internal sealed class ZLinkSessionActorBindingTable
         if (!_entries.TryGetValue(key, out var entry))
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"route_seal_refused actor={request.ActorId} entry=false "
-                    + "binding=false route=false session_owner=false"
+                $"route_seal_refused actor={request.ActorId} entry=false binding=false route=false session_owner=false"
             );
             return new ZLinkSessionRouteSealResult(false, 0);
         }
@@ -1345,17 +1337,7 @@ internal sealed class ZLinkSessionActorBindingTable
         if (!bindingMatches || !routeMatches || !sessionOwnerMatches)
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"route_seal_refused actor={request.ActorId} entry=true "
-                    + $"binding={bindingMatches} route={routeMatches} "
-                    + $"session_owner={sessionOwnerMatches} "
-                    + $"current_authority={entry.AuthorityOwnerGeneration} "
-                    + $"request_authority={request.AuthorityOwnerGeneration} "
-                    + $"current_node={entry.TargetNodeGeneration} "
-                    + $"request_node={request.TargetNodeGeneration} "
-                    + $"current_lease={entry.OwnerLeaseGeneration} "
-                    + $"request_lease={request.OwnerLeaseGeneration} "
-                    + $"current_session_owner={entry.SessionOwnerNodeGeneration} "
-                    + $"request_session_owner={request.SessionOwnerNodeGeneration}"
+                $"route_seal_refused actor={request.ActorId} entry=true binding={bindingMatches} route={routeMatches} session_owner={sessionOwnerMatches} current_authority={entry.AuthorityOwnerGeneration} request_authority={request.AuthorityOwnerGeneration} current_node={entry.TargetNodeGeneration} request_node={request.TargetNodeGeneration} current_lease={entry.OwnerLeaseGeneration} request_lease={request.OwnerLeaseGeneration} current_session_owner={entry.SessionOwnerNodeGeneration} request_session_owner={request.SessionOwnerNodeGeneration}"
             );
             return new ZLinkSessionRouteSealResult(false, entry.AcceptedHighWater);
         }
@@ -1366,10 +1348,7 @@ internal sealed class ZLinkSessionActorBindingTable
         )
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"route_seal_refused actor={request.ActorId} entry=true "
-                    + "binding=true route=true session_owner=true "
-                    + $"handoff=false current_handoff={current} "
-                    + $"request_handoff={request.HandoffId}"
+                $"route_seal_refused actor={request.ActorId} entry=true binding=true route=true session_owner=true handoff=false current_handoff={current} request_handoff={request.HandoffId}"
             );
             return new ZLinkSessionRouteSealResult(false, entry.AcceptedHighWater);
         }
@@ -1390,8 +1369,7 @@ internal sealed class ZLinkSessionActorBindingTable
         //  that only frame completion raises. If a frame is never
         //  completed the seal never answers and the join times out.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"route_seal_drain actor={request.ActorId} "
-                + $"active_frames={entry.ActiveFrames} waits={drain is not null}"
+            $"route_seal_drain actor={request.ActorId} active_frames={entry.ActiveFrames} waits={drain is not null}"
         );
         return null;
     }
@@ -1461,8 +1439,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (!_entries.TryGetValue(key, out var entry))
                 {
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"route_unseal_refused actor={request.ActorId} entry=false "
-                            + "binding=false route=false session_owner=false high_water=false handoff=false"
+                        $"route_unseal_refused actor={request.ActorId} entry=false binding=false route=false session_owner=false high_water=false handoff=false"
                     );
                     return false;
                 }
@@ -1490,10 +1467,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 )
                 {
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"route_unseal_refused actor={request.ActorId} "
-                            + $"entry=true binding={bindingMatches} route={routeMatches} "
-                            + $"session_owner={sessionOwnerMatches} high_water={highWaterMatches} "
-                            + $"handoff={handoffMatches} completed={completedHandoffMatches}"
+                        $"route_unseal_refused actor={request.ActorId} entry=true binding={bindingMatches} route={routeMatches} session_owner={sessionOwnerMatches} high_water={highWaterMatches} handoff={handoffMatches} completed={completedHandoffMatches}"
                     );
                     return false;
                 }
@@ -1522,9 +1496,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!_entries.TryGetValue(key, out var entry))
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_refused actor={request.ActorId} entry=false "
-                        + "binding=false object=false session_owner=false high_water=false "
-                        + "route=false handoff=false completed=false"
+                    $"route_commit_refused actor={request.ActorId} entry=false binding=false object=false session_owner=false high_water=false route=false handoff=false completed=false"
                 );
                 return new ZLinkSessionRouteCommitResult(false, 0);
             }
@@ -1536,11 +1508,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!bindingMatches || !objectMatches || !sessionOwnerMatches)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_refused actor={request.ActorId} entry=true "
-                        + $"binding={bindingMatches} object={objectMatches} "
-                        + $"session_owner={sessionOwnerMatches} high_water=false "
-                        + $"current_high_water={entry.AcceptedHighWater} "
-                        + $"request_high_water={request.AcceptedHighWater}"
+                    $"route_commit_refused actor={request.ActorId} entry=true binding={bindingMatches} object={objectMatches} session_owner={sessionOwnerMatches} high_water=false current_high_water={entry.AcceptedHighWater} request_high_water={request.AcceptedHighWater}"
                 );
                 return new ZLinkSessionRouteCommitResult(false, entry.AcceptedHighWater);
             }
@@ -1560,10 +1528,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!targetRouteCreated || !targetObjectMatches || !authorityOrderMatches)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_refused actor={request.ActorId} entry=true "
-                        + "binding=true object=true session_owner=true high_water=true "
-                        + $"target_route={targetRouteCreated} target_object={targetObjectMatches} "
-                        + $"authority_order={authorityOrderMatches}"
+                    $"route_commit_refused actor={request.ActorId} entry=true binding=true object=true session_owner=true high_water=true target_route={targetRouteCreated} target_object={targetObjectMatches} authority_order={authorityOrderMatches}"
                 );
                 return new ZLinkSessionRouteCommitResult(false, entry.AcceptedHighWater);
             }
@@ -1585,10 +1550,7 @@ internal sealed class ZLinkSessionActorBindingTable
             )
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_idempotent actor={request.ActorId} "
-                        + $"ack=true completed=true handoff={request.HandoffId} "
-                        + $"current_high_water={entry.AcceptedHighWater} "
-                        + $"request_high_water={request.AcceptedHighWater}"
+                    $"route_commit_idempotent actor={request.ActorId} ack=true completed=true handoff={request.HandoffId} current_high_water={entry.AcceptedHighWater} request_high_water={request.AcceptedHighWater}"
                 );
                 return new ZLinkSessionRouteCommitResult(true, entry.AcceptedHighWater);
             }
@@ -1597,10 +1559,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!highWaterMatches)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_refused actor={request.ActorId} entry=true "
-                        + $"binding=true object=true session_owner=true high_water=false "
-                        + $"current_high_water={entry.AcceptedHighWater} "
-                        + $"request_high_water={request.AcceptedHighWater}"
+                    $"route_commit_refused actor={request.ActorId} entry=true binding=true object=true session_owner=true high_water=false current_high_water={entry.AcceptedHighWater} request_high_water={request.AcceptedHighWater}"
                 );
                 return new ZLinkSessionRouteCommitResult(false, entry.AcceptedHighWater);
             }
@@ -1608,9 +1567,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (entry.Route == targetRoute)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_idempotent actor={request.ActorId} "
-                        + $"ack={completedHandoffMatches} completed={completedHandoffMatches} "
-                        + $"handoff={request.HandoffId}"
+                    $"route_commit_idempotent actor={request.ActorId} ack={completedHandoffMatches} completed={completedHandoffMatches} handoff={request.HandoffId}"
                 );
                 return new ZLinkSessionRouteCommitResult(
                     completedHandoffMatches,
@@ -1637,14 +1594,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (!previousRouteMatches || !handoffMatches)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"route_commit_refused actor={request.ActorId} entry=true "
-                        + "binding=true object=true session_owner=true high_water=true "
-                        + $"previous_route={previousRouteMatches} handoff={handoffMatches} "
-                        + $"completed={string.Equals(entry.CompletedRelocationHandoffId, request.HandoffId, StringComparison.Ordinal)} "
-                        + $"current_authority={entry.AuthorityOwnerGeneration} "
-                        + $"request_previous_authority={request.PreviousAuthorityOwnerGeneration} "
-                        + $"current_node={entry.TargetNodeGeneration} "
-                        + $"request_previous_node={request.PreviousTargetNodeGeneration}"
+                    $"route_commit_refused actor={request.ActorId} entry=true binding=true object=true session_owner=true high_water=true previous_route={previousRouteMatches} handoff={handoffMatches} completed={string.Equals(entry.CompletedRelocationHandoffId, request.HandoffId, StringComparison.Ordinal)} current_authority={entry.AuthorityOwnerGeneration} request_previous_authority={request.PreviousAuthorityOwnerGeneration} current_node={entry.TargetNodeGeneration} request_previous_node={request.PreviousTargetNodeGeneration}"
                 );
                 return new ZLinkSessionRouteCommitResult(false, entry.AcceptedHighWater);
             }
@@ -1655,8 +1605,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 CompletedRelocationHandoffId = request.HandoffId,
             };
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"route_commit_accepted actor={request.ActorId} handoff={request.HandoffId} "
-                    + $"high_water={entry.AcceptedHighWater}"
+                $"route_commit_accepted actor={request.ActorId} handoff={request.HandoffId} high_water={entry.AcceptedHighWater}"
             );
             return new ZLinkSessionRouteCommitResult(true, entry.AcceptedHighWater);
         });

@@ -57,18 +57,20 @@ template <typename T> std::string simple_type_name ()
     std::string_view name = decorated;
 
 #if defined(_MSC_VER) && !defined(__clang__)
-    const auto open = name.find ("decorated_type_name<");
+    constexpr std::string_view type_prefix = "decorated_type_name<";
+    const auto open = name.find (type_prefix);
     if (open != std::string_view::npos) {
-        name.remove_prefix (open + std::string_view ("decorated_type_name<").size ());
+        name.remove_prefix (open + type_prefix.size ());
         const auto close = name.rfind (">(");
         if (close != std::string_view::npos) {
             name = name.substr (0, close);
         }
     }
 #else
-    const auto open = name.find ("T = ");
+    constexpr std::string_view type_prefix = "T = ";
+    const auto open = name.find (type_prefix);
     if (open != std::string_view::npos) {
-        name.remove_prefix (open + 4);
+        name.remove_prefix (open + type_prefix.size ());
         const auto close = name.find_first_of (";]");
         if (close != std::string_view::npos) {
             name = name.substr (0, close);
@@ -91,9 +93,10 @@ template <typename T> std::string simple_type_name ()
     if (template_open != std::string_view::npos) {
         name = name.substr (0, template_open);
     }
-    const auto qualifier = name.rfind ("::");
+    constexpr std::string_view qualifier_separator = "::";
+    const auto qualifier = name.rfind (qualifier_separator);
     if (qualifier != std::string_view::npos) {
-        name.remove_prefix (qualifier + 2);
+        name.remove_prefix (qualifier + qualifier_separator.size ());
     }
 
     while (!name.empty () && (name.front () == ' ' || name.front () == '\t')) {

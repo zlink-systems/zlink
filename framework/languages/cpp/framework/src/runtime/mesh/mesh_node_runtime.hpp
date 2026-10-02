@@ -179,6 +179,7 @@ class mesh_node_runtime_t
     void start ();
     void request_stop () noexcept;
     void stop () noexcept;
+    void cancel_pending_dispatch_waits () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_descriptor_publisher (

@@ -492,11 +492,17 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             output.push_back (static_cast<std::byte> (static_cast<unsigned char> (character)));
     }
 
+    static constexpr std::string_view authority_relocation_reference_prefix = "ZLRA";
+    static constexpr std::uint8_t authority_relocation_reference_version = 3;
+    static constexpr std::uint8_t authority_relocation_reference_wire_version =
+      static_cast<std::uint8_t> ('0' + authority_relocation_reference_version);
+
     static std::vector<std::byte> encode (const authority_relocation_reference_t &reference)
     {
         std::vector<std::byte> output;
-        for (const auto value : std::string_view ("ZLRA3"))
+        for (const auto value : authority_relocation_reference_prefix)
             output.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
+        output.push_back (static_cast<std::byte> (authority_relocation_reference_wire_version));
         output.push_back (static_cast<std::byte> (reference.source.kind));
         append_text (output, reference.source.key);
         append_text (output, reference.source.mesh_name);
@@ -522,7 +528,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
 
         std::optional<std::uint8_t> consume_version ()
         {
-            constexpr std::string_view prefix = "ZLRA";
+            constexpr auto prefix = authority_relocation_reference_prefix;
             if (_input.size () < prefix.size () + 1)
                 return std::nullopt;
             for (const auto value : prefix) {
@@ -530,8 +536,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                     return std::nullopt;
             }
             const auto version = read_byte ();
-            return version == static_cast<std::uint8_t> ('3') ? std::optional<std::uint8_t>{3}
-                                                              : std::nullopt;
+            return version == authority_relocation_reference_wire_version
+                     ? std::optional<std::uint8_t>{authority_relocation_reference_version}
+                     : std::nullopt;
         }
 
         std::optional<std::uint8_t> byte ()

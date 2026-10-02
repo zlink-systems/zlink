@@ -188,12 +188,12 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                                     }
                                     default -> defaultValue(method.getReturnType());
                                 });
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
         ZLinkSessionActor actor =
-                runtime(stream)
-                        .bind(new ActorRef("actor-1", 7, "game", NODE_A))
+                runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A))
                         .toCompletableFuture()
                         .join();
-        ZLinkSessionActorsRuntime.enterRelayDispatch(oneWayHeader("Play"));
+        runtime.enterRelayDispatch(oneWayHeader("Play"));
         try {
             CompletableFuture<Void> submission =
                     actor.relay(ZLinkMessage.of("payload")).toCompletableFuture();
@@ -203,7 +203,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
             assertTrue(submission.cancel(false));
             assertTrue(physicalTerminal.isCancelled());
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
+            runtime.exitRelayDispatch();
         }
     }
 

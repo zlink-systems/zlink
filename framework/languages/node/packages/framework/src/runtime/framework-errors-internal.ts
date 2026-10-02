@@ -105,6 +105,8 @@ const INTERNAL_TO_PUBLIC: Readonly<
   [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ZLinkFrameworkErrorKind.Unavailable
 });
 
+const ROUTE_NOT_CONNECTED_INTERNAL_CODE = ServiceWireFrameworkErrorCode.routeNotConnected - 1;
+
 export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   Record<ZLinkFrameworkInternalErrorKind, number>
 > = Object.freeze({
@@ -120,7 +122,8 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   [ZLinkFrameworkInternalErrorKind.RouteHandlerNotFound]: 9,
   [ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound]: 10,
   [ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed]: 11,
-  [ZLinkFrameworkInternalErrorKind.RouteNotConnected]: 12,
+  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ROUTE_NOT_CONNECTED_INTERNAL_CODE,
+  [ZLinkFrameworkInternalErrorKind.RouteNotConnected]: ROUTE_NOT_CONNECTED_INTERNAL_CODE,
   [ZLinkFrameworkInternalErrorKind.RequestTargetNotFound]: 13,
   [ZLinkFrameworkInternalErrorKind.RequestRejected]: 14,
   [ZLinkFrameworkInternalErrorKind.RequestProtocolError]: 15,
@@ -148,8 +151,7 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
   [ZLinkFrameworkInternalErrorKind.RelocationDisabled]: 37,
   [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]: 38,
   [ZLinkFrameworkInternalErrorKind.RelocationFailed]: 39,
-  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40,
-  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: 41
+  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40
 });
 
 const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> =
@@ -165,15 +167,10 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
     ]
   ]);
 
-const ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE =
-  ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[
-    ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable
-  ] + 1;
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
   ...Object.entries(ServiceWireExactTerminalByFailureCode).map(
     ([code, terminal]) => [Number(code), terminal] as const
-  ),
-  [ACTOR_ROUTE_UNAVAILABLE_FAILURE_CODE, RequestResult.InternalError]
+  )
 ]);
 
 const INTERNAL_KIND = new WeakMap<ZLinkFrameworkException, ZLinkFrameworkInternalErrorKind>();
@@ -319,7 +316,9 @@ export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
               ? ServiceWireFrameworkErrorCode.actorRouteNotFound
               : error.kind === ZLinkFrameworkErrorKind.Rejected
                 ? ServiceWireFrameworkErrorCode.requestRejected
-                : ServiceWireFrameworkErrorCode.requestFailed;
+                : error.kind === ZLinkFrameworkErrorKind.Unavailable
+                  ? ServiceWireFrameworkErrorCode.routeNotConnected
+                  : ServiceWireFrameworkErrorCode.requestFailed;
     return {
       terminalResult: ServiceWireExactTerminalByFailureCode[failureCode],
       failureCode

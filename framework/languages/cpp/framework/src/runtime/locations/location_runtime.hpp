@@ -280,7 +280,8 @@ class location_runtime_t
         auto attempt =
           std::make_shared<heartbeat_attempt_t> (this, deadline_at, heartbeat, cancellation);
         auto pending = heartbeat_renew_once_async (attempt);
-        auto completed = pending.result_for (remaining_until (deadline_at), cancellation);
+        auto completed =
+          detail::observe_task_result_for (pending, remaining_until (deadline_at), cancellation);
         if (!completed) {
             std::function<void ()> expire;
             {
@@ -362,8 +363,7 @@ class location_runtime_t
         if (!attempt || !heartbeat || heartbeat->stop.load (std::memory_order_acquire)
             || remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ())
             co_return std::nullopt;
-        auto completion =
-          std::make_shared<detail::task_completion_source_t<std::optional<result_t<T>>>> ();
+        auto completion = std::make_shared<task_completion_source_t<std::optional<result_t<T>>>> ();
         auto ready = completion->task ();
         {
             std::lock_guard lock (heartbeat->gate);

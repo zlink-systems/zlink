@@ -19,6 +19,60 @@ import java.util.function.IntConsumer;
 
 final class ZLinkStatusPublisherTest {
     @Test
+    void subscriptionCapacitiesKeepTerminalRetentionAndLossIndependent() throws Exception {
+        var state = new AtomicReference<>(new SourceStatus("A", 0, false));
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        state::get,
+                        SourceStatus::sequence,
+                        SourceStatus::source,
+                        2,
+                        SourceStatus::terminal,
+                        ignored -> false,
+                        Runnable::run);
+        var narrow = new CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>>();
+        var wide = new CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>>();
+        var narrowSubscription = new CompletableFuture<Flow.Subscription>();
+        var wideSubscription = new CompletableFuture<Flow.Subscription>();
+        publisher.subscribe(statusSubscriber(narrow, narrowSubscription), 1);
+        publisher.subscribe(statusSubscriber(wide, wideSubscription), 3);
+        for (String source : List.of("A", "B", "C")) {
+            state.set(new SourceStatus(source, 1, true));
+            publisher.signal();
+        }
+        narrowSubscription.get(1, TimeUnit.SECONDS).request(3);
+        wideSubscription.get(1, TimeUnit.SECONDS).request(3);
+        assertEquals(List.of("C"), narrow.stream().map(item -> item.status().source()).toList());
+        assertEquals(
+                List.of("A", "B", "C"), wide.stream().map(item -> item.status().source()).toList());
+        assertEquals(2, narrow.getFirst().loss().discardedTerminalCount());
+        assertEquals(0, wide.getFirst().loss().discardedTerminalCount());
+    }
+
+    @Test
+    void sourceSignalsWithoutSubscribersDoNotReadSnapshots() {
+        var reads = new AtomicInteger();
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        reads::incrementAndGet,
+                        value -> value,
+                        2,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        publisher.signalIfSubscribed();
+        publisher.signalIfSubscribed();
+        assertEquals(0, reads.get());
+        var received = new CopyOnWriteArrayList<ZLinkObservedStatus<Integer>>();
+        var subscription = new CompletableFuture<Flow.Subscription>();
+        publisher.subscribe(statusSubscriber(received, subscription));
+        assertEquals(1, reads.get());
+        subscription.join().cancel();
+        publisher.signalIfSubscribed();
+        assertEquals(1, reads.get());
+    }
+
+    @Test
     void intermediateSnapshotsCoalesceOnlyWithinTheSameSource() throws Exception {
         AtomicReference<SourceStatus> state =
                 new AtomicReference<>(new SourceStatus("A", 0, false));

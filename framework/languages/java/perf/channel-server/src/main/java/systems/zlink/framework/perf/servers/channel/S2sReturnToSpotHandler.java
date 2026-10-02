@@ -10,6 +10,7 @@ import systems.zlink.framework.perf.PerfClock;
 import systems.zlink.framework.perf.PerfEchoReply;
 import systems.zlink.framework.perf.PerfEchoRequest;
 import systems.zlink.framework.perf.PerfValidationException;
+import systems.zlink.framework.perf.RoleConfig;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -18,10 +19,12 @@ import java.util.concurrent.CompletionStage;
 public final class S2sReturnToSpotHandler implements ZLinkSendHandler<PerfEchoRequest> {
     private final Measurement measurement;
     private final ZLinkRouteClient spots;
+    private final RoleConfig config;
 
-    public S2sReturnToSpotHandler(Measurement measurement, ZLinkRouteClient spots) {
+    public S2sReturnToSpotHandler(Measurement measurement, ZLinkRouteClient spots, RoleConfig config) {
         this.measurement = measurement;
         this.spots = spots;
+        this.config = config;
     }
 
     @Override
@@ -29,10 +32,11 @@ public final class S2sReturnToSpotHandler implements ZLinkSendHandler<PerfEchoRe
         long received = PerfClock.now();
         measurement.handlerEnter();
         try {
-            if (message.returnSpotId() == null || message.returnSpotId().isEmpty()) {
-                throw new PerfValidationException("IdentityMismatch", "No return SpotId in the request.");
+            if (message.clientId() < 0 || config.spotIds().isEmpty()) {
+                throw new PerfValidationException("IdentityMismatch", "The request has no source Spot in this cell.");
             }
-            measurement.validateRequest(message, null, message.returnSpotId());
+            String expectedReturnSpot = config.spotIds().get(message.clientId() % config.spotIds().size());
+            measurement.validateRequest(message, null, expectedReturnSpot);
             PerfEchoReply reply = PayloadPattern.reply(message, received);
             measurement.recordApplicationCall(message, "send");
             return spots.sendToSpot(message.returnSpotId(), reply).submit().whenComplete((ignored, error) -> {

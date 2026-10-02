@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 
@@ -70,15 +72,15 @@ std::shared_ptr<void> enter_ambient_flow (const std::shared_ptr<void> &snapshot)
     return std::make_shared<ambient_context_scope_t> (*value);
 }
 
-constexpr framework::detail::ambient_context_hooks_t ambient_flow_hooks{&capture_ambient_flow,
-                                                                        &enter_ambient_flow};
-
-const bool ambient_flow_hooks_installed = [] {
-    framework::detail::set_ambient_context_hooks (&ambient_flow_hooks);
-    return true;
-}();
+constexpr framework::detail::ambient_context_hooks_t ambient_flow_hook_table{&capture_ambient_flow,
+                                                                             &enter_ambient_flow};
 
 } // namespace
+
+const framework::detail::ambient_context_hooks_t &ambient_flow_hooks () noexcept
+{
+    return ambient_flow_hook_table;
+}
 
 std::string flow_id_t::create ()
 {
@@ -101,38 +103,14 @@ std::string flow_id_t::create ()
     bytes[6] = static_cast<std::uint8_t> ((bytes[6] & 0x0F) | 0x70);
     bytes[8] = static_cast<std::uint8_t> ((bytes[8] & 0x3F) | 0x80);
 
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string value;
-    value.reserve (encoded_length);
-    for (std::size_t i = 0; i < bytes.size (); ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) {
-            value.push_back ('-');
-        }
-        value.push_back (digits[bytes[i] >> 4]);
-        value.push_back (digits[bytes[i] & 0x0F]);
-    }
-    return value;
+    return zlink::framework::detail::encode_uuid (bytes);
 }
 
 bool flow_id_t::is_valid (std::string_view value) noexcept
 {
-    if (value.size () != encoded_length) {
+    if (!zlink::framework::detail::is_lowercase_uuid_text (value))
         return false;
-    }
-    for (std::size_t i = 0; i < value.size (); ++i) {
-        const char c = value[i];
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (c != '-') {
-                return false;
-            }
-            continue;
-        }
-        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-        if (!hex) {
-            return false;
-        }
-    }
-    if (value[14] != '7') {
+    if (value[14] != uuid_v7_version_character) {
         return false;
     }
     const char variant = value[19];

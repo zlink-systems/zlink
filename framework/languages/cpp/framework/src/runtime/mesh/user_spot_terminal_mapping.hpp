@@ -12,25 +12,34 @@ namespace zlink::framework::runtime::user_spot_terminal
 inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_header_t &header,
                                                           bool creation)
 {
-    if (header.terminal_result == 101)
+    if (header.terminal_result
+        == static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut))
         return framework_error_kind_t::deadline_exceeded;
     //  Spec 32-framework-error-model:91-92 — a reply that could not be
     //  processed (including a synthesized protocolError terminal from a
     //  malformed decode) is ProtocolError.
-    if (header.terminal_result == 104)
+    if (header.terminal_result
+        == static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError))
         return framework_error_kind_t::protocol_error;
-    if (header.terminal_result == 109)
+    if (header.terminal_result
+        == static_cast<std::uint32_t> (protocol::request_terminal_result::notConnected))
         return framework_error_kind_t::unavailable;
     // No eligible node can host the Spot; waiting on a queue cannot make a
     // placement target appear.
-    if (creation && header.terminal_result == 113 && header.failure_code == 0)
+    if (creation
+        && header.terminal_result
+             == static_cast<std::uint32_t> (protocol::request_terminal_result::backpressured)
+        && header.failure_code == static_cast<std::uint32_t> (protocol::framework_error_code::none))
         return framework_error_kind_t::unavailable;
     //  Spec 32-framework-error-model:99-103 — a remote target's operation-table/
     //  queue saturation (Conflict(107)/Busy(108)+None) is the target's own
     //  resource, so Unavailable. This matches
     //  the request-path reply_header_exception remote mapper.
-    if ((header.terminal_result == 107 || header.terminal_result == 108)
-        && header.failure_code == 0)
+    if ((header.terminal_result
+           == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
+         || header.terminal_result
+              == static_cast<std::uint32_t> (protocol::request_terminal_result::busy))
+        && header.failure_code == static_cast<std::uint32_t> (protocol::framework_error_code::none))
         return framework_error_kind_t::unavailable;
 
     switch (static_cast<protocol::framework_error_code> (header.failure_code)) {
@@ -66,9 +75,11 @@ inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_
 
     //  Spec 32-framework-error-model:118 — terminal 103 is Terminated, which is
     //  ShuttingDown; only terminal 106 (Rejected) maps to rejected.
-    if (header.terminal_result == 103)
+    if (header.terminal_result
+        == static_cast<std::uint32_t> (protocol::request_terminal_result::terminated))
         return framework_error_kind_t::shutting_down;
-    if (header.terminal_result == 106)
+    if (header.terminal_result
+        == static_cast<std::uint32_t> (protocol::request_terminal_result::rejected))
         return framework_error_kind_t::rejected;
     return framework_error_kind_t::internal_failure;
 }

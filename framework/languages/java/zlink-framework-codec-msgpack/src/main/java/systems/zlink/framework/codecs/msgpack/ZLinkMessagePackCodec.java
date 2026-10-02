@@ -10,6 +10,7 @@ import java.util.Objects;
 import java.util.function.Predicate;
 
 public final class ZLinkMessagePackCodec implements ZLinkCodecExtension, ZLinkStreamTypedCodec {
+    private static final String CONTENT_TYPE = "application/x-msgpack";
     private static final ZLinkMessagePackCodec DEFAULT = new ZLinkMessagePackCodec(ignored -> true);
     private final Predicate<Class<?>> canSerialize;
 
@@ -38,7 +39,7 @@ public final class ZLinkMessagePackCodec implements ZLinkCodecExtension, ZLinkSt
     @Override
     public void register(ZLinkCodecRegistrar codecs) {
         codecs.addSerializer(
-                "application/x-msgpack", ZLinkMessagePackMessageSerializer.INSTANCE, canSerialize);
-        codecs.addStreamCodec("application/x-msgpack", ZLinkStreamCodec.MESSAGE_PACK);
+                CONTENT_TYPE, ZLinkMessagePackMessageSerializer.INSTANCE, canSerialize);
+        codecs.addStreamCodec(CONTENT_TYPE, ZLinkStreamCodec.MESSAGE_PACK);
     }
 }

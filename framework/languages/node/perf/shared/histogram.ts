@@ -17,7 +17,7 @@ export interface HistogramSnapshot {
   count: string;
   sumNs: string;
   maxNs: string | null;
-  percentileMethod: 'nearest-rank-bucket-upper-bound';
+  percentileMethod: 'nearest-rank-bucket-upper-bound-capped-by-max';
 }
 
 export const LATENCY_SUFFIXES = ['meanMs', 'p50Ms', 'p95Ms', 'p99Ms', 'maxMs'] as const;
@@ -44,7 +44,7 @@ export class Histogram {
     return {
       unit: 'ms', ticksUnit: 'ns', bounds: [...HISTOGRAM_BOUNDS], counts: this.counts.map(String), overflow: String(this.overflow),
       count: String(this.count), sumNs: this.sum.toString(), maxNs: this.count === 0 ? null : this.max.toString(),
-      percentileMethod: 'nearest-rank-bucket-upper-bound'
+      percentileMethod: 'nearest-rank-bucket-upper-bound-capped-by-max'
     };
   }
 
@@ -64,7 +64,7 @@ export class Histogram {
       if (value === null) {
         reasons[`/metrics/${key}`] = this.count === 0
           ? nullReason('NO_SAMPLES', 'No successful samples in this cohort and window.')
-          : nullReason('HISTOGRAM_OVERFLOW', 'Nearest rank lies above the final bucket.', 'perf/README.ko.md', 1024);
+          : nullReason('HISTOGRAM_OVERFLOW', 'Nearest rank lies above the final bucket.', 'perf/README.ko.md', HISTOGRAM_BOUNDS[HISTOGRAM_BOUNDS.length - 1]);
       }
     }
     if (this.count === 0) reasons[`/histograms/${histogramKey}/maxNs`] = nullReason('NO_SAMPLES', 'No successful samples in this cohort and window.');
@@ -75,7 +75,7 @@ export class Histogram {
     let cumulative = 0;
     for (let i = 0; i < this.counts.length; i++) {
       cumulative += this.counts[i];
-      if (cumulative >= rank) return HISTOGRAM_BOUNDS[i];
+      if (cumulative >= rank) return Math.min(HISTOGRAM_BOUNDS[i], Number(this.max) / 1_000_000);
     }
     return null;
   }

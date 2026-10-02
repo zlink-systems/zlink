@@ -164,14 +164,18 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         Objects.requireNonNull(record, "record");
         ZLinkMeshDrainCoordinator.Claim claim = drains == null ? null : drains.tryClaim(meshName);
         if (drains != null && claim == null) {
-            recordDrop(record, "shutdown");
+            recordDrop(record, ZLinkDispatchErrorReason.SHUTDOWN);
             reject(record, "RouteMesh application admission is sealed", null);
             return;
         }
         RecordKind kind = record.receive().kind();
         Namespace namespace = namespace(kind, record.receive().channelName());
         if (namespace == null || record.parts().size() < 2) {
-            recordDrop(record, namespace == null ? "no_handler" : "decode_error");
+            recordDrop(
+                    record,
+                    namespace == null
+                            ? ZLinkDispatchErrorReason.HANDLER_MISSING
+                            : ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
             reject(
                     record,
                     "MeshNode message has no registered handler namespace or payload",
@@ -188,7 +192,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).
-            recordDrop(record, "decode_error");
+            recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header rejectedEnvelope;
             try {
                 rejectedEnvelope =
@@ -267,7 +271,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                 : ZLinkApplicationMetadata.decode(
                                         record.receive().applicationMetadata());
             } catch (IllegalArgumentException error) {
-                recordDrop(record, "decode_error");
+                recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
                 reject(record, error.getMessage(), claim);
                 return;
             }
@@ -359,6 +363,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             boolean accepted =
                                     namespace.sendQueue.tryEnqueue(
                                             () -> {
+                                                CompletionStage<Void> invocation;
                                                 try {
                                                     traceLocalNodeSend(
                                                             ZLinkMessageFlowOutcome.ADMITTED,
@@ -368,7 +373,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                             ZLinkMessageFlowOutcome.DISPATCHED,
                                                             packetName,
                                                             sourceNodeRid);
-                                                    return invoker.executeHandler(
+                                                    invocation =
+                                                            invoker.executeHandler(
                                                                     () ->
                                                                             invoker
                                                                                     .invokeRouteSendHandler(
@@ -377,25 +383,25 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                             sourceNodeRid,
                                                                                             ownedPayload,
                                                                                             metadata,
-                                                                                            contentType))
-                                                            .whenComplete(
-                                                                    (unused, error) -> {
-                                                                        if (error == null) {
-                                                                            traceLocalNodeSend(
-                                                                                    ZLinkMessageFlowOutcome
-                                                                                            .COMPLETED,
-                                                                                    packetName,
-                                                                                    sourceNodeRid);
-                                                                        }
-                                                                        closeLocalSubmission(
-                                                                                ownedPayload,
-                                                                                claim);
-                                                                    });
+                                                                                            contentType));
                                                 } catch (RuntimeException handlerFailure) {
-                                                    closeLocalSubmission(ownedPayload, claim);
-                                                    return CompletableFuture.failedFuture(
-                                                            handlerFailure);
+                                                    invocation =
+                                                            CompletableFuture.failedFuture(
+                                                                    handlerFailure);
                                                 }
+                                                return invocation.whenComplete(
+                                                        (unused, error) -> {
+                                                            try {
+                                                                finishSend(
+                                                                        null,
+                                                                        packetName,
+                                                                        sourceNodeRid,
+                                                                        error);
+                                                            } finally {
+                                                                closeLocalSubmission(
+                                                                        ownedPayload, claim);
+                                                            }
+                                                        });
                                             });
                             if (!accepted) {
                                 traceLocalNodeSend(
@@ -448,7 +454,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         ChannelSendHandlerRegistration channel = namespace.channelSends.get(packetName);
         if (route == null && channel == null) {
-            recordDrop(record, "no_handler");
+            recordDrop(record, ZLinkDispatchErrorReason.HANDLER_MISSING);
             closeRecord(record, claim);
             return;
         }
@@ -482,32 +488,61 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                         payload,
                                                                         metadata,
                                                                         contentType));
-                                return invocation.whenComplete(
-                                        (ignored, error) -> {
-                                            if (ZLinkChannelCallRuntime.unwrap(error)
-                                                    instanceof PayloadDecodeDispatchException) {
-                                                recordDrop(record, "decode_error");
-                                            }
-                                            if (error == null) {
-                                                traceFlow(
-                                                        ZLinkMessageFlowOutcome.COMPLETED,
-                                                        record,
-                                                        packetName);
-                                            }
-                                            closeRecord(record, claim);
-                                        });
+                                return invocation;
                             },
                             null);
             queued.whenComplete(
                     (ignored, error) -> {
-                        if (error != null) {
+                        try {
+                            finishSend(record, packetName, record.receive().sourceNodeRid(), error);
+                        } finally {
                             closeRecord(record, claim);
                         }
                     });
         } catch (RuntimeException error) {
-            closeRecord(record, claim);
+            try {
+                finishSend(record, packetName, record.receive().sourceNodeRid(), error);
+            } finally {
+                closeRecord(record, claim);
+            }
             throw error;
         }
+    }
+
+    private void finishSend(
+            ZLinkMeshDispatchRecord record,
+            String packetName,
+            RoutingId sourceNodeRid,
+            Throwable error) {
+        Throwable cause = ZLinkChannelCallRuntime.unwrap(error);
+        if (cause == null) {
+            if (record == null) {
+                traceLocalNodeSend(ZLinkMessageFlowOutcome.COMPLETED, packetName, sourceNodeRid);
+            } else {
+                traceFlow(ZLinkMessageFlowOutcome.COMPLETED, record, packetName);
+            }
+            return;
+        }
+        ZLinkDispatchErrorReason reason = ZLinkChannelDispatchReporter.reasonFrom(cause);
+        if (record != null && reason == ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED) {
+            recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
+        }
+        ReceiveRecord receive = record == null ? null : record.receive();
+        dispatchErrors.report(
+                receive == null || receive.kind() == RecordKind.NODE_SEND
+                        ? ZLinkDispatchErrorSurface.NODE
+                        : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                ZLinkDispatchMessageKind.SEND,
+                reason,
+                ZLinkDispatchErrorAction.DROP,
+                packetName,
+                receive == null ? null : receive.channelName(),
+                null,
+                null,
+                null,
+                sourceNodeRid,
+                receive == null ? null : receive.applicationCorrelation(),
+                cause);
     }
 
     private void dispatchRequest(
@@ -631,10 +666,15 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         reject(record, message, null);
     }
 
-    private void recordDrop(ZLinkMeshDispatchRecord record, String reason) {
+    private void recordDrop(ZLinkMeshDispatchRecord record, ZLinkDispatchErrorReason reason) {
         switch (record.receive().kind()) {
-            case NODE_SEND -> messageMetrics.dropped("node", reason);
-            case CHANNEL_SEND -> messageMetrics.dropped("channel", reason);
+            case NODE_SEND ->
+                    messageMetrics.dropped(
+                            ZLinkDispatchErrorSurface.NODE.traceName(), reason.traceName());
+            case CHANNEL_SEND ->
+                    messageMetrics.dropped(
+                            ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL.traceName(),
+                            reason.traceName());
             default -> {}
         }
     }

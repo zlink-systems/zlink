@@ -6,14 +6,29 @@
 
 #include "runtime/diagnostics/dispatch_events.hpp"
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+struct ambient_context_hooks_t;
+}
+
 namespace zlink::framework::runtime
 {
+
+inline constexpr char incomplete_flow_context_error[] =
+  "flow id and origin must be present together";
+inline constexpr char uuid_v7_version_character = '7';
+inline constexpr char invalid_flow_context_error[] = "flow id must be UUIDv7";
+// Ambient flow and actor capture for Framework continuations; installed by
+// install_host_context_hooks().
+const framework::detail::ambient_context_hooks_t &ambient_flow_hooks () noexcept;
 
 /* flow_id wire form (flow-correlation §6): lowercase hyphenated UUIDv7,
  * 36 ASCII bytes. The generation algorithm is a framework-internal decision;
@@ -22,7 +37,7 @@ class flow_id_t
 {
   public:
     static constexpr std::uint8_t format_marker = 0xF2;
-    static constexpr std::size_t encoded_length = 36;
+    static constexpr std::size_t encoded_length = zlink::framework::detail::uuid_text_length;
 
     static std::string create ();
     static bool is_valid (std::string_view value) noexcept;
@@ -89,12 +104,12 @@ class flow_context_t
         }
         if (flow_id.has_value () != origin.has_value ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         "flow id and origin must be present together");
+                                         incomplete_flow_context_error);
         }
         if (flow_id) {
             if (!flow_id_t::is_valid (*flow_id)) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                             "flow id must be UUIDv7");
+                                             invalid_flow_context_error);
             }
             return scope_t (
               flow_value_t{*flow_id, *origin, diagnostics_mode, std::move (stream_session_id)});
@@ -113,12 +128,12 @@ class flow_context_t
             return scope_t (std::nullopt);
         if (flow_id.has_value () != origin.has_value ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         "flow id and origin must be present together");
+                                         incomplete_flow_context_error);
         }
         if (flow_id) {
             if (!flow_id_t::is_valid (*flow_id)) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                             "flow id must be UUIDv7");
+                                             invalid_flow_context_error);
             }
             return scope_t (flow_value_t{std::move (*flow_id), *origin, diagnostics_mode,
                                          std::move (stream_session_id)});

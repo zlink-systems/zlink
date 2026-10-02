@@ -71,7 +71,7 @@ services.AddZLinkFramework(options =>
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `OwnerLeaseRenewInterval` / `OwnerLeaseTtl` / `OwnerLeaseFencingMargin` / `OwnerLeaseRenewTimeout` | 5초 / 15초 / 5초 / 3초 | Owner lease 갱신 주기와 유효기간. `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout < OwnerLeaseTtl - OwnerLeaseFencingMargin`을 만족해야 한다 |
+| `OwnerLeaseRenewInterval` / `OwnerLeaseTtl` / `OwnerLeaseFencingMargin` / `OwnerLeaseRenewTimeout` | 5초 / 15초 / 5초 / 3초 | Owner lease 갱신 주기와 유효기간. `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout < OwnerLeaseTtl - OwnerLeaseFencingMargin`을 만족해야 한다 |
 | `PollingInterval` | 1초 | Store 상태 확인 주기 |
 | `StoreFailureGrace` | 30초 | Store 장애를 감내하는 유예 시간 |
 | `RouteCacheMaxAge` / `MessageFollowDuration` | 15초 / 30초 | 0이면 기능을 끈다. 둘 다 양수면 cache age가 Message Follow duration보다 최소 5초 작아야 한다 |

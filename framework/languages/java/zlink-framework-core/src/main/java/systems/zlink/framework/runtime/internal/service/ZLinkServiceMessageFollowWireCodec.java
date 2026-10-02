@@ -24,7 +24,6 @@ public final class ZLinkServiceMessageFollowWireCodec {
     //  Frame guard, not a queue bound: the Message Follow queue has no stored
     //  size cap, but a single encoded record still must not be unbounded.
     public static final long MAX_ENCODED_BYTES = 16L * 1024L * 1024L;
-    private static final int PREFIX_BYTES = 5;
     private static final int VERSION_BYTES = 1;
     private static final int BODY_LENGTH_BYTES = 4;
     private static final int MAX_ROUTE_BODY_BYTES = 0xffff;
@@ -47,7 +46,10 @@ public final class ZLinkServiceMessageFollowWireCodec {
         }
         ByteArrayOutputStream result =
                 new ByteArrayOutputStream(
-                        PREFIX_BYTES + VERSION_BYTES + BODY_LENGTH_BYTES + bodyBytes.length);
+                        ZLinkServiceWireCodec.PREFIX_BYTES
+                                + VERSION_BYTES
+                                + BODY_LENGTH_BYTES
+                                + bodyBytes.length);
         result.write(ServiceWireConstants.MAGIC_0);
         result.write(ServiceWireConstants.MAGIC_1);
         result.write(ServiceWireConstants.WIRE_MAJOR);

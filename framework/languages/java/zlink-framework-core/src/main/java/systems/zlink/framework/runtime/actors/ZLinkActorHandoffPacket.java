@@ -9,6 +9,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkActorHandoffPacket implements AutoCloseable {
+    private static final long RETAINED_PACKET_OVERHEAD_BYTES = 128L;
     private final long arrivalIndex;
     private final ZLinkStreamHeader header;
     private final Message payload;
@@ -54,7 +55,7 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
     }
 
     long retainedBytes() {
-        return payload.size() + acceptedJournalRecord.length + 128L;
+        return payload.size() + acceptedJournalRecord.length + RETAINED_PACKET_OVERHEAD_BYTES;
     }
 
     CompletionStage<Optional<Message>> reply() {

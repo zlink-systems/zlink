@@ -119,6 +119,10 @@ export class ZLinkChannelRuntimeLifecycle {
 
   constructor(private readonly options: ZLinkChannelRuntimeLifecycleOptions) {}
 
+  fanoutTopologyTargets(channelName: string) {
+    return this.fanoutLocation?.topologyTargets(channelName);
+  }
+
   configureLocationAutoConnect(
     runtime: ZLinkLocationRuntime,
     stores: ZLinkLocationRuntimeStores,

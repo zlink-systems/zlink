@@ -731,7 +731,7 @@ Metadata's public contract is as follows.
 
 | Item | Contract |
 |---|---|
-| Key and value | UTF-8 and contain no NUL. |
+| Key and value | UTF-8 and contain no NUL. A key is not empty. |
 | Total size | At most 1024 bytes, including encoded key, value, and structural overhead. |
 | Setting the same key multiple times | The last value is sent. |
 | Reading in a handler | Provided as an unchangeable snapshot; the application copies it to keep it after the handler turn ends. |

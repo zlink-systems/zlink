@@ -17,6 +17,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -37,6 +38,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollo
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
@@ -323,6 +325,131 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
             awaitState(right, MeshPeerState.ADMITTED);
         }
+    }
+
+    @Test
+    void securityIdentityMismatchRejectKeepsAdmittedPeer() throws Exception {
+        var targetRid = RoutingId.from("wire-reject-target");
+        var peerRid = RoutingId.from("wire-reject-peer");
+        var codec = new ZLinkServiceM6AWireCodec();
+        try (var context = Zlink.createContext();
+                var target = meshNode(context);
+                var port = new ZLinkJavaRawServicePort(context);
+                var peer = port.openRouter(peerRid)) {
+            target.setRoutingId(targetRid);
+            target.setBind("inproc://wire-reject-" + System.nanoTime());
+            target.start();
+            peer.connect(target.status().localEndpoint());
+            port.send(
+                            peer,
+                            targetRid,
+                            List.of(
+                                    codec.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO,
+                                            descriptor(peerRid))))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            try (var admitted = receiveServiceControl(port, peer)) {
+                assertEquals(
+                        ServiceWireConstants.COMMAND_ADMIT,
+                        codec.decodeHeader(admitted.frames().getFirst()).command());
+            }
+            var received = new CompletableFuture<ZLinkMeshDispatchRecord>();
+            target.startDispatch(received::complete);
+            // service-wire-v1.schema.json reject-reason: securityIdentityMismatch.
+            port.send(peer, targetRid, List.of(codec.encodeReject(4)))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            try (var packet = Message.from("wire-reject-marker");
+                    var payload = Message.from(new byte[] {1})) {
+                port.send(
+                                peer,
+                                targetRid,
+                                List.of(
+                                        codec.encodeNodeSendHeader(0),
+                                        ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(
+                                                List.of(packet, payload))))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
+            }
+            try (var record = received.get(2, TimeUnit.SECONDS)) {
+                assertEquals(RecordKind.NODE_SEND, record.receive().kind());
+            }
+            assertFalse(
+                    target.peers().stream()
+                            .anyMatch(row -> row.state() == MeshPeerState.NOT_REQUIRED));
+        }
+    }
+
+    @Test
+    void notRequiredHelloRespondsWithDescriptorAdmission() throws Exception {
+        var targetRid = RoutingId.from("wire-reject-client-target");
+        var peerRid = RoutingId.from("wire-reject-client-peer");
+        var codec = new ZLinkServiceM6AWireCodec();
+        var peerDescriptor =
+                new ZLinkServiceNodeDescriptor(
+                        "mesh",
+                        peerRid,
+                        1,
+                        1,
+                        "inproc://wire-reject-client-peer",
+                        List.of(),
+                        ZLinkServiceNodeDescriptor.State.SERVING,
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                        1,
+                        List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                        ZLinkServiceNodeDescriptor.ObjectRole.CLIENT,
+                        1,
+                        1,
+                        0,
+                        0,
+                        0);
+        try (var context = Zlink.createContext();
+                var target = meshNode(context);
+                var port = new ZLinkJavaRawServicePort(context);
+                var peer = port.openRouter(peerRid)) {
+            target.setRoutingId(targetRid);
+            target.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
+            target.setBind("inproc://wire-reject-client-" + System.nanoTime());
+            target.start();
+            peer.connect(target.status().localEndpoint());
+            port.send(
+                            peer,
+                            targetRid,
+                            List.of(
+                                    codec.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO, peerDescriptor)))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            try (var response = receiveServiceControl(port, peer)) {
+                assertEquals(
+                        ServiceWireConstants.COMMAND_ADMIT,
+                        codec.decodeHeader(response.frames().getFirst()).command());
+                assertEquals(
+                        ZLinkServiceNodeDescriptor.ObjectRole.CLIENT,
+                        codec.decodeAdmission(
+                                        response.frames().getFirst(),
+                                        ServiceWireConstants.COMMAND_ADMIT,
+                                        targetRid)
+                                .objectRole());
+            }
+        }
+    }
+
+    private static ZLinkJavaRawServicePort.Inbound receiveServiceControl(
+            ZLinkJavaRawServicePort port, RouterSocket router) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            assertTrue(
+                    port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())));
+            var received = port.receive(router).orElseThrow();
+            if (received.frames().size() != 1 || received.frames().getFirst().length != 0) {
+                return received;
+            }
+            // Core 연결 알림은 빈 frame을 전달하며 runtime도 이 알림을 제외한다.
+            received.close();
+        }
+        throw new AssertionError("service control response was not observed");
     }
 
     @Test
@@ -1331,7 +1458,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                             List.of(application.toByteArray())));
             assertEquals(
-                    systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_REPLY,
+                    ServiceWireConstants.COMMAND_REPLY,
                     ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                             List.of(reply.toByteArray())));
             assertEquals(

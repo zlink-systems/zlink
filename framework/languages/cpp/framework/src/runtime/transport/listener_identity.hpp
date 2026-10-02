@@ -12,6 +12,11 @@
 namespace zlink::framework::runtime::transport
 {
 
+inline constexpr std::string_view tcp_endpoint_prefix = "tcp://";
+
+inline constexpr char default_security_identity[] = "default";
+inline constexpr char plaintext_security_identity[] = "plaintext";
+
 namespace detail
 {
 
@@ -163,18 +168,21 @@ inline std::string advertised_tcp_endpoint (std::string bound_endpoint,
                                             std::string_view listener_kind)
 {
     const auto port_separator = bound_endpoint.rfind (':');
-    if (!bound_endpoint.starts_with ("tcp://") || port_separator == std::string::npos
-        || port_separator < 6) {
+    if (!bound_endpoint.starts_with (tcp_endpoint_prefix) || port_separator == std::string::npos
+        || port_separator < tcp_endpoint_prefix.size ()) {
         if (!advertise_host)
             return normalize_endpoint (bound_endpoint);
         throw std::invalid_argument (std::string (listener_kind)
                                      + " advertise host requires a TCP bind endpoint");
     }
 
-    const auto bound_host = std::string_view (bound_endpoint).substr (6, port_separator - 6);
+    const auto bound_host =
+      std::string_view (bound_endpoint)
+        .substr (tcp_endpoint_prefix.size (), port_separator - tcp_endpoint_prefix.size ());
     const auto host =
       bracket_ipv6_host (advertised_host (bound_host, advertise_host, listener_kind));
-    return normalize_endpoint ("tcp://" + host + bound_endpoint.substr (port_separator));
+    return normalize_endpoint (std::string (tcp_endpoint_prefix) + host
+                               + bound_endpoint.substr (port_separator));
 }
 
 } // namespace zlink::framework::runtime::transport

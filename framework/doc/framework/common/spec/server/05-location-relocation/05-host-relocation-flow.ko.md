@@ -673,7 +673,7 @@ message를 임시 보관하는 구간을
 같은 ActorId로 새로 만든 Actor는 application이 다시 bind해야 한다.
 
 Instance Spot의 `Close`와 relocation은 같은 authority commit에서 순서를 정한다. `Closing`이
-먼저면 close를 완료하고 이전하지 않는다. Relocation이 먼저면 늦은 `Close`는 moving 결과이며
+먼저면 close를 완료하고 이전하지 않으며, relocation 중인 host이므로 그 Close는 이 host에 새 generation을 만들지 않는다([Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계) 3단계). Relocation이 먼저면 늦은 `Close`는 moving 결과이며
 자동 재제출하지 않는다.
 
 ## 13. Relocate 완료와 실패

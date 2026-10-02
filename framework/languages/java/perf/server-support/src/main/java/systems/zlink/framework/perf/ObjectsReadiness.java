@@ -2,8 +2,7 @@ package systems.zlink.framework.perf;
 
 import java.util.List;
 
-// The role's own statement that its cell objects (Spot, Actor, subscriptions) are not yet prepared (§16.1 objectsReady).
-// The role replaces the statement as its public create/bind results arrive; the evidence lists those results.
+// The role's statement that cell objects are ready (§16.1); evidence may be refreshed without changing that decision.
 public final class ObjectsReadiness {
     private record State(boolean ready, String reason, List<Object> evidence) {}
 
@@ -25,7 +24,13 @@ public final class ObjectsReadiness {
         return state.evidence();
     }
 
-    public void set(boolean ready, String reason, List<Object> evidence) {
+    public synchronized void set(boolean ready, String reason, List<Object> evidence) {
         state = new State(ready, reason, List.copyOf(evidence));
+    }
+
+    /** Refresh evidence without changing the role's independently owned readiness decision. */
+    synchronized void recordEvidence(List<Object> evidence) {
+        State current = state;
+        state = new State(current.ready(), current.reason(), List.copyOf(evidence));
     }
 }

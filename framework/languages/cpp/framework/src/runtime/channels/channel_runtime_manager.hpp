@@ -46,7 +46,7 @@ class channel_runtime_manager_t
     const channel_snapshot_t &require_channel (const std::string &channel_name,
                                                capability_t capability) const;
 
-    static std::pair<std::string, std::string> parse_source (const std::string &source_name);
+    static std::pair<std::string, capability_t> parse_source (const std::string &source_name);
 
     std::shared_ptr<channel_runtime_state_t> _state;
     channel_bundle_factory_t _bundle_factory;

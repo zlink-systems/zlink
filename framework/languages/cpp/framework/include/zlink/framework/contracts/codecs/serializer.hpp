@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/json_profile.hpp>
+
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/codecs/json.hpp>
@@ -329,7 +331,7 @@ class serializer_registry_t
                           const auto *end = begin == nullptr ? begin : begin + bytes.size ();
                           return zlink::detail::json_profile::parse (begin, end).template get<T> ();
                       },
-                      "application/json");
+                      zlink::detail::json_profile::content_type);
                 } else {
                     return serializer_t<T> (
                       [] (const T &) -> encoded_payload_t {
@@ -342,7 +344,7 @@ class serializer_registry_t
                             framework_error_kind_t::protocol_error,
                             "No serializer is registered for this payload type");
                       },
-                      "application/json");
+                      zlink::detail::json_profile::content_type);
                 }
             }
             auto serialize = std::move (registered->serialize);

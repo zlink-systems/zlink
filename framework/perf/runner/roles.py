@@ -64,7 +64,7 @@ def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reser
         listeners = endpoints[key]
         peer = next(iter(endpoints[target].values()), None) if role.peer and target else None
         name = f"server-{role.kind}-{index}"
-        config = {**{k: common[k] for k in ("runId", "cellId", "configHash")},
+        config = {**{k: common[k] for k in ("runId", "cellId", "configHash", "language")},
                   "role": role.kind, "roleInstance": index, "scenario": scenario.name, "mode": cell.mode,
                   "terminal": cell.terminal, "topology": cell.topology, "channelName": channel_name, "meshName": mesh_name,
                   "transportEndpoints": listeners, "peerEndpoint": peer,

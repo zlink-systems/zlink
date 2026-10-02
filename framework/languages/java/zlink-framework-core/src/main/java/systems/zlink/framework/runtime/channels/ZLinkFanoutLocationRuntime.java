@@ -22,13 +22,13 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +51,7 @@ import java.util.logging.Logger;
 
 /** Dedicated classic fanout descriptor publication and subscriber discovery. */
 final class ZLinkFanoutLocationRuntime implements AutoCloseable {
-    private static final String SECURITY_IDENTITY = "default";
+    private static final long DISCOVERY_TICK_MILLIS = 10;
     private static final int MAX_DESCRIPTORS_PER_CHANNEL = 1024;
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkFanoutLocationRuntime.class.getName());
@@ -67,8 +67,9 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     private final BiConsumer<String, ZLinkBackendTopicMessage> dispatch;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Published> published = new ConcurrentHashMap<>();
-    // The state lane exclusively owns connection membership and phase.
+    // The state lane owns desired descriptors and physical connection membership and phase.
     private final Map<String, Connection> connections = new LinkedHashMap<>();
+    private final Map<String, Map<String, Publisher>> desiredPublishers = new LinkedHashMap<>();
     private final Set<String> automaticChannels = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler;
     private final Executor infrastructureExecutor;
@@ -153,7 +154,10 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         if (start.started()) {
             ScheduledFuture<?> scheduled =
                     scheduler.scheduleAtFixedRate(
-                            () -> signalTick(start.epoch()), 0, 10, TimeUnit.MILLISECONDS);
+                            () -> signalTick(start.epoch()),
+                            0,
+                            DISCOVERY_TICK_MILLIS,
+                            TimeUnit.MILLISECONDS);
             boolean cancel =
                     inStateLane(
                             () -> {
@@ -187,10 +191,17 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                             lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
                             List<Published> servers = List.copyOf(published.values());
                             published.clear();
+                            desiredPublishers.clear();
+                            sockets.signalTopologyChanged();
                             CompletableFuture<Void> pendingTick = admittedTick;
                             CompletableFuture<Void> completion = new CompletableFuture<>();
                             stopCompletion = completion;
-                            return StopState.stopping(servers, pendingTick, completion, task);
+                            return StopState.stopping(
+                                    servers,
+                                    List.copyOf(connections.values()),
+                                    pendingTick,
+                                    completion,
+                                    task);
                         });
         if (!stop.stopping()) {
             return stop.completion() == null
@@ -211,7 +222,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 .handle((ignored, failure) -> completionCause(failure))
                 .thenCompose(
                         publishFailure ->
-                                closeConnections()
+                                closeConnections(stop.connections())
                                         .handle(
                                                 (ignored, closeFailure) -> {
                                                     Throwable closeCause =
@@ -379,6 +390,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     }
 
     private void settleTick(CompletableFuture<Void> settlement, Throwable failure) {
+        sockets.signalTopologyChanged();
         inStateLane(
                 () -> {
                     if (admittedTick == settlement) {
@@ -445,21 +457,35 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             List<ZLinkFanoutPublisherDescriptor> rows,
             long epoch,
             CompletableFuture<Void> settlement) {
-        boolean current =
-                inStateLane(() -> running && epoch == lifecycleEpoch && admittedTick == settlement);
-        if (!current) {
+        Map<String, Publisher> desired =
+                inStateLane(
+                        () -> {
+                            if (!running || epoch != lifecycleEpoch || admittedTick != settlement) {
+                                return null;
+                            }
+                            Map<String, Publisher> previous =
+                                    desiredPublishers.getOrDefault(channelName, Map.of());
+                            Map<String, Publisher> current = new LinkedHashMap<>();
+                            for (ZLinkFanoutPublisherDescriptor row : rows) {
+                                String id = connectionId(row);
+                                Publisher publisher = previous.get(id);
+                                if (publisher == null) {
+                                    publisher = new Publisher(row);
+                                } else {
+                                    publisher.descriptor = row;
+                                }
+                                current.put(id, publisher);
+                            }
+                            desiredPublishers.put(channelName, current);
+                            return current;
+                        });
+        if (desired == null) {
             return;
         }
-        Set<String> desired = new HashSet<>();
-        for (ZLinkFanoutPublisherDescriptor row : rows) {
-            if (row.state() != ZLinkFrameworkRuntimeState.SERVING) {
-                continue;
-            }
-            String id = connectionId(row);
-            desired.add(id);
-            boolean absent = inStateLane(() -> !connections.containsKey(id));
-            if (absent) {
-                open(row, id, epoch, settlement);
+        for (Publisher publisher : desired.values()) {
+            String id = connectionId(publisher.descriptor);
+            if (publisher.requiresConnection() && inStateLane(() -> !connections.containsKey(id))) {
+                open(publisher, id, epoch, settlement);
             }
         }
         List<Connection> removed =
@@ -469,21 +495,26 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                         .filter(
                                                 connection ->
                                                         connection
+                                                                .publisher
                                                                 .descriptor
                                                                 .channelName()
                                                                 .equals(channelName))
                                         .filter(
                                                 connection ->
-                                                        !desired.contains(connection.connectionId))
+                                                        desired.get(connection.connectionId)
+                                                                        != connection.publisher
+                                                                || !connection.publisher
+                                                                        .requiresConnection())
                                         .toList());
         removed.forEach(connection -> remove(connection.connectionId, connection, settlement));
     }
 
     private void open(
-            ZLinkFanoutPublisherDescriptor descriptor,
+            Publisher publisher,
             String connectionId,
             long epoch,
             CompletableFuture<Void> settlement) {
+        ZLinkFanoutPublisherDescriptor descriptor = publisher.descriptor;
         removeByPublisher(descriptor.channelName(), descriptor.publisherRid(), settlement);
         ZLinkBackendSubscriberSocket subscriber = backend.createSubscriberSocket(context);
         ZLinkBackendSocketMonitor monitor = null;
@@ -496,7 +527,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 subscriber.setSubscription(topic);
             }
             monitor = monitoring.openSocketMonitor(subscriber);
-            connection = new Connection(descriptor, connectionId, subscriber, monitor);
+            connection = new Connection(publisher, connectionId, subscriber, monitor);
             Connection candidate = connection;
             boolean accepted =
                     inStateLane(
@@ -516,7 +547,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                 return current;
                             });
             if (!accepted) {
-                closeUnregistered(candidate);
+                RuntimeException failure =
+                        closeResources(candidate.monitor, candidate.subscriber, null);
+                if (failure != null) {
+                    throw failure;
+                }
                 return;
             }
             ZLinkSocketMonitorDrainLoop.start(
@@ -554,39 +589,58 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 remove(connectionId, candidate, settlement);
             }
         } catch (RuntimeException failure) {
-            LOGGER.log(
-                    Level.WARNING,
-                    "fanout subscriber connect failed for publisher "
-                            + descriptor.publisherRid().toHex()
-                            + " at "
-                            + descriptor.endpoint(),
-                    failure);
             if (connection != null) {
-                remove(connectionId, connection, settlement);
+                remove(connectionId, connection, settlement)
+                        .whenComplete(
+                                (ignored, closeFailure) -> {
+                                    Throwable cause = completionCause(closeFailure);
+                                    if (cause != null && cause != failure) {
+                                        failure.addSuppressed(cause);
+                                    }
+                                    logConnectFailure(descriptor, failure);
+                                });
             } else {
-                if (monitor != null) {
-                    try {
-                        monitor.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
-                try {
-                    subscriber.close();
-                } catch (RuntimeException ignored) {
-                }
+                logConnectFailure(descriptor, closeResources(monitor, subscriber, failure));
             }
         }
     }
 
-    private static void closeUnregistered(Connection connection) {
-        try {
-            connection.monitor.close();
-        } catch (RuntimeException ignored) {
+    private static RuntimeException closeResources(
+            ZLinkBackendSocketMonitor monitor,
+            ZLinkBackendSubscriberSocket subscriber,
+            RuntimeException failure) {
+        if (monitor != null) {
+            try {
+                monitor.close();
+            } catch (RuntimeException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                } else if (failure != closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
         }
         try {
-            connection.subscriber.close();
-        } catch (RuntimeException ignored) {
+            subscriber.close();
+        } catch (RuntimeException closeFailure) {
+            if (failure == null) {
+                failure = closeFailure;
+            } else if (failure != closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
         }
+        return failure;
+    }
+
+    private static void logConnectFailure(
+            ZLinkFanoutPublisherDescriptor descriptor, RuntimeException failure) {
+        LOGGER.log(
+                Level.WARNING,
+                "fanout subscriber connect failed for publisher "
+                        + descriptor.publisherRid().toHex()
+                        + " at "
+                        + descriptor.endpoint(),
+                failure);
     }
 
     private void receiveAvailable(long epoch, CompletableFuture<Void> settlement) {
@@ -655,14 +709,15 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                         }
                                         ZLinkClassicFanoutLiveness.ReceiveKind accepted =
                                                 connection.liveness.receive(
-                                                        connection.descriptor.publisherRid(),
+                                                        connection.publisher.descriptor
+                                                                .publisherRid(),
                                                         connection.connectionId,
                                                         frames,
                                                         System.nanoTime());
                                         connection.ready =
                                                 connection.nativeReady
                                                         && connection.liveness.isReady(
-                                                                connection.descriptor
+                                                                connection.publisher.descriptor
                                                                         .publisherRid());
                                         return accepted;
                                     });
@@ -678,7 +733,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 if (kind == ZLinkClassicFanoutLiveness.ReceiveKind.APPLICATION) {
                     // Dispatch owns the received message. Keep user-facing queue
                     // admission outside the connection registry monitor.
-                    dispatch.accept(connection.descriptor.channelName(), received);
+                    dispatch.accept(connection.publisher.descriptor.channelName(), received);
                 } else {
                     received.parts().forEach(Message::close);
                 }
@@ -723,10 +778,12 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                         .filter(
                                                 connection ->
                                                         connection
+                                                                        .publisher
                                                                         .descriptor
                                                                         .channelName()
                                                                         .equals(channelName)
                                                                 && connection
+                                                                        .publisher
                                                                         .descriptor
                                                                         .publisherRid()
                                                                         .equals(rid))
@@ -747,7 +804,8 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                             }
                             expected.phase = ConnectionPhase.CLOSING;
                             expected.liveness.disconnect(
-                                    expected.descriptor.publisherRid(), expected.connectionId);
+                                    expected.publisher.descriptor.publisherRid(),
+                                    expected.connectionId);
                             return CloseReservation.owned(expected, admittedTick);
                         });
         if (reservation == null) {
@@ -792,35 +850,26 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     }
 
     private static void closeNative(Connection connection) {
-        try {
-            connection.subscriber.disconnect(connection.descriptor.endpoint());
-        } catch (RuntimeException ignored) {
-        }
         RuntimeException failure = null;
         try {
-            connection.monitor.close();
-        } catch (RuntimeException monitorFailure) {
-            failure = monitorFailure;
+            connection.subscriber.disconnect(connection.publisher.descriptor.endpoint());
+        } catch (RuntimeException disconnectFailure) {
+            failure = disconnectFailure;
         }
-        try {
-            connection.subscriber.close();
-        } catch (RuntimeException subscriberFailure) {
-            if (failure == null) {
-                failure = subscriberFailure;
-            } else {
-                failure.addSuppressed(subscriberFailure);
-            }
-        }
+        failure = closeResources(connection.monitor, connection.subscriber, failure);
         if (failure != null) {
             throw failure;
         }
     }
 
-    private CompletionStage<Void> closeConnections() {
-        List<Connection> snapshot = inStateLane(() -> List.copyOf(connections.values()));
-        List<CompletionStage<Void>> closes =
+    private CompletionStage<Void> closeConnections(List<Connection> snapshot) {
+        List<CompletableFuture<Void>> closes =
                 snapshot.stream()
-                        .map(connection -> remove(connection.connectionId, connection, null))
+                        .map(
+                                connection -> {
+                                    remove(connection.connectionId, connection, null);
+                                    return connection.closeSettlement;
+                                })
                         .toList();
         return CompletableFuture.allOf(
                 closes.stream()
@@ -837,7 +886,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 value.revision,
                 value.endpoint,
                 value.state,
-                SECURITY_IDENTITY,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                 owner.ownerId(),
                 owner.leaseGeneration(),
                 Instant.now());
@@ -852,8 +901,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     }
 
     private static long positiveNonce() {
-        long value = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
-        return value == 0 ? 1 : value;
+        return ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
     }
 
     private static boolean isReadyEvent(String event) {
@@ -885,28 +933,33 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     List<FanoutPublisherSnapshot> publisherSnapshots(String channelName) {
         return inStateLane(
                 () ->
-                        connections.values().stream()
-                                .filter(
-                                        connection ->
-                                                connection.phase == ConnectionPhase.RECEIVABLE)
-                                .filter(
-                                        connection ->
-                                                connection
-                                                        .descriptor
-                                                        .channelName()
-                                                        .equals(channelName))
+                        desiredPublishers.getOrDefault(channelName, Map.of()).entrySet().stream()
                                 .map(
-                                        connection ->
-                                                new FanoutPublisherSnapshot(
-                                                        connection.descriptor.publisherRid(),
-                                                        connection.ready))
+                                        entry -> {
+                                            Publisher publisher = entry.getValue();
+                                            Connection connection = connections.get(entry.getKey());
+                                            return new FanoutPublisherSnapshot(
+                                                    publisher.descriptor.publisherRid(),
+                                                    publisher.descriptor.state(),
+                                                    connection != null
+                                                            && connection.phase
+                                                                    == ConnectionPhase.RECEIVABLE
+                                                            && connection.ready,
+                                                    connection != null
+                                                            && connection.phase
+                                                                    != ConnectionPhase.CLOSING);
+                                        })
                                 .sorted(
                                         Comparator.comparing(
                                                 snapshot -> snapshot.nodeRid().toHex()))
                                 .toList());
     }
 
-    record FanoutPublisherSnapshot(RoutingId nodeRid, boolean ready) {}
+    record FanoutPublisherSnapshot(
+            RoutingId nodeRid,
+            ZLinkFrameworkRuntimeState hostState,
+            boolean ready,
+            boolean connecting) {}
 
     private record ReceiveSnapshot(List<Connection> connections, int cursor) {
         private static ReceiveSnapshot empty() {
@@ -949,19 +1002,21 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     private record StopState(
             boolean stopping,
             List<Published> servers,
+            List<Connection> connections,
             CompletableFuture<Void> pendingTick,
             CompletableFuture<Void> completion,
             ScheduledFuture<?> task) {
         private static StopState alreadyStopped(CompletableFuture<Void> completion) {
-            return new StopState(false, List.of(), null, completion, null);
+            return new StopState(false, List.of(), List.of(), null, completion, null);
         }
 
         private static StopState stopping(
                 List<Published> servers,
+                List<Connection> connections,
                 CompletableFuture<Void> pendingTick,
                 CompletableFuture<Void> completion,
                 ScheduledFuture<?> task) {
-            return new StopState(true, servers, pendingTick, completion, task);
+            return new StopState(true, servers, connections, pendingTick, completion, task);
         }
     }
 
@@ -1005,8 +1060,20 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         }
     }
 
+    private static final class Publisher {
+        private volatile ZLinkFanoutPublisherDescriptor descriptor;
+
+        private Publisher(ZLinkFanoutPublisherDescriptor descriptor) {
+            this.descriptor = descriptor;
+        }
+
+        private boolean requiresConnection() {
+            return descriptor.state() == ZLinkFrameworkRuntimeState.SERVING;
+        }
+    }
+
     private static final class Connection {
-        private final ZLinkFanoutPublisherDescriptor descriptor;
+        private final Publisher publisher;
         private final String connectionId;
         private final ZLinkBackendSubscriberSocket subscriber;
         private final ZLinkBackendSocketMonitor monitor;
@@ -1017,11 +1084,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         private boolean ready;
 
         private Connection(
-                ZLinkFanoutPublisherDescriptor descriptor,
+                Publisher publisher,
                 String connectionId,
                 ZLinkBackendSubscriberSocket subscriber,
                 ZLinkBackendSocketMonitor monitor) {
-            this.descriptor = descriptor;
+            this.publisher = publisher;
             this.connectionId = connectionId;
             this.subscriber = subscriber;
             this.monitor = monitor;

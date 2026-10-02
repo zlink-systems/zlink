@@ -8,6 +8,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 
 namespace zlink::framework::detail
 {
@@ -90,8 +91,17 @@ class activation_admission_t : public std::enable_shared_from_this<activation_ad
           nullptr, [self, key = std::move (key)] (void *) { self->leave (key); });
     }
 
-    static std::string actor_key (const std::string &actor_id) { return "actor:" + actor_id; }
-    static std::string spot_key (const std::string &spot_id) { return "spot:" + spot_id; }
+    static constexpr std::string_view actor_key_prefix = "actor:";
+    static constexpr std::string_view spot_key_prefix = "spot:";
+
+    static std::string actor_key (const std::string &actor_id)
+    {
+        return std::string (actor_key_prefix) + actor_id;
+    }
+    static std::string spot_key (const std::string &spot_id)
+    {
+        return std::string (spot_key_prefix) + spot_id;
+    }
 
   private:
     mutable std::mutex _mutex;

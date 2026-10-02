@@ -65,8 +65,8 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
 
 **Application이 직접 완료시키는 비동기 결과와 제한 시간 관찰.** Application은 외부 사건으로 완료되는 비동기 결과를 만들고, application thread에서 그 결과를 제한 시간 동안 관찰할 수 있다.
 
-- 완료 소스는 첫 완료 하나만 확정하며, 이후 완료 시도는 결과를 바꾸지 않는다. 결과는 성공 값 또는 typed Framework 오류다. 같은 완료 소스에서 얻은 결과 handle은 모두 같은 원 결과를 관찰한다. 완료 소스나 결과 handle을 파괴해도 원 결과를 완료하거나 취소하지 않는다.
-- 제한 시간 관찰은 동기 blocking 종결자와 같은 문맥 규칙을 따른다 — runtime 실행 문맥에서는 `InvalidOperation`이다. 시간이 지나면 미완료를 알릴 뿐 원 결과를 완료·취소하지 않으며, 늦은 완료는 원 결과에 남는다. 관찰 시간 초과는 operation terminal이 아니다.
+- 완료 소스는 첫 완료 하나만 확정하며, 이후 완료 시도는 결과를 바꾸지 않는다. 결과는 성공 값 또는 실패이며, 실패의 표현(typed Framework 오류, 취소, 원래 예외)은 각 언어의 오류 계약이 정한다. 같은 완료 소스에서 얻은 결과 handle은 모두 같은 원 결과를 관찰한다. 완료 소스나 결과 handle을 파괴해도 원 결과를 완료하거나 취소하지 않는다.
+- Framework가 제공하는 제한 시간 관찰은 동기 blocking 종결자와 같은 문맥 규칙을 따른다 — runtime 실행 문맥에서는 `InvalidOperation`이다. 시간이 지나면 미완료를 알릴 뿐 원 결과를 완료·취소하지 않으며, 늦은 완료는 원 결과에 남는다. 관찰 시간 초과는 operation terminal이 아니다.
 - .NET·Java·Node.js는 언어 표준 타입(`TaskCompletionSource`, `CompletableFuture`, `Promise`)으로 이 능력을 제공하므로 Framework API를 따로 두지 않는다. C++은 Framework task 타입에 완료 소스와 제한 시간 관찰을 둔다. 이 완료 소스의 결과를 기다린 continuation은 완료한 thread가 아니라 await를 등록한 실행 문맥에서 재개하며, handler 안의 await는 일반 비동기 terminal처럼 그 handler turn을 유지한다. 이름과 형태는 [C++ common runtime](../languages/cpp/interfaces/01-common-runtime.ko.md)이 정하고, host 종료와의 경계는 [Cancellation과 shutdown §5.1](03-cancellation-and-shutdown.ko.md#51-application-완료-소스를-기다리는-대기의-종료)이 정한다.
 
 `Yield`를 제공하는 실행 문맥과 call 목록은
@@ -175,8 +175,9 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 - Binding에 넘기기 전 Framework queue 대기의 timeout·shutdown·cancellation 경쟁은
   [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다.
   Binding operation의 cancellation과 native completion 정리도 그 절의 소유 경계를 참조한다.
-- Framework는 기다리는 줄을 따로 만들지 않으므로 "대기 자리가 없다"는 이유로 끝나는
-  호출이 없다. 자리를 기다리다 시간이 다 되면 `DeadlineExceeded`로 끝난다.
+- Framework는 기다리는 줄을 따로 만들지 않는다. 자리를 기다리다 시간이 다 되면 `DeadlineExceeded`로 끝난다.
+- Core가 대기 토큰 없이 capacity 부족을 반환하면(예: request completion slot 포화) 기다릴 대상이 없으므로
+  Framework는 그 호출을 즉시 `Unavailable`로 끝낸다.
 - 어느 경우에도 `Backpressured` status를 공개하거나 나중에 message를 다시 제출하지 않는다.
 
 | 실패 | 오류 분류 |
@@ -409,9 +410,8 @@ Dispatcher에서 기다리거나 실행 중인 callback 수는 진행 중인 호
 
 진행 중인 호출 수는 Framework가 따로 세지 않는다. 그 수를 제한하는 것은 Core다. Core는
 socket마다 completion 자리를 정해 두고, 그 자리가 다 차면 새 호출을 접수하지 않고
-`ZLINK_SUBMIT_BACKPRESSURED`로 알린다([Core socket 계약](../../../../../../../core/doc/spec/core/socket/README.ko.md)).
-이것은 오류가 아니라 기다리라는 신호이며, binding이 받아서 자리가 날 때까지 기다린 뒤 같은
-호출을 완성한다([Binding 비동기 coroutine 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)).
+대기 토큰 없이 `ZLINK_SUBMIT_BACKPRESSURED`로 알린다([Core socket 계약](../../../../../../../core/doc/spec/core/socket/README.ko.md)).
+기다릴 대상이 없으므로 그 호출은 [§5](#5-backpressure와-오류-분류)의 분류대로 끝난다.
 상대 host에 일이 쌓였을 때도 같다 — 상대의 `PAUSED`가 이쪽 send를 멈추고, Core와 binding이
 보낼 자리를 기다린다([§6](04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어),
 [§7](04-application-job-queue-and-backpressure.ko.md#7-send-completion과의-합성)).
@@ -543,8 +543,8 @@ dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 
 - Local capacity가 부족한 send는 family send timeout까지 기다리다가, capacity가
   먼저 생기면 정확히 한 번 제출되어 정상 완료하고, timeout이 먼저 확정되면
   `DeadlineExceeded`로 완료한다.
-- 진행 중인 send·request를 아무리 늘려도 대기 자리가 없다는 이유로 끝나는 call이 없고,
-  시간이 다 된 call만 `DeadlineExceeded`로 끝난다.
+- 대기 토큰이 있는 capacity 부족은 그 대기로 이어지고, 시간이 다 된 call만 `DeadlineExceeded`로
+  끝난다. 토큰 없는 거절은 [§5](#5-backpressure와-오류-분류)대로 `Unavailable`로 끝난다.
 - Logical Multicast는 target이 0개여도 반환 데이터 없이 정상 완료하고, 시작 뒤
   개별 target 실패는 public 반환값을 바꾸지 않는다.
 - Subscriber가 없는 Classic fanout의 완료는 [§6](#6-logical-multicast와-classic-fanout)의 publish 규칙을 확인한다.
@@ -586,8 +586,8 @@ Binding cancellation 관찰은
 [Binding 비동기 실행 모델 §7](../../../../../../../bindings/doc/spec/async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)을 참조한다.
 
 - 완료 callback은 확정 시점의 호출 stack이 아니라 새 execution turn에서 실행된다.
-- 진행 중인 request를 아무리 늘려도 완료 자리가 없다는 이유로 끝나는 request가 없고,
-  각 request는 답·오류·timeout·취소·종료 가운데 하나로 끝난다.
+- 각 request는 답·오류·timeout·취소·종료 가운데 하나로 끝난다. Core completion 자리 포화는
+  [§5](#5-backpressure와-오류-분류)대로 `Unavailable`로 끝난다.
 - 전송 수락 뒤 연결 단절의 재제출은 [§5](#5-backpressure와-오류-분류)의 경계를 확인한다.
 - 취소·시간 초과·종료로 완료된 결과는 오류 메시지 문자열이 아니라 별도 타입이나
   값으로 구분된다.

@@ -24,7 +24,7 @@ export class EventLoopResourceStack {
   }
 }
 
-async function closeResources(resources: readonly CloseableResource[]): Promise<void> {
+export async function closeResources(resources: readonly CloseableResource[]): Promise<void> {
   const failures: unknown[] = [];
   for (const resource of resources) {
     try {
@@ -33,6 +33,10 @@ async function closeResources(resources: readonly CloseableResource[]): Promise<
       failures.push(error);
     }
   }
+  finishResourceCleanup(failures);
+}
+
+export function finishResourceCleanup(failures: readonly unknown[]): void {
   if (failures.length > 0) {
     throw new AggregateError(failures, 'Event-loop resource cleanup failed.');
   }

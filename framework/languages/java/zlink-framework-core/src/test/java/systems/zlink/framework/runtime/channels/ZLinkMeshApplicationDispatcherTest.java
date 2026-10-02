@@ -579,6 +579,94 @@ final class ZLinkMeshApplicationDispatcherTest {
         return submitLocalAsync(dispatcher, packetName, value).toCompletableFuture().join();
     }
 
+    @Test
+    void localNodeSendFailureReportsDispatchError() throws Exception {
+        assertNodeSendFailureReportsDispatchError(true);
+    }
+
+    @Test
+    void receivedNodeSendFailureReportsDispatchError() throws Exception {
+        assertNodeSendFailureReportsDispatchError(false);
+    }
+
+    private static void assertNodeSendFailureReportsDispatchError(boolean local) throws Exception {
+        List<String> traces = new CopyOnWriteArrayList<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level previousLevel = logger.getLevel();
+        Handler listener =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        traces.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.setLevel(Level.ALL);
+        logger.addHandler(listener);
+        try (var scope = ZLinkFlowContext.enterOrCreate(null, ZLinkFlowOrigin.APPLICATION)) {
+            String flowId = ZLinkFlowContext.current().flowId();
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://mesh-node-failure-trace");
+            mesh.addRouteSendHandler(FailingNodeHandler.class, String.class);
+            var framework = new ZLinkFrameworkRegistration();
+            framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            var drains = new ZLinkMeshDrainCoordinator(List.of("game"));
+            var dispatcher =
+                    new ZLinkMeshApplicationDispatcher(
+                            mesh,
+                            new ZLinkStringMessageSerializer(),
+                            framework,
+                            ZLinkHandlerActivator.reflection(),
+                            (token, parts) -> parts.forEach(Message::close),
+                            drains);
+            if (local) {
+                assertEquals(0, submitLocal(dispatcher, "String", "failure"));
+            } else {
+                try (var legacy = record(RecordKind.NODE_SEND, null, "failure")) {
+                    var header =
+                            ZLinkChannelEnvelope.create(
+                                    ZLinkChannelEnvelope.KIND_COMMAND,
+                                    null,
+                                    "String",
+                                    null,
+                                    null,
+                                    Map.of(),
+                                    ZLinkFlowContext.current());
+                    dispatcher.accept(
+                            new ZLinkMeshDispatchRecord(
+                                    legacy.owner(),
+                                    legacy.receive(),
+                                    List.of(
+                                            ZLinkChannelEnvelope.encodeHeader(header),
+                                            Message.from(
+                                                    "failure".getBytes(StandardCharsets.UTF_8)))));
+                }
+            }
+            drains.sealAndAwaitZero("game").toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(
+                    traces.stream()
+                            .anyMatch(
+                                    trace ->
+                                            trace.contains("event_id=zlink.dispatch_error")
+                                                    && trace.contains("reason=handler_exception")
+                                                    && trace.contains("surface=node")
+                                                    && trace.contains("kind=send")
+                                                    && trace.contains("flow=" + flowId)
+                                                    && trace.contains(
+                                                            "error_type=IllegalStateException")
+                                                    && trace.contains(
+                                                            "error_message=expected failure")));
+        } finally {
+            logger.removeHandler(listener);
+            logger.setLevel(previousLevel);
+        }
+    }
+
     private static CompletionStage<Integer> submitLocalAsync(
             ZLinkMeshApplicationDispatcher dispatcher, String packetName, String value) {
         List<Message> parts =

@@ -3,6 +3,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
+#include <zlink/framework/detail/crc32c.hpp>
 
 #include <array>
 #include <chrono>
@@ -53,7 +54,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
                                                 "relocation retention must be positive");
 
         const auto retention_ms = std::chrono::duration_cast<std::chrono::milliseconds> (retention);
-        const auto checksum = crc32c (payload);
+        const auto checksum = zlink::framework::detail::crc32c (
+          std::span<const std::byte> (payload));
         auto reference = make_reference ();
         for (;;) {
             if (auto terminal = check_operation ())
@@ -161,6 +163,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
     }
 
   private:
+    static constexpr std::string_view reference_prefix = "zlr-";
+
     template <typename T> static task_t<T> completed (T value)
     {
         return task_t<T> (result_t<T>::success (std::move (value)));
@@ -185,21 +189,10 @@ class provider_relocation_repository_t final : public relocation_repository_t
             word = (static_cast<std::uint64_t> (random ()) << 32)
                    | static_cast<std::uint64_t> (random ());
         std::ostringstream stream;
-        stream << "zlr-" << std::hex << std::setfill ('0');
+        stream << reference_prefix << std::hex << std::setfill ('0');
         for (const auto word : words)
             stream << std::setw (16) << word;
         return stream.str ();
-    }
-
-    static std::uint32_t crc32c (const std::vector<std::byte> &payload) noexcept
-    {
-        std::uint32_t crc = 0xFFFFFFFFU;
-        for (const auto byte : payload) {
-            crc ^= std::to_integer<std::uint8_t> (byte);
-            for (int bit = 0; bit < 8; ++bit)
-                crc = (crc >> 1) ^ (0x82F63B78U & (0U - (crc & 1U)));
-        }
-        return ~crc;
     }
 
     relocation_store_t *_store;

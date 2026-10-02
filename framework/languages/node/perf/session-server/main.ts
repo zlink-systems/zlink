@@ -1,6 +1,6 @@
 import { Measurement } from '../shared/measurement';
 import { PerfActorRelaySessionFactory, SessionActorSetup } from '../server-support/actor-echo-support';
-import { ObjectsReadiness, readConfig, runRole } from '../server-support/server-application';
+import { readConfig, runRole } from '../server-support/server-application';
 import { PerfSessionFactory, SessionEchoHandler } from './perf-session';
 
 const { config } = readConfig(process.argv.slice(2));
@@ -9,12 +9,10 @@ if (config.role !== 'session' || config.source || (config.scenario !== 'session-
 }
 const measurement = new Measurement(config, config.source);
 const remote = config.scenario === 'cs-remote-session-actor-echo';
-const readiness = remote ? new ObjectsReadiness(false, 'No Actor is bound to a session yet.') : undefined;
 runRole({
   config,
-  objects: readiness,
   providers: remote
-    ? [{ provide: ObjectsReadiness, useValue: readiness }, SessionActorSetup, PerfActorRelaySessionFactory]
+    ? [SessionActorSetup, PerfActorRelaySessionFactory]
     : [PerfSessionFactory, SessionEchoHandler],
   configureFramework: (builder) => {
     if (!remote) {

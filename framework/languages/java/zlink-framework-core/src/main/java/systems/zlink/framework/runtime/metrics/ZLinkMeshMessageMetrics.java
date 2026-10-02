@@ -1,5 +1,10 @@
 package systems.zlink.framework.runtime.internal.metrics;
 
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry.ChannelSelectionFailure;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,7 +14,11 @@ public final class ZLinkMeshMessageMetrics {
     private static final ConcurrentHashMap<String, ZLinkMeshMessageMetrics> MESHES =
             new ConcurrentHashMap<>();
     private static final String[] DROP_REASONS = {
-        "no_handler", "decode_error", "backpressure", "stale_target", "shutdown"
+        ZLinkDispatchErrorReason.HANDLER_MISSING.traceName(),
+        ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED.traceName(),
+        ZLinkDispatchErrorReason.BACKPRESSURE.traceName(),
+        ZLinkDispatchErrorReason.STALE_TARGET.traceName(),
+        ZLinkDispatchErrorReason.SHUTDOWN.traceName()
     };
     private final String meshName;
     private final Map<String, Map<String, Map<String, String>>> drops;
@@ -19,19 +28,27 @@ public final class ZLinkMeshMessageMetrics {
     private ZLinkMeshMessageMetrics(String meshName) {
         this.meshName = meshName;
         Map<String, Map<String, Map<String, String>>> surfaces = new HashMap<>();
-        for (String surface : new String[] {"node", "channel", "spot", "instance_spot", "actor"}) {
+        for (ZLinkDispatchErrorSurface metricSurface :
+                new ZLinkDispatchErrorSurface[] {
+                    ZLinkDispatchErrorSurface.NODE,
+                    ZLinkDispatchErrorSurface.CHANNEL,
+                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                    ZLinkDispatchErrorSurface.INSTANCE_SPOT,
+                    ZLinkDispatchErrorSurface.SPOT_ACTOR
+                }) {
+            String surface = metricSurface.traceName();
             Map<String, Map<String, String>> reasons = new HashMap<>();
             for (String reason : DROP_REASONS) {
                 reasons.put(
                         reason,
                         Map.of(
-                                "mesh_name",
+                                ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
                                 meshName,
-                                "surface",
+                                ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
                                 surface,
-                                "message_kind",
-                                "send",
-                                "reason",
+                                ZLinkRuntimeMetrics.Tag.MESSAGE_KIND.wire(),
+                                ZLinkDispatchMessageKind.SEND.traceName(),
+                                ZLinkRuntimeMetrics.Tag.REASON.wire(),
                                 reason));
             }
             surfaces.put(surface, Map.copyOf(reasons));
@@ -50,7 +67,8 @@ public final class ZLinkMeshMessageMetrics {
     public void dropped(String surface, String reason) {
         if (ZLinkRuntimeMetrics.enabled()) {
             ZLinkRuntimeMetrics.increment(
-                    "zlink.mesh_node.messages.dropped", drops.get(surface).get(reason));
+                    ZLinkRuntimeMetrics.Metric.MESSAGES_DROPPED.metricName(),
+                    drops.get(surface).get(reason));
         }
     }
 
@@ -63,15 +81,23 @@ public final class ZLinkMeshMessageMetrics {
             tags = selections.computeIfAbsent(channelName, this::selectionTags);
         }
         ZLinkRuntimeMetrics.increment(
-                "zlink.mesh_node.channel.selection_failures", tags.get(reason));
+                ZLinkRuntimeMetrics.Metric.CHANNEL_SELECTION_FAILURES.metricName(),
+                tags.get(reason));
     }
 
     private Map<String, Map<String, String>> selectionTags(String channelName) {
         Map<String, Map<String, String>> tags = new HashMap<>();
-        for (String reason : new String[] {"no_member", "not_ready", "draining"}) {
+        for (ChannelSelectionFailure failure : ChannelSelectionFailure.values()) {
+            String reason = failure.wire();
             tags.put(
                     reason,
-                    Map.of("mesh_name", meshName, "channel_name", channelName, "reason", reason));
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            meshName,
+                            ZLinkRuntimeMetrics.Tag.CHANNEL_NAME.wire(),
+                            channelName,
+                            ZLinkRuntimeMetrics.Tag.REASON.wire(),
+                            reason));
         }
         return Map.copyOf(tags);
     }

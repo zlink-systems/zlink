@@ -84,7 +84,16 @@ public sealed class S2sChannelToSpotSendSendEchoScenario(IZLinkSpotClient spots,
                 with { returnChannel = config.channelName };
             if (!measurement.BeginOperation(out var started, "send")) break;
             request = request with { sentTicks = DecimalText.Of(started) };
-            var entry = correlations.Register(request, started);   // §13: registered right before the first public send
+            SendSendCorrelation.Entry entry;
+            try
+            {
+                entry = correlations.Register(request, started);   // §13: register immediately before the first public send
+            }
+            catch (Exception error)
+            {
+                measurement.CompleteOperation(started, error);
+                continue;
+            }
             try
             {
                 await spots.SendToSpot(spotId, request).Async();
@@ -92,7 +101,7 @@ public sealed class S2sChannelToSpotSendSendEchoScenario(IZLinkSpotClient spots,
             }
             catch (Exception error) { correlations.FirstSendEnded(entry, error); }
             var (result, completed) = await correlations.CompleteAsync(entry);   // the return Channel handler decides
-            measurement.CompleteOperation(started, result, completed);
+            measurement.CompleteOperation(started, result, completedTicks: completed);
         }
     }
 }

@@ -5,10 +5,8 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
     <ProjectReference Include="../ZLink.Framework.Perf.Shared/ZLink.Framework.Perf.Shared.csproj" />
-    <!-- The PS sequence originals are defined once, in the Publisher project (perf §15.4). -->
-    <Compile Include="../ZLink.Framework.Perf.PublisherServer/FanoutSequences.cs" Link="FanoutSequences.cs" />
-    <!-- The send/send correlation and the family metric counters are defined once, in ServerSupport (perf §13, §14). -->
-    <Compile Include="../ZLink.Framework.Perf.ServerSupport/SendSendCorrelation.cs" Link="SendSendCorrelation.cs" />
-    <Compile Include="../ZLink.Framework.Perf.ServerSupport/ScenarioMetrics.cs" Link="ScenarioMetrics.cs" />
+    <ProjectReference Include="../ZLink.Framework.Perf.ServerSupport/ZLink.Framework.Perf.ServerSupport.csproj" />
+    <ProjectReference Include="../ZLink.Framework.Perf.SubscriberServer/ZLink.Framework.Perf.SubscriberServer.csproj" />
+    <ProjectReference Include="../ZLink.Framework.Perf.SpotServer/ZLink.Framework.Perf.SpotServer.csproj" />
   </ItemGroup>
 </Project>

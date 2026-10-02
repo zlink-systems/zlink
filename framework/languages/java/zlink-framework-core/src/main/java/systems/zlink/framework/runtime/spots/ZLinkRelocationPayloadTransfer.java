@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -317,8 +318,13 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         static Options defaults() {
+            var defaults = new ZLinkLocationOptions();
             return new Options(
-                    262_144L, 16_777_216L, 0L, Duration.ofMillis(1_000), Duration.ofSeconds(30));
+                    defaults.relocationPayloadChunkLimitBytes(),
+                    defaults.relocationInFlightPayloadBudgetBytes(),
+                    defaults.relocationNodeInFlightPayloadBudgetBytes(),
+                    defaults.relocationCutoverWaitTimeout(),
+                    defaults.messageFollowDuration());
         }
     }
 }

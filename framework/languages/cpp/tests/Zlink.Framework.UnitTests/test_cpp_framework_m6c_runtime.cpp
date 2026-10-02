@@ -998,8 +998,9 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
 
-    auto reply_source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
-    auto result_source = std::make_shared<detail::task_completion_source_t<reply_t>> ();
+    auto reply_source =
+      std::make_shared<zlink::framework::task_completion_source_t<zlink::message_t>> ();
+    auto result_source = std::make_shared<zlink::framework::task_completion_source_t<reply_t>> ();
     auto result_task = result_source->task ();
     const auto submitted = state->run_serial_sync ("temporary-channel-call-yield", [&] {
         auto pending =
@@ -3076,7 +3077,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     maintenance_runtime_t relocation (objects, authority, roots);
 
     auto target_terminal =
-      std::make_shared<framework::detail::task_completion_source_t<relocation_reason_t>> ();
+      std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
     std::uint32_t planned_chunks = 0;
     std::uint32_t sent_chunks = 0;
     eligible_relocation_unit_t::canonical_wire_context_t wire{

@@ -72,8 +72,7 @@ export class ZLinkBoundSessionRelay {
       boundSessionFactory: options.boundSessionFactory,
       updateRemoteActorPacketTarget: (actorId, value) =>
         this.actorPackets.updateRemoteActorPacketTarget(actorId, value),
-      actorPacketTargetForState: (actorId, routerChannelIdHint) =>
-        this.actorPackets.actorPacketTargetForState(actorId, routerChannelIdHint),
+      actorPacketTargetForState: (actorId) => this.actorPackets.actorPacketTargetForState(actorId),
       reportOwnershipRefreshError: (actorId, error) =>
         options
           .errorSink()

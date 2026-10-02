@@ -563,6 +563,10 @@ host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_k
               static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestRejected);
             break;
         case framework_error_kind_t::unavailable:
+            result.terminal_result = 105;
+            result.failure_code = static_cast<std::uint32_t> (
+              runtime::protocol::framework_error_code::routeNotConnected);
+            break;
         default:
             result.terminal_result = 105;
             result.failure_code =
@@ -1180,7 +1184,7 @@ mesh_node_runtime_t::seal_bound_sessions (
             operation_terminal_t terminal = operation_terminal_t::transport_failed;
             std::optional<host::session_relocation_seal_result_t> result;
         };
-        auto completion = std::make_shared<detail::task_completion_source_t<completion_t>> ();
+        auto completion = std::make_shared<task_completion_source_t<completion_t>> ();
         auto completion_task = completion->task ();
         bool submitted = false;
         try {
@@ -1907,6 +1911,11 @@ void mesh_node_runtime_t::request_stop () noexcept
     _stopping.store (true, std::memory_order_release);
 }
 
+void mesh_node_runtime_t::cancel_pending_dispatch_waits () noexcept
+{
+    spot_node_runtime_t (_state->spot_state).cancel_dispatch_waits ();
+}
+
 void mesh_node_runtime_t::stop () noexcept
 {
     // Stop timer producers before draining their serial/worker consumers, and
@@ -2329,14 +2338,14 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &ac
                                                            std::chrono::milliseconds timeout)
 {
     // The operation completion delivers the reply (submit_application_actor_entry_spot_join).
-    detail::task_completion_source_t<actor_join_reply_t> joined;
-    auto result = joined.task ();
+    auto joined = std::make_shared<task_completion_source_t<actor_join_reply_t>> ();
+    auto result = joined->task ();
     const auto submitted = submit_application_actor_entry_spot_join (
       actor, target_node, request, timeout, [joined] (result_t<actor_join_reply_t> reply) mutable {
-          joined.complete (std::move (reply));
+          joined->complete (std::move (reply));
       });
     if (!submitted)
-        joined.complete (detail::propagate_failure<actor_join_reply_t> (
+        joined->complete (detail::propagate_failure<actor_join_reply_t> (
           submitted, "Actor entry Spot join failed"));
     return result;
 }
@@ -3129,7 +3138,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
         const auto remaining =
           std::chrono::duration_cast<std::chrono::milliseconds> (s->deadline - now);
         auto completion =
-          std::make_shared<detail::task_completion_source_t<session_relocation_seal_outcome_t>> ();
+          std::make_shared<task_completion_source_t<session_relocation_seal_outcome_t>> ();
         auto output = completion->task ();
         auto attempt =
           std::make_shared<task_t<session_relocation_seal_outcome_t>> (seal_bound_sessions (
@@ -3938,7 +3947,7 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               "Remote Actor session binding fence is invalid");
         }
         auto completion =
-          std::make_shared<detail::task_completion_source_t<runtime::protocol::reply_header_t>> ();
+          std::make_shared<task_completion_source_t<runtime::protocol::reply_header_t>> ();
         auto output = completion->task ();
         const auto actor_fence = runtime::protocol::actor_route_fence_t{
           std::string (actor.actor_id ().value ()),
@@ -4033,7 +4042,7 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
                                      "retired Actor session binding fence is invalid");
     }
     auto completion =
-      std::make_shared<detail::task_completion_source_t<runtime::protocol::reply_header_t>> ();
+      std::make_shared<task_completion_source_t<runtime::protocol::reply_header_t>> ();
     auto output = completion->task ();
     const auto actor_owner = zlink::routing_id_t::from (binding.actor.node_id);
     const auto submitted = co_await _node->transport ().request_bound_session_bind (

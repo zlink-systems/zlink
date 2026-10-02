@@ -13,6 +13,10 @@ import java.util.Set;
 import java.util.jar.JarFile;
 
 final class ZLinkHandlerPackageScanner {
+    private static final String FILE_PROTOCOL = "file";
+    private static final String JAR_PROTOCOL = "jar";
+    private static final String CLASS_SUFFIX = ".class";
+
     private ZLinkHandlerPackageScanner() {}
 
     static Set<Class<?>> scan(Class<?> markerType) {
@@ -24,9 +28,9 @@ final class ZLinkHandlerPackageScanner {
             Enumeration<URL> resources = loader.getResources(packagePath);
             while (resources.hasMoreElements()) {
                 URL resource = resources.nextElement();
-                if ("file".equals(resource.getProtocol())) {
+                if (FILE_PROTOCOL.equals(resource.getProtocol())) {
                     scanDirectory(loader, packageName, new File(resource.toURI()), classes);
-                } else if ("jar".equals(resource.getProtocol())) {
+                } else if (JAR_PROTOCOL.equals(resource.getProtocol())) {
                     scanJar(loader, packagePath, resource, classes);
                 }
             }
@@ -45,8 +49,10 @@ final class ZLinkHandlerPackageScanner {
         for (File file : files) {
             if (file.isDirectory()) {
                 scanDirectory(loader, packageName + "." + file.getName(), file, classes);
-            } else if (file.getName().endsWith(".class")) {
-                String simpleName = file.getName().substring(0, file.getName().length() - 6);
+            } else if (file.getName().endsWith(CLASS_SUFFIX)) {
+                String simpleName =
+                        file.getName()
+                                .substring(0, file.getName().length() - CLASS_SUFFIX.length());
                 loadClass(loader, packageName + "." + simpleName, classes);
             }
         }
@@ -60,8 +66,11 @@ final class ZLinkHandlerPackageScanner {
             jar.stream()
                     .filter(entry -> !entry.isDirectory())
                     .map(entry -> entry.getName())
-                    .filter(name -> name.startsWith(packagePath) && name.endsWith(".class"))
-                    .map(name -> name.substring(0, name.length() - 6).replace('/', '.'))
+                    .filter(name -> name.startsWith(packagePath) && name.endsWith(CLASS_SUFFIX))
+                    .map(
+                            name ->
+                                    name.substring(0, name.length() - CLASS_SUFFIX.length())
+                                            .replace('/', '.'))
                     .forEach(className -> loadClass(loader, className, classes));
         }
     }

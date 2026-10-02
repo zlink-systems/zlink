@@ -174,6 +174,7 @@ public final class ServerApplication {
             builder.properties("logging.file.name=" + config.diagnostics().flowFile(), "logging.level.systems.zlink=INFO");
         }
         context = builder.run();
+        measurement.samplePublicState(this::publicStatus);
         return context;
     }
 
@@ -231,7 +232,7 @@ public final class ServerApplication {
     }
 
     private void stats(HttpExchange exchange) {
-        // The runner's last read of a phase (?final=1) ends the settle: roles that keep recording seal their originals then.
+        // The runner's final read of a phase seals its originals after the measured window has ended.
         String query = exchange.getRequestURI().getRawQuery();
         measurement.finalSnapshot(query != null && (query.equals("final") || query.startsWith("final=") || query.contains("&final")));
         PerfSnapshot snapshot = measurement.snapshot(publicStatus());
@@ -297,10 +298,8 @@ public final class ServerApplication {
         respond(exchange, reply.accepted() ? 200 : 409, reply);
     }
 
-    // A role that reports ObjectsReadiness.ready=false has not registered this cell's mesh or channel, so only the host is observed.
     private String observedTopology() {
-        ObjectsReadiness objects = context.getBeanProvider(ObjectsReadiness.class).getIfAvailable();
-        return objects != null && !objects.ready() ? null : config.topology();
+        return config.topology();
     }
 
     private Object publicStatus() {

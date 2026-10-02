@@ -26,6 +26,7 @@ namespace zlink::stream_connector
 
 namespace detail
 {
+inline constexpr char default_packet_name[] = "packet";
 class actor_access_t;
 }
 
@@ -207,7 +208,7 @@ class connector_t
     send_call_t send (packet_t packet)
     {
         if (packet.name.empty ()) {
-            packet.name = "packet";
+            packet.name = detail::default_packet_name;
         }
         return send_call_t (_state, result_t<packet_t>::success (std::move (packet)));
     }
@@ -225,7 +226,7 @@ class connector_t
     request_call_t request (packet_t packet)
     {
         if (packet.name.empty ()) {
-            packet.name = "packet";
+            packet.name = detail::default_packet_name;
         }
         return request_call_t (_state, result_t<packet_t>::success (std::move (packet)),
                                options ().request_timeout);

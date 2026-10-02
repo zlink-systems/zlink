@@ -163,9 +163,9 @@ ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 | `RelocationNodeInFlightPayloadBudget` | 같은 상한의 node 전체 값 | `0` — 적용하지 않음 |
 | `relocationCutoverWaitTimeout` | cutover를 기다리는 시간 | 1초 |
 
-**lease 값은 함께 움직인다.** `OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout`이
+**lease 값은 함께 움직인다.** `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout`이
 `OwnerLeaseTtl - OwnerLeaseFencingMargin`보다 작아야 한다. 기본값은 8초와 10초로 이 관계를
-만족하며 갱신이 한 번 실패해도 소유권이 유지된다. `routeCacheMaxAge`는 `messageFollowDuration`
+만족한다. `routeCacheMaxAge`는 `messageFollowDuration`
 보다 5초 이상 작아야 하고, 각각 `0`이면 경로 캐시와 message 전달을 끈다. 위치 결정과 이전
 동작은 [Location](25-location.ko.md)과 [Relocation](37-relocation.ko.md)이 다룬다.
 
@@ -225,7 +225,7 @@ object와 연결은 유지된다. 무중단 배포에서 이 node로 새 트래�
   광고 주소를 각각 지정한다.
 - **`0`으로 두었더니 memory가 계속 늘어난다** — byte 상한의 `0`은 무제한이다. Core 계산에
   맡기려면 값을 지정하지 않는다.
-- **소유권을 자꾸 잃는다** — 갱신 주기와 갱신 상한의 합이 유효 기간에서 여유를 뺀 값보다 크다.
+- **소유권을 자꾸 잃는다** — 갱신 주기와 갱신 상한 중 큰 값에 갱신 상한을 더한 값이 유효 기간에서 여유를 뺀 값보다 크다.
 - **client가 보낸 큰 message에서 연결이 끊긴다** — STREAM의 크기 상한은 64 KiB다. 큰 payload를
   받는 node라면 상한을 올린다.
 - **weight를 `0`으로 했더니 기존 연결도 끊길 것이라 예상했다** — weight는 새 배정만 막고 기존

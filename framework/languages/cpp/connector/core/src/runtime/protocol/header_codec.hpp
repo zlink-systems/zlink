@@ -13,6 +13,10 @@
 namespace zlink::stream_connector::detail
 {
 
+inline constexpr const char *reserved_control_prefix = "$zlink.";
+inline constexpr const char *heartbeat_ping_name = "$zlink.heartbeat.ping";
+inline constexpr const char *heartbeat_pong_name = "$zlink.heartbeat.pong";
+
 struct stream_header_t
 {
     message_kind_t kind = message_kind_t::send;
@@ -34,6 +38,11 @@ struct actor_bound_t
 class actor_binding_control_codec_t
 {
   public:
+    static constexpr std::uint8_t version = 1;
+    static constexpr std::size_t bound_header_size =
+      sizeof (std::uint8_t) * 2 + sizeof (std::uint16_t);
+    static constexpr std::size_t unbound_payload_size =
+      sizeof (std::uint8_t) + sizeof (std::uint16_t);
     static constexpr const char *bound_name = "$zlink.actor.bound";
     static constexpr const char *unbound_name = "$zlink.actor.unbound";
     static result_t<actor_bound_t> decode_bound (const std::vector<std::uint8_t> &payload);
@@ -55,6 +64,7 @@ class session_closing_codec_t
     static constexpr const char *control_name = "session-closing";
     static constexpr std::uint8_t version = 1;
     static constexpr std::size_t max_diagnostic_bytes = 512;
+    static constexpr std::size_t header_size = sizeof (std::uint8_t) * 2 + sizeof (std::uint16_t);
 
     static result_t<std::vector<std::uint8_t>> encode (const session_closing_t &closing);
     static result_t<session_closing_t> decode (const std::vector<std::uint8_t> &payload);
@@ -71,6 +81,8 @@ class flow_id_codec_t
 class header_codec_t
 {
   public:
+    static constexpr std::size_t minimum_header_size = 5;
+
     result_t<std::vector<std::uint8_t>> encode (const stream_header_t &header) const;
     result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes) const;
 };

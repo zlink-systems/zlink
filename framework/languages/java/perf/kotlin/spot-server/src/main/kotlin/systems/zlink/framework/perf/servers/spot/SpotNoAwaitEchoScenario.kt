@@ -20,6 +20,7 @@ import systems.zlink.framework.perf.PerfEchoReply
 import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.kotlin.completionStage
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 class SpotNoAwaitEchoScenario(
@@ -31,6 +32,7 @@ class SpotNoAwaitEchoScenario(
     private val readiness: ObjectsReadiness,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -47,6 +49,7 @@ class SpotNoAwaitEchoScenario(
     fun prepare(): CompletionStage<Void> = completionStage {
         val created = KotlinSpotRole.createSpots(config, manager, mesh)
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val probes = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true)
@@ -56,7 +59,8 @@ class SpotNoAwaitEchoScenario(
             measurement.pattern().validate(reply.payload())
             probes.add(mapOf("correlationId" to request.correlationId(), "receivedTicks" to reply.receivedTicks(), "clockDomainId" to reply.clockDomainId()))
         }
-        readiness.set(true, "", listOf(created, Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot<PerfEchoReply>().await()", probes)))
+        measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot<PerfEchoReply>().await()", probes)))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
@@ -65,20 +69,21 @@ class SpotNoAwaitEchoScenario(
                 repeat(config.workload().inflight()) {
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
-                            val spotId = config.spotIds()[stream % config.spotIds().size]
+                            val spotId = streamTargets[stream]
                             val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation()
                             if (started < 0) break
-                            val sent = request.withSentTicks(started)
                             try {
-                                val reply = spots.kotlin().requestToSpot<PerfEchoReply>(spotId, sent)
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                PayloadPattern.validateIdentity(sent, reply)
-                                measurement.pattern().validate(reply.payload())
+
+                                    val sent = request.withSentTicks(started)
+                                    val reply = spots.kotlin().requestToSpot<PerfEchoReply>(spotId, sent)
+                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
+                                    PayloadPattern.validateIdentity(sent, reply)
+                                    measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
-                                if (error is CancellationException) throw error
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException) throw error
                             }
                         }
                     }

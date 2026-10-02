@@ -187,8 +187,7 @@ internal sealed class ZLinkRemoteActorReplyRelayHandler(ZLinkFrameworkRuntime ru
     {
         cancellationToken.ThrowIfCancellationRequested();
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"remote_actor_reply_handler actor={message.ActorId} request_id={message.RequestId} "
-                + $"source_node={context.SourceNodeRid} responder_node={message.ResponderNodeRid}"
+            $"remote_actor_reply_handler actor={message.ActorId} request_id={message.RequestId} source_node={context.SourceNodeRid} responder_node={message.ResponderNodeRid}"
         );
         await runtime
             .DeliverRemoteActorReplyAsync(

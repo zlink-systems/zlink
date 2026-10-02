@@ -149,15 +149,17 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        var observer = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(static _ =>
-            "framework-runtime"
-        );
-        RunState(() =>
+        var observer = RunState(() =>
         {
             ThrowIfDisposed();
-            _observers.Add(observer);
             var initial = CreateStatusUnderLock(DateTimeOffset.UtcNow);
-            observer.Publish(initial, IsTerminal(initial));
+            var subscription = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(
+                initial,
+                IsTerminal(initial),
+                static _ => "framework-runtime"
+            );
+            _observers.Add(subscription);
+            return subscription;
         });
         try
         {
@@ -360,12 +362,12 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             //  세 catch가 서로 다른 이유를 만들지만 밖에서는 결과만 보이므로
             //  어느 것이 탔는지 알 수 없다. 조사할 때마다 여기에 계측을 다시
             //  심게 되어 표시를 남긴다.
-            ZLinkFrameworkDebugLog.SpotDiscovery("relocation_preflight_blocked path=shutdown");
+            ZLinkFrameworkDebugLog.SpotDiscovery($"relocation_preflight_blocked path=shutdown");
             blocker = ZLinkFrameworkRelocationReason.ShutdownRequested;
         }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery("relocation_preflight_blocked path=deadline");
+            ZLinkFrameworkDebugLog.SpotDiscovery($"relocation_preflight_blocked path=deadline");
             blocker = ZLinkFrameworkRelocationReason.DeadlineExceeded;
         }
         catch (Exception error)

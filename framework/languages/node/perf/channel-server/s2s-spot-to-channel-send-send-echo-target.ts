@@ -5,7 +5,7 @@ import { PerfClock } from '../shared/clock';
 import { PerfEchoRequest, RoleConfig } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
-import { runRole } from '../server-support/server-application';
+import { ROLE_CONFIG, runRole } from '../server-support/server-application';
 
 // The Channel target of §10.6 (Object Client): the Channel send handler receives the Spot's send and answers with a
 // second one-way send to the SpotId that the DTO names in returnSpotId. The measured operation lives in the Spot
@@ -25,15 +25,18 @@ export async function runS2sSpotToChannelSendSendEchoTarget(config: RoleConfig):
 
 @Injectable()
 export class S2sReturnToSpotHandler implements ZLinkSendHandler<PerfEchoRequest> {
-  constructor(@Inject(Measurement) private readonly measurement: Measurement, @Inject(ZLINK_SPOT_OUTBOUND) private readonly spots: ZLinkSpotOutbound) {}
+  constructor(@Inject(Measurement) private readonly measurement: Measurement, @Inject(ZLINK_SPOT_OUTBOUND) private readonly spots: ZLinkSpotOutbound,
+    @Inject(ROLE_CONFIG) private readonly config: RoleConfig) {}
 
   async handle(message: PerfEchoRequest, _context: ZLinkMessageContext): Promise<void> {
     const received = PerfClock.now();
     const measurement = this.measurement;
     measurement.handlerEnter();
     try {
-      if (!message.returnSpotId) throw new Error('No return SpotId in the request.');
-      measurement.validateRequest(message, null, message.returnSpotId);
+      if (message.clientId < 0 || this.config.spotIds.length === 0 || !message.returnSpotId)
+        throw new Error('The request has no source Spot in this cell.');
+      const expectedReturnSpotId = this.config.spotIds[message.clientId % this.config.spotIds.length];
+      measurement.validateRequest(message, null, expectedReturnSpotId);
       const reply = PayloadPattern.reply(message, received);
       measurement.recordApplicationCall(message, 'send');
       await this.spots.sendToSpot(message.returnSpotId, reply).submit();

@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
@@ -12,6 +11,7 @@ internal sealed class ZLinkObservationQueue<TStatus>
     where TStatus : class
 {
     internal const int DefaultTerminalCapacity = 64;
+    private const string DefaultEventName = "unknown";
     private const ulong LossMaximum = 9_223_372_036_854_775_807UL;
 
     private readonly ZLinkStateLane _lane = new();
@@ -32,7 +32,7 @@ internal sealed class ZLinkObservationQueue<TStatus>
     internal ZLinkObservationQueue(
         Func<TStatus, string> sourceSelector,
         int terminalCapacity = DefaultTerminalCapacity,
-        string eventName = "unknown"
+        string eventName = DefaultEventName
     )
     {
         if (terminalCapacity <= 0)
@@ -43,6 +43,17 @@ internal sealed class ZLinkObservationQueue<TStatus>
         _terminalCapacity = terminalCapacity;
         _sourceSelector = sourceSelector;
         _eventName = eventName;
+    }
+
+    internal ZLinkObservationQueue(
+        TStatus initialStatus,
+        bool initialTerminal,
+        Func<TStatus, string> sourceSelector,
+        string eventName = DefaultEventName
+    )
+        : this(sourceSelector, eventName: eventName)
+    {
+        Publish(initialStatus, initialTerminal);
     }
 
     internal void Publish(TStatus status, bool terminal)

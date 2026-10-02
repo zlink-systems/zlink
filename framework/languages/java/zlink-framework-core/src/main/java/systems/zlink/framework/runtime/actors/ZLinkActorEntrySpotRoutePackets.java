@@ -10,6 +10,8 @@ import java.nio.charset.StandardCharsets;
 public final class ZLinkActorEntrySpotRoutePackets {
     public static final String JOIN_ENTRY_SPOT_PACKET_NAME = "__zlink.actor.joinEntrySpot";
 
+    private static final int JOIN_FIELD_COUNT = 4;
+
     private ZLinkActorEntrySpotRoutePackets() {}
 
     public static Message encodeJoinRequest(
@@ -26,7 +28,7 @@ public final class ZLinkActorEntrySpotRoutePackets {
 
     public static JoinRequest decodeJoinRequest(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 4 || fields[0].isBlank() || fields[1].isBlank()) {
+        if (fields.length != JOIN_FIELD_COUNT || fields[0].isBlank() || fields[1].isBlank()) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid actor Entry Spot route join request");
@@ -49,7 +51,7 @@ public final class ZLinkActorEntrySpotRoutePackets {
 
     public static JoinReply decodeJoinReply(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 4 || fields[0].isBlank() || fields[1].isBlank()) {
+        if (fields.length != JOIN_FIELD_COUNT || fields[0].isBlank() || fields[1].isBlank()) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid actor Entry Spot route join reply");

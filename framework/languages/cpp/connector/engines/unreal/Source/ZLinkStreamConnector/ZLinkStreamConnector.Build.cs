@@ -5,6 +5,37 @@ using UnrealBuildTool;
 
 public class ZLinkStreamConnector : ModuleRules
 {
+    private const string SchemaKey = "schema";
+    private const string PlatformKey = "platform";
+    private const string ArchitectureKey = "architecture";
+    private const string ConfigurationKey = "configuration";
+    private const string CompilerIdKey = "compiler_id";
+    private const string CompilerVersionKey = "compiler_version";
+    private const string CxxStandardKey = "cxx_standard";
+    private const string IncludeKey = "include";
+    private const string LibraryKey = "library";
+    private const string RuntimeKey = "runtime";
+    private const string SystemLibraryKey = "system_library";
+    private const string PackageRootEnvironment = "ZLINK_UNREAL_THIRDPARTY_ROOT";
+    private const string CompilerIdEnvironment = "ZLINK_UNREAL_COMPILER_ID";
+    private const string CompilerVersionEnvironment = "ZLINK_UNREAL_COMPILER_VERSION";
+    private const string DefaultPackageRelativePath = "../../ThirdParty/ZLink";
+    private const string Win64Platform = "win64";
+    private const string WindowsPlatform = "windows";
+    private const string MacPlatform = "mac";
+    private const string MacOSPlatform = "macos";
+    private const string DarwinPlatform = "darwin";
+    private const string X64Architecture = "x64";
+    private const string Amd64Architecture = "amd64";
+    private const string X8664Architecture = "x8664";
+    private const string X86Architecture = "x86_64";
+    private const string Arm64Architecture = "arm64";
+    private const string Aarch64Architecture = "aarch64";
+    private const string DebugConfiguration = "debug";
+    private const string ReleaseConfiguration = "release";
+    private const int ManifestSchemaVersion = 1;
+    private const int PackageCxxStandard = 20;
+
     private const string PackageManifestName = "zlink-unreal-package.manifest";
 
     public ZLinkStreamConnector(ReadOnlyTargetRules Target) : base(Target)
@@ -24,10 +55,10 @@ public class ZLinkStreamConnector : ModuleRules
 
     private void ConfigureNativePackage(ReadOnlyTargetRules Target)
     {
-        var packageRoot = Environment.GetEnvironmentVariable("ZLINK_UNREAL_THIRDPARTY_ROOT");
+        var packageRoot = Environment.GetEnvironmentVariable(PackageRootEnvironment);
         if (string.IsNullOrWhiteSpace(packageRoot))
         {
-            packageRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "../../ThirdParty/ZLink"));
+            packageRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, DefaultPackageRelativePath));
         }
         else
         {
@@ -74,43 +105,43 @@ public class ZLinkStreamConnector : ModuleRules
             var value = line.Substring(separator + 1).Trim();
             switch (key)
             {
-                case "schema":
+                case SchemaKey:
                     if (!int.TryParse(value, out schema))
                     {
                         throw new BuildException("Invalid ZLink Unreal package manifest schema: " + value);
                     }
                     break;
-                case "platform":
+                case PlatformKey:
                     packagePlatform = value;
                     break;
-                case "architecture":
+                case ArchitectureKey:
                     packageArchitecture = value;
                     break;
-                case "configuration":
+                case ConfigurationKey:
                     packageConfiguration = value;
                     break;
-                case "compiler_id":
+                case CompilerIdKey:
                     packageCompilerId = value;
                     break;
-                case "compiler_version":
+                case CompilerVersionKey:
                     packageCompilerVersion = value;
                     break;
-                case "cxx_standard":
+                case CxxStandardKey:
                     if (!int.TryParse(value, out packageCxxStandard))
                     {
                         throw new BuildException("Invalid ZLink Unreal package C++ standard: " + value);
                     }
                     break;
-                case "include":
+                case IncludeKey:
                     includes.Add(ResolvePackageDirectory(packageRoot, value));
                     break;
-                case "library":
+                case LibraryKey:
                     libraries.Add(ResolvePackageFile(packageRoot, value));
                     break;
-                case "runtime":
+                case RuntimeKey:
                     runtimes.Add(ResolvePackageFile(packageRoot, value));
                     break;
-                case "system_library":
+                case SystemLibraryKey:
                     systemLibraries.Add(value);
                     break;
                 default:
@@ -118,13 +149,13 @@ public class ZLinkStreamConnector : ModuleRules
             }
         }
 
-        if (schema != 1 || includes.Count == 0 || libraries.Count == 0
+        if (schema != ManifestSchemaVersion || includes.Count == 0 || libraries.Count == 0
             || string.IsNullOrWhiteSpace(packagePlatform)
             || string.IsNullOrWhiteSpace(packageArchitecture)
             || string.IsNullOrWhiteSpace(packageConfiguration)
             || string.IsNullOrWhiteSpace(packageCompilerId)
             || string.IsNullOrWhiteSpace(packageCompilerVersion)
-            || packageCxxStandard != 20)
+            || packageCxxStandard != PackageCxxStandard)
         {
             throw new BuildException(
                 "ZLink Unreal package manifest must declare schema=1, target metadata, "
@@ -170,7 +201,7 @@ public class ZLinkStreamConnector : ModuleRules
                 + ", target=" + Target.Platform + "/" + Target.Architecture + "/" + Target.Configuration);
         }
 
-        var expectedCompilerId = Environment.GetEnvironmentVariable("ZLINK_UNREAL_COMPILER_ID");
+        var expectedCompilerId = Environment.GetEnvironmentVariable(CompilerIdEnvironment);
         if (string.IsNullOrWhiteSpace(expectedCompilerId))
         {
             throw new BuildException(
@@ -183,7 +214,7 @@ public class ZLinkStreamConnector : ModuleRules
                 "ZLink Unreal native package compiler mismatch. Package=" + packageCompilerId
                 + ", expected=" + expectedCompilerId);
         }
-        var expectedCompilerVersion = Environment.GetEnvironmentVariable("ZLINK_UNREAL_COMPILER_VERSION");
+        var expectedCompilerVersion = Environment.GetEnvironmentVariable(CompilerVersionEnvironment);
         if (string.IsNullOrWhiteSpace(expectedCompilerVersion))
         {
             throw new BuildException(
@@ -202,13 +233,13 @@ public class ZLinkStreamConnector : ModuleRules
     private static string NormalizePlatform(string value)
     {
         var normalized = value.Trim().ToLowerInvariant();
-        if (normalized == "win64" || normalized == "windows")
+        if (normalized == Win64Platform || normalized == WindowsPlatform)
         {
-            return "windows";
+            return WindowsPlatform;
         }
-        if (normalized == "mac" || normalized == "macos" || normalized == "darwin")
+        if (normalized == MacPlatform || normalized == MacOSPlatform || normalized == DarwinPlatform)
         {
-            return "darwin";
+            return DarwinPlatform;
         }
         return normalized;
     }
@@ -216,13 +247,13 @@ public class ZLinkStreamConnector : ModuleRules
     private static string NormalizeArchitecture(string value)
     {
         var normalized = value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
-        if (normalized == "x64" || normalized == "amd64" || normalized == "x8664")
+        if (normalized == X64Architecture || normalized == Amd64Architecture || normalized == X8664Architecture)
         {
-            return "x86_64";
+            return X86Architecture;
         }
-        if (normalized == "arm64" || normalized == "aarch64")
+        if (normalized == Arm64Architecture || normalized == Aarch64Architecture)
         {
-            return "arm64";
+            return Arm64Architecture;
         }
         return normalized;
     }
@@ -230,7 +261,7 @@ public class ZLinkStreamConnector : ModuleRules
     private static string NormalizeConfiguration(string value)
     {
         var normalized = value.Trim().ToLowerInvariant();
-        return normalized == "debug" ? "debug" : "release";
+        return normalized == DebugConfiguration ? DebugConfiguration : ReleaseConfiguration;
     }
 
     private static string ResolvePackageDirectory(string packageRoot, string relativePath)

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/json_profile.hpp>
+
 #include <zlink/Contracts/Messaging/message.hpp>
 
 #include <string>
@@ -24,7 +26,7 @@ auto to_message_payload (const TMessage &message, int) -> decltype (to_stream_pa
 
 template <typename TMessage> zlink::message_t to_message_payload (const TMessage &, long)
 {
-    return zlink::message_t::from (std::string ("{}"));
+    return zlink::message_t::from (std::string (zlink::detail::json_profile::empty_object));
 }
 
 } // namespace zlink::framework::detail
