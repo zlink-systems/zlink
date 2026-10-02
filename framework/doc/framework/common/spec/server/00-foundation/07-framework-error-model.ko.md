@@ -54,7 +54,9 @@ relocation 실패(command 53)처럼 code만 온 것이든 수신자는 command�
 `ErrorKind`를 wire로 보낼 때 원인을 나타내는 failure code가 그 kind의 행에 있으면 그 code를 쓰고, 없으면
 대표 code를 쓴다. Terminal result를 담는 reply에서 `ShuttingDown`은 `terminated`, `InvalidOperation`의 대표는
 `invalidState`로 failure code 없이 보내며, 그 조합은 schema의 `terminal-failure-integrity`를 따른다.
-`NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다.
+`NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다. Relocation 실패(command 53)처럼 terminal result 없이
+code만 담는 실패에서 `ShuttingDown`은 `routeNotConnected`로 보내고(받는 쪽에서 그 node를 이 operation에 쓸 수 없는
+`Unavailable`이다), 원인 code가 없는 `InvalidOperation`은 `requestFailed`로 보낸다.
 
 | ErrorKind | 대표 code | 같은 kind로 받는 다른 code |
 |---|---|---|
