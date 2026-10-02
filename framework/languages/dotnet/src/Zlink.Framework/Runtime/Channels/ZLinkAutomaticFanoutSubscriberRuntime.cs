@@ -54,6 +54,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         ZLinkFanoutRuntimeService monitoring,
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken runtimeStopToken,
+        CancellationToken forceStopToken = default,
         TimeProvider? timeProvider = null,
         ZLinkApplicationJobQueue? applicationJobQueue = null
     )
@@ -80,7 +81,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         _applicationDispatch = receiveLoop.CreateFanoutDispatchQueue(
             channelName,
             errorSink,
-            runtimeStopToken
+            runtimeStopToken,
+            forceStopToken
         );
     }
 

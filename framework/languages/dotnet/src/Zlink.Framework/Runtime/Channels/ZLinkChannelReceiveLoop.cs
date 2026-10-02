@@ -15,7 +15,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkClientServerServerIdentity identity,
         ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(router);
@@ -24,6 +25,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 $"client-server-application:{channelName}",
                 errorSink,
                 cancellationToken,
+                forceStopToken,
                 DispatchClientServerAsync,
                 RejectClientServerDispatch
             );
@@ -288,7 +290,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ISubSocket subscriber,
         ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
@@ -297,6 +300,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 $"fanout-application:{channelName}",
                 errorSink,
                 cancellationToken,
+                forceStopToken,
                 DispatchFanoutAsync,
                 RejectFanoutDispatch
             );
@@ -539,12 +543,14 @@ internal sealed class ZLinkChannelReceiveLoop(
     internal ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> CreateFanoutDispatchQueue(
         string channelName,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
     ) =>
         new(
             $"fanout-application:{channelName}",
             errorSink,
             cancellationToken,
+            forceStopToken,
             DispatchFanoutAsync,
             RejectFanoutDispatch
         );

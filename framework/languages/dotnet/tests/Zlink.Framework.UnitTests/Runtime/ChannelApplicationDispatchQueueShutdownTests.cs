@@ -13,6 +13,7 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
             "shutdown-test",
             new AuditRuntimeFailureReporter(),
             CancellationToken.None,
+            CancellationToken.None,
             async (_, _) =>
             {
                 started.SetResult();
@@ -27,5 +28,34 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
         await queue.DisposeAsync();
 
         Assert.Equal(1, Volatile.Read(ref finished));
+    }
+
+    [Fact]
+    public async Task Dispose_returns_when_host_deadline_expires_while_handler_ignores_cancellation()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource();
+        var queue = new ZLinkChannelApplicationDispatchQueue<int>(
+            "deadline-test",
+            new AuditRuntimeFailureReporter(),
+            CancellationToken.None,
+            deadline.Token,
+            async (_, _) =>
+            {
+                started.SetResult();
+                await release.Task;
+            },
+            _ => { }
+        );
+
+        await queue.PostAsync(1, CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var dispose = queue.DisposeAsync().AsTask();
+        await Task.Delay(100);
+        Assert.False(dispose.IsCompleted);
+        deadline.Cancel();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        release.SetResult();
     }
 }
