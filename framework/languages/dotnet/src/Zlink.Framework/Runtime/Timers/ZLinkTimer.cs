@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Timers;
@@ -96,7 +97,13 @@ internal sealed class ZLinkTimer : IZLinkTimer
         _callbacks = new ZLinkTimerCallbacks(
             snapshot.Options,
             onTickAsync,
-            onUnhandledExceptionAsync,
+            (tick, error, cancellationToken) =>
+                HandleUnhandledExceptionAsync(
+                    tick,
+                    error,
+                    cancellationToken,
+                    onUnhandledExceptionAsync
+                ),
             enterTickScope
         );
         _startedAt = snapshot.StartedAt;
@@ -277,27 +284,63 @@ internal sealed class ZLinkTimer : IZLinkTimer
     {
         TaskCompletionSource? completion = null;
         var finalization = await _lane
-            .RunAsync(() =>
-            {
-                if (_finalization is not null)
-                    return _finalization;
-
-                Volatile.Write(ref _disposed, 1);
-                completion = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously
-                );
-                _finalization = completion.Task;
-                return _finalization;
-            })
+            .RunAsync(() => GetOrStartFinalizationOnLane(out completion))
             .ConfigureAwait(false);
 
+        StartFinalization(completion);
+        return finalization;
+    }
+
+    private Task GetOrStartFinalizationOnLane(out TaskCompletionSource? completion)
+    {
+        completion = null;
+        if (_finalization is not null)
+            return _finalization;
+
+        Volatile.Write(ref _disposed, 1);
+        completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _finalization = completion.Task;
+    }
+
+    private void StartFinalization(TaskCompletionSource? completion)
+    {
         // Start cancellation before returning, outside the state lane: a
         // queued worker could run after the active callback unregisters.
         if (completion is not null)
             _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
                 CompleteFinalizationAsync(completion)
             );
-        return finalization;
+    }
+
+    private async ValueTask HandleUnhandledExceptionAsync(
+        ZLinkTimerTick tick,
+        Exception error,
+        CancellationToken cancellationToken,
+        Func<ZLinkTimerTick, Exception, bool, CancellationToken, ValueTask> reportFailureAsync
+    )
+    {
+        TaskCompletionSource? completion = null;
+        var stopped = await _lane
+            .RunAsync(() =>
+            {
+                var stopped = _callbacks.Options.StopOnUnhandledException;
+                if (stopped)
+                    _ = GetOrStartFinalizationOnLane(out completion);
+                return stopped;
+            })
+            .ConfigureAwait(false);
+        try
+        {
+            await reportFailureAsync(tick, error, stopped, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception reportFailure)
+        {
+            ZLinkFrameworkDebugLog.UnhandledCallbackFailure(reportFailure);
+        }
+        finally
+        {
+            StartFinalization(completion);
+        }
     }
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
@@ -412,15 +455,12 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 {
                     if (outcome.Delivered)
                     {
-                        if (outcome.KeepRunning)
-                        {
-                            _deliveryIndex = tick.DeliveryIndex;
-                            _lastScheduledIndex = tick.ScheduledIndex;
-                        }
+                        _deliveryIndex = tick.DeliveryIndex;
+                        _lastScheduledIndex = tick.ScheduledIndex;
                         _pendingTick = null;
                     }
 
-                    if (!IsDisposedOnLane && _resume is null && outcome.KeepRunning)
+                    if (!IsDisposedOnLane && _resume is null)
                     {
                         var due = outcome.Delivered
                             ? ComputeNextScheduledAtOnLane()
@@ -531,13 +571,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     private readonly struct ZLinkTimerCallbacks(
         ZLinkTimerOptions options,
         Func<ZLinkTimerTick, CancellationToken, ValueTask<bool>> onTickAsync,
-        Func<
-            ZLinkTimerTick,
-            Exception,
-            bool,
-            CancellationToken,
-            ValueTask
-        > onUnhandledExceptionAsync,
+        Func<ZLinkTimerTick, Exception, CancellationToken, ValueTask> onUnhandledExceptionAsync,
         Func<IDisposable>? enterTickScope
     )
     {
@@ -552,7 +586,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
             try
             {
                 var delivered = await onTickAsync(tick, cancellationToken).ConfigureAwait(false);
-                return new ZLinkTimerDispatchOutcome(true, delivered);
+                return new ZLinkTimerDispatchOutcome(delivered);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -560,23 +594,13 @@ internal sealed class ZLinkTimer : IZLinkTimer
             }
             catch (Exception ex)
             {
-                var stopped = options.StopOnUnhandledException;
-                try
-                {
-                    await onUnhandledExceptionAsync(tick, ex, stopped, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Monitoring failures must not change the timer exception policy.
-                }
-
-                return new ZLinkTimerDispatchOutcome(!stopped, true);
+                await onUnhandledExceptionAsync(tick, ex, cancellationToken).ConfigureAwait(false);
+                return new ZLinkTimerDispatchOutcome(true);
             }
         }
     }
 
     private readonly record struct SchedulerSchedule(TimeSpan DueAt, long Version);
 
-    private readonly record struct ZLinkTimerDispatchOutcome(bool KeepRunning, bool Delivered);
+    private readonly record struct ZLinkTimerDispatchOutcome(bool Delivered);
 }
