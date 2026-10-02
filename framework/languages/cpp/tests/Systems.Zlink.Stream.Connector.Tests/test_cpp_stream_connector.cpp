@@ -1160,6 +1160,70 @@ int fail (int check_id)
 
 int main ()
 {
+    /* stream-connector §4.5: 진단 바이트는 엄격한 UTF-8이다.
+     * 잘못된 서버 제어 프레임의 결과를 공개 연결 종료 이벤트로 관찰한다. */
+    for (const auto &[diagnostic, valid] :
+         std::vector<std::pair<std::string, bool>>{{"valid", true},
+                                                   {std::string ("\xed\x9f\xbf", 3), true},
+                                                   {std::string ("\xee\x80\x80", 3), true},
+                                                   {std::string ("\xf4\x8f\xbf\xbf", 4), true},
+                                                   {std::string ("\xe0\x80\x80", 3), false},
+                                                   {std::string ("\xed\xa0\x80", 3), false},
+                                                   {std::string ("\xf4\x90\x80\x80", 4), false}}) {
+        boost::asio::io_context closing_io;
+        boost::asio::ip::tcp::acceptor closing_acceptor (
+          closing_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        callback_latch_t connected;
+        callback_latch_t release_server;
+        callback_latch_t disconnected;
+        joining_thread_t closing_server ([&] {
+            boost::asio::ip::tcp::socket accepted (closing_acceptor.get_executor ());
+            closing_acceptor.accept (accepted);
+            if (connected.wait_for (std::chrono::seconds (5))) {
+                std::string payload;
+                payload.push_back (1);
+                payload.push_back (
+                  static_cast<char> (zlink::stream_connector::close_reason_t::server_drain));
+                payload.push_back (0);
+                payload.push_back (static_cast<char> (diagnostic.size ()));
+                payload += diagnostic;
+                const auto frame = make_server_frame (
+                  zlink::stream_connector::message_kind_t::control, 0, "session-closing", payload);
+                boost::system::error_code write_error;
+                boost::asio::write (accepted, boost::asio::buffer (frame.to_string ()),
+                                    write_error);
+                accepted.shutdown (boost::asio::ip::tcp::socket::shutdown_both, write_error);
+                accepted.close (write_error);
+            }
+            (void) release_server.wait_for (std::chrono::seconds (5));
+        });
+        zlink::stream_connector::connector_options_t options;
+        options.endpoint =
+          "tcp://127.0.0.1:" + std::to_string (closing_acceptor.local_endpoint ().port ());
+        options.heartbeat.enabled = false;
+        options.reconnect.enabled = false;
+        options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        auto connector = zlink::stream_connector::connector_factory_t::create (options);
+        std::optional<zlink::stream_connector::close_reason_t> observed_reason;
+        auto subscription = connector.on_disconnected ([&] (auto reason) {
+            observed_reason = reason;
+            disconnected.signal ();
+        });
+        const bool did_connect = static_cast<bool> (connector.connect ());
+        connected.signal ();
+        const bool did_disconnect = did_connect && disconnected.wait_for (std::chrono::seconds (5));
+        release_server.signal ();
+        closing_server.join ();
+        (void) connector.close ();
+        const auto expected = valid ? zlink::stream_connector::close_reason_t::server_drain
+                                    : zlink::stream_connector::close_reason_t::protocol_error;
+        if (!did_disconnect || observed_reason != expected) {
+            std::cerr << "session-closing UTF-8 " << (valid ? "valid" : "invalid")
+                      << " diagnostic check failed\n";
+            return fail (407);
+        }
+    }
+
     using zlink::stream_connector::codec_t;
     using zlink::stream_connector::header_flags_t;
     using zlink::stream_connector::message_kind_t;

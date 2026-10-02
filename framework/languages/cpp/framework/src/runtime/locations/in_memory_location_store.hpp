@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
+
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -19,6 +23,11 @@
 
 namespace zlink::framework::runtime
 {
+
+namespace location_composite_key
+{
+inline constexpr char separator[] = "\x1f";
+}
 
 struct owner_lease_row_t
 {
@@ -213,7 +222,8 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<location_page_t<client_server_server_descriptor_t>>
     list_client_servers (std::string channel_name, location_page_request_t page = {}) override
     {
-        if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
+        if (channel_name.empty () || page.page_size < 1
+            || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("ClientServer list arguments are invalid");
         return _lane
           .run ([&] {
@@ -318,7 +328,8 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<location_page_t<fanout_publisher_descriptor_t>>
     list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) override
     {
-        if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
+        if (channel_name.empty () || page.page_size < 1
+            || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("fanout publisher list arguments are invalid");
         return _lane
           .run ([&] {
@@ -583,7 +594,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_scan_result_t> ();
-        if (limit == 0 || limit > 1000)
+        if (limit == 0 || limit > location_page_item_limit)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         return _lane
           .run ([&] {
@@ -674,7 +685,7 @@ class in_memory_location_repository_t : public location_repository_t
           request.completion);
         if (publication.terminal_envelope.size () > 1024u * 1024u)
             throw std::invalid_argument ("creation terminal envelope is too large");
-        const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
+        const auto expires_at = publication.operation_deadline + creation_terminal_retention;
         return _lane
           .run ([&] {
               const auto now = clock_t::now ();
@@ -1296,7 +1307,8 @@ class in_memory_location_repository_t : public location_repository_t
             || descriptor.activation_concurrency.active
                  > static_cast<std::uint32_t> (descriptor.activation_concurrency.limit)
             || descriptor.security_identity.empty () || descriptor.owner_id.empty ()
-            || descriptor.lease_generation <= 0 || descriptor.object_capabilities.size () > 1024
+            || descriptor.lease_generation <= 0
+            || descriptor.object_capabilities.size () > mesh_descriptor_list_item_limit
             || descriptor.capacity.actors.limit < 0 || descriptor.capacity.spots.limit < 0
             || (descriptor.capacity.actors.limit > 0
                 && descriptor.capacity.actors.active + descriptor.capacity.actors.reserved
@@ -1304,7 +1316,7 @@ class in_memory_location_repository_t : public location_repository_t
             || (descriptor.capacity.spots.limit > 0
                 && descriptor.capacity.spots.active + descriptor.capacity.spots.reserved
                      > static_cast<std::uint64_t> (descriptor.capacity.spots.limit))
-            || descriptor.capacity.spot_types.size () > 1024
+            || descriptor.capacity.spot_types.size () > mesh_descriptor_list_item_limit
             || (descriptor.object_role != object_role_t::server
                 && !descriptor.object_capabilities.empty ()))
             return false;
@@ -1458,7 +1470,7 @@ class in_memory_location_repository_t : public location_repository_t
 
     static bool valid_fanout_descriptor_text (std::string_view value) noexcept
     {
-        return !value.empty () && value.size () <= 255
+        return !value.empty () && value.size () <= protocol::shortTextBytes
                && value.find ('\0') == std::string_view::npos;
     }
 
@@ -1505,18 +1517,18 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string mesh_node_key (const std::string &mesh_name, const std::string &rid)
     {
-        return mesh_name + "\x1f" + rid;
+        return mesh_name + location_composite_key::separator + rid;
     }
 
     static std::string client_server_key (const std::string &channel_name,
                                           const zlink::routing_id_t &rid)
     {
-        return channel_name + "\x1f" + rid.to_hex ();
+        return channel_name + location_composite_key::separator + rid.to_hex ();
     }
 
     static std::string fanout_key (const std::string &channel_name, const zlink::routing_id_t &rid)
     {
-        return channel_name + "\x1f" + rid.to_hex ();
+        return channel_name + location_composite_key::separator + rid.to_hex ();
     }
 
     static bool
@@ -1666,26 +1678,27 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string capacity_node_key (const object_creation_target_t &target)
     {
-        return target.mesh_name + "\x1f" + std::string (target.node_rid.value ()) + "\x1f"
+        return target.mesh_name + location_composite_key::separator
+               + std::string (target.node_rid.value ()) + location_composite_key::separator
                + std::to_string (target.node_lifecycle_generation);
     }
 
     static std::string actor_capacity_key (const object_creation_target_t &target)
     {
-        return capacity_node_key (target) + "\x1f" + "actor";
+        return capacity_node_key (target) + location_composite_key::separator + "actor";
     }
 
     static std::string spot_capacity_key (const object_creation_target_t &target)
     {
-        return capacity_node_key (target) + "\x1f" + "spot";
+        return capacity_node_key (target) + location_composite_key::separator + "spot";
     }
 
     static std::string spot_type_capacity_key (const object_creation_target_t &target,
                                                const spot_type_capacity_delta_t &spot_type)
     {
-        return spot_capacity_key (target) + "\x1f"
-               + std::to_string (static_cast<int> (spot_type.object_kind)) + "\x1f"
-               + spot_type.stable_type;
+        return spot_capacity_key (target) + location_composite_key::separator
+               + std::to_string (static_cast<int> (spot_type.object_kind))
+               + location_composite_key::separator + spot_type.stable_type;
     }
 
     static bool valid_capacity_bundle (const placement_capacity_bundle_t &bundle)
@@ -1848,15 +1861,7 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string aggregate_id_key (const aggregate_id_t &id)
     {
-        static constexpr char hex[] = "0123456789abcdef";
-        std::string result;
-        result.reserve (32);
-        for (const auto value : id.value) {
-            const auto byte = std::to_integer<unsigned char> (value);
-            result.push_back (hex[byte >> 4]);
-            result.push_back (hex[byte & 0x0f]);
-        }
-        return result;
+        return zlink::framework::detail::encode_hex (std::span<const std::byte> (id.value));
     }
 
     void cleanup_scans (clock_t::time_point now)

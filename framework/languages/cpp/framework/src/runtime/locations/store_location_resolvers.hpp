@@ -589,7 +589,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         do {
             const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
             auto read = _store
-                          ->list_authorities (std::string ("zla1:") + authority_kind + ":",
+                          ->list_authorities (std::string (authority_key_codec_detail::prefix)
+                                                + authority_kind + ":",
                                               std::move (cursor), remaining)
                           .result ();
             if (!read.has_value ())
@@ -679,17 +680,18 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     static std::size_t
     encoded_size_upper_bound (const location_page_t<location_object_entry_t> &page)
     {
+        constexpr std::size_t maximum_json_escape_bytes = sizeof ("\\uFFFF") - 1;
         constexpr std::size_t fixed_page_bytes = 256;
         constexpr std::size_t fixed_entry_bytes = 256;
         auto size = fixed_page_bytes;
         if (page.continuation_token)
-            size += page.continuation_token->size () * 6;
+            size += page.continuation_token->size () * maximum_json_escape_bytes;
         for (const auto &entry : page.items) {
             size += fixed_entry_bytes;
-            size += entry.global_id.size () * 6;
-            size += entry.mesh_name.size () * 6;
-            size += entry.stable_type.size () * 6;
-            size += entry.node_rid.to_string ().size () * 6;
+            size += entry.global_id.size () * maximum_json_escape_bytes;
+            size += entry.mesh_name.size () * maximum_json_escape_bytes;
+            size += entry.stable_type.size () * maximum_json_escape_bytes;
+            size += entry.node_rid.to_string ().size () * maximum_json_escape_bytes;
         }
         return size;
     }
@@ -715,7 +717,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
 
     static void validate_page (const location_page_request_t &page)
     {
-        if (page.page_size < 1 || page.page_size > 1000)
+        if (page.page_size < 1 || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("location query page size must be between 1 and 1000");
     }
 

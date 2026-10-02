@@ -2,6 +2,8 @@
 
 #include "runtime/protocol/header_codec.hpp"
 
+#include <zlink/framework/detail/utf8.hpp>
+
 #include "runtime/protocol/metadata_codec.hpp"
 #include <zlink/detail/stream_packet_name.hpp>
 
@@ -225,7 +227,7 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
 
 result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t> &bytes) const
 {
-    if (bytes.size () < 5) {
+    if (bytes.size () < minimum_header_size) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header is too short.");
     }
@@ -324,7 +326,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
 result_t<actor_bound_t>
 actor_binding_control_codec_t::decode_bound (const std::vector<std::uint8_t> &payload)
 {
-    if (payload.size () < 4 || payload[0] != 1) {
+    if (payload.size () < bound_header_size || payload[0] != version) {
         return result_t<actor_bound_t>::failure (error_code_t::frame_decode_failed,
                                                  "Actor bound control is invalid.");
     }
@@ -343,7 +345,7 @@ actor_binding_control_codec_t::decode_bound (const std::vector<std::uint8_t> &pa
 result_t<std::uint16_t>
 actor_binding_control_codec_t::decode_unbound (const std::vector<std::uint8_t> &payload)
 {
-    if (payload.size () != 3 || payload[0] != 1) {
+    if (payload.size () != unbound_payload_size || payload[0] != version) {
         return result_t<std::uint16_t>::failure (error_code_t::frame_decode_failed,
                                                  "Actor unbound control is invalid.");
     }
@@ -360,7 +362,8 @@ result_t<std::vector<std::uint8_t>>
 session_closing_codec_t::encode (const session_closing_t &closing)
 {
     const auto raw_reason = static_cast<std::uint8_t> (closing.reason);
-    if (raw_reason < 1 || raw_reason > 6) {
+    if (raw_reason < static_cast<std::uint8_t> (close_reason_t::client_close)
+        || raw_reason > static_cast<std::uint8_t> (close_reason_t::transport_error)) {
         return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
                                                              "Session-closing reason is invalid.");
     }
@@ -369,7 +372,7 @@ session_closing_codec_t::encode (const session_closing_t &closing)
           error_code_t::validation_failed, "Session-closing diagnostic is too large.");
     }
     std::vector<std::uint8_t> bytes;
-    bytes.reserve (4 + closing.diagnostic.size ());
+    bytes.reserve (header_size + closing.diagnostic.size ());
     bytes.push_back (version);
     bytes.push_back (raw_reason);
     bytes.push_back (static_cast<std::uint8_t> ((closing.diagnostic.size () >> 8) & 0xff));
@@ -381,7 +384,7 @@ session_closing_codec_t::encode (const session_closing_t &closing)
 result_t<session_closing_t>
 session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
 {
-    if (payload.size () < 4) {
+    if (payload.size () < header_size) {
         return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
                                                      "Session-closing payload is truncated.");
     }
@@ -389,7 +392,8 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
         return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
                                                      "Session-closing version is not supported.");
     }
-    if (payload[1] < 1 || payload[1] > 6) {
+    if (payload[1] < static_cast<std::uint8_t> (close_reason_t::client_close)
+        || payload[1] > static_cast<std::uint8_t> (close_reason_t::transport_error)) {
         return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
                                                      "Session-closing reason is not supported.");
     }
@@ -398,37 +402,15 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
         return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
                                                      "Session-closing diagnostic is too large.");
     }
-    if (payload.size () != 4 + diagnostic_length) {
+    if (payload.size () != header_size + diagnostic_length) {
         return result_t<session_closing_t>::failure (
           error_code_t::frame_decode_failed,
           "Session-closing diagnostic length does not match the payload.");
     }
-    std::string diagnostic (payload.begin () + 4, payload.end ());
-    /* Strict UTF-8 validation (invalid sequences close as protocol error). */
-    for (std::size_t i = 0; i < diagnostic.size ();) {
-        const auto byte = static_cast<unsigned char> (diagnostic[i]);
-        std::size_t continuation = 0;
-        if (byte <= 0x7F) {
-            continuation = 0;
-        } else if ((byte & 0xE0) == 0xC0 && byte >= 0xC2) {
-            continuation = 1;
-        } else if ((byte & 0xF0) == 0xE0) {
-            continuation = 2;
-        } else if ((byte & 0xF8) == 0xF0 && byte <= 0xF4) {
-            continuation = 3;
-        } else {
-            return result_t<session_closing_t>::failure (
-              error_code_t::frame_decode_failed, "Session-closing diagnostic is not valid UTF-8.");
-        }
-        for (std::size_t j = 1; j <= continuation; ++j) {
-            if (i + j >= diagnostic.size ()
-                || (static_cast<unsigned char> (diagnostic[i + j]) & 0xC0) != 0x80) {
-                return result_t<session_closing_t>::failure (
-                  error_code_t::frame_decode_failed,
-                  "Session-closing diagnostic is not valid UTF-8.");
-            }
-        }
-        i += continuation + 1;
+    std::string diagnostic (payload.begin () + header_size, payload.end ());
+    if (!zlink::framework::detail::is_valid_utf8 (diagnostic)) {
+        return result_t<session_closing_t>::failure (
+          error_code_t::frame_decode_failed, "Session-closing diagnostic is not valid UTF-8.");
     }
     return result_t<session_closing_t>::success (
       session_closing_t{static_cast<close_reason_t> (payload[1]), std::move (diagnostic)});

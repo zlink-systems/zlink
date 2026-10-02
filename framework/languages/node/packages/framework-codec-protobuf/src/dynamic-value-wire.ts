@@ -144,7 +144,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
     case ValueKind.String:
       return stringValue;
     case ValueKind.Object:
-      return objectValue ? Object.setPrototypeOf(objectValue, Object.prototype) : {};
+      return objectValue !== undefined ? Object.setPrototypeOf(objectValue, Object.prototype) : {};
     case ValueKind.Array:
       return arrayValue;
     case ValueKind.Bytes:
@@ -285,7 +285,7 @@ function readVarint(
   let value = 0n;
   let shift = 0n;
   let offset = start;
-  while (true) {
+  for (;;) {
     requirePayloadEnd(bytes, offset + 1);
     const byte = bytes[offset];
     value |= BigInt(byte & 0x7f) << shift;

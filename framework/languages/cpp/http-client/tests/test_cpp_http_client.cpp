@@ -2,6 +2,8 @@
 
 #include <zlink/http_client.hpp>
 
+#include "runtime_context_hooks_environment.hpp"
+
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/v6_only.hpp>
 #ifdef ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL

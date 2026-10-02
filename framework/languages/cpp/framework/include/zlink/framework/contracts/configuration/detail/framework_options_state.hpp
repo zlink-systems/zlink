@@ -62,6 +62,11 @@ enum class application_job_queue_pressure_state_t
 namespace detail
 {
 
+inline constexpr std::size_t automatic_routing_id_prefix_max_text_bytes = 64;
+
+inline constexpr std::uint32_t application_job_queue_default_pause_threshold_percent = 80;
+inline constexpr std::uint32_t application_job_queue_default_resume_threshold_percent = 60;
+
 class mesh_node_builder_state_t;
 
 inline bool is_blank (const std::string &value)
@@ -79,7 +84,7 @@ inline void require_non_blank (const std::string &value, const char *message)
 
 inline bool is_valid_automatic_routing_id_prefix (std::string_view value) noexcept
 {
-    if (value.empty () || value.size () > 64) {
+    if (value.empty () || value.size () > automatic_routing_id_prefix_max_text_bytes) {
         return false;
     }
     for (const auto character : value) {
@@ -437,8 +442,10 @@ struct framework_options_state_t
     application_job_queue_profile_t application_job_queue_profile =
       application_job_queue_profile_t::balanced;
     std::optional<std::uint32_t> max_queued_application_jobs;
-    std::uint32_t application_job_queue_pause_threshold_percent = 80;
-    std::uint32_t application_job_queue_resume_threshold_percent = 60;
+    std::uint32_t application_job_queue_pause_threshold_percent =
+      application_job_queue_default_pause_threshold_percent;
+    std::uint32_t application_job_queue_resume_threshold_percent =
+      application_job_queue_default_resume_threshold_percent;
     std::chrono::milliseconds session_replacement_callback_timeout{30'000};
     bool applied = false;
 

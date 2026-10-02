@@ -6,13 +6,26 @@
 #include <boost/beast/http/verb.hpp>
 
 #include <string>
+#include <string_view>
 
 namespace zlink::http_client::detail
 {
 
+inline constexpr unsigned http_11_version = 11;
+inline constexpr std::string_view http_url_prefix = "http://";
+inline constexpr std::string_view https_url_prefix = "https://";
+inline constexpr const char *http_default_port = "80";
+inline constexpr const char *https_default_port = "443";
+
+enum class http_scheme_t
+{
+    plain,
+    secure
+};
+
 struct parsed_url_t
 {
-    std::string scheme;
+    http_scheme_t scheme;
     std::string host;
     std::string port;
     std::string target_prefix;
@@ -20,7 +33,7 @@ struct parsed_url_t
 
 struct hop_target_t
 {
-    std::string scheme;
+    http_scheme_t scheme;
     std::string host;
     std::string port;
     std::string target;

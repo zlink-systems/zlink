@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include <zlink/json_profile.hpp>
+
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include "runtime/dispatch/offload_executor.hpp"
@@ -293,7 +295,7 @@ std::string serializer_registry_t::content_type (std::type_index type) const
 {
     const auto found = _state->serializers.find (type);
     if (found == _state->serializers.end ()) {
-        return "application/json";
+        return zlink::detail::json_profile::content_type;
     }
     if (found->second.content_type.empty ()) {
         return "application/octet-stream";

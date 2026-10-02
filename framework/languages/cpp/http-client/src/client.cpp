@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <zlink/http_client.hpp>
+#include <zlink/framework/detail/base64.hpp>
+#include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include "runtime/http_client_runtime.hpp"
 
@@ -12,6 +14,17 @@ namespace zlink::http_client
 {
 namespace
 {
+
+constexpr char basic_auth_prefix[] = "Basic ";
+constexpr char bearer_auth_prefix[] = "Bearer ";
+constexpr char multipart_boundary_prefix[] = "zlink-boundary-";
+constexpr char form_content_type[] = "application/x-www-form-urlencoded";
+constexpr char multipart_content_type_prefix[] = "multipart/form-data; boundary=";
+constexpr char multipart_delimiter[] = "--";
+constexpr char line_ending[] = "\r\n";
+constexpr char multipart_name_header[] = "Content-Disposition: form-data; name=\"";
+constexpr char multipart_filename_parameter[] = "; filename=\"";
+constexpr char multipart_content_type_header[] = "Content-Type: ";
 
 bool is_blank (const std::string &value)
 {
@@ -57,41 +70,15 @@ std::string percent_encode (const std::string &value)
     return encoded;
 }
 
-std::string base64_encode (std::string_view input)
-{
-    static constexpr char table[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string encoded;
-    encoded.reserve ((input.size () + 2) / 3 * 4);
-    unsigned value = 0;
-    int bits = -6;
-    for (const unsigned char ch : input) {
-        value = (value << 8) + ch;
-        bits += 8;
-        while (bits >= 0) {
-            encoded.push_back (table[(value >> bits) & 0x3f]);
-            bits -= 6;
-        }
-    }
-    if (bits > -6) {
-        encoded.push_back (table[((value << 8) >> (bits + 8)) & 0x3f]);
-    }
-    while (encoded.size () % 4 != 0) {
-        encoded.push_back ('=');
-    }
-    return encoded;
-}
-
 std::string make_multipart_boundary ()
 {
     std::random_device device;
     std::mt19937_64 generator (device ());
     std::uniform_int_distribution<unsigned long long> distribution;
-    std::string boundary = "zlink-boundary-";
-    static constexpr char hex[] = "0123456789abcdef";
+    std::string boundary = multipart_boundary_prefix;
     auto bits = distribution (generator);
     for (int nibble = 0; nibble < 16; ++nibble) {
-        boundary.push_back (hex[bits & 0x0f]);
+        boundary.push_back (zlink::framework::detail::lowercase_hex_digits[bits & 0x0f]);
         bits >>= 4;
     }
     return boundary;
@@ -176,14 +163,17 @@ client_builder_t &client_builder_t::basic_auth (const std::string &user,
                                                 const std::string &password)
 {
     require_non_blank (user, "HTTP client basic auth user is required");
-    _headers["authorization"] = "Basic " + base64_encode (user + ":" + password);
+    const auto credentials = user + ":" + password;
+    _headers[detail::authorization_header_name] =
+      basic_auth_prefix
+      + zlink::framework::detail::base64_encode (std::as_bytes (std::span (credentials)));
     return *this;
 }
 
 client_builder_t &client_builder_t::bearer_token (const std::string &token)
 {
     require_non_blank (token, "HTTP client bearer token is required");
-    _headers["authorization"] = "Bearer " + token;
+    _headers[detail::authorization_header_name] = bearer_auth_prefix + token;
     return *this;
 }
 
@@ -258,7 +248,10 @@ client_builder_t &client_builder_t::proxy_basic_auth (const std::string &user,
                                                       const std::string &password)
 {
     require_non_blank (user, "HTTP client proxy auth user is required");
-    _proxy_authorization = "Basic " + base64_encode (user + ":" + password);
+    const auto credentials = user + ":" + password;
+    _proxy_authorization =
+      basic_auth_prefix
+      + zlink::framework::detail::base64_encode (std::as_bytes (std::span (credentials)));
     return *this;
 }
 
@@ -418,7 +411,7 @@ request_builder_t &request_builder_t::body (std::string content, std::string con
 {
     require_non_blank (content_type, "HTTP request body content type is required");
     _body = std::move (content);
-    _headers["content-type"] = std::move (content_type);
+    _headers[detail::content_type_header_name] = std::move (content_type);
     return *this;
 }
 
@@ -432,7 +425,7 @@ request_builder_t &request_builder_t::body_stream (body_stream_provider_t provid
     }
     require_non_blank (content_type, "HTTP request body content type is required");
     _body_provider = std::move (provider);
-    _headers["content-type"] = std::move (content_type);
+    _headers[detail::content_type_header_name] = std::move (content_type);
     return *this;
 }
 
@@ -509,7 +502,7 @@ request_builder_t::resolve_body_and_headers () const
             encoded.push_back ('=');
             encoded += percent_encode (value);
         }
-        headers["content-type"] = "application/x-www-form-urlencoded";
+        headers[detail::content_type_header_name] = form_content_type;
         return {std::move (encoded), std::move (headers)};
     }
 
@@ -517,21 +510,21 @@ request_builder_t::resolve_body_and_headers () const
         const auto boundary = make_multipart_boundary ();
         std::string encoded;
         for (const auto &part : _multipart) {
-            encoded += "--" + boundary + "\r\n";
-            encoded += "Content-Disposition: form-data; name=\"" + part.name + "\"";
+            encoded += multipart_delimiter + boundary + line_ending;
+            encoded += multipart_name_header + part.name + "\"";
             if (!part.filename.empty ()) {
-                encoded += "; filename=\"" + part.filename + "\"";
+                encoded += multipart_filename_parameter + part.filename + "\"";
             }
-            encoded += "\r\n";
+            encoded += line_ending;
             if (!part.content_type.empty ()) {
-                encoded += "Content-Type: " + part.content_type + "\r\n";
+                encoded += multipart_content_type_header + part.content_type + line_ending;
             }
-            encoded += "\r\n";
+            encoded += line_ending;
             encoded += part.content;
-            encoded += "\r\n";
+            encoded += line_ending;
         }
-        encoded += "--" + boundary + "--\r\n";
-        headers["content-type"] = "multipart/form-data; boundary=" + boundary;
+        encoded += multipart_delimiter + boundary + multipart_delimiter + line_ending;
+        headers[detail::content_type_header_name] = multipart_content_type_prefix + boundary;
         return {std::move (encoded), std::move (headers)};
     }
 

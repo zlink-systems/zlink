@@ -6,9 +6,43 @@
 #include <exception>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace zlink::framework
 {
+
+namespace detail::dispatch_event_field
+{
+inline constexpr char action[] = "action";
+inline constexpr char activation_state[] = "activation_state";
+inline constexpr char actor[] = "actor";
+inline constexpr char channel[] = "channel";
+inline constexpr char channel_route[] = "channel_route";
+inline constexpr char corr[] = "corr";
+inline constexpr char error_message[] = "error_message";
+inline constexpr char error_type[] = "error_type";
+inline constexpr char event_id[] = "event_id";
+inline constexpr char flow[] = "flow";
+inline constexpr char instance_type[] = "instance_type";
+inline constexpr char kind[] = "kind";
+inline constexpr char mesh[] = "mesh";
+inline constexpr char origin[] = "origin";
+inline constexpr char outcome[] = "outcome";
+inline constexpr char packet[] = "packet";
+inline constexpr char phase[] = "phase";
+inline constexpr char reason[] = "reason";
+inline constexpr char result[] = "result";
+inline constexpr char server_rid[] = "server_rid";
+inline constexpr char session[] = "session";
+inline constexpr char size[] = "size";
+inline constexpr char source_rid[] = "source_rid";
+inline constexpr char spot[] = "spot";
+inline constexpr char stage[] = "stage";
+inline constexpr char surface[] = "surface";
+inline constexpr char target_rid[] = "target_rid";
+inline constexpr char topic[] = "topic";
+} // namespace detail::dispatch_event_field
+
 
 enum class message_flow_outcome_t
 {
@@ -36,6 +70,22 @@ enum class dispatch_error_surface_t
     actor_relocation = 8,
     classic_fanout = 9
 };
+
+namespace detail
+{
+inline std::optional<std::string_view>
+default_channel_route_name (dispatch_error_surface_t surface) noexcept
+{
+    switch (surface) {
+        case dispatch_error_surface_t::route_mesh_channel:
+            return "route_mesh";
+        case dispatch_error_surface_t::channel:
+            return "client_server";
+        default:
+            return std::nullopt;
+    }
+}
+} // namespace detail
 
 enum class dispatch_message_kind_t
 {

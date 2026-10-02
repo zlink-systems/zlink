@@ -11,6 +11,24 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinWireAdmissionNegativeTests
 {
+    [Fact]
+    public async Task Canonical_actor_join_unavailable_preserves_public_error_kind()
+    {
+        await using var fixture = await WireAdmissionFixture.CreateAsync(onJoin: () =>
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Actor admission unavailable."
+            )
+        );
+        var reply = await fixture.SendAsync(fixture.CreateRequest());
+        AssertTerminal(
+            reply,
+            RequestResult.InternalError,
+            ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+            ZLinkFrameworkErrorKind.Unavailable
+        );
+    }
+
     [Theory]
     [InlineData(ActorFenceMismatch.ObjectGeneration)]
     [InlineData(ActorFenceMismatch.NodeRid)]
@@ -126,7 +144,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
     private static void AssertTerminal(
         IReadOnlyList<Message> parts,
         RequestResult expectedResult,
-        ServiceWireConstants.FrameworkErrorCode expectedCode
+        ServiceWireConstants.FrameworkErrorCode expectedCode,
+        ZLinkFrameworkErrorKind? expectedKind = null
     )
     {
         try
@@ -143,6 +162,19 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             Assert.Equal((int)expectedResult, reply.TerminalResult);
             Assert.Equal((uint)expectedCode, reply.FailureCode);
             Assert.Empty(reply.Tail);
+            if (expectedKind is { } kind)
+                Assert.Equal(
+                    kind,
+                    Assert
+                        .IsType<ZLinkFrameworkException>(
+                            ZLinkRequestFailureMapper.CreateCompletionException(
+                                (RequestResult)reply.TerminalResult,
+                                checked((int)reply.FailureCode),
+                                "Actor Join"
+                            )
+                        )
+                        .Kind
+                );
         }
         finally
         {
@@ -202,7 +234,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         internal ZLinkFrameworkRuntime Runtime { get; }
 
         internal static async Task<WireAdmissionFixture> CreateAsync(
-            ActorFenceMismatch? mismatch = null
+            ActorFenceMismatch? mismatch = null,
+            Func<ZLinkSpotActorJoinResult>? onJoin = null
         )
         {
             var provider = new ZLinkInMemoryProviderLocationStore();
@@ -224,6 +257,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             );
             var locationLifecycle = new ZLinkLocationLifecycle(locationRuntime, locationResolvers);
             var services = new ServiceCollection()
+                .AddSingleton(onJoin ?? (() => ZLinkSpotActorJoinResult.Accept()))
                 .AddSingleton(locationRuntime)
                 .AddSingleton(locationLifecycle)
                 .AddSingleton(locationResolvers)
@@ -478,7 +512,10 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         }
     }
 
-    private sealed class AdmissionSpot(IZLinkSpotContext context) : IZLinkSpot<TestActor>
+    private sealed class AdmissionSpot(
+        IZLinkSpotContext context,
+        Func<ZLinkSpotActorJoinResult> onJoin
+    ) : IZLinkSpot<TestActor>
     {
         public IZLinkSpotContext Context { get; } = context;
 
@@ -486,7 +523,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             string actorId,
             ZLinkMessage request,
             CancellationToken cancellationToken
-        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+        ) => ValueTask.FromResult(onJoin());
 
         public ValueTask OnJoinedActorAsync(TestActor actor, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;

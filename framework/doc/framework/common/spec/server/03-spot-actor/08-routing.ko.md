@@ -479,7 +479,7 @@ Request는 reply, error, timeout, cancellation 또는 shutdown 가운데 먼저 
   `StoreVersion`, stale result, Store recovery와 lease invalidation에서 즉시
   제거된다.
 - Resolver 결과가 `Missing`과 `Unavailable`을 서로 다른 tag로 돌려주고, `Missing`은
-  creation coordinator에만, `Unavailable`은 terminal completion mapper에만 연결된다.
+  creation coordinator에만 연결된다. `Unavailable`은 Instance intent가 `Creating`·explicit Close·idle cleanup을 만난 경우 [Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 전달 대상으로, 그 밖에는 terminal completion mapper로 연결된다.
 - Positive route cache의 수명이 `MessageFollowDuration`을 넘지 않는다.
 - Target admission은 찾은 owner의 authority owner generation과 lease fence를 검증하고, direct
   message의 `ObjectGeneration`은 §2.6대로 대상 판정에서 제외하며, 새 incarnation으로 다시 지정하지

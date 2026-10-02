@@ -12,6 +12,11 @@
 namespace zlink::framework::detail
 {
 
+namespace
+{
+constexpr std::chrono::milliseconds submission_poll_interval{10};
+} // namespace
+
 route_channel_runtime_t::route_channel_runtime_t (std::string router_channel_id) :
     _router_channel_id (std::move (router_channel_id))
 {
@@ -489,7 +494,7 @@ route_channel_runtime_t::wait_until_peer_ready (const zlink::routing_id_t &targe
             || std::chrono::steady_clock::now () >= deadline) {
             return last;
         }
-        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
+        zlink::framework::runtime::wait_poll_interval (submission_poll_interval);
     }
 }
 
@@ -520,7 +525,7 @@ route_channel_runtime_t::wait_until_connected (std::chrono::milliseconds timeout
             || std::chrono::steady_clock::now () >= deadline) {
             return last;
         }
-        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (10));
+        zlink::framework::runtime::wait_poll_interval (submission_poll_interval);
     }
 }
 

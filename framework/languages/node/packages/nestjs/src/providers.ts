@@ -384,8 +384,7 @@ function createProviderResolver(
     },
     async create<T>(type: Type<T>): Promise<T> {
       const owner = findDiscoveredProvider(discovery, type)?.host;
-      const creationModuleRef =
-        owner?.getProviderByKey<ModuleRef>(ModuleRef)?.instance ?? moduleRef;
+      const creationModuleRef = owner?.getProviderByKey<ModuleRef>(ModuleRef).instance ?? moduleRef;
       return await creationModuleRef.create(type as unknown as import('@nestjs/common').Type<T>);
     }
   };

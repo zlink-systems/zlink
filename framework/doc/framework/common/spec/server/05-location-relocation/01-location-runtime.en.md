@@ -825,6 +825,17 @@ doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
 
+**An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
+`Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
+authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
+the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and the
+owner lease is valid. If so, it re-reads the capacity, counter, and descriptor records the request
+needs, rebuilds all of its conditions and changes, and requests it again. Otherwise the operation's
+existing result classification applies. Factories and application callbacks aren't run again. This
+repetition happens within the operation's deadline with no separate retry cap, except that
+[§10](#10-when-a-store-response-isnt-received) decides when the repetition of a relocation target's
+`NewOwner` and a `SpotWide` whole-unit batch ends.
+
 A regular `Preserve` has no relocation reservation information. Only for a standalone
 relocation, when updating the completion-record payload location or recording target
 readiness, can pre-secured reservation information be passed along. The Framework checks

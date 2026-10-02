@@ -29,8 +29,10 @@ struct application_job_queue_configuration_t
     std::optional<std::uint32_t> configured_manual_max;
     std::uint32_t effective_processor_count = 1;
     std::uint32_t effective_max_queued_application_jobs = 1;
-    std::uint32_t pause_threshold_percent = 80;
-    std::uint32_t resume_threshold_percent = 60;
+    std::uint32_t pause_threshold_percent =
+      detail::application_job_queue_default_pause_threshold_percent;
+    std::uint32_t resume_threshold_percent =
+      detail::application_job_queue_default_resume_threshold_percent;
 };
 
 enum class receive_flow_state_apply_result_t

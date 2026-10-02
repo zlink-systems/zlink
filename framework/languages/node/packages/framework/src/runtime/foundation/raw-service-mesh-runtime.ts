@@ -52,8 +52,8 @@ import {
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
+
 const nativeErrnoValues = osConstants.errno;
-const LEGACY_ROUTE_NOT_REQUIRED_REJECT_REASON = 4;
 
 export type RawServicePumpResult =
   'noData' | 'infrastructure' | 'application' | 'dropped' | 'protocolError';
@@ -816,26 +816,7 @@ export class RawServiceMeshRuntime {
       }
       if (header.command === M6aServiceWireCommand.reject) {
         if (received.parts.length !== 1) return 'protocolError';
-        const reason = decodeReject(received.parts[0]!);
-        // Keep an already admitted peer: a reject of an earlier Hello on the
-        // same selected route does not end the admission that succeeded.
-        if (
-          reason === LEGACY_ROUTE_NOT_REQUIRED_REJECT_REASON &&
-          this.topology.peer(received.sourceRid) === undefined
-        ) {
-          const expected = this.expectedPeers.get(received.sourceRid);
-          const local = this.topology.localDescriptor();
-          this.topology.markNotRequired({
-            ...local,
-            nodeRoutingId: received.sourceRid,
-            lifecycleGeneration: 1n,
-            descriptorRevision: 1n,
-            advertisedEndpoint: expected?.endpoint ?? local.advertisedEndpoint,
-            channels: [],
-            objectRole: 'client'
-          });
-          this.retireNotRequiredExpectedPeer(received.sourceRid);
-        }
+        decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
       const peer = this.topology.peer(received.sourceRid);

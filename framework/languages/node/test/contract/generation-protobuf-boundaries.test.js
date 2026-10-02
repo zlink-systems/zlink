@@ -6,6 +6,14 @@ const protobuf = require('../../packages/framework-codec-protobuf/dist/server/fr
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 test('Public User Spot creation exposes its generation as bigint', async () => {
   let contextGeneration;
@@ -56,6 +64,7 @@ for (const generation of [9007199254740992n, 9223372036854775807n]) {
     }
     const manager = new framework.DefaultZLinkSpotManager({
       spotFactories: [],
+      detachedTaskRunner,
       instanceSpotFactories: new Map([
         ['generation-boundary.mesh', new Map([['generation-boundary', GenerationSpot]])]
       ])

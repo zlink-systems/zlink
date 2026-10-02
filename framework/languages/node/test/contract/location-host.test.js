@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
@@ -742,7 +743,8 @@ async function resolveFrameworkRegistration(module) {
   if ('useValue' in provider) {
     return provider.useValue;
   }
-  return await provider.useFactory();
+  const container = await resolveModuleProviders(module, [nestjs.ZLINK_FRAMEWORK_REGISTRATION]);
+  return container.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION);
 }
 
 test('concurrent relocation with a different deadline joins the running operation', async () => {
