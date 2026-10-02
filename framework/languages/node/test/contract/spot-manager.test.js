@@ -2866,6 +2866,8 @@ test('ZLinkSpotManager rejects unregistered spot factories', async () => {
 test('spot manager local actor join commits and runs target lifecycle before one-way source leave', async () => {
   const events = [];
   let finishLeave;
+  let leaveEntered;
+  const leaveEntry = new Promise(resolve => { leaveEntered = resolve; });
   class StageSpot {
     async onActorJoin(actorId, request) {
       events.push(`join:${actorId}:${request.decode()}`);
@@ -2881,6 +2883,7 @@ test('spot manager local actor join commits and runs target lifecycle before one
     entrySpotCallbacks: {
       onLeaveActor(actor) {
         events.push(`entry-left:${actor.actorId}`);
+        leaveEntered();
         return new Promise((resolve) => {
           finishLeave = resolve;
         });
@@ -2905,7 +2908,7 @@ test('spot manager local actor join commits and runs target lifecycle before one
   const pending = manager.admitActorJoin('stage-1', actor, request, () => {
     events.push('commit');
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await leaveEntry;
   assert.deepEqual(events, ['join:alice:hello', 'commit', 'joined:alice', 'entry-left:alice']);
   finishLeave();
   const result = await pending;
@@ -2958,6 +2961,8 @@ test('formal Entry Spot LEFT control invokes the Entry Spot lifecycle callback',
 test('source leave gate error is reported after target commit without blocking accepted Join', async () => {
   const events = [];
   const errors = [];
+  let reportCompleted;
+  const reportCompletion = new Promise(resolve => { reportCompleted = resolve; });
   class RoomSpot {
     constructor(context) {
       this.context = context;
@@ -2981,7 +2986,7 @@ test('source leave gate error is reported after target commit without blocking a
   manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
-    dispatchErrors: { report(event) { errors.push(event.error); } },
+    dispatchErrors: { report(event) { errors.push(event.error); reportCompleted(); } },
     entrySpotCallbacks: {
       onLeaveActor(actor) {
         return manager.executeOnSpot(RoomSpot, actor.sourceSpotId, (source) =>
@@ -3012,7 +3017,7 @@ test('source leave gate error is reported after target commit without blocking a
       events.push('commit:room-b:alice');
     }));
   const result = await move;
-  await new Promise(resolve => setImmediate(resolve));
+  await reportCompletion;
   assert.equal(result.accepted, true);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
@@ -4204,6 +4209,13 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     targetSpotRef.spotId,
     async () => targetSpotRef
   );
+  let resolveSendTarget;
+  const sendTargetResolution = new Promise(resolve => { resolveSendTarget = resolve; });
+  const sendTargetSpot = framework.createSpotHandle(targetSpotRef.spotId, async () => {
+    const resolved = await sendTargetResolution;
+    assert.deepEqual(resolved, targetSpotRef);
+    return resolved;
+  });
   const routedTransport = {
     async sendToSpot(address, message, options) {
       events.push(
@@ -4217,6 +4229,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
         `request:${address.routerChannelId}:${address.targetNodeRid}:${address.spotId}:${address.spotKind}:` +
         `${address.targetSpotGeneration}:${options.timeoutMs}:${request}`
       );
+      resolveSendTarget(targetSpotRef);
       return 'routed-reply';
     }
   };
@@ -4244,7 +4257,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
   await firstStart;
   class Notice extends String {}
   class Ping extends String {}
-  const send = outbound.sendToSpot(targetSpot, new Notice('notice')).submit();
+  const send = outbound.sendToSpot(sendTargetSpot, new Notice('notice')).submit();
   const request = outbound.requestToSpot(targetSpot, new Ping('ping')).timeout(250).submit();
   releaseFirst();
   const reply = await request;
@@ -4252,12 +4265,12 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
   await first;
 
   assert.equal(reply, 'routed-reply');
-  assert.deepEqual(events.slice(0, 2), ['spot:start', 'spot:end']);
-  assert.equal(events.length, 4);
-  assert.deepEqual(new Set(events.slice(2)), new Set([
+  assert.deepEqual(events, [
+    'spot:start',
+    'spot:end',
     `request:play.route:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:250:ping`,
     `send:node-b:stage-b:${framework.ZLinkSpotKind.User}:9:Notice:notice`
-  ]));
+  ]);
 });
 
 test('spot outbound one-way admission does not hold the serial executor during transport wait', async () => {

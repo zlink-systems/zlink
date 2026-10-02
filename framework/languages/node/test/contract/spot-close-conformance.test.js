@@ -412,13 +412,14 @@ test('completed Close rejects lifecycle submission without retaining work', asyn
   const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   assert.equal(await owner.spots.close(owner.ref), true);
+  await activation.serial.whenIdle();
   let ran = false;
   await assert.rejects(
     () => activation.serial.executeLifecycleOperation(() => { ran = true; }),
     (error) => errorKindName(error) === 'Rejected'
   );
-  assert.equal(ran, false);
   assert.equal(activation.serial.hasPendingWork, false);
+  assert.equal(ran, false);
 });
 
 test('membership makes Close false without rejecting admission', async () => {

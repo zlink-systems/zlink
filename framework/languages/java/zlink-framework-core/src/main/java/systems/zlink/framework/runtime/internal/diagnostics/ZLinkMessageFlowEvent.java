@@ -61,7 +61,9 @@ public record ZLinkMessageFlowEvent(
             throw new IllegalArgumentException(
                     "logical multicast and classic fanout must not create message-flow events");
         }
-        if (channelRouteKind != null && !"channel".equals(surface.traceName())) {
+        if (channelRouteKind != null
+                && surface != ZLinkDispatchErrorSurface.CHANNEL
+                && surface != ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL) {
             throw new IllegalArgumentException(
                     "channelRouteKind is only valid for the channel surface");
         }

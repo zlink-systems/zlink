@@ -9,9 +9,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -109,23 +106,6 @@ final class ZLinkActorAcceptedJournal {
     }
 
     private record DecodedApplication(ZLinkStreamHeader header, byte[] payload) {}
-
-    private static void write(DataOutputStream output, byte[] value) throws IOException {
-        output.writeInt(value.length);
-        output.write(value);
-    }
-
-    private static byte[] read(DataInputStream input) throws IOException {
-        int length = input.readInt();
-        if (length < 0 || length > 64 * 1024 * 1024) {
-            throw new IllegalArgumentException("invalid accepted Actor journal byte length");
-        }
-        byte[] value = input.readNBytes(length);
-        if (value.length != length) {
-            throw new IllegalArgumentException("truncated accepted Actor journal record");
-        }
-        return value;
-    }
 
     record Record(
             String actorId,

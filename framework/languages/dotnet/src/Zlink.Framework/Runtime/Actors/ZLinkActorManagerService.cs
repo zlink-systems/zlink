@@ -472,8 +472,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 if (target.Rid == source.Node.RoutingId)
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"actor_create_local actor={actorId} target={target.Rid} "
-                            + $"generation={target.LifecycleGeneration}"
+                        $"actor_create_local actor={actorId} target={target.Rid} generation={target.LifecycleGeneration}"
                     );
                     try
                     {
@@ -502,8 +501,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 // The mesh durable sender keeps this reservation's encoded
                 // OperationId until a terminal or the original deadline.
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_create_remote actor={actorId} source={source.Node.RoutingId} "
-                        + $"target={target.Rid} generation={target.LifecycleGeneration}"
+                    $"actor_create_remote actor={actorId} source={source.Node.RoutingId} target={target.Rid} generation={target.LifecycleGeneration}"
                 );
                 var remote = await source
                     .Node.CreateActorRemoteAsync(

@@ -53,6 +53,8 @@ listener도 셋이 따로 생긴다.
 <iframe class="zlink-diagram" src="/common/diagrams/30-wiring.html" title="세 패턴은 서로 다른 소켓을 연다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-wiring.html" target="_blank">↗ 크게 보기</a></p>
 
+<p><a href="/common/diagrams/zlink-tour.html#meshchannel" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — RouteMesh·ClientServer·Fanout 배선</a></p>
+
 | | 여는 listener | 연결 단위 | channel을 늘리면 |
 | --- | --- | --- | --- |
 | RouteMesh | MeshNode마다 ROUTER 하나 | node 사이 peer 연결 | **socket이 늘지 않는다** |
@@ -275,6 +277,8 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 �
 [Spot](21-spot.ko.md)은 id로 찾는 상태 객체이고 자기 앞으로 온 일을 한 줄로 세워 처리한다.
 RouteMesh channel 위에서 그 Spot끼리 이벤트를 주고받는 것을 Logical Multicast라 한다. 별도
 소켓이 없고, 받는 쪽은 그 channel에서 같은 topic을 구독한 Spot으로 한정된다.
+
+<p><a href="/common/diagrams/zlink-tour.html#meshpubsub" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — RouteMesh pub/sub</a></p>
 
 ```typescript
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe-game-spot.ts:doc-multicast-publish"

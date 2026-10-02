@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,103 @@ import java.util.function.Predicate;
 final class ZLinkRouteMeshRuntimeViewTest {
     private static final String MESH = "mesh";
     private static final Duration WAIT = Duration.ofSeconds(30);
+
+    @org.junit.jupiter.api.RepeatedTest(30)
+    void terminalSourceRemainsQueryableAndObservableAfterNativeTeardown() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(rid("terminal-source"));
+        var runtime = start(options);
+        var view = runtime.routeMeshRuntime();
+        CountDownLatch initial = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        var terminal = new AtomicReference<ZLinkMeshNodeSnapshot>();
+        var observationFailure = new AtomicReference<Throwable>();
+        try {
+            view.observe(MESH, 8)
+                    .subscribe(
+                            subscriber(
+                                    observed -> {
+                                        initial.countDown();
+                                        if (observed.status().state()
+                                                == ZLinkTopologyState.STOPPED) {
+                                            terminal.set(observed.status());
+                                            stopped.countDown();
+                                        }
+                                    },
+                                    Long.MAX_VALUE,
+                                    failure -> {
+                                        observationFailure.set(failure);
+                                        stopped.countDown();
+                                    }));
+            assertTrue(initial.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+        } finally {
+            runtime.close();
+        }
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> view.snapshot(MESH));
+        assertTrue(stopped.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+        if (observationFailure.get() != null) {
+            throw new AssertionError("terminal observation failed", observationFailure.get());
+        }
+        assertEquals(terminal.get(), view.snapshot(MESH));
+        var late = new AtomicReference<ZLinkMeshNodeSnapshot>();
+        CountDownLatch delivered = new CountDownLatch(1);
+        view.observe(MESH, 8)
+                .subscribe(
+                        subscriber(
+                                observed -> {
+                                    late.set(observed.status());
+                                    delivered.countDown();
+                                },
+                                1));
+        assertTrue(delivered.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+        assertEquals(terminal.get(), late.get());
+        assertThrows(
+                systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                () -> view.snapshot("missing-mesh"));
+    }
+
+    @Test
+    void unchangedSignalsDoNotConsumeOtherMeshSourceSequence() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(rid("source-one"));
+        options.addRouteMesh("other-mesh")
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(rid("source-two"));
+        try (var runtime = start(options)) {
+            var view = (ZLinkRouteMeshRuntimeView) runtime.routeMeshRuntime();
+            CountDownLatch initial = new CountDownLatch(2);
+            view.observe(MESH, 8)
+                    .subscribe(subscriber(ignored -> initial.countDown(), Long.MAX_VALUE));
+            view.observe("other-mesh", 8)
+                    .subscribe(subscriber(ignored -> initial.countDown(), Long.MAX_VALUE));
+            assertTrue(initial.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+            long first = view.snapshot(MESH).sequence();
+            long second = view.snapshot("other-mesh").sequence();
+            view.signalAll();
+            var firstDelivered = new AtomicReference<ZLinkMeshNodeSnapshot>();
+            var secondDelivered = new AtomicReference<ZLinkMeshNodeSnapshot>();
+            CountDownLatch dispatched = new CountDownLatch(2);
+            view.observe(MESH, 8)
+                    .subscribe(
+                            subscriber(
+                                    observed -> {
+                                        firstDelivered.set(observed.status());
+                                        dispatched.countDown();
+                                    },
+                                    1));
+            view.observe("other-mesh", 8)
+                    .subscribe(
+                            subscriber(
+                                    observed -> {
+                                        secondDelivered.set(observed.status());
+                                        dispatched.countDown();
+                                    },
+                                    1));
+            assertTrue(dispatched.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+            assertEquals(first, firstDelivered.get().sequence());
+            assertEquals(second, secondDelivered.get().sequence());
+        }
+    }
 
     @Test
     void readyPeerAndClientOnlyChannelCountTheRemoteServerOnly() throws Exception {
@@ -240,6 +338,63 @@ final class ZLinkRouteMeshRuntimeViewTest {
     }
 
     @Test
+    void zeroWeightPlacementUsesCapacityReasonEvenWhenAPeerIsUnavailable() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var node = options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setPlacementWeight(0);
+        node.objects().server();
+        node.channelName("work").server();
+        node.peerConnections()
+                .connect(rid("view-weight-zero-missing"), "tcp://127.0.0.1:" + unusedPort());
+        try (var runtime = start(options)) {
+            var status =
+                    awaitSnapshot(
+                            runtime, snapshot -> snapshot.state() == ZLinkTopologyState.DEGRADED);
+            assertFalse(status.placement().isAvailable());
+            assertEquals(
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    status.placement().unavailableReason().orElseThrow());
+        }
+    }
+
+    @Test
+    void observationStartsWithWeightChangedBeforeSubscription() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setPlacementWeight(100)
+                .objects()
+                .server();
+        try (var runtime = start(options)) {
+            awaitSnapshot(runtime, status -> status.placement().isAvailable());
+            ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime())
+                    .mesh(MESH)
+                    .setPlacementWeight(0);
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> first =
+                    new AtomicReference<>();
+            runtime.routeMeshRuntime()
+                    .observe(MESH, 1)
+                    .subscribe(
+                            subscriber(
+                                    observed -> {
+                                        first.set(observed);
+                                        received.countDown();
+                                    },
+                                    1));
+
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertFalse(first.get().status().placement().isAvailable());
+            assertEquals(
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    first.get().status().placement().unavailableReason().orElseThrow());
+            assertEquals(0, first.get().loss().coalescedCount());
+            assertEquals(0, first.get().loss().discardedTerminalCount());
+        }
+    }
+
+    @Test
     void placementEventsProjectCapacityAndWeightChanges() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
@@ -359,6 +514,13 @@ final class ZLinkRouteMeshRuntimeViewTest {
     private static Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> subscriber(
             java.util.function.Consumer<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> onNext,
             long demand) {
+        return subscriber(onNext, demand, ignored -> {});
+    }
+
+    private static Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> subscriber(
+            java.util.function.Consumer<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> onNext,
+            long demand,
+            java.util.function.Consumer<Throwable> onError) {
         return new Flow.Subscriber<>() {
             @Override
             public void onSubscribe(Flow.Subscription subscription) {
@@ -371,7 +533,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
             }
 
             @Override
-            public void onError(Throwable throwable) {}
+            public void onError(Throwable throwable) {
+                onError.accept(throwable);
+            }
 
             @Override
             public void onComplete() {}

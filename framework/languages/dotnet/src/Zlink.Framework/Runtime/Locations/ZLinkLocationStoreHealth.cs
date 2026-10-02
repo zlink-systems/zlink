@@ -81,6 +81,21 @@ internal sealed class ZLinkLocationStoreHealth
         get => AwaitStateLane(_lane.RunAsync(() => _recoveryGeneration));
     }
 
+    internal static ZLinkLocationRuntimeSnapshot ProjectSnapshot(Snapshot? snapshot) =>
+        snapshot is { } health
+            ? new ZLinkLocationRuntimeSnapshot(
+                health.Healthy
+                    ? ZLinkLocationRuntimeSnapshot.ReadyState
+                    : ZLinkLocationRuntimeSnapshot.DegradedState,
+                health.LastSuccessAt,
+                health.LastFailureAt
+            )
+            : new ZLinkLocationRuntimeSnapshot(
+                ZLinkLocationRuntimeSnapshot.NotConfiguredState,
+                null,
+                null
+            );
+
     internal readonly record struct Snapshot(
         bool Healthy,
         DateTimeOffset? LastSuccessAt,

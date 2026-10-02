@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -25,7 +24,6 @@ import java.util.function.Supplier;
  * returns a {@link CompletionStage}; no thread is parked while the request is in flight.
  */
 public final class ZLinkHttpRequestBuilder {
-    private static final int FIRST_ERROR_STATUS = 400;
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
@@ -87,7 +85,8 @@ public final class ZLinkHttpRequestBuilder {
         } catch (Exception cause) {
             throw HttpClientErrors.protocol("HTTP request body could not be serialized", cause);
         }
-        headers.putIfAbsent("content-type", "application/json");
+        headers.putIfAbsent(
+                HttpClientText.Header.CONTENT_TYPE.wire(), HttpClientText.JSON_CONTENT_TYPE);
         return this;
     }
 
@@ -98,7 +97,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.body = content;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -112,7 +111,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.bodyProvider = provider;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -141,7 +140,7 @@ public final class ZLinkHttpRequestBuilder {
 
     /** Submits the request and returns the raw response. */
     public CompletionStage<RawHttpResponse> submitRaw() {
-        return execute(null, Function.identity());
+        return execute(null);
     }
 
     /**
@@ -152,11 +151,10 @@ public final class ZLinkHttpRequestBuilder {
         if (sink == null) {
             throw HttpClientErrors.protocol("HTTP request download sink is required");
         }
-        return execute(sink, Function.identity());
+        return execute(sink);
     }
 
-    private <T> CompletionStage<T> execute(
-            Consumer<byte[]> sink, Function<RawHttpResponse, T> transform) {
+    private CompletionStage<RawHttpResponse> execute(Consumer<byte[]> sink) {
         var spec = makeRequest(sink);
         ZLinkHttpClient resolved = clientLease.acquire();
         try {
@@ -164,21 +162,18 @@ public final class ZLinkHttpRequestBuilder {
                     .executeAsync(spec)
                     .thenApply(
                             result ->
-                                    transform.apply(
-                                            new RawHttpResponse(
-                                                    result.status(),
-                                                    result.headers(),
-                                                    result.body())))
-                    .whenComplete((result, error) -> clientLease.release(error));
+                                    new RawHttpResponse(
+                                            result.status(), result.headers(), result.body()))
+                    .whenComplete((result, error) -> clientLease.release());
         } catch (RuntimeException error) {
-            clientLease.release(error);
+            clientLease.release();
             throw error;
         }
     }
 
     /** Submits the request and decodes the JSON body to {@code type}. */
     public <T> CompletionStage<HttpResponse<T>> submit(Class<T> type) {
-        return execute(null, raw -> decode(raw, type));
+        return decode(submitRaw(), type);
     }
 
     /** Submits the request and returns only the decoded JSON body. */
@@ -194,20 +189,24 @@ public final class ZLinkHttpRequestBuilder {
                                 callback.complete(error, error == null ? response : null));
     }
 
-    private static <T> HttpResponse<T> decode(RawHttpResponse raw, Class<T> type) {
-        if (raw.status() >= FIRST_ERROR_STATUS) {
-            throw HttpClientErrors.internalFailure(
-                    "HTTP request failed with status " + raw.status());
-        }
-        if (raw.body().isEmpty()) {
-            return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
-        }
-        try {
-            T body = MAPPER.readValue(raw.body(), type);
-            return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
-        } catch (Exception cause) {
-            throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
-        }
+    private static <T> CompletionStage<HttpResponse<T>> decode(
+            CompletionStage<RawHttpResponse> operation, Class<T> type) {
+        return operation.thenApply(
+                raw -> {
+                    if (raw.status() >= java.net.HttpURLConnection.HTTP_BAD_REQUEST) {
+                        throw HttpClientErrors.internalFailure(
+                                "HTTP request failed with status " + raw.status());
+                    }
+                    if (raw.body().isEmpty()) {
+                        return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
+                    }
+                    try {
+                        T body = MAPPER.readValue(raw.body(), type);
+                        return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
+                    } catch (Exception cause) {
+                        throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
+                    }
+                });
     }
 
     private HttpRequestSpec makeRequest(Consumer<byte[]> sink) {
@@ -256,16 +255,14 @@ public final class ZLinkHttpRequestBuilder {
             return client;
         }
 
-        synchronized void release(Throwable requestFailure) {
+        synchronized void release() {
             if (!owned || client == null) {
                 return;
             }
             try {
                 client.close();
-            } catch (RuntimeException closeFailure) {
-                if (requestFailure == null) {
-                    throw closeFailure;
-                }
+            } catch (RuntimeException ignored) {
+                // Cleanup must not replace the request result.
             } finally {
                 client = null;
             }

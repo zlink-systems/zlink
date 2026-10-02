@@ -85,7 +85,7 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 - 위 종류로 표현할 수 없는 Framework 실행 실패는 `InternalFailure`다.
 
 <a id="bounded-queue-failure"></a>
-**줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
+**Framework가 소유한 줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
 수단은 [§6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)의
 `PAUSED` 하나뿐이다.
 
@@ -173,7 +173,7 @@ wait다.
 
 **줄이 가득 찼을 때**
 
-- 같은 runtime이든 다른 node든, 줄에 자리가 없다는 이유로 끝나는 request가 없다.
+- 같은 runtime이든 다른 node든, Framework가 소유한 줄에 자리가 없다는 이유로 끝나는 request가 없다.
 - Spot을 둘 node가 하나도 없으면 `Unavailable`로 끝난다.
 
 **Typed Rejected 구분**

@@ -7,6 +7,8 @@ import java.net.UnknownHostException;
 
 /** Resolves the endpoint that a remote process uses for one listener. */
 public final class ZLinkListenerIdentity {
+    private static final String IPV4_WILDCARD_HOST = "0.0.0.0";
+
     private ZLinkListenerIdentity() {}
 
     public static String advertisedEndpoint(String boundEndpoint, String advertiseHost) {
@@ -24,7 +26,7 @@ public final class ZLinkListenerIdentity {
         }
 
         String boundHost = endpointHost(endpoint);
-        if ("0.0.0.0".equals(boundHost)) {
+        if (IPV4_WILDCARD_HOST.equals(boundHost)) {
             return ZLinkEndpointNotation.withHost(endpoint, "127.0.0.1");
         }
         if (isIpv6Wildcard(boundHost)) {
@@ -38,7 +40,7 @@ public final class ZLinkListenerIdentity {
             return false;
         }
         String value = unbracket(host.strip());
-        return value.equals("*") || value.equals("0.0.0.0") || isIpv6Wildcard(value);
+        return value.equals("*") || value.equals(IPV4_WILDCARD_HOST) || isIpv6Wildcard(value);
     }
 
     private static boolean isIpv6Wildcard(String host) {

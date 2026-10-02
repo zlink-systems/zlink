@@ -687,6 +687,28 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void failedHandlersDoNotChangeAnyTryAdmission() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+        var executions = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<CompletionStage<Void>> failure =
+                () -> {
+                    executions.incrementAndGet();
+                    return CompletableFuture.failedFuture(
+                            new IllegalStateException("handler failed"));
+                };
+        assertTrue(queue.tryEnqueue(failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(1, executions.get());
+        assertTrue(queue.tryEnqueueWithPayloadBytes(0, failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(2, executions.get());
+        assertTrue(queue.tryEnqueueRelocatable(new byte[] {1}, failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(3, executions.get());
+    }
+
+    @Test
     void lifecycleLaneRemainsSeparateWithoutAnAdmissionCap() throws Exception {
         ZLinkSerialExecutionQueue queue =
                 new ZLinkSerialExecutionQueue(

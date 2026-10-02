@@ -3,6 +3,7 @@ package systems.zlink.framework.spring;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
@@ -59,6 +60,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
+    private static final String CLOSE_METHOD_NAME = "close";
+    private static final String PRE_DESTROY_ANNOTATION_CLASS_NAME = "jakarta.annotation.PreDestroy";
     private final AutowireCapableBeanFactory beanFactory;
     private final Map<Class<?>, HandlerPlan> handlerPlans = new ConcurrentHashMap<>();
 
@@ -120,11 +123,15 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                 current != null && current != Object.class;
                 current = current.getSuperclass()) {
             for (Method method : current.getDeclaredMethods()) {
-                if (!method.getName().equals("close") || method.getParameterCount() != 0) {
+                if (!method.getName().equals(CLOSE_METHOD_NAME)
+                        || method.getParameterCount() != 0) {
                     continue;
                 }
                 for (Annotation annotation : method.getDeclaredAnnotations()) {
-                    if (annotation.annotationType().getSimpleName().equals("PreDestroy")) {
+                    if (annotation
+                            .annotationType()
+                            .getName()
+                            .equals(PRE_DESTROY_ANNOTATION_CLASS_NAME)) {
                         return true;
                     }
                 }
@@ -369,12 +376,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private static int autowiredPriority(Constructor<?> constructor) {
-        for (Annotation annotation : constructor.getDeclaredAnnotations()) {
-            if (annotation.annotationType().getSimpleName().equals("Autowired")) {
-                return 1;
-            }
-        }
-        return 0;
+        return constructor.isAnnotationPresent(Autowired.class) ? 1 : 0;
     }
 
     private static Throwable unwrap(Throwable failure) {

@@ -218,9 +218,19 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     public enum ChannelSelectionFailure {
-        NO_MEMBER,
-        NOT_READY,
-        DRAINING
+        NO_MEMBER("no_member"),
+        NOT_READY("not_ready"),
+        DRAINING("draining");
+
+        private final String wire;
+
+        ChannelSelectionFailure(String wire) {
+            this.wire = wire;
+        }
+
+        public String wire() {
+            return wire;
+        }
     }
 
     /**

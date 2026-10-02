@@ -20,6 +20,7 @@ import java.util.function.Supplier;
 
 /** Owns the encoded identity and typed admission history of one durable request. */
 final class ZLinkJavaDurableRequest {
+    private static final long ADMISSION_RETRY_DELAY_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
     private final Supplier<List<byte[]>> prepare;
     private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
     private final BooleanSupplier targetLifecycleEnded;
@@ -81,13 +82,14 @@ final class ZLinkJavaDurableRequest {
                 exhaust();
                 return;
             }
-            submit.apply(frames, Duration.ofNanos(remaining)).whenComplete(this::settle);
+            submit.apply(frames, Duration.ofNanos(remaining))
+                    .whenComplete((reply, failure) -> settle(reply, failure, false));
         } catch (RuntimeException failure) {
-            settle(null, failure);
+            settle(null, failure, true);
         }
     }
 
-    private void settle(List<byte[]> reply, Throwable failure) {
+    private void settle(List<byte[]> reply, Throwable failure, boolean initialSubmission) {
         if (completion.isDone()) {
             return;
         }
@@ -114,13 +116,19 @@ final class ZLinkJavaDurableRequest {
             SubmitResult result = initial.getResult();
             if (result == SubmitResult.NOT_CONNECTED
                     || result == SubmitResult.NOT_FOUND
-                    || result == SubmitResult.BACKPRESSURED
                     || result == SubmitResult.NOT_ADMITTED) {
                 retry();
                 return;
             }
         }
-        completion.completeExceptionally(cause);
+        RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(cause, initialSubmission);
+        completion.completeExceptionally(
+                terminal == RequestResult.INTERNAL_ERROR
+                        ? cause
+                        : new ZLinkFrameworkException(
+                                ZLinkJavaRawMeshNode.backendResult(terminal).toFrameworkErrorKind(),
+                                "durable request submission failed",
+                                cause));
     }
 
     private void retry() {
@@ -128,7 +136,7 @@ final class ZLinkJavaDurableRequest {
         ZLinkProcessExecutionLanes.deadlines()
                 .schedule(
                         this::attempt,
-                        Math.max(0, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10))),
+                        Math.max(0, Math.min(remaining, ADMISSION_RETRY_DELAY_NANOS)),
                         TimeUnit.NANOSECONDS);
     }
 

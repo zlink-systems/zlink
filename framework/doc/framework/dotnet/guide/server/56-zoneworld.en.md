@@ -191,6 +191,8 @@ The zone Spot ticks on a timer and builds a state notify from its own zone and t
 snapshots. The notify is sent to each player Actor, and the Actor's handler pushes it to the bound
 session. A bot is an Actor of the same type without a bound session.
 
+<p><a href="/common/diagrams/zlink-tour-en.html#meshpubsub" target="_blank">▶ Try it in the interactive tour — RouteMesh pub/sub</a></p>
+
 `Server/ZoneNode/Infrastructure/ZLink/Spots/Handlers/PlayerMoveHandlers.cs`
 
 ```csharp

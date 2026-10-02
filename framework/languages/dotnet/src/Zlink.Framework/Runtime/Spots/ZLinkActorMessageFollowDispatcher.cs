@@ -86,15 +86,7 @@ internal static class ZLinkActorMessageFollowDispatcher
         {
             var currentActor = actorState.NativeActorRef;
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_frame_route actor={frameActor.ActorId} route={route} "
-                    + $"frame_node={frameActor.NodeRid} frame_generation={frameActor.Generation} "
-                    + $"current_node={currentActor?.NodeRid} "
-                    + $"current_generation={currentActor?.Generation} "
-                    + $"direct={routeContext.IsDirectRoute} "
-                    + $"hop={routeContext.MessageFollowHopCount} "
-                    + $"target_node_generation={routeContext.TargetNodeGeneration} "
-                    + $"authority_generation={routeContext.AuthorityOwnerGeneration} "
-                    + $"owner_lease={routeContext.OwnerLeaseGeneration}"
+                $"actor_frame_route actor={frameActor.ActorId} route={route} frame_node={frameActor.NodeRid} frame_generation={frameActor.Generation} current_node={currentActor?.NodeRid} current_generation={currentActor?.Generation} direct={routeContext.IsDirectRoute} hop={routeContext.MessageFollowHopCount} target_node_generation={routeContext.TargetNodeGeneration} authority_generation={routeContext.AuthorityOwnerGeneration} owner_lease={routeContext.OwnerLeaseGeneration}"
             );
         }
         if (route == ZLinkActorFrameRoute.MessageFollow)

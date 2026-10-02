@@ -54,9 +54,18 @@ internal static class ZLinkDurableRequest
 
     private static bool CanReplay(Exception error, out bool admitted)
     {
-        // Framework mappers may wrap a typed binding outcome, but an error
-        // kind alone cannot establish the binding's admission phase.
-        if (error is ZLinkFrameworkException { InnerException: { } cause })
+        // mapper가 phase를 확정한 Backpressured terminal은 그대로 전달한다.
+        // 그 외 typed binding 오류의 기존 replay 분류는 유지한다.
+        if (
+            error is ZLinkFrameworkException
+            {
+                InnerException: { } cause
+                    and not ZlinkSubmitException
+                    {
+                        Result: ZlinkSubmitException.ErrorCode.Backpressured
+                    }
+            }
+        )
             error = cause;
         admitted = error is ZlinkRequestException;
         return error

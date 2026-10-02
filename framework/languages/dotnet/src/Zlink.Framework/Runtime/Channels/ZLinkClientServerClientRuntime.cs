@@ -7,6 +7,7 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 {
+    private const string ProcessLocalOwnerId = "process-local";
     private static readonly TimeSpan ControlReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
@@ -94,7 +95,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             snapshot.Weight,
             snapshot.State,
             identity.SecurityIdentity,
-            "process-local",
+            ProcessLocalOwnerId,
             1,
             default
         );
@@ -771,8 +772,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private bool _rejected;
         private int _weight;
         private string _diagnostics = "configured";
-        private string? _admittedIdentity;
-        private ZLinkClientServerControlProtocol.Admission? _currentAdmission;
+        private ZLinkClientServerControlProtocol.Admission? _admittedDescriptor;
         private CancellationTokenSource _admissionStop = null!;
         private readonly List<Task> _requestTasks = [];
         private Task? _controlTask;
@@ -815,10 +815,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         internal IDealerSocket Socket { get; }
         internal ReadyTarget? ReadyTarget => Volatile.Read(ref _readyTarget);
+        private ZLinkClientServerControlProtocol.Admission? CurrentAdmission =>
+            _admissionCompleted && !_rejected ? _admittedDescriptor : null;
         internal bool AdmittedButIneligible =>
             RunState(() =>
                 !_disposed
-                && _currentAdmission
+                && CurrentAdmission
                     is {
                         State: ZLinkFrameworkRuntimeState.Serving
                             or ZLinkFrameworkRuntimeState.Draining
@@ -830,7 +832,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 )
                 && _readyTarget is null
             );
-        internal bool Ready => RunState(() => _ready && !_disposed);
+        internal bool Ready => ReadyTarget is not null;
         internal bool AdmissionCompleted
         {
             get => RunState(() => _admissionCompleted);
@@ -843,7 +845,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     + $"attempt={_admissionAttempt};"
                     + $"admissionStarted={_admissionStarted};"
                     + $"admissionCompleted={_admissionCompleted};"
-                    + $"current={_currentAdmission is not null}"
+                    + $"current={CurrentAdmission is not null}"
                 );
         }
         internal RoutingId? ExpectedServerRid
@@ -852,7 +854,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
         internal string? AdmittedIdentity
         {
-            get => RunState(() => _admittedIdentity);
+            get =>
+                RunState(() =>
+                    _admittedDescriptor is { } descriptor
+                        ? IdentityOf(descriptor.ServerRid, descriptor.LifecycleGeneration)
+                        : null
+                );
         }
         internal ZLinkClientServerServerDescriptor? Expected
         {
@@ -867,15 +874,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             return RunState(() =>
             {
-                var admission = _currentAdmission;
+                var admission = _admittedDescriptor;
                 var expected = _expected;
                 var state =
-                    _rejected ? ZLinkClientServerServerState.Rejected
-                    : _ready ? ZLinkClientServerServerState.Ready
-                    : admission?.State == ZLinkFrameworkRuntimeState.Draining
+                    admission?.State
+                        is ZLinkFrameworkRuntimeState.Draining
+                            or ZLinkFrameworkRuntimeState.Relocating
+                            or ZLinkFrameworkRuntimeState.Relocated
+                    || expected?.State
+                        is ZLinkFrameworkRuntimeState.Draining
+                            or ZLinkFrameworkRuntimeState.Relocating
+                            or ZLinkFrameworkRuntimeState.Relocated
                         ? ZLinkClientServerServerState.Draining
+                    : _rejected ? ZLinkClientServerServerState.Rejected
+                    : _ready ? ZLinkClientServerServerState.Ready
                     : _admissionStarted ? ZLinkClientServerServerState.Connecting
-                    : _admissionCompleted ? ZLinkClientServerServerState.Disconnected
+                    : _admissionCompleted || admission is not null
+                        ? ZLinkClientServerServerState.Disconnected
                     : ZLinkClientServerServerState.Configured;
                 return new ZLinkClientServerConnectionSnapshot(
                     admission?.ServerRid ?? expected?.ServerRid,
@@ -883,10 +898,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     admission?.DescriptorRevision ?? expected?.DescriptorRevision,
                     admission?.AdvertisedEndpoint ?? expected?.Endpoint ?? _endpoint,
                     _weight,
-                    _ready,
+                    _readyTarget is not null,
                     state,
-                    expected?.OwnerId == "process-local" ? "manual"
-                        : expected is null ? "manual"
+                    expected is null || expected.OwnerId == ProcessLocalOwnerId
+                        ? "manual"
                         : "redis",
                     _ready ? null : _diagnostics
                 );
@@ -920,12 +935,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 if (expected is not null)
                 {
                     _weight = expected.Weight;
-                    if (
-                        expected.State != ZLinkFrameworkRuntimeState.Serving
-                        || expected.Weight <= 0
-                    )
+                    if (expected.State != ZLinkFrameworkRuntimeState.Serving)
                         _ready = false;
-                    else if (_currentAdmission is not null)
+                    else if (CurrentAdmission is not null)
                         _ready = true;
                 }
                 PublishReadyTargetUnderLock();
@@ -939,19 +951,18 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             RunState(() =>
             {
                 if (
-                    _admittedIdentity is not null
-                    && !StringComparer.Ordinal.Equals(
-                        _admittedIdentity,
-                        IdentityOf(expected.ServerRid, expected.LifecycleGeneration)
+                    _admittedDescriptor is { } descriptor
+                    && (
+                        descriptor.ServerRid != expected.ServerRid
+                        || descriptor.LifecycleGeneration != expected.LifecycleGeneration
                     )
                 )
                     return;
                 _expected = expected;
                 _weight = expected.Weight;
                 _ready =
-                    _currentAdmission is not null
-                    && expected.State == ZLinkFrameworkRuntimeState.Serving
-                    && expected.Weight > 0;
+                    CurrentAdmission is not null
+                    && expected.State == ZLinkFrameworkRuntimeState.Serving;
                 PublishReadyTargetUnderLock();
             });
         }
@@ -1273,6 +1284,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return;
                     _ready = false;
                     _admissionCompleted = true;
+                    _rejected = true;
                     _diagnostics = $"request:{exception.GetType().Name}:{exception.Message}";
                     PublishReadyTargetUnderLock();
                 });
@@ -1307,7 +1319,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     {
                         if (!IsCurrentAttempt(physicalGeneration, attempt))
                             return false;
-                        _admissionCompleted = true;
                         return true;
                     })
                 )
@@ -1349,6 +1360,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             return false;
                         _ready = false;
                         _rejected = true;
+                        _admissionCompleted = true;
                         _diagnostics =
                             reply.Count == 0
                                 ? "invalid:empty"
@@ -1362,16 +1374,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     if (IsCurrentAttempt(physicalGeneration, attempt))
                     {
+                        _admissionCompleted = true;
                         _weight = admission.Weight;
-                        _ready =
-                            admission.State == ZLinkFrameworkRuntimeState.Serving && _weight > 0;
-                        _admittedIdentity = IdentityOf(
+                        _ready = admission.State == ZLinkFrameworkRuntimeState.Serving;
+                        admittedIdentity = IdentityOf(
                             admission.ServerRid,
                             admission.LifecycleGeneration
                         );
-                        _currentAdmission = admission;
+                        _admittedDescriptor = admission;
                         _lastPeerActivity = _time.GetTimestamp();
-                        admittedIdentity = _admittedIdentity;
                         _diagnostics = "ready";
                         using (ExecutionContext.SuppressFlow())
                         {
@@ -1392,6 +1403,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     if (!IsCurrentAttempt(physicalGeneration, attempt))
                         return false;
                     _ready = false;
+                    _rejected = true;
+                    _admissionCompleted = true;
                     _diagnostics = "invalid:exception";
                     PublishReadyTargetUnderLock();
                     return false;
@@ -1412,7 +1425,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     var readiness = _receivePoller.Wait(ControlReceivePollInterval);
                     var admissionEstablished = RunState(() =>
-                        !_disposed && _admissionCompleted && _currentAdmission is not null
+                        !_disposed && CurrentAdmission is not null
                     );
                     if (!admissionEstablished)
                         continue;
@@ -1501,7 +1514,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     .ConfigureAwait(false);
                 var timedOut = RunState(() =>
                 {
-                    if (_disposed || _currentAdmission is null)
+                    if (_disposed || CurrentAdmission is null)
                         return false;
                     if (_time.GetElapsedTime(_lastPeerActivity) >= TimeSpan.FromSeconds(15))
                         return true;
@@ -1585,7 +1598,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     return false;
                 _outstandingProbeId = null;
                 _lastPeerActivity = _time.GetTimestamp();
-                if (_currentAdmission is { State: ZLinkFrameworkRuntimeState.Serving, Weight: > 0 })
+                if (CurrentAdmission is { State: ZLinkFrameworkRuntimeState.Serving })
                     _ready = true;
                 PublishReadyTargetUnderLock();
                 return true;
@@ -1611,13 +1624,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
 
             var serverRid =
-                _currentAdmission?.ServerRid
+                CurrentAdmission?.ServerRid
                 ?? _expected?.ServerRid
                 ?? throw new InvalidOperationException(
                     "A ready ClientServer connection has no Server RID."
                 );
             var maximumMessageBytes =
-                _currentAdmission?.NormalizedEffectiveMaxMessageBytes
+                CurrentAdmission?.NormalizedEffectiveMaxMessageBytes
                 ?? _normalizedEffectiveMaxMessageBytes;
             if (
                 current is not null
@@ -1647,8 +1660,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _admissionAttempt++;
             _admissionStarted = false;
             _admissionCompleted = false;
+            _rejected = false;
             _ready = false;
-            _currentAdmission = null;
             _outstandingProbeId = null;
             _diagnostics = diagnostics;
             PublishReadyTargetUnderLock();
@@ -1662,7 +1675,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             var restart = RunState(() =>
             {
-                if (_disposed || _currentAdmission is null)
+                if (_disposed || CurrentAdmission is null)
                     return false;
                 FencePhysicalConnection(diagnostics);
                 return true;
@@ -1675,7 +1688,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             RunState(() =>
             {
-                var current = _currentAdmission;
+                var current = CurrentAdmission;
                 if (
                     current is null
                     || update.ChannelName != current.ChannelName
@@ -1704,9 +1717,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     }
                     return;
                 }
-                _currentAdmission = update;
+                _admittedDescriptor = update;
                 _weight = update.Weight;
-                _ready = update.State == ZLinkFrameworkRuntimeState.Serving && update.Weight > 0;
+                _ready = update.State == ZLinkFrameworkRuntimeState.Serving;
                 _diagnostics = _ready ? "ready" : "update:not-ready";
                 PublishReadyTargetUnderLock();
             });

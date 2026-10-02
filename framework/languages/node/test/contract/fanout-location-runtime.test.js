@@ -2,22 +2,16 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
-const { ZLinkConfigurationException } = require(
-  '../../packages/framework/dist/contracts/Configuration/ConfigurationException'
-);
+const {
+  ZLinkConfigurationException
+} = require('../../packages/framework/dist/contracts/Configuration/ConfigurationException');
 const {
   ZLinkChannelSocketRegistry
-} = require(
-  '../../packages/framework/dist/runtime/channels/channel-socket-registry'
-);
-const fanoutWire = require(
-  '../../packages/framework/dist/runtime/channels/fanout-service-wire'
-);
+} = require('../../packages/framework/dist/runtime/channels/channel-socket-registry');
+const fanoutWire = require('../../packages/framework/dist/runtime/channels/fanout-service-wire');
 const {
   ZLinkFanoutLocationRuntime
-} = require(
-  '../../packages/framework/dist/runtime/channels/fanout-location-runtime'
-);
+} = require('../../packages/framework/dist/runtime/channels/fanout-location-runtime');
 
 test('fanout publishers use dedicated SUB sockets and isolate readiness, protocol failure, and deadline', async () => {
   const registration = internal.createFrameworkRegistration({
@@ -46,32 +40,30 @@ test('fanout publishers use dedicated SUB sockets and isolate readiness, protoco
       openSocketMonitor(subscriber) {
         return {
           nativeInstance: {},
-          onEvent(handler) { monitorHandlers.set(subscriber.id, handler); },
+          onEvent(handler) {
+            monitorHandlers.set(subscriber.id, handler);
+          },
           recv() {},
-          drain() { return 0; },
+          drain() {
+            return 0;
+          },
           async dispose() {}
         };
       }
     }
   );
-  sockets.openFanoutSubscriberConnection(
-    'events',
-    'publisher-a:7',
-    'tcp://10.0.0.1:9501',
-    {
-      onReady() {},
-      onTerminated(reason) { terminated.push(`a:${reason}`); }
+  sockets.openFanoutSubscriberConnection('events', 'publisher-a:7', 'tcp://10.0.0.1:9501', {
+    onReady() {},
+    onTerminated(reason) {
+      terminated.push(`a:${reason}`);
     }
-  );
-  sockets.openFanoutSubscriberConnection(
-    'events',
-    'publisher-b:7',
-    'tcp://10.0.0.2:9501',
-    {
-      onReady() {},
-      onTerminated(reason) { terminated.push(`b:${reason}`); }
+  });
+  sockets.openFanoutSubscriberConnection('events', 'publisher-b:7', 'tcp://10.0.0.2:9501', {
+    onReady() {},
+    onTerminated(reason) {
+      terminated.push(`b:${reason}`);
     }
-  );
+  });
   assert.equal(subscribers.length, 2);
   assert.notEqual(subscribers[0], subscribers[1]);
   for (const handler of monitorHandlers.values()) {
@@ -84,32 +76,40 @@ test('fanout publishers use dedicated SUB sockets and isolate readiness, protoco
   }
 
   const base = performance.now();
-  assert.equal(sockets.handleFanoutInbound(
-    'publisher-a:7',
-    {
-      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-      parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
-    },
-    subscribers[0],
-    base
-  ), true);
+  assert.equal(
+    sockets.handleFanoutInbound(
+      'publisher-a:7',
+      {
+        topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+        parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
+      },
+      subscribers[0],
+      base
+    ),
+    true
+  );
   assert.equal(sockets.isFanoutConnectionReady('publisher-a:7'), true);
   assert.equal(sockets.isFanoutConnectionReady('publisher-b:7'), false);
 
-  assert.equal(sockets.handleFanoutInbound(
-    'publisher-b:7',
-    {
-      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-      parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
-    },
-    subscribers[1],
-    base
-  ), true);
+  assert.equal(
+    sockets.handleFanoutInbound(
+      'publisher-b:7',
+      {
+        topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+        parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
+      },
+      subscribers[1],
+      base
+    ),
+    true
+  );
   assert.equal(sockets.isFanoutConnectionReady('publisher-b:7'), true);
 
   let topologyNotifications = 0;
   const topologySource = sockets.fanoutTopologyMonitoringSource('events');
-  topologySource.onChange(() => { topologyNotifications += 1; });
+  topologySource.onChange(() => {
+    topologyNotifications += 1;
+  });
   const publisherDescriptor = {
     channelName: 'events',
     publisherRid: 'publisher-b',
@@ -171,25 +171,25 @@ test('fanout publisher sends the exact reserved beacon every five seconds and pu
   };
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
-    { createPublisherSocket() { return publisher; } },
+    {
+      createPublisherSocket() {
+        return publisher;
+      }
+    },
     {}
   );
   sockets.publisher('events');
   sockets.tickClientServerLiveness(performance.now() + 5_001);
   assert.equal(published.length, 1);
   assert.equal(published[0].topic, fanoutWire.FANOUT_LIVENESS_TOPIC);
-  assert.deepEqual(
-    published[0].payload,
-    Buffer.from(fanoutWire.FANOUT_LIVENESS_PAYLOAD)
-  );
+  assert.deepEqual(published[0].payload, Buffer.from(fanoutWire.FANOUT_LIVENESS_PAYLOAD));
   for (const topic of [
     fanoutWire.FANOUT_LIVENESS_TOPIC,
     `${fanoutWire.FANOUT_LIVENESS_TOPIC}.application`
   ]) {
     assert.throws(
       () => fanoutWire.requirePublicFanoutTopic(topic),
-      (error) => error instanceof ZLinkConfigurationException
-        && /reserved/.test(error.message)
+      (error) => error instanceof ZLinkConfigurationException && /reserved/.test(error.message)
     );
   }
   for (const topic of ['\x01ZLF', '\x01ZLF2']) {
@@ -198,7 +198,7 @@ test('fanout publisher sends the exact reserved beacon every five seconds and pu
   await sockets.dispose();
 });
 
-test('fanout publisher descriptor defaults a wildcard bind to loopback with the actual port', async t => {
+test('fanout publisher descriptor defaults a wildcard bind to loopback with the actual port', async (t) => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const stores = locationStores(store);
   const locationRuntime = new internal.ZLinkLocationRuntime({
@@ -221,12 +221,18 @@ test('fanout publisher descriptor defaults a wildcard bind to loopback with the 
     setChannelName() {},
     bind() {},
     onSendReady() {},
-    publish() { return true; },
+    publish() {
+      return true;
+    },
     async dispose() {}
   };
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
-    { createPublisherSocket() { return publisher; } },
+    {
+      createPublisherSocket() {
+        return publisher;
+      }
+    },
     {}
   );
   const runtime = new ZLinkFanoutLocationRuntime(
@@ -249,7 +255,7 @@ test('fanout publisher descriptor defaults a wildcard bind to loopback with the 
   assert.equal(rows.items[0].endpoint, 'tcp://127.0.0.1:45123');
 });
 
-test('automatic fanout reconciles dedicated descriptors by publisher RID and lifecycle', async () => {
+test('automatic fanout reconciles dedicated descriptors by publisher RID and lifecycle', async (t) => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const stores = locationStores(store);
   const local = new internal.ZLinkLocationRuntime({
@@ -260,15 +266,16 @@ test('automatic fanout reconciles dedicated descriptors by publisher RID and lif
   const remote = await store.claimOwnerLease('publisher-owner', 30_000);
   assert.equal(remote.kind, 'claimed');
   const descriptor = fanoutDescriptor(remote.token);
-  assert.equal((await store.updateFanoutPublisher(
-    descriptor,
-    1
-  )).status, 'stored');
+  assert.equal((await store.updateFanoutPublisher(descriptor, 1)).status, 'stored');
 
   const registration = internal.createFrameworkRegistration({
     channels: {
       events: {
         subscriber: { manualConnections: [] },
+        publishHandlers: [{ packetName: 'event', handler: { handle() {} } }]
+      },
+      manual: {
+        subscriber: { manualConnections: ['tcp://127.0.0.1:9502'] },
         publishHandlers: [{ packetName: 'event', handler: { handle() {} } }]
       }
     },
@@ -291,7 +298,9 @@ test('automatic fanout reconciles dedicated descriptors by publisher RID and lif
           nativeInstance: {},
           onEvent() {},
           recv() {},
-          drain() { return 0; },
+          drain() {
+            return 0;
+          },
           async dispose() {}
         };
       }
@@ -305,59 +314,111 @@ test('automatic fanout reconciles dedicated descriptors by publisher RID and lif
     { pollingIntervalMs: 60_000 },
     () => async () => {}
   );
+  t.after(async () => {
+    await runtime.stop();
+    await local.stop();
+    await sockets.dispose();
+  });
   await runtime.start();
   assert.equal(subscribers.length, 1);
   assert.equal(runtime.activeTargets('events').length, 0);
   const connectionId = `events\0publisher-a\0${7n.toString()}`;
-  sockets.handleFanoutInbound(connectionId, {
-    topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-    parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
-  }, subscribers[0]);
+  sockets.handleFanoutInbound(
+    connectionId,
+    {
+      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+      parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
+    },
+    subscribers[0]
+  );
   assert.equal(runtime.activeTargets('events').length, 1);
   assert.equal(sockets.fanoutActiveTargets('events').length, 1);
 
-  sockets.handleFanoutInbound(connectionId, {
-    topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-    parts: [{ data: () => Uint8Array.of(0) }]
-  }, subscribers[0]);
-  await new Promise(resolve => setImmediate(resolve));
+  sockets.handleFanoutInbound(
+    connectionId,
+    {
+      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+      parts: [{ data: () => Uint8Array.of(0) }]
+    },
+    subscribers[0]
+  );
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(subscribers.length, 2);
   assert.equal(runtime.activeTargets('events').length, 0);
   assert.equal(sockets.fanoutActiveTargets('events').length, 0);
-  sockets.handleFanoutInbound(connectionId, {
-    topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-    parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
-  }, subscribers[0]);
+  sockets.handleFanoutInbound(
+    connectionId,
+    {
+      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+      parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
+    },
+    subscribers[0]
+  );
   assert.equal(runtime.activeTargets('events').length, 0);
   assert.equal(sockets.fanoutActiveTargets('events').length, 0);
   const deadlineBase = performance.now();
-  sockets.handleFanoutInbound(connectionId, {
-    topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
-    parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
-  }, subscribers[1], deadlineBase);
+  sockets.handleFanoutInbound(
+    connectionId,
+    {
+      topic: fanoutWire.FANOUT_LIVENESS_TOPIC,
+      parts: [{ data: () => fanoutWire.FANOUT_LIVENESS_PAYLOAD }]
+    },
+    subscribers[1],
+    deadlineBase
+  );
   assert.equal(runtime.activeTargets('events').length, 1);
   assert.equal(sockets.fanoutActiveTargets('events').length, 1);
   sockets.tickClientServerLiveness(deadlineBase + 15_001);
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(subscribers.length, 3);
   assert.equal(runtime.activeTargets('events').length, 0);
   assert.equal(sockets.fanoutActiveTargets('events').length, 0);
 
-  await store.updateFanoutPublisher({
-    ...descriptor,
-    descriptorRevision: 2n,
-    state: 2
-  }, 2);
+  await store.updateFanoutPublisher(
+    {
+      ...descriptor,
+      descriptorRevision: 2n,
+      state: 2
+    },
+    2
+  );
   await runtime.tick();
   assert.equal(subscribers.length, 3);
   assert.equal(runtime.activeTargets('events').length, 0);
+  const projection = new internal.ZLinkFanoutRuntimeProjection(() => ({
+    fanoutTopology() {
+      return { descriptors: runtime.topologyTargets('events') };
+    },
+    observeFanoutTopology() {
+      return () => {};
+    }
+  }));
+  const drainingStatus = projection.snapshot('events');
+  assert.equal(drainingStatus.publishers.length, 1);
+  assert.equal(drainingStatus.publishers[0].state, framework.ZLinkPeerState.Draining);
+  assert.equal(
+    drainingStatus.publishers[0].unavailableReason,
+    framework.ZLinkTopologyReason.Draining
+  );
+  assert.equal(drainingStatus.readyPublisherCount, 0);
+  assert.equal(runtime.topologyTargets('manual'), undefined);
+
+  await store.removeFanoutPublisher(
+    {
+      channelName: descriptor.channelName,
+      publisherRid: descriptor.publisherRid
+    },
+    remote.token
+  );
+  await runtime.tick();
+  assert.equal(projection.snapshot('events').publishers.length, 0);
 
   await runtime.stop();
   await local.stop();
   await sockets.dispose();
 });
 
-test('automatic fanout ignores stale termination callbacks and never reopens a removed target', async t => {
+test('automatic fanout ignores stale termination callbacks and never reopens a removed target', async (t) => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const stores = locationStores(store);
   const local = new internal.ZLinkLocationRuntime({
@@ -382,7 +443,13 @@ test('automatic fanout ignores stale termination callbacks and never reopens a r
   const attempts = [];
   const closed = [];
   const admitted = new Set();
+  let stopReceiver = async () => {};
+  let secondCloseFinished;
+  const secondCloseComplete = new Promise((resolve) => {
+    secondCloseFinished = resolve;
+  });
   const sockets = {
+    notifyFanoutTopology() {},
     openFanoutSubscriberConnection(channelName, connectionId, endpoint, callbacks) {
       const subscriber = fakeSubscriber(`attempt-${attempts.length}`);
       attempts.push({
@@ -404,6 +471,7 @@ test('automatic fanout ignores stale termination callbacks and never reopens a r
     },
     async closeFanoutSubscriberConnection(connectionId) {
       closed.push(connectionId);
+      if (closed.length === 2) secondCloseFinished();
     }
   };
   const runtime = new ZLinkFanoutLocationRuntime(
@@ -412,7 +480,7 @@ test('automatic fanout ignores stale termination callbacks and never reopens a r
     local,
     stores,
     { pollingIntervalMs: 60_000 },
-    () => async () => {}
+    () => () => stopReceiver()
   );
   t.after(async () => {
     await runtime.stop();
@@ -423,28 +491,61 @@ test('automatic fanout ignores stale termination callbacks and never reopens a r
   assert.equal(admitted.size, 0);
 
   attempts[0].callbacks.onTerminated('deadline');
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts.length, 2);
   assert.equal(closed.length, 1);
   assert.equal(admitted.size, 0);
 
   // A delayed callback from the replaced physical socket cannot close its successor.
   attempts[0].callbacks.onTerminated('deadline');
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts.length, 2);
   assert.equal(closed.length, 1);
 
-  await store.removeFanoutPublisher({
-    channelName: descriptor.channelName,
-    publisherRid: descriptor.publisherRid
-  }, remote.token);
+  let releaseReceiver;
+  const receiverSettlement = new Promise((resolve) => {
+    releaseReceiver = resolve;
+  });
+  let receiverStarted;
+  const receiverEntry = new Promise((resolve) => {
+    receiverStarted = resolve;
+  });
+  stopReceiver = async () => {
+    receiverStarted();
+    await receiverSettlement;
+  };
+  attempts[1].callbacks.onTerminated('deadline');
+  await receiverEntry;
+  await store.updateFanoutPublisher(
+    {
+      ...descriptor,
+      descriptorRevision: 2n,
+      state: framework.ZLinkFrameworkRuntimeState.Draining
+    },
+    2
+  );
+  await runtime.tick();
+  releaseReceiver();
+  await secondCloseComplete;
+  await runtime.tick();
+  assert.equal(attempts.length, 2);
+  assert.equal(closed.length, 2);
+  assert.equal(runtime.topologyTargets('events')[0].state, 'retiring');
+
+  await store.removeFanoutPublisher(
+    {
+      channelName: descriptor.channelName,
+      publisherRid: descriptor.publisherRid
+    },
+    remote.token
+  );
   await runtime.tick();
   assert.equal(closed.length, 2);
   assert.equal(admitted.size, 0);
 
   // Once reconciliation removes the desired target, its last callback cannot reopen it.
   attempts[1].callbacks.onTerminated('deadline');
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts.length, 2);
   assert.equal(closed.length, 2);
 });
@@ -455,10 +556,14 @@ function fakeSubscriber(id) {
     nativeInstance: {},
     subscriptions: [],
     setChannelName() {},
-    setSubscription(topic) { this.subscriptions.push(topic); },
+    setSubscription(topic) {
+      this.subscriptions.push(topic);
+    },
     connect() {},
     disconnect() {},
-    subscribe() { return false; },
+    subscribe() {
+      return false;
+    },
     async dispose() {}
   };
 }
@@ -490,3 +595,130 @@ function fanoutDescriptor(owner) {
     updatedAt: new Date(0)
   };
 }
+
+for (const failingResource of ['receiver', 'socket', 'both']) {
+  test(`automatic fanout stop preserves ${failingResource} cleanup failures and closes its socket`, async (t) => {
+    const store = new internal.ZLinkInMemoryLocationStore();
+    const stores = locationStores(store);
+    const local = new internal.ZLinkLocationRuntime({ stores, ownerId: 'fanout-cleanup-client' });
+    await local.start('cleanup-client-node');
+    const remote = await store.claimOwnerLease('cleanup-publisher-owner', 30_000);
+    const descriptor = fanoutDescriptor(remote.token);
+    assert.equal((await store.updateFanoutPublisher(descriptor, 1)).status, 'stored');
+    const registration = internal.createFrameworkRegistration({
+      channels: {
+        events: {
+          subscriber: { manualConnections: [] },
+          publishHandlers: [{ packetName: 'event', handler: { handle() {} } }]
+        }
+      },
+      locations: { useInMemoryStores: true }
+    });
+    const receiverFailure = new Error('receiver cleanup failed');
+    const socketFailure = new Error('socket cleanup failed');
+    const closed = [];
+    const sockets = {
+      notifyFanoutTopology() {},
+      openFanoutSubscriberConnection() {
+        return fakeSubscriber('cleanup');
+      },
+      removeFanoutPublisher() {
+        return true;
+      },
+      async closeFanoutSubscriberConnection(id) {
+        closed.push(id);
+        if (failingResource !== 'receiver') throw socketFailure;
+      }
+    };
+    const runtime = new ZLinkFanoutLocationRuntime(
+      registration,
+      sockets,
+      local,
+      stores,
+      { pollingIntervalMs: 60_000 },
+      () => async () => {
+        if (failingResource !== 'socket') throw receiverFailure;
+      }
+    );
+    t.after(async () => {
+      await runtime.stop();
+      await local.stop();
+    });
+    await runtime.start();
+    const settlement = await Promise.allSettled([runtime.stop()]);
+    assert.equal(closed.length, 1, 'socket close must follow receiver failure');
+    assert.equal(settlement[0].status, 'rejected', 'cleanup failure must reach the caller');
+    const failures = [];
+    const collect = (error) => {
+      if (error instanceof AggregateError) for (const nested of error.errors) collect(nested);
+      else failures.push(error);
+    };
+    collect(settlement[0].reason);
+    assert.deepEqual(
+      failures,
+      failingResource === 'receiver'
+        ? [receiverFailure]
+        : failingResource === 'socket'
+          ? [socketFailure]
+          : [receiverFailure, socketFailure]
+    );
+  });
+}
+
+test('automatic fanout stop attempts every local publisher removal after a store failure', async (t) => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const stores = locationStores(store);
+  const local = new internal.ZLinkLocationRuntime({ stores, ownerId: 'fanout-publisher-cleanup' });
+  await local.start('publisher-cleanup-node');
+  const registration = internal.createFrameworkRegistration({
+    channels: {
+      first: { routingId: 'first-publisher', publisher: {} },
+      second: { routingId: 'second-publisher', publisher: {} }
+    },
+    locations: { useInMemoryStores: true }
+  });
+  const runtime = new ZLinkFanoutLocationRuntime(
+    registration,
+    {
+      publisher() {},
+      fanoutPublisherEndpoint() {
+        return 'tcp://127.0.0.1:45555';
+      }
+    },
+    local,
+    stores,
+    { pollingIntervalMs: 60_000 },
+    () => async () => {}
+  );
+  const originalRemove = store.removeFanoutPublisher.bind(store);
+  t.after(async () => {
+    store.removeFanoutPublisher = originalRemove;
+    await runtime.stop();
+    await local.stop();
+  });
+  await runtime.start();
+  const attempted = [];
+  const storeFailure = new Error('first publisher removal failed');
+  store.removeFanoutPublisher = async (key, owner, signal) => {
+    attempted.push(key.channelName);
+    if (key.channelName === 'first') throw storeFailure;
+    return originalRemove(key, owner, signal);
+  };
+  const settlement = await Promise.allSettled([runtime.stop()]);
+  assert.deepEqual(attempted, ['first', 'second']);
+  assert.equal(settlement[0].status, 'rejected');
+  const failures = [];
+  const collect = (error) => {
+    if (error instanceof AggregateError) for (const nested of error.errors) collect(nested);
+    else failures.push(error);
+  };
+  collect(settlement[0].reason);
+  assert.deepEqual(failures, [storeFailure]);
+  attempted.length = 0;
+  await runtime.stop();
+  assert.deepEqual(
+    attempted,
+    [],
+    'completed removal attempts must clear the owned descriptor collection'
+  );
+});

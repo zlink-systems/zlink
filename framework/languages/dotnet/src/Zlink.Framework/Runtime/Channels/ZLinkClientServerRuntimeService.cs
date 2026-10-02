@@ -9,13 +9,13 @@ internal sealed class ZLinkClientServerRuntimeService(
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkHostLifecycleState hostLifecycle,
     ZLinkLocationStoreHealth? storeHealth
-) : IZLinkClientServerRuntime
+) : IZLinkClientServerRuntime, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly ZLinkFrameworkRuntime _runtime = runtime;
     private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle = hostLifecycle;
     private readonly ZLinkLocationStoreHealth? _storeHealth = storeHealth;
-    private readonly Dictionary<ZLinkChannelName, SequenceState> _sequences = [];
+    private readonly Dictionary<ZLinkChannelName, ZLinkClientServerStatus> _statuses = [];
     private readonly Dictionary<ZLinkChannelName, MonitorHub> _monitorHubs = [];
 
     private ZLinkClientServerChannelSnapshot SnapshotInternal(string channelName)
@@ -23,6 +23,8 @@ internal sealed class ZLinkClientServerRuntimeService(
         ArgumentException.ThrowIfNullOrEmpty(channelName);
         var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         var state = _runtime.ClientServerMonitoringState(channelName);
+        if (_monitorHubs.TryGetValue(channel, out var hub))
+            hub.RefreshClientSubscription(state.Client);
         var servers =
             state
                 .Client?.SnapshotConnections()
@@ -76,39 +78,25 @@ internal sealed class ZLinkClientServerRuntimeService(
                     : left.LifecycleGeneration.CompareTo(right.LifecycleGeneration);
             }
         );
-        var location = LocationSnapshot();
+        var location = ZLinkLocationStoreHealth.ProjectSnapshot(_storeHealth?.GetSnapshot());
         var role =
             state.HasClient && state.HasServer
                 ? Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.ClientAndServer
             : state.HasClient ? Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client
             : Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Server;
         var readyCount = servers.Count(static entry => entry.Ready);
-        var fingerprint = new Fingerprint(
-            _hostLifecycle.State,
-            role,
-            state.Client?.ConnectionIntentCount ?? 0,
-            state.Client?.PendingRequestCount ?? 0,
-            location,
-            string.Join(
-                "\n",
-                servers.Select(static entry =>
-                    $"{entry.ServerRid.ToHex()}|{entry.LifecycleGeneration}|"
-                    + $"{entry.DescriptorRevision}|{entry.Endpoint}|"
-                    + $"{entry.Weight}|{entry.Ready}|{entry.State}|"
-                    + $"{entry.DescriptorSource}|{entry.LastFailure}"
-                )
-            )
-        );
-        var sequence = Sequence(channel, fingerprint);
+        ulong sequence;
+        lock (_gate)
+            sequence = _statuses.GetValueOrDefault(channel)?.Sequence ?? 0;
         return new ZLinkClientServerChannelSnapshot(
             channelName,
             role,
-            IsReady: fingerprint.HostState == ZLinkFrameworkRuntimeState.Serving
+            IsReady: _hostLifecycle.State == ZLinkFrameworkRuntimeState.Serving
                 && _runtime.IsStarted
                 && readyCount > 0,
             readyCount,
-            fingerprint.ConnectionIntentCount,
-            fingerprint.PendingRequestCount,
+            state.Client?.ConnectionIntentCount ?? 0,
+            state.Client?.PendingRequestCount ?? 0,
             sequence,
             DateTimeOffset.UtcNow,
             servers,
@@ -118,9 +106,56 @@ internal sealed class ZLinkClientServerRuntimeService(
 
     public ZLinkClientServerStatus GetStatus(string channelName)
     {
-        var snapshot = SnapshotInternal(channelName);
-        return Project(snapshot, _hostLifecycle.State, _runtime.IsStarted);
+        lock (_gate)
+        {
+            var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
+            if (_statuses.GetValueOrDefault(channel) is { } terminal && terminal.State.IsTerminal())
+                return terminal;
+            _ = GetOrCreateHubOnGate(channel);
+            var snapshot = SnapshotInternal(channelName);
+            return PublishStatusOnGate(Project(snapshot, _hostLifecycle.State, _runtime.IsStarted));
+        }
     }
+
+    private MonitorHub GetOrCreateHubOnGate(ZLinkChannelName channel)
+    {
+        if (_monitorHubs.TryGetValue(channel, out var hub))
+            return hub;
+        hub = new MonitorHub(this, channel);
+        _monitorHubs.Add(channel, hub);
+        hub.Start();
+        if (_runtime.ClientServerMonitoringState(channel.Value).Server is { } server)
+            server.SnapshotChanged += hub.SignalServer;
+        return hub;
+    }
+
+    internal async Task StopAsync()
+    {
+        MonitorHub[] hubs;
+        lock (_gate)
+        {
+            hubs = _monitorHubs.Values.ToArray();
+            foreach (var channel in _monitorHubs.Keys)
+            {
+                if (_runtime.ClientServerMonitoringState(channel.Value).Server is { } server)
+                    server.SnapshotChanged -= _monitorHubs[channel].SignalServer;
+                var current = _statuses.GetValueOrDefault(channel);
+                if (current is not null)
+                    PublishStatusOnGate(
+                        current with
+                        {
+                            State = ZLinkTopologyState.Stopped,
+                            IsReady = false,
+                        }
+                    );
+            }
+            _monitorHubs.Clear();
+        }
+        foreach (var hub in hubs)
+            await hub.StopAsync().ConfigureAwait(false);
+    }
+
+    public ValueTask DisposeAsync() => new(StopAsync());
 
     private static ZLinkClientServerStatus Project(
         ZLinkClientServerChannelSnapshot snapshot,
@@ -129,12 +164,16 @@ internal sealed class ZLinkClientServerRuntimeService(
     )
     {
         var targets = snapshot
-            .Servers.Select(static server => new ZLinkClientServerTargetStatus(
-                server.ServerRid,
-                server.Weight,
-                MapPeerState(server.State),
-                MapUnavailableReason(server.State)
-            ))
+            .Servers.Select(static server =>
+            {
+                var (state, reason) = MapPeer(server.State);
+                return new ZLinkClientServerTargetStatus(
+                    server.ServerRid,
+                    server.Weight,
+                    state,
+                    reason
+                );
+            })
             .ToArray();
         var topologyState = snapshot.IsReady
             ? ZLinkTopologyState.Ready
@@ -157,69 +196,44 @@ internal sealed class ZLinkClientServerRuntimeService(
     )
     {
         var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
-        var observer = new ZLinkObservationQueue<RetainedObservation>(
-            static item => item.SourceKey,
-            eventName: "client_server"
-        );
-        MonitorHub hub;
+        ZLinkObservationQueue<ZLinkClientServerStatus> observer;
+        MonitorHub? hub;
         lock (_gate)
         {
-            _ = SnapshotInternal(channelName);
-            if (!_monitorHubs.TryGetValue(channel, out hub!))
-            {
-                hub = new MonitorHub(this, channel);
-                _monitorHubs.Add(channel, hub);
-                hub.Add(observer);
-                hub.Start();
-            }
-            else
-            {
-                hub.Add(observer);
-            }
+            var initial = GetStatus(channelName);
+            observer = new ZLinkObservationQueue<ZLinkClientServerStatus>(
+                initial,
+                initial.State.IsTerminal(),
+                static status => status.ChannelName,
+                eventName: "client_server"
+            );
+            _monitorHubs.TryGetValue(channel, out hub);
+            hub?.Add(observer);
         }
         try
         {
             await foreach (
                 var item in observer.ReadAllAsync(cancellationToken).ConfigureAwait(false)
             )
-                yield return new ZLinkObservedStatus<ZLinkClientServerStatus>(
-                    item.Status.Status,
-                    item.Loss
-                );
+                yield return item;
         }
         finally
         {
             observer.Complete();
-            MonitorHub? stopped = null;
             lock (_gate)
-            {
-                hub.Remove(observer);
-                if (
-                    hub.IsEmpty
-                    && _monitorHubs.TryGetValue(channel, out var current)
-                    && ReferenceEquals(current, hub)
-                )
-                {
-                    _monitorHubs.Remove(channel);
-                    stopped = hub;
-                }
-            }
-            if (stopped is not null)
-                await stopped.StopAsync().ConfigureAwait(false);
+                hub?.Remove(observer);
         }
     }
 
     private sealed class MonitorHub
     {
-        private readonly object _gate = new();
         private readonly ZLinkClientServerRuntimeService _owner;
         private readonly ZLinkChannelName _channel;
         private readonly StateChangeSignal _signal = new();
         private readonly CancellationTokenSource _stop = new();
-        private readonly List<ZLinkObservationQueue<RetainedObservation>> _observers = [];
+        private readonly List<ZLinkObservationQueue<ZLinkClientServerStatus>> _observers = [];
         private readonly Action _signalClient;
         private readonly Action<ZLinkFrameworkRuntimeState> _signalHost;
-        private ZLinkClientServerChannelSnapshot _previous;
         private ZLinkClientServerClientRuntime? _client;
         private Task _producer = Task.CompletedTask;
 
@@ -227,35 +241,28 @@ internal sealed class ZLinkClientServerRuntimeService(
         {
             _owner = owner;
             _channel = channel;
-            _previous = owner.SnapshotInternal(channel.Value);
             _signalClient = _signal.Signal;
             _signalHost = _ => _signal.Signal();
         }
 
-        internal bool IsEmpty
+        // Subscription changes and publication share the owner's gate.
+        internal void Add(ZLinkObservationQueue<ZLinkClientServerStatus> observer) =>
+            _observers.Add(observer);
+
+        internal void Remove(ZLinkObservationQueue<ZLinkClientServerStatus> observer) =>
+            _observers.Remove(observer);
+
+        internal void Publish(ZLinkClientServerStatus status)
         {
-            get
-            {
-                lock (_gate)
-                    return _observers.Count == 0;
-            }
+            foreach (var observer in _observers)
+                observer.Publish(status, status.State.IsTerminal());
         }
 
-        internal void Add(ZLinkObservationQueue<RetainedObservation> observer)
-        {
-            lock (_gate)
-                _observers.Add(observer);
-        }
-
-        internal void Remove(ZLinkObservationQueue<RetainedObservation> observer)
-        {
-            lock (_gate)
-                _observers.Remove(observer);
-        }
+        internal void SignalServer(ZLinkClientServerServerIdentity.Snapshot snapshot) =>
+            _signal.Signal();
 
         internal void Start()
         {
-            RefreshClientSubscription();
             _owner._hostLifecycle.Changed += _signalHost;
             if (_owner._storeHealth is not null)
                 _owner._storeHealth.Changed += _signalClient;
@@ -289,31 +296,12 @@ internal sealed class ZLinkClientServerRuntimeService(
             while (await _signal.WaitToReadAsync(_stop.Token).ConfigureAwait(false))
             {
                 while (_signal.TryRead()) { }
-                RefreshClientSubscription();
-                var current = _owner.SnapshotInternal(_channel.Value);
-                if (current.Sequence == _previous.Sequence)
-                    continue;
-                var changes = Changes(_previous, current).ToArray();
-                _previous = current;
-                var hostState = _owner._hostLifecycle.State;
-                var status = Project(current, hostState, _owner._runtime.IsStarted);
-                var hostTerminal =
-                    hostState
-                    is ZLinkFrameworkRuntimeState.Stopped
-                        or ZLinkFrameworkRuntimeState.Error;
-                lock (_gate)
-                    foreach (var change in changes)
-                    foreach (var observer in _observers)
-                        observer.Publish(
-                            new RetainedObservation(change.SourceKey, status),
-                            change.IsTerminal || hostTerminal
-                        );
+                _ = _owner.GetStatus(_channel.Value);
             }
         }
 
-        private void RefreshClientSubscription()
+        internal void RefreshClientSubscription(ZLinkClientServerClientRuntime? client)
         {
-            var client = _owner._runtime.ClientServerMonitoringState(_channel.Value).Client;
             if (ReferenceEquals(client, _client))
                 return;
             if (_client is not null)
@@ -351,134 +339,60 @@ internal sealed class ZLinkClientServerRuntimeService(
         }
     }
 
-    internal static IEnumerable<ZLinkClientServerRuntimeEvent> Changes(
-        ZLinkClientServerChannelSnapshot previous,
-        ZLinkClientServerChannelSnapshot current
-    )
+    private ZLinkClientServerStatus PublishStatusOnGate(ZLinkClientServerStatus status)
     {
-        var prior = previous.Servers.ToDictionary(
-            static entry => $"{entry.ServerRid.ToHex()}:{entry.LifecycleGeneration}",
-            StringComparer.Ordinal
-        );
-        var changed = false;
-        foreach (var server in current.Servers)
-        {
-            var key = $"{server.ServerRid.ToHex()}:{server.LifecycleGeneration}";
-            if (prior.Remove(key, out var old) && old == server)
-                continue;
-            changed = true;
-            yield return Event(current, server, server.LastFailure);
-        }
-        foreach (var removed in prior.Values)
-        {
-            changed = true;
-            yield return Event(
-                current,
-                removed with
-                {
-                    Ready = false,
-                    State = ZLinkClientServerServerState.Disconnected,
-                },
-                "removed",
-                terminal: true
-            );
-        }
-        if (!changed)
-            yield return new ZLinkClientServerRuntimeEvent(
-                "zlink.runtime.client_server.state_changed",
-                current.Sequence,
-                current.ObservedAt,
-                current.ChannelName,
-                ServerRid: null,
-                LifecycleGeneration: null,
-                DescriptorRevision: null,
-                Weight: null,
-                Ready: current.IsReady,
-                State: null,
-                Reason: null
-            );
+        var channel = ZLinkChannelName.FromBoundary(status.ChannelName, nameof(status.ChannelName));
+        var previous = _statuses.GetValueOrDefault(channel);
+        if (
+            previous is not null
+            && (previous.State.IsTerminal() || SamePublicStatus(previous, status))
+        )
+            return previous;
+        status = status with { Sequence = checked((previous?.Sequence ?? 0) + 1) };
+        _statuses[channel] = status;
+        if (_monitorHubs.TryGetValue(channel, out var hub))
+            hub.Publish(status);
+        return status;
     }
 
-    private static ZLinkClientServerRuntimeEvent Event(
-        ZLinkClientServerChannelSnapshot current,
-        ZLinkClientServerServerSnapshot server,
-        string? reason,
-        bool terminal = false
+    private static bool SamePublicStatus(
+        ZLinkClientServerStatus left,
+        ZLinkClientServerStatus right
     ) =>
-        new(
-            "zlink.runtime.client_server.server_changed",
-            current.Sequence,
-            current.ObservedAt,
-            current.ChannelName,
-            server.ServerRid,
-            server.LifecycleGeneration,
-            server.DescriptorRevision,
-            server.Weight,
-            server.Ready,
-            server.State,
-            reason,
-            terminal
-        );
-
-    private sealed record RetainedObservation(string SourceKey, ZLinkClientServerStatus Status);
-
-    private ulong Sequence(ZLinkChannelName channelName, Fingerprint fingerprint)
-    {
-        lock (_gate)
-        {
-            if (!_sequences.TryGetValue(channelName, out var state))
-            {
-                _sequences[channelName] = new SequenceState(1, fingerprint);
-                return 1;
-            }
-            if (state.Fingerprint == fingerprint)
-                return state.Sequence;
-            var next = checked(state.Sequence + 1);
-            _sequences[channelName] = new SequenceState(next, fingerprint);
-            return next;
-        }
-    }
-
-    private ZLinkLocationRuntimeSnapshot LocationSnapshot()
-    {
-        if (_storeHealth is null)
-            return new ZLinkLocationRuntimeSnapshot("not_configured", null, null);
-        var snapshot = _storeHealth.GetSnapshot();
-        return new ZLinkLocationRuntimeSnapshot(
-            snapshot.Healthy ? "ready" : "degraded",
-            snapshot.LastSuccessAt,
-            snapshot.LastFailureAt
-        );
-    }
+        left.ChannelName == right.ChannelName
+        && left.LocalRole == right.LocalRole
+        && left.State == right.State
+        && left.IsReady == right.IsReady
+        && left.ReadyTargetCount == right.ReadyTargetCount
+        && left.Targets.SequenceEqual(right.Targets);
 
     private static ZLinkClientServerServerState Map(ZLinkFrameworkRuntimeState state) =>
         state switch
         {
             ZLinkFrameworkRuntimeState.Serving => ZLinkClientServerServerState.Ready,
-            ZLinkFrameworkRuntimeState.Draining or ZLinkFrameworkRuntimeState.Relocating =>
-                ZLinkClientServerServerState.Draining,
+            ZLinkFrameworkRuntimeState.Draining
+            or ZLinkFrameworkRuntimeState.Relocating
+            or ZLinkFrameworkRuntimeState.Relocated => ZLinkClientServerServerState.Draining,
             ZLinkFrameworkRuntimeState.Stopped => ZLinkClientServerServerState.Disconnected,
             ZLinkFrameworkRuntimeState.Error => ZLinkClientServerServerState.Rejected,
             _ => ZLinkClientServerServerState.Configured,
         };
 
-    private static ZLinkPeerState MapPeerState(ZLinkClientServerServerState state) =>
+    private static (ZLinkPeerState State, ZLinkTopologyReason? Reason) MapPeer(
+        ZLinkClientServerServerState state
+    ) =>
         state switch
         {
-            ZLinkClientServerServerState.Ready => ZLinkPeerState.Ready,
-            ZLinkClientServerServerState.Draining => ZLinkPeerState.Draining,
-            ZLinkClientServerServerState.Configured or ZLinkClientServerServerState.Connecting =>
+            ZLinkClientServerServerState.Ready => (ZLinkPeerState.Ready, null),
+            ZLinkClientServerServerState.Draining => (
+                ZLinkPeerState.Draining,
+                ZLinkTopologyReason.Draining
+            ),
+            ZLinkClientServerServerState.Configured or ZLinkClientServerServerState.Connecting => (
                 ZLinkPeerState.Connecting,
-            _ => ZLinkPeerState.NotConnected,
-        };
-
-    private static ZLinkTopologyReason? MapUnavailableReason(ZLinkClientServerServerState state) =>
-        MapPeerState(state) switch
-        {
-            ZLinkPeerState.Ready => null,
-            ZLinkPeerState.Draining => ZLinkTopologyReason.Draining,
-            ZLinkPeerState.Connecting => ZLinkTopologyReason.NoReadyTarget,
-            _ => ZLinkTopologyReason.InternalFailure,
+                ZLinkTopologyReason.NoReadyTarget
+            ),
+            _ => (ZLinkPeerState.NotConnected, ZLinkTopologyReason.NoReadyTarget),
         };
 
     private static ZLinkTopologyState HostTopologyState(
@@ -495,17 +409,6 @@ internal sealed class ZLinkClientServerRuntimeService(
             ZLinkFrameworkRuntimeState.Error => ZLinkTopologyState.Failed,
             _ => runtimeStarted ? ZLinkTopologyState.Degraded : ZLinkTopologyState.Starting,
         };
-
-    private sealed record Fingerprint(
-        ZLinkFrameworkRuntimeState HostState,
-        Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole Role,
-        int ConnectionIntentCount,
-        int PendingRequestCount,
-        ZLinkLocationRuntimeSnapshot Location,
-        string ServerFingerprint
-    );
-
-    private sealed record SequenceState(ulong Sequence, Fingerprint Fingerprint);
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();

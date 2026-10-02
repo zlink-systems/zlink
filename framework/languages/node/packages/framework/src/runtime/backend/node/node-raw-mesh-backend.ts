@@ -63,6 +63,7 @@ import {
   type ServiceSpot,
   type StreamSessionActorAuthorityFence,
   type StreamSessionService,
+  MeshNodeRuntimeState,
   MeshPeerRuntimeState,
   OperationKind,
   ReadyDomain,
@@ -763,7 +764,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       source: 1,
       state:
         this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === false
-          ? 1
+          ? MeshPeerRuntimeState.Connecting
           : peerStateCode(peer.descriptor.state),
       routingId: peer.descriptor.nodeRoutingId as RoutingId,
       lifecycleGeneration: peer.descriptor.lifecycleGeneration,
@@ -2488,7 +2489,7 @@ function readyDomain(domain: ServiceMailboxDomain): number {
 /**
  * The one classification of a failed node/channel/stateful request into its
  * completion terminal. A binding REQUEST result is Core's decision and is kept
- * as is; a submit failure retains its Core meaning at the request boundary.
+ * as is; a submit failure is classified from its submission or completion phase.
  * A reply that could not be decoded is a protocol
  * failure (spec 32-framework-error-model:91-92). The failure code is a wire
  * code, so a Core result carries 0.
@@ -2498,7 +2499,9 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   if (isZLinkBackendResultError(failure)) {
     return {
       terminalResult:
-        failure.operation === 'request' ? failure.result : submitFailureTerminal(failure.result),
+        failure.operation === 'request'
+          ? failure.result
+          : submitFailureTerminal(failure.result, failure.phase),
       failureCode: 0
     };
   }
@@ -2525,10 +2528,10 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   };
 }
 
-function submitFailureTerminal(result: number): number {
+function submitFailureTerminal(result: number, phase: 'submit' | 'completion'): number {
   switch (result) {
     case SubmitResult.Backpressured:
-      return RequestResult.Backpressured;
+      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.Backpressured;
     case SubmitResult.NotConnected:
       return RequestResult.NotConnected;
     case SubmitResult.NotFound:
@@ -2687,8 +2690,21 @@ function requireRawReadyBatch(batch: ReadyBatch): RawReadyBatch {
   return batch;
 }
 
-function stateCode(state: ServiceNodeDescriptor['state']): number {
-  return ['preparing', 'serving', 'retiring', 'draining', 'stopped', 'error'].indexOf(state) + 1;
+function stateCode(state: ServiceNodeDescriptor['state']): MeshNodeRuntimeState {
+  switch (state) {
+    case 'preparing':
+      return MeshNodeRuntimeState.Preparing;
+    case 'serving':
+      return MeshNodeRuntimeState.Serving;
+    case 'retiring':
+      return MeshNodeRuntimeState.Retiring;
+    case 'draining':
+      return MeshNodeRuntimeState.Draining;
+    case 'stopped':
+      return MeshNodeRuntimeState.Stopped;
+    case 'error':
+      return MeshNodeRuntimeState.Error;
+  }
 }
 
 function peerStateCode(state: ServiceNodeDescriptor['state']): number {

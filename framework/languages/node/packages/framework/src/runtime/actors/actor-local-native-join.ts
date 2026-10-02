@@ -103,7 +103,16 @@ export class ZLinkLocalNativeActorJoin {
         false
       );
     }
-    return await this.joinLocal(node, actor, state, actorRef, target, request, signal);
+    return await this.joinLocal(
+      node,
+      actor,
+      state,
+      actorRef,
+      target,
+      target.spotId,
+      request,
+      signal
+    );
   }
 
   async joinEntrySpot(
@@ -141,14 +150,23 @@ export class ZLinkLocalNativeActorJoin {
         true
       );
     }
-    const target = spotRouteTarget ?? {
-      routerChannelId: runtimeActorMeshName(actor, state, ''),
+    const target = {
+      routerChannelId: spotRouteTarget?.routerChannelId ?? runtimeActorMeshName(actor, state, ''),
       targetNodeRid,
       spotId: toFrameworkRoutingId(node.entrySpot().routingId),
       spotKind: ZLinkSpotKind.Entry,
       targetSpotGeneration: node.entrySpot().status().lifecycleGeneration
     };
-    return await this.joinLocal(node, actor, state, actorRef, target, request, signal);
+    return await this.joinLocal(
+      node,
+      actor,
+      state,
+      actorRef,
+      target,
+      spotRouteTarget?.spotId ?? target.spotId,
+      request,
+      signal
+    );
   }
 
   private async joinLocal(
@@ -157,6 +175,7 @@ export class ZLinkLocalNativeActorJoin {
     state: ZLinkActorRuntimeState,
     actorRef: ZLinkBackendActorRef,
     target: ZLinkSpotRouteTarget,
+    storeSpotId: RoutingId,
     request: Message,
     signal: AbortSignal | undefined
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
@@ -186,7 +205,7 @@ export class ZLinkLocalNativeActorJoin {
         await this.options.locationLifecycle?.notifyActorLeftSpot(
           actorType,
           actor.context.actorId,
-          target.spotId,
+          storeSpotId,
           spotGeneration,
           membershipEpoch,
           node.status().lifecycleGeneration
@@ -196,7 +215,7 @@ export class ZLinkLocalNativeActorJoin {
           actorType,
           actor.context.actorId,
           meshName,
-          target.spotId,
+          storeSpotId,
           spotGeneration,
           membershipEpoch,
           node.status().lifecycleGeneration

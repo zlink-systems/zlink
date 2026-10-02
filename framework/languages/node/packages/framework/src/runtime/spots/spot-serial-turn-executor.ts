@@ -63,7 +63,7 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Waits for turns admitted through the execution barrier to complete. */
-  close(): Promise<void> {
+  whenIdle(): Promise<void> {
     return this.scheduler.whenIdle();
   }
 

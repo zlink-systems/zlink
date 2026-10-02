@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
@@ -638,7 +639,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                                             != relay.targetAttemptGeneration()
                                     || route.replyRouteId != relay.replyRouteId()
                                     || relay.hopCount() < 0
-                                    || relay.hopCount() > 8) {
+                                    || relay.hopCount()
+                                            > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
                                 return RouteSelection.notAcknowledged();
                             }
                             if (route.delivered) {

@@ -726,7 +726,7 @@ final class ZLinkStreamConnectionLifecycle {
                     ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT);
             return;
         }
-        controlSender.apply("$zlink.heartbeat.ping");
+        controlSender.apply(ZLinkStreamReceiveDispatcher.HEARTBEAT_PING_NAME);
     }
 
     private void transitionTo(ZLinkStreamConnectionState next) {

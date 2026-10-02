@@ -58,11 +58,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 storeToken => _store.ListAllMeshNodesAsync(meshName, storeToken)
             )
             .ConfigureAwait(false);
-        if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"autoconnect_store_snapshot mesh={meshName} raw_rows={rows.Count} "
-                    + $"raw_rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
-            );
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"autoconnect_store_snapshot mesh={meshName} raw_rows={rows.Count} raw_rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}"
+        );
 
         var live = await _liveRows
             .FilterAsync(
@@ -72,11 +70,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 static row => row.LeaseGeneration
             )
             .ConfigureAwait(false);
-        if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} "
-                    + $"live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
-            );
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
+        );
         return live;
     }
 
@@ -421,15 +417,12 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             snapshot.Payload.Span,
             out var user
         );
-        if (userDecoded && ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+        if (userDecoded)
             //  A user-spot row that decodes but fails a guard used to vanish as
             //  a bare null, which reads the same as "no row at all" at the
             //  caller. Name the values the guards compare.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"project_user_spot spot={user.SpotId} state={user.State} "
-                    + $"payload_owner={user.OwnerId} snapshot_owner={snapshot.OwnerId} "
-                    + $"payload_lease={user.OwnerLeaseGeneration} "
-                    + $"snapshot_lease={snapshot.OwnerLeaseGeneration}"
+                $"project_user_spot spot={user.SpotId} state={user.State} payload_owner={user.OwnerId} snapshot_owner={snapshot.OwnerId} payload_lease={user.OwnerLeaseGeneration} snapshot_lease={snapshot.OwnerLeaseGeneration}"
             );
         if (
             userDecoded

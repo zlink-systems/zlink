@@ -31,8 +31,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final Logger LOGGER =
             Logger.getLogger(DefaultZLinkStreamConnector.class.getName());
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
-    private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
-    private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ScheduledExecutorService timeouts =

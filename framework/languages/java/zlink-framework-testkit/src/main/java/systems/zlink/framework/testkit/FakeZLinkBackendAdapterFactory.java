@@ -3,6 +3,7 @@ package systems.zlink.framework.testkit;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
+import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
@@ -2010,7 +2011,13 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
             if (errorHandler == null) {
                 throw new IllegalStateException("stream error handler is not registered");
             }
-            errorHandler.handle(routingId, nativeCode, message);
+            errorHandler.handle(
+                    routingId,
+                    nativeCode == 0 && MonitorEventType.DISCONNECTED.name().equals(message)
+                            ? MonitorEventType.DISCONNECTED
+                            : null,
+                    nativeCode,
+                    message);
         }
     }
 

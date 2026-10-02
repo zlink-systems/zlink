@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.streams;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
@@ -72,6 +73,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkStreamRuntime implements AutoCloseable {
+    private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;
+    private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
     private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
@@ -327,8 +330,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 stream.bind(bindEndpoint);
             }
             stream.onTransportError(
-                    (routingId, nativeCode, message) ->
-                            reportTransportError(streamNode, routingId, nativeCode, message));
+                    (routingId, event, nativeCode, message) ->
+                            reportTransportError(
+                                    streamNode, routingId, event, nativeCode, message));
             stream.startSessionService();
             ZLinkInternalSpotNode spotNode = resolveSessionRelayNode(spotNodes);
             streamsByName.put(streamNode.name(), stream);
@@ -1127,6 +1131,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private void reportTransportError(
             StreamNodeRegistration streamNode,
             RoutingId routingId,
+            MonitorEventType event,
             int nativeCode,
             String message) {
         receiveLoops.stream()
@@ -1138,7 +1143,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return;
         }
         recordSessionClosed(state, nativeCode == 0 ? "transport_error" : "protocol_error");
-        if (nativeCode == 0 && "DISCONNECTED".equals(message)) {
+        if (nativeCode == 0 && event == MonitorEventType.DISCONNECTED) {
             state.serials()
                     .executeInfrastructure(
                             () -> executeHandler(() -> disconnectSessionStage(state)));
@@ -1354,9 +1359,12 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private static boolean awaitExecutorTermination(ExecutorService executor, String description) {
         boolean interrupted = false;
-        for (int attempt = 0; attempt < 2 && !executor.isTerminated(); attempt++) {
+        for (int attempt = 0;
+                attempt < EXECUTOR_TERMINATION_ATTEMPTS && !executor.isTerminated();
+                attempt++) {
             try {
-                if (executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                if (executor.awaitTermination(
+                        EXECUTOR_TERMINATION_WAIT_SECONDS, TimeUnit.SECONDS)) {
                     break;
                 }
             } catch (InterruptedException interruption) {

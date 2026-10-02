@@ -17,33 +17,23 @@ import java.util.Optional;
 
 /** Canonical service-wire-v1 frozen Spot and Actor operation encoder. */
 public final class ZLinkServiceFrozenRecordCodec {
-    private static final int RECORD_SPOT_SEND = 5;
-    private static final int RECORD_SPOT_REQUEST = 6;
-    private static final int RECORD_ACTOR_SEND = 9;
-    private static final int RECORD_ACTOR_REQUEST = 10;
-    private static final int SOURCE_NODE = 1;
-    private static final int SOURCE_SPOT = 2;
-    private static final int SOURCE_ACTOR = 3;
-    private static final int SOURCE_BOUND_SESSION = 4;
-    private static final int OPERATION_NONE = 0;
-    private static final int OPERATION_SPOT_REQUEST = 3;
-    private static final int OPERATION_ACTOR_REQUEST = 4;
 
     private ZLinkServiceFrozenRecordCodec() {}
 
     public static boolean isCanonical(byte[] encoded) {
         return encoded != null
                 && encoded.length != 0
-                && (encoded[0] == RECORD_SPOT_SEND
-                        || encoded[0] == RECORD_SPOT_REQUEST
-                        || encoded[0] == RECORD_ACTOR_SEND
-                        || encoded[0] == RECORD_ACTOR_REQUEST);
+                && (encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
+                        || encoded[0] == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire);
     }
 
     public static DecodedSpot decodeSpot(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
-        if (kind != RECORD_SPOT_SEND && kind != RECORD_SPOT_REQUEST) {
+        if (kind != (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire
+                && kind != (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire) {
             throw new IllegalArgumentException("frozen record is not a Spot operation");
         }
         Source source = reader.source();
@@ -51,8 +41,9 @@ public final class ZLinkServiceFrozenRecordCodec {
         OperationId operation = reader.operationId();
         int operationKind = reader.u32();
         Optional<Long> replyRoute = reader.replyRoute();
-        if ((kind == RECORD_SPOT_REQUEST)
-                != (operationKind == OPERATION_SPOT_REQUEST && replyRoute.isPresent())) {
+        if ((kind == (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire)
+                != (operationKind == (int) ServiceWireCodec.MeshOperationKind.SPOT_REQUEST.wire
+                        && replyRoute.isPresent())) {
             throw new IllegalArgumentException(
                     "frozen Spot operation kind does not match record kind");
         }
@@ -84,7 +75,8 @@ public final class ZLinkServiceFrozenRecordCodec {
     public static DecodedActor decodeActor(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
-        if (kind != RECORD_ACTOR_SEND && kind != RECORD_ACTOR_REQUEST) {
+        if (kind != (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire
+                && kind != (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire) {
             throw new IllegalArgumentException("frozen record is not an Actor operation");
         }
         Source source = reader.source();
@@ -92,8 +84,9 @@ public final class ZLinkServiceFrozenRecordCodec {
         OperationId operation = reader.operationId();
         int operationKind = reader.u32();
         Optional<Long> replyRoute = reader.replyRoute();
-        if ((kind == RECORD_ACTOR_REQUEST)
-                != (operationKind == OPERATION_ACTOR_REQUEST && replyRoute.isPresent())) {
+        if ((kind == (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire)
+                != (operationKind == (int) ServiceWireCodec.MeshOperationKind.ACTOR_REQUEST.wire
+                        && replyRoute.isPresent())) {
             throw new IllegalArgumentException(
                     "frozen Actor operation kind does not match record kind");
         }
@@ -131,12 +124,16 @@ public final class ZLinkServiceFrozenRecordCodec {
             byte[] metadataFrame,
             byte[] applicationPayloadEnvelope) {
         return encode(
-                operation.request() ? RECORD_SPOT_REQUEST : RECORD_SPOT_SEND,
+                operation.request()
+                        ? (int) ServiceWireCodec.MeshRecordKind.SPOT_REQUEST.wire
+                        : (int) ServiceWireCodec.MeshRecordKind.SPOT_SEND.wire,
                 sourceIdentity(source, operation.sourceSpotId(), null, null),
                 metadataFrame,
                 operation.operationHigh(),
                 operation.operationLow(),
-                operation.request() ? OPERATION_SPOT_REQUEST : OPERATION_NONE,
+                operation.request()
+                        ? (int) ServiceWireCodec.MeshOperationKind.SPOT_REQUEST.wire
+                        : (int) ServiceWireCodec.MeshOperationKind.NONE.wire,
                 operation.request() ? operation.correlation() : null,
                 output -> {
                     writeText8(output, operation.target().spotId());
@@ -156,7 +153,9 @@ public final class ZLinkServiceFrozenRecordCodec {
             byte[] metadataFrame,
             byte[] applicationPayloadEnvelope) {
         return encode(
-                operation.request() ? RECORD_ACTOR_REQUEST : RECORD_ACTOR_SEND,
+                operation.request()
+                        ? (int) ServiceWireCodec.MeshRecordKind.ACTOR_REQUEST.wire
+                        : (int) ServiceWireCodec.MeshRecordKind.ACTOR_SEND.wire,
                 sourceIdentity(
                         source,
                         null,
@@ -171,7 +170,9 @@ public final class ZLinkServiceFrozenRecordCodec {
                 metadataFrame,
                 operation.operationHigh(),
                 operation.operationLow(),
-                operation.request() ? OPERATION_ACTOR_REQUEST : OPERATION_NONE,
+                operation.request()
+                        ? (int) ServiceWireCodec.MeshOperationKind.ACTOR_REQUEST.wire
+                        : (int) ServiceWireCodec.MeshOperationKind.NONE.wire,
                 operation.request() ? operation.correlation() : null,
                 output -> {
                     writeText8(output, operation.target().actor().actorId());
@@ -231,12 +232,12 @@ public final class ZLinkServiceFrozenRecordCodec {
             ZLinkServiceM6BWireCodec.BoundSessionTail boundSession) {
         int sourceKind =
                 boundSession != null
-                        ? SOURCE_BOUND_SESSION
+                        ? (int) ServiceWireCodec.FrozenSourceKind.BOUND_SESSION.wire
                         : sourceActor != null
-                                ? SOURCE_ACTOR
+                                ? (int) ServiceWireCodec.FrozenSourceKind.ACTOR.wire
                                 : sourceSpotId != null && !sourceSpotId.isBlank()
-                                        ? SOURCE_SPOT
-                                        : SOURCE_NODE;
+                                        ? (int) ServiceWireCodec.FrozenSourceKind.SPOT.wire
+                                        : (int) ServiceWireCodec.FrozenSourceKind.NODE.wire;
         byte[] body =
                 encodeSection(
                         output -> {
@@ -244,13 +245,20 @@ public final class ZLinkServiceFrozenRecordCodec {
                             output.writeLong(source.sourceNodeGeneration());
                             writeText8(output, source.ownerId());
                             output.writeLong(source.ownerLeaseGeneration());
-                            if (sourceKind == SOURCE_SPOT) {
+                            if (sourceKind == (int) ServiceWireCodec.FrozenSourceKind.SPOT.wire) {
                                 writeText8(output, sourceSpotId);
-                            } else if (sourceKind == SOURCE_ACTOR
-                                    || sourceKind == SOURCE_BOUND_SESSION) {
+                            } else if (sourceKind
+                                            == (int) ServiceWireCodec.FrozenSourceKind.ACTOR.wire
+                                    || sourceKind
+                                            == (int)
+                                                    ServiceWireCodec.FrozenSourceKind.BOUND_SESSION
+                                                            .wire) {
                                 writeText8(output, sourceActor.actorId());
                                 output.writeLong(sourceActor.generation());
-                                if (sourceKind == SOURCE_BOUND_SESSION) {
+                                if (sourceKind
+                                        == (int)
+                                                ServiceWireCodec.FrozenSourceKind.BOUND_SESSION
+                                                        .wire) {
                                     writeRid(output, boundSession.sourceSessionRid());
                                     output.writeLong(boundSession.sourceBindingGeneration());
                                     output.writeLong(boundSession.sourceSessionSequence());
@@ -388,17 +396,18 @@ public final class ZLinkServiceFrozenRecordCodec {
             RoutingId sessionRid = null;
             long bindingGeneration = 0;
             long sessionSequence = 0;
-            if (kind == SOURCE_SPOT) {
+            if (kind == (int) ServiceWireCodec.FrozenSourceKind.SPOT.wire) {
                 spotId = Optional.of(text8());
-            } else if (kind == SOURCE_ACTOR || kind == SOURCE_BOUND_SESSION) {
+            } else if (kind == (int) ServiceWireCodec.FrozenSourceKind.ACTOR.wire
+                    || kind == (int) ServiceWireCodec.FrozenSourceKind.BOUND_SESSION.wire) {
                 text8();
                 nonzeroU64();
-                if (kind == SOURCE_BOUND_SESSION) {
+                if (kind == (int) ServiceWireCodec.FrozenSourceKind.BOUND_SESSION.wire) {
                     sessionRid = rid();
                     bindingGeneration = nonzeroU64();
                     sessionSequence = nonzeroU64();
                 }
-            } else if (kind != SOURCE_NODE) {
+            } else if (kind != (int) ServiceWireCodec.FrozenSourceKind.NODE.wire) {
                 throw invalid("unknown frozen source kind");
             }
             requireOffset(end, "frozen source identity");

@@ -63,7 +63,10 @@ final class ZLinkStandaloneActorRelocationScheduler {
                                 () ->
                                         systems.zlink.framework.runtime.internal.metrics
                                                 .ZLinkRuntimeMetrics.increment(
-                                                "zlink.drain.actors.handed_off", Map.of()));
+                                                systems.zlink.framework.runtime.internal.metrics
+                                                        .ZLinkRuntimeMetrics
+                                                        .DRAIN_ACTORS_HANDED_OFF_NAME,
+                                                Map.of()));
             }
             case SOURCE_PRESERVED ->
                     source.abort()

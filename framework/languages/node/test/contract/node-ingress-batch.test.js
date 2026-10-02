@@ -79,12 +79,19 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
 test('idle application worker registration is reused across sparse ready edges', async t => {
   let ready;
   let queued;
+  let finishDrain;
   const node = {
     setReadyHandler(handler) { ready = handler; },
     createReadyBatch() {
+      let claimed = false;
       return {
-        reset() {},
+        reset() {
+          if (!claimed) return;
+          claimed = false;
+          queueMicrotask(() => finishDrain());
+        },
         takeClaim() {
+          claimed = true;
           let consumed = false;
           const record = queued;
           queued = undefined;
@@ -132,12 +139,12 @@ test('idle application worker registration is reused across sparse ready edges',
     assert.equal(workerRegistrations, 1);
     for (let sequence = 0; sequence < 16; sequence++) {
       const completed = new Promise(resolve => { dispatched = resolve; });
+      const drained = new Promise(resolve => { finishDrain = resolve; });
       queued = { sequence };
       ready(ReadyDomain.Application);
       assert.equal(await completed, sequence);
-      // Let the same persistent worker return to its idle wait before the next
-      // empty-to-ready transition.
-      await new Promise(resolve => setTimeout(resolve, 5));
+      // Observe the claim drain's final reset before the next ready edge.
+      await drained;
     }
     assert.equal(
       areaEntries,

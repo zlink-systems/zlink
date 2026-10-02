@@ -3,14 +3,12 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 final class ZLinkSpotFlowFrame {
-    private static final String PREFIX = "__zlink.flow\n";
+    private static final int MAX_SEARCHED_HEADER_PARTS = 4;
     //  A well-formed flow frame is prefix(13) + UUIDv7(36) + '\n' + origin
     //  name; larger route parts are payload frames and are never stringified.
     private static final int MAX_FRAME_BYTES = 96;
@@ -23,11 +21,7 @@ final class ZLinkSpotFlowFrame {
      * return stay bare.
      */
     static Message encode(ZLinkFlowContext.State state) {
-        return state == null
-                ? null
-                : Message.from(
-                        (PREFIX + state.flowId() + "\n" + state.origin().name())
-                                .getBytes(StandardCharsets.UTF_8));
+        return ZLinkFlowContext.encodeLegacyFrame(state);
     }
 
     static ZLinkFlowContext.State fromEnvelopeHeader(
@@ -56,28 +50,18 @@ final class ZLinkSpotFlowFrame {
         }
         //  The legacy encoder placed the flow frame at index 2, or at index 3
         //  when a content-type frame preceded it.
-        int limit = Math.min(parts.size(), 4);
+        int limit = Math.min(parts.size(), MAX_SEARCHED_HEADER_PARTS);
         for (int index = 2; index < limit; index++) {
             Message part = parts.get(index);
             if (part.size() > MAX_FRAME_BYTES) {
                 continue;
             }
             String value = part.toUtf8String();
-            if (!value.startsWith(PREFIX)) {
-                continue;
-            }
-            String[] fields = value.split("\n", -1);
-            if (fields.length != 3 || fields[1].isBlank()) {
-                throw invalidFlow("SPOT route flow fields are malformed", null);
-            }
-            if (!ZLinkFlowContext.isValidFlowId(fields[1])) {
-                throw invalidFlow("SPOT route flow id must be UUIDv7", null);
-            }
-            try {
-                return new ZLinkFlowContext.State(
-                        fields[1], ZLinkFlowOrigin.valueOf(fields[2]), null);
-            } catch (IllegalArgumentException invalidOrigin) {
-                throw invalidFlow("SPOT route flow origin is invalid", invalidOrigin);
+            ZLinkFlowContext.State state =
+                    ZLinkFlowContext.decodeLegacyFrame(
+                            value, "SPOT route", ZLinkSpotFlowFrame::invalidFlow);
+            if (state != null) {
+                return state;
             }
         }
         return null;
