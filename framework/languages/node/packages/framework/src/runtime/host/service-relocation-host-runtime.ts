@@ -146,6 +146,7 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
+import { isIndeterminateLocationStoreFailure } from '../locations/location-store-failure';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type {
   ZLinkAuthorityKey,
@@ -3889,7 +3890,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // A thrown provider call has an unknown result; the read below decides.
         const result = await this.requireLocationStore()
           .commitAggregate(prepared.fence, signal)
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+            return undefined;
+          });
         if (result?.kind === 'generationExhausted') {
           throw new Error('location_update_failed: relocation aggregate commit exhausted.');
         }
@@ -3909,7 +3913,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         await this.exactSourceLeaseExpired(
           { ownerId: target.ownerId, leaseGeneration: target.ownerLeaseGeneration },
           signal
-        ).catch(() => false)
+        ).catch((error: unknown) => {
+          if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+          return false;
+        })
       ) {
         return undefined;
       }
@@ -3955,7 +3962,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return { kind: 'stale' };
         }
       }
-    } catch {
+    } catch (error) {
+      if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
       return { kind: 'unknown' };
     }
     if (committed === prepared.plan.participants.length) {
