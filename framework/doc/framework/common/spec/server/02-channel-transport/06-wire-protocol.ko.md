@@ -445,7 +445,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 
 | Kind | 용도 | 내용 |
 |---|---|---|
-| `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion, 그 call의 [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent) 유무(`instanceIntent`)와 절대 deadline(`deadlineUnixMs`) |
+| `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion, 그 call의 [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent) 유무(`instanceIntent`) |
 | `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와

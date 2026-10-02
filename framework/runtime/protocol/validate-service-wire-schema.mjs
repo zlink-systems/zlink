@@ -4992,8 +4992,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetSpotId", $ref: "text8" },
     { name: "authority", $ref: "authority-generation-fence" },
     { name: "instanceIntent", $ref: "bool8" },
-    { name: "deadlineUnixMs", $ref: "nonzero-u64" },
-  ], "$.types", "Ready Instance route must carry the exact current authority fence, the call's Instance intent and its deadline");
+  ], "$.types", "Ready Instance route must carry the exact current authority fence and the call's Instance intent");
   requireFields(coldInstanceRoute?.fields, [
     { name: "targetNodeRid", $ref: "rid" },
     { name: "targetNodeGeneration", $ref: "nonzero-u64" },

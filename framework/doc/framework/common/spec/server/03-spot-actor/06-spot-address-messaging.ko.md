@@ -494,7 +494,7 @@ Close 절차는 다음 순서로 진행한다.
    `Reincarnate`로 authority를 같은 node의 새 `ObjectGeneration`으로 바꾼다. 새 incarnation은 초기화와
    저장 상태 복원이 끝난 뒤 그 Instance intent message만 도착 순서대로 실행한다. 초기화나 복원이 실패하면
    그 generation을 `Delete`하고 기다리던 message는 typed 실패로 끝난다. 그 밖의 경우에는 같은 fence로
-   authority를 해제하고, 남은 Instance intent message는 `Missing`에서 다시 배치된다. 다시 배치할 때 owner는 그 message가 실어 온 deadline·operation·reply route를 그대로 쓰며, operation이 없는 send에만 새 operation을 발급한다.
+   authority를 해제하고, 남은 Instance intent message는 `Missing`에서 다시 배치된다.
 
 Close 작업 뒤에 놓인 message 가운데 Instance intent가 없는 message는 [§9](#9-실패와-관측)의 결과로
 끝난다. 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
