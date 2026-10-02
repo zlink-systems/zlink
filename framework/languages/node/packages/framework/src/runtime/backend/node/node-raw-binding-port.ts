@@ -283,16 +283,19 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     timeoutMs: number
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
+    let submission: ReturnType<RequestSubmitOperation['submit']>;
     try {
-      const replies = await appendRequestParts(
-        this.socket.request(bindingRoutingId(targetRid)),
-        parts
-      )
+      submission = appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
         .timeout(timeoutMs)
-        .submit().reply;
+        .submit();
+    } catch (error) {
+      throw translateBindingResultError(error, 'submit');
+    }
+    try {
+      const replies = await submission.reply;
       return copyAndClose(replies);
     } catch (error) {
-      throw translateBindingResultError(error);
+      throw translateBindingResultError(error, 'completion');
     }
   }
 
@@ -345,10 +348,18 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   async request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]> {
     this.requireOpen();
-    const replies = await appendRequestParts(this.socket.request(), parts)
-      .timeout(timeoutMs)
-      .submit().reply;
-    return copyAndClose(replies);
+    let submission: ReturnType<RequestSubmitOperation['submit']>;
+    try {
+      submission = appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
+    } catch (error) {
+      throw translateBindingResultError(error, 'submit');
+    }
+    try {
+      const replies = await submission.reply;
+      return copyAndClose(replies);
+    } catch (error) {
+      throw translateBindingResultError(error, 'completion');
+    }
   }
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
