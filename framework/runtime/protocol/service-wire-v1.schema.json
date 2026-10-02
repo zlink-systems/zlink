@@ -6032,6 +6032,10 @@
             {
               "name": "authority",
               "$ref": "authority-generation-fence"
+            },
+            {
+              "name": "instanceIntent",
+              "$ref": "bool8"
             }
           ]
         },
