@@ -3,6 +3,7 @@
 #include "utils/precompiled.hpp"
 
 #include <memory>
+#include <new>
 
 #include "api/socket/part_helper_internal.hpp"
 #include "api/message/recv_result_internal.hpp"
@@ -47,7 +48,7 @@ int validate_router_recv_entry (
         errno = EFAULT;
         return -1;
     }
-    socket_handle_t handle = as_socket_handle (router_);
+    socket_handle_t handle = as_socket_receive_handle (router_);
     if (!handle.socket)
         return -1;
     handle.socket->clear_last_recv_source_rid ();
@@ -117,11 +118,10 @@ int stage_router_recv_sequence (
           reqrep::request_reply_allocation_receive_part_stage);
 #endif
         rc = zlink::part_helper_internal::stage_recv_sequence (
-          state_, zlink::part_helper_internal::recv_family_router,
-          source_socket_, source_node_rid_, reply_token_, parts_, part_count_,
-          std::this_thread::get_id (), transport_pair_id_,
-          transport_pair_generation_, route_generation_, route_source_pipe_);
-    } catch (...) {
+          state_, source_socket_, source_node_rid_, reply_token_, parts_, part_count_,
+          transport_pair_id_, transport_pair_generation_, route_generation_, route_source_pipe_);
+    }
+    catch (const std::bad_alloc &) {
         errno = ENOMEM;
     }
     return rc;
@@ -146,7 +146,7 @@ zlink_recv_result_t zlink_router_recv (
       handle.socket->part_helper_state ();
     zlink::router_t *const router =
       static_cast<zlink::router_t *> (handle.socket);
-    if (helper_state) {
+    if (handle.socket->part_helper_recv_ready ()) {
         zlink::part_helper_internal::recv_record_metadata_t staged_metadata = {};
         size_t staged_part_count = 0;
         bool staged_handled = false;
@@ -155,8 +155,7 @@ zlink_recv_result_t zlink_router_recv (
         router->within_receive_turn ([&] () {
             const zlink::part_helper_internal::staged_recv_record_result_t staged_rc =
               zlink::part_helper_internal::try_take_staged_recv_record (
-                helper_state, zlink::part_helper_internal::recv_family_router,
-                parts_out_, parts_capacity_, &staged_part_count, &staged_metadata);
+                helper_state, parts_out_, parts_capacity_, &staged_part_count, &staged_metadata);
             if (staged_rc == zlink::part_helper_internal::staged_recv_record_error) {
                 if (errno == ENOBUFS)
                     *part_count_out_ = staged_part_count;
@@ -265,7 +264,6 @@ zlink_recv_result_t zlink_router_recv (
                                                    reply_token);
                 if (stage_errno == ESTALE)
                     continue;
-                zlink::part_helper_internal::abort_recv_step (helper_state);
                 errno = stage_errno;
                 return zlink::recv_result_internal::from_errno (errno);
             }

@@ -1030,9 +1030,7 @@ bool zlink::socket_base_t::has_in ()
           part_helper_state ();
         if (state) {
             std::lock_guard<std::mutex> lock (state->mutex);
-            if (state->recv.active
-                && state->recv.next_part_index
-                     < state->recv.buffered_parts.size ())
+            if (state->recv.active)
                 return true;
         }
     }
@@ -1239,10 +1237,7 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
 int zlink::socket_base_t::begin_public_part_receive_delivery_hold ()
 {
     scoped_lock_t lock (_transport_pairs_sync);
-    if (_public_part_receive_delivery_hold_active) {
-        errno = EBUSY;
-        return -1;
-    }
+    zlink_assert (!_public_part_receive_delivery_hold_active);
     _public_part_receive_delivery_hold_active = true;
     _public_part_receive_delivery_hold_pipe = NULL;
     _public_part_receive_delivery_hold_key = transport_pair_key_t (0, 0);

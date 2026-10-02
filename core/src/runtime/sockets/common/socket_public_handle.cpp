@@ -17,7 +17,7 @@ bool zlink::socket_public_handle_t::check_tag () const
     return _tag == tag_value;
 }
 
-bool zlink::socket_public_handle_t::acquire (socket_base_t **socket_out_)
+bool zlink::socket_public_handle_t::acquire (socket_base_t **socket_out_, bool receive_)
 {
     if (!socket_out_) {
         errno = EFAULT;
@@ -30,19 +30,19 @@ bool zlink::socket_public_handle_t::acquire (socket_base_t **socket_out_)
             errno = ESHUTDOWN;
             return false;
         }
-        if ((old & ref_mask) == ref_mask) {
+        if ((receive_ && (old & receive_bit) != 0) || (old & ref_mask) == ref_mask) {
             errno = EBUSY;
             return false;
         }
-        if (_state.compare_exchange_weak (old, old + 1,
-                                          std::memory_order_acq_rel,
+        const uint32_t desired = (old + 1) | (receive_ ? receive_bit : 0);
+        if (_state.compare_exchange_weak (old, desired, std::memory_order_acq_rel,
                                           std::memory_order_acquire))
             break;
     }
 
     socket_base_t *socket = _socket.load (std::memory_order_acquire);
     if (!socket) {
-        release ();
+        release (receive_);
         errno = ESHUTDOWN;
         return false;
     }
@@ -70,11 +70,13 @@ bool zlink::socket_public_handle_t::try_claim_final_destroy (uint32_t state_)
     return false;
 }
 
-void zlink::socket_public_handle_t::release ()
+void zlink::socket_public_handle_t::release (bool receive_)
 {
-    const uint32_t old = _state.fetch_sub (1, std::memory_order_acq_rel);
+    const uint32_t released = 1 + (receive_ ? receive_bit : 0);
+    const uint32_t old = _state.fetch_sub (released, std::memory_order_acq_rel);
     zlink_assert ((old & ref_mask) > 0);
-    const uint32_t current = old - 1;
+    zlink_assert (!receive_ || (old & receive_bit) != 0);
+    const uint32_t current = old - released;
     if (!try_claim_final_destroy (current))
         return;
 
