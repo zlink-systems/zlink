@@ -568,7 +568,15 @@ public final class ZLinkChannelRuntime
             }
             attachProcessLocalClientServerAdmissions(registration.channels());
             scheduleInfrastructureAtFixedRate(
-                    () -> sockets.tickClientServerLiveness(System.nanoTime()),
+                    () ->
+                            sockets.tickClientServerLiveness(
+                                    System.nanoTime(),
+                                    (channelName, failure) ->
+                                            reportReceiveFailure(
+                                                    ZLinkDispatchErrorSurface.CHANNEL,
+                                                    ZLinkDispatchMessageKind.REQUEST,
+                                                    channelName,
+                                                    failure)),
                     CLIENT_SERVER_LIVENESS_TICK_MILLIS,
                     CLIENT_SERVER_LIVENESS_TICK_MILLIS,
                     TimeUnit.MILLISECONDS);

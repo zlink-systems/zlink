@@ -50,6 +50,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -1148,7 +1149,8 @@ final class ZLinkChannelSocketRegistry {
         return true;
     }
 
-    void tickClientServerLiveness(long nowNanos) {
+    void tickClientServerLiveness(
+            long nowNanos, BiConsumer<String, Throwable> reportReceiveFailure) {
         LivenessSnapshot snapshot =
                 inStateLane(
                         () -> {
@@ -1177,7 +1179,11 @@ final class ZLinkChannelSocketRegistry {
                         clientServerControlCursor = nextCursor;
                         return null;
                     });
-            drainClientServerControls(connection);
+            try {
+                drainClientServerControls(connection);
+            } catch (systems.zlink.contracts.errors.ZlinkRecvException failure) {
+                reportReceiveFailure.accept(connection.descriptor.channelName(), failure);
+            }
             flushClientServerLivenessAck(connection);
             ClientLivenessAction action =
                     inStateLane(
