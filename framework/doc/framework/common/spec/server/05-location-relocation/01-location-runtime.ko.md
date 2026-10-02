@@ -530,8 +530,8 @@ record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw b
 시작한 runtime이 아닌 다른 언어의 runtime도 진행 중인 participant를 읽고 끝난 이동을 정리하므로,
 진행 정보는 아래 record에만 두고 네 언어가 같은 key([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법))와
 bytes를 사용한다. 이 밖의 진행 정보(별도 lock record, 변경 전후 page, participant별 metadata
-record)를 두지 않는다. Membership 변경은 각 participant의 commit 뒤 authority payload에 담기며
-따로 저장하지 않는다.
+record)를 두지 않는다. `SpotWide` 이동은 membership을 바꾸지 않으며(§8의 두 변경 모두), 이동하는
+member는 inventory가 열거한다.
 
 | Record | Value |
 |---|---|
@@ -590,23 +590,23 @@ Level 0 page는 `entries`에 entry를 담고 `children`이 빈 배열이다. 상
 하나 더 만든다. 읽은 page의 hash, 개수 또는 `digest`가 맞지 않으면 data lost다.
 
 **상태 전이.** Aggregate record는 `staging → prepared → committed`, 또는 `staging·prepared →
-aborted`로만 바뀐다. `committed`와 `aborted`는 다시 바뀌지 않는다. Participant의 marker,
+aborted`로만 바뀐다. `committed`와 `aborted`는 다시 바뀌지 않으며, 그 뒤에는 `cleaned`만 `false`에서 `true`로 한 번
+바뀐다. Participant의 marker,
 inventory, 경과 시간 또는 process memory로 결과를 추정하지 않는다. 아래 단계는 각각 Store
 write 하나다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
 
 | 단계 | 내용과 조건 |
 |---|---|
-| 크기 확인 | Claim 전에 marker를 넣은 각 authority, participant record, page, root의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 하나라도 넘으면 Claim하지 않고 이동을 시작하지 않는다. |
-| Claim | Aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. 같은 `requestFingerprint`의 `staging`이면 이어서 준비하고, 다른 요청이면 `Conflict`, 같은 fence가 이미 terminal이면 그 결과를 돌려준다. |
+| Claim | 먼저 marker를 넣은 authority, committed 투영과 정리 뒤의 authority, participant record, page, root의 value와 아래 각 write의 encoded 크기·unique key 수를 [02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch) 한도로 확인한다. 아직 발급되지 않은 `StoreVersion`은 provider token의 최대 길이로 계산한다. 하나라도 넘으면 Claim하지 않는다. 한도 안이면 aggregate가 없고 `sourceOwner`의 lease가 현재 lease일 때 `staging`으로 쓴다. 같은 `requestFingerprint`의 `staging`이면 이어서 준비하고, 다른 요청이면 `Conflict`, 같은 fence가 이미 terminal이면 그 결과를 돌려준다. |
 | 목록 기록 | Aggregate가 `staging`인 version을 조건으로 participant record, page, root를 이 순서로 각각 없을 때 쓴다. 같은 bytes가 이미 있으면 완료로 보고 다른 bytes면 `Conflict`다. |
 | Marker 설치 | Root까지 모든 목록 record를 확인한 뒤 시작한다. Participant마다 aggregate가 `staging`인 version과 participant 물리 version을 조건으로, 공개 `StoreVersion`이 entry의 `expectedStoreVersion`과 같을 때 marker를 쓰고 `visibleStoreVersion`을 지운다. Payload와 owner는 바꾸지 않는다. 같은 canonical marker bytes가 이미 있으면 완료이고, 다른 marker가 있으면 `Conflict`다. Inventory 순서로 첫 `newOwner` entry의 write에만 `AuthorityOwnerGeneration` counter 갱신과 aggregate의 구간 기록을 함께 넣는다([02 §8](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 구간이 이미 기록돼 있으면 다시 발급하지 않는다. |
 | Prepare | 모든 marker를 확인한 뒤 `staging → prepared`와 target host capacity counter의 reserved 증가를 쓴다. Aggregate version, target descriptor의 `lifecycleGeneration`, target owner lease와 capacity record가 조건이다. Reserved 증가는 일반 host capacity counter의 점유이며 relocation 전용 reservation record가 아니다. |
-| Commit | `prepared → committed`, target capacity의 reserved → active 전환과 source active 감소, Spot participant authority에 아래 committed 공개 값을 marker 없이 쓰는 Put을 담는다. Aggregate version, Spot participant authority의 물리 version, target owner lease와 capacity record가 조건이다. Target의 liveness와 lifecycle은 조건이 아니다([§9.1](#91-복원-데이터가-공식-데이터가-되는-시점)). |
+| Commit | `prepared → committed`, target capacity의 reserved → active 전환과 source active 감소, Spot participant authority에 아래 committed 공개 값을 marker 없이 쓰는 Put을 담는다. Aggregate version, Spot participant authority의 물리 version과 capacity record가 조건이다. Target의 lease·liveness·lifecycle은 다시 검사하지 않는다([§9.1](#91-복원-데이터가-공식-데이터가-되는-시점)). |
 | Source fence | [§6.1](#61-read와-cas)의 source `Preserve`다. `staging·prepared → aborted`, `prepared`였으면 reserved 해제, Spot participant authority에 이동 전 값을 marker 없이 쓰는 Put을 담는다. Aggregate version과 Spot participant authority의 물리 version이 조건이다. Commit과 같은 두 조건을 쓰고 둘 다 바꾸므로 둘 중 하나만 성공한다. |
 | Abort | `staging·prepared → aborted`와, `prepared`였으면 reserved 해제를 쓴다. Aggregate version이 조건이다. |
 
-Prepare·Commit·Source fence·Abort write의 key는 aggregate, Spot authority, target owner lease와
-`capacity` 항목 수만큼의 capacity record이며 participant 수와 무관하다. Commit과 Source fence가
+Prepare·Commit·Source fence·Abort write의 key는 aggregate, Spot authority, (Prepare만) target owner
+lease와 `capacity` 항목 수만큼의 capacity record이며 participant 수와 무관하다. Commit과 Source fence가
 쓴 Spot authority에는 `visibleStoreVersion`을 두지 않으므로 새 물리 version이 공개 version이 된다.
 
 **공개 값.** Repository는 participant authority를 읽을 때 다음 값을 공개한다.
@@ -628,16 +628,20 @@ Authority 변경 요청의 `StoreVersion` 조건은 이 공개 값과 비교하�
 
 1. `staging·prepared` aggregate는 이동을 시작한 runtime이 끝낸다. `sourceOwner`의 lease가
    만료됐으면 정리하는 runtime이 `Abort`한다.
-2. Terminal이고 `cleaned`가 `false`인 aggregate는 inventory 순서대로 모든 entry의 authority를 다시
+2. Root가 없는 terminal aggregate는 marker 설치 전에 끝났으므로 marker가 없다. 같은 fence의 child
+   preimage prefix(`aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0`,
+   `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0`)를 scan해 찾은 child를 지우고
+   aggregate version을 조건으로 `cleaned`를 `true`로 쓴다.
+3. Root가 있는 terminal이고 `cleaned`가 `false`인 aggregate는 inventory 순서대로 모든 entry의 authority를 다시
    읽어 이 fence의 marker가 있으면 정리한다. 모든 entry에 이 fence의 marker가 없음을 확인한 뒤
-   aggregate version을 조건으로 `cleaned`를 `true`로 쓰고, 이 write에 [Relocation Store의 기본
-   retention](03-relocation-store-redis.ko.md#3-reference와-저장-크기)을 붙인다.
-3. `cleaned`가 `true`인 aggregate의 participant record, page, root를 지운다. 없는 child는 이미 지운
-   것이다. Aggregate는 지우지 않고 retention 만료로 사라지므로, 같은 fence의 늦은 Claim은 그동안
-   terminal 결과를 받는다.
+   aggregate version을 조건으로 `cleaned`를 `true`로 쓴다.
+4. `cleaned`가 `true`인 aggregate의 participant record, page, root를 지운다. 없는 child는 이미 지운
+   것이다.
+5. Aggregate는 `sourceOwner`와 `targetOwner`의 lease가 둘 다 현재 lease가 아닐 때 지운다. 그 뒤에는
+   같은 fence의 Claim(현재 `sourceOwner` lease가 조건)도 target의 재제출([§10](#10-store-응답을-받지-못했을-때),
+   target lease 만료로 끝남)도 일어나지 않으므로, 그 전까지 같은 fence는 terminal 결과를 받는다.
 
-`cleaned`가 `false`인 aggregate의 child가 없거나, marker가 가리키는 aggregate·child가 없으면
-authority를 다시 읽는다. 물리 version이 그대로면 data lost이고, 바뀌었으면 새 row로 다시 투영한다.
+Marker가 가리키는 aggregate, root, page 또는 participant record가 없으면 authority를 다시 읽는다. 물리 version이 그대로면 data lost이고, 바뀌었으면 새 row로 다시 투영한다.
 
 ## 4. 실행 중인 node와 제공 기능을 찾는다
 

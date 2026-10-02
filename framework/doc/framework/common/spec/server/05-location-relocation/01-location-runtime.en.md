@@ -580,8 +580,8 @@ participants in progress and cleans up finished relocations, so progress lives o
 records below, and all four languages use the same keys
 ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) and bytes. No other
 progress information (a separate lock record, before/after pages, a per-participant metadata
-record) is kept. Membership changes are carried in each participant's post-commit authority
-payload and are not stored separately.
+record) is kept. A `SpotWide` relocation does not change membership (neither of the two changes
+in §8 does), and the inventory lists the members that move.
 
 | Record | Value |
 |---|---|
@@ -645,23 +645,23 @@ entries or references and at most 1 MiB; when the root would exceed this, one mo
 A read page whose hash, count, or `digest` does not match is data lost.
 
 **State transitions.** The aggregate record changes only `staging → prepared → committed` or
-`staging/prepared → aborted`. `committed` and `aborted` never change again. The result is never
+`staging/prepared → aborted`. `committed` and `aborted` never change again; after that only `cleaned` changes, once, from
+`false` to `true`. The result is never
 inferred from participant markers, the inventory, elapsed time, or process memory. Each step below
 is one Store write ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
 
 | Step | Contents and conditions |
 |---|---|
-| Size check | Before Claim, checks the value of every authority with its marker, participant record, page, and root, and the encoded size and unique key count of each write below, against the limits of [02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch). If any exceeds them, Claim is not written and the relocation does not start. |
-| Claim | Writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. A `staging` record with the same `requestFingerprint` continues preparation, a different request is `Conflict`, and a fence that is already terminal returns that result. |
+| Claim | First checks the value of every authority with its marker, the authority after commit projection and after cleanup, every participant record, page, and root, and the encoded size and unique key count of each write below, against the limits of [02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch). A `StoreVersion` not yet issued is counted at the provider token's maximum length. If any exceeds them, Claim is not written. Within the limits it writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. A `staging` record with the same `requestFingerprint` continues preparation, a different request is `Conflict`, and a fence that is already terminal returns that result. |
 | List | Conditioned on the aggregate's `staging` version, writes the participant records, pages, and root in that order, each when missing. Identical existing bytes count as done; different bytes are `Conflict`. |
 | Marker installation | Starts after every list record through the root is confirmed. For each participant, conditioned on the aggregate's `staging` version and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. Identical existing canonical marker bytes count as done; any other marker is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. |
 | Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity counter's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease, and the capacity records. The reserved increase occupies the ordinary host capacity counter and is not a relocation-specific reservation record. |
-| Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, the target owner lease, and the capacity records. The target's liveness and lifecycle are not conditions ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
+| Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, and the capacity records. The target's lease, liveness, and lifecycle are not checked again ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
 | Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Carries `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and a Put that writes the pre-move values to the Spot participant's authority without a marker, conditioned on the aggregate version and the physical version of the Spot participant's authority. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
 | Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the reserved count, conditioned on the aggregate version. |
 
 The keys of the Prepare, Commit, Source fence, and Abort writes are the aggregate, the Spot
-authority, the target owner lease, and as many capacity records as `capacity` has items, regardless
+authority, the target owner lease (Prepare only), and as many capacity records as `capacity` has items, regardless
 of the number of participants. The Spot authority written by Commit or Source fence carries no
 `visibleStoreVersion`, so its new physical version becomes its public version.
 
@@ -686,16 +686,22 @@ scan of the `aggregate\0` preimage prefix
 
 1. A `staging` or `prepared` aggregate is finished by the runtime that started the relocation. When
    the `sourceOwner` lease has expired, the cleaning runtime `Abort`s it.
-2. For a terminal aggregate whose `cleaned` is `false`, the authority of every entry is read again in
+2. A terminal aggregate without a root ended before marker installation, so it has no markers. The
+   children found by scanning the same fence's child preimage prefixes
+   (`aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0`,
+   `aggregate-participant\0{AggregateId}\0{AggregateGeneration}\0`) are deleted, and `cleaned` is
+   written as `true` conditioned on the aggregate version.
+3. For a terminal aggregate with a root whose `cleaned` is `false`, the authority of every entry is read again in
    inventory order and cleaned up if it carries this fence's marker. After confirming that no entry
-   carries this fence's marker, `cleaned` is written as `true` conditioned on the aggregate version,
-   and that write carries the [default retention of the Relocation Store](03-relocation-store-redis.en.md#3-reference-and-storage-size).
-3. The participant records, pages, and root of an aggregate whose `cleaned` is `true` are deleted. A
-   missing child was already deleted. The aggregate itself is not deleted and disappears when its
-   retention expires, so a late Claim of the same fence receives the terminal result until then.
+   carries this fence's marker, `cleaned` is written as `true` conditioned on the aggregate version.
+4. The participant records, pages, and root of an aggregate whose `cleaned` is `true` are deleted. A
+   missing child was already deleted.
+5. The aggregate is deleted when neither the `sourceOwner` lease nor the `targetOwner` lease is the
+   current lease. After that neither a Claim of the same fence (conditioned on the current `sourceOwner`
+   lease) nor the target's resubmission ([§10](#10-when-a-store-response-isnt-received), which ends when
+   the target lease expires) can happen, so until then the same fence receives the terminal result.
 
-When a child of an aggregate whose `cleaned` is `false` is missing, or the aggregate or child a
-marker refers to is missing, the authority is read again. If its physical version is unchanged the
+When the aggregate, root, page, or participant record a marker refers to is missing, the authority is read again. If its physical version is unchanged the
 result is data lost; if it changed, the new row is projected again.
 
 ## 4. Finding Running Nodes and Their Capabilities
