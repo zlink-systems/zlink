@@ -34,6 +34,8 @@ Spot은 채팅방 하나, 매칭 queue 하나처럼 **무언가를 기억하면�
 단위**를 만든다. channel로는 그것을 표현할 수 없다 — channel 호출은 그 이름을 맡은 node
 중 하나로 가므로, 같은 방에 보낸 두 메시지가 서로 다른 node에 도착할 수 있다.
 
+<p><a href="/common/diagrams/zlink-tour.html#lobby" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — 로비와 던전</a></p>
+
 Spot은 id를 가진다. 같은 id로 보낸 메시지는 언제나 같은 Spot에 도착하고, 그 Spot 안에서
 **한 번에 하나씩** 실행된다. 그래서 Spot의 필드는 lock 없이 다뤄도 된다.
 
@@ -179,6 +181,8 @@ id는 Framework가 만든다. 두 번째 호출은 응답을 기다리지 않고
 이 장이 만든 것은 **application이 명시적으로 만드는 Spot**이고, 대부분의 방·스테이지·존이
 여기 해당한다. 그 밖에 Object Server가 시작할 때 Framework가 만드는 것과, 첫 메시지가
 도착할 때 만들어지는 것이 있다. 생성 시점과 받는 lifecycle callback이 서로 다르다.
+
+<p><a href="/common/diagrams/zlink-tour.html#instance" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — Instance Spot</a></p>
 
 종류별 차이와 lifecycle 전체는 [Spot](21-spot.ko.md)이 다룬다.
 

@@ -179,6 +179,8 @@ RouteMesh는 **무엇을 지정하느냐**에 따라 호출이 달라진다. 지
 <iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional.html" title="RouteMesh — 양쪽이 서로 호출한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-routemesh-bidirectional.html" target="_blank">↗ 크게 보기</a></p>
 
+<p><a href="/common/diagrams/zlink-tour.html#meshchannel" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — RouteMesh channel</a></p>
+
 같은 mesh에 참여한 node는 서로 호출할 수 있다. A가 `profile` channel을 담당하고 B가
 `match` channel을 담당하면 A는 B를 호출하고 B는 A를 호출한다. 연결은 mesh 단위로 하나이며,
 두 호출이 그 연결을 함께 사용한다.
@@ -600,6 +602,8 @@ handler 작성 방법은 RouteMesh와 같다. 등록 방법만 다르다.
 <iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway.html" title="ClientServer — 호출은 한 방향이다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-clientserver-oneway.html" target="_blank">↗ 크게 보기</a></p>
 
+<p><a href="/common/diagrams/zlink-tour.html#clientserver" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — ClientServer</a></p>
+
 server만 주소를 공개하고, 연결도 client가 시작한다. **server는 client를 대상으로 새 호출을
 시작하지 않는다.** client에게 돌아가는 것은 client가 먼저 보낸 request의 응답뿐이다.
 
@@ -700,6 +704,8 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 
 <iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic.html" title="Fanout — 구독한 node 전부가 받는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-fanout-topic.html" target="_blank">↗ 크게 보기</a></p>
+
+<p><a href="/common/diagrams/zlink-tour.html#fanout" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — Fanout</a></p>
 
 발행하는 쪽은 받을 node를 지정하지 않는다. `publish` 한 번이 그 **topic**을 구독한 node
 전부에 전달된다. topic을 생략하면 Framework가 event의 packet name을 topic으로 사용한다.
