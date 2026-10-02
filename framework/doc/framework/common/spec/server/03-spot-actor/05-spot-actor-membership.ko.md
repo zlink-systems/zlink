@@ -122,9 +122,7 @@ target descriptor, typed capacity bundle, 현재 owner lease와 `StoreVersion`�
 인계와 취소 여부를 결정한다. Actor와 Spot은 이 공통 reservation operation을 함께
 사용한다.
 
-Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. Framework는 reservation 전에 변경할 수
-없는 content reference와 hash를 creation intent에 기록하고, object가 Ready가 되거나
-실패한 생성을 정리할 때까지 유지한다. 생성 권한을 얻은 target만 이 request를
+Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. Request의 content reference·hash, 저장 시점과 수명은 [Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다. 생성 권한을 얻은 target만 이 request를
 factory에 전달한다. Factory와 initialize는 `(logical key, ObjectGeneration,
 attempt)` 기준으로 한 번 이상 실행될 수 있으므로 같은 입력의 재실행을 안전하게
 처리해야 한다.

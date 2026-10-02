@@ -823,8 +823,7 @@ Ready incarnation을 `Existing`으로 반환한다. Creating
 Reservation CAS에서 패배한 caller는 별도 factory를
 시작하거나 다른 owner를 선택하지 않는다.
 
-Creation request는 reservation 전에 immutable content reference와
-hash로 저장한다.
+Creation request의 content reference·hash와 저장 시점은 [Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다.
 
 Factory는 logical key, 같은 ID의 서로 다른 logical incarnation을 구분하는 번호인
 [ObjectGeneration](02-glossary.ko.md#objectgeneration)과 attempt를 기준으로 at-least-once

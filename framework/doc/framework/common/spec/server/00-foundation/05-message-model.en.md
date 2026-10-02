@@ -53,8 +53,8 @@ An object creation request is a manager-operation input distinct from a regular
 send/request.
 
 The framework encodes it with the typed codec into a payload within the
-[size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) and records its immutable content reference and hash into a durable
-creation intent before the placement reservation.
+[size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines its content reference,
+hash, and when it is stored.
 
 A factory receives the logical
 key, ObjectGeneration, and creation attempt together, and must converge to the same

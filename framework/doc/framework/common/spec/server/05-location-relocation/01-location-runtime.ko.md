@@ -402,7 +402,8 @@ bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 — 
 이 preimage 구조의 key 파생 벡터를 고정한다.
 
 각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교한다. Creation
-terminal의 value는 `creation-operation-terminal-v1` bytes 그대로다(§7). [§3.5](#35-spotwide-이동의-진행-record)의
+terminal의 value는 `creation-operation-terminal-v1` bytes 그대로다(§7). Creation request의 value는
+encoded 생성 요청 bytes 그대로다(아래 `pendingCreation`). [§3.5](#35-spotwide-이동의-진행-record)의
 record는 그 절이 value를 정한다. 나머지 record의 value는 canonical JSON 값이며 최소한 다음
 field를 포함한다.
 
@@ -505,8 +506,10 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `aggregate` | 이 object가 참여한 SpotWide 이동의 participant marker다([§3.5](#35-spotwide-이동의-진행-record)). 참여 중이 아니면 field를 두지 않는다. |
 | `visibleStoreVersion` | 공개 `StoreVersion`이 이 row의 물리 version과 다를 때 공개 값을 보존한다([§3.5](#35-spotwide-이동의-진행-record)). 같으면 field를 두지 않는다. |
 
-Creation request record의 value는 encoded 생성 요청 bytes 그대로다. JSON·base64·별도 header를 붙이지
-않는다. 이 record는 한 번 쓰고 바꾸지 않으며 예약 상태를 담지 않는다. `pendingCreation`을 쓰는 Store
+생성 요청의 content reference는 authority identity와 `pendingCreation.reservationId`로 유도하는 creation
+request record의 key이며, 별도 field로 저장하지 않는다. 이 record의 value에는 JSON·base64·별도
+header를 붙이지 않는다. 생성을 요청하는 쪽은 reservation 전에 encoded bytes와 SHA-256을 준비하고,
+저장은 아래 write가 한다. 이 record는 한 번 쓰고 바꾸지 않으며 예약 상태를 담지 않는다. `pendingCreation`을 쓰는 Store
 write가 이 record를 없을 때만 함께 쓰고, `pendingCreation`을 지우는 write(완료·실패·취소·회수)와 그
 authority를 지우는 write가 이 record를 함께 지운다. 그 밖의 경우에는 지우지 않는다.
 
@@ -514,10 +517,10 @@ authority를 지우는 write가 이 record를 함께 지운다. 그 밖의 경�
 SHA-256이 `requestSha256`과 같은지 확인한다. Record가 없거나 어느 하나라도 다르면 factory를 실행하지
 않고 그 생성을 실패로 기록한다.
 
-예약은 별도의 record가 아니라 이 record의 상태다. `allocation.state`가 `reserved`이고
+예약은 별도의 record가 아니라 authority record의 상태다. `allocation.state`가 `reserved`이고
 `pendingCreation`이 있는 구간이 하나의 예약이며, `pendingCreation.reservationId`가 그
-예약의 식별자다. 예약 전용 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
-취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
+예약의 식별자다. 예약 상태를 담는 별도 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
+취소도 authority record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
 그 정보가 남지 않는다.
 
@@ -932,7 +935,7 @@ Create call은 한 번만 제출할 수 있다. 제출할 때 위치 조회부�
 deadline을 사용한다. 같은 option을 중복 지정하거나 같은 call을 다시 제출하면
 `InvalidOperation`이다.
 
-생성 요청의 encoded 크기는 최대 1 MiB(1,048,576 bytes)다. Actor와 User Spot 요청 bytes는 §3.4의
+생성 요청의 encoded 크기는 최대 1 MiB(1,048,576 bytes)다. Actor와 User Spot 요청 bytes는 [§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)의
 creation request record value에 그대로 들어가며, 이 한도는 Store value 한도([02 §3](02-location-store-redis.ko.md#3-key-value-version과-clock))와 같다. Relocation Store에는 저장하지 않는다.
 
 ```mermaid

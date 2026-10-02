@@ -940,8 +940,7 @@ to the deadline. A different object kind or stable type is a type-mismatch error
 A caller
 that loses the reservation CAS doesn't start a separate factory or pick a different owner.
 
-The creation request is stored as an immutable content reference and hash before
-reservation.
+[Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines the creation request's content reference, hash, and when it is stored.
 
 The factory must converge to the same result even when it runs at-least-once,
 based on the logical key, the number distinguishing different logical incarnations of the same

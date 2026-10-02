@@ -147,10 +147,8 @@ target, and cancellation are decided by checking the recorded `Creating`
 state and target owner lease together. Actor and Spot share this common
 reservation operation.
 
-The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). The framework records an
-unchangeable content reference and hash into the creation intent before
-reservation, and keeps it until the object becomes Ready or a failed
-creation is cleaned up. Only the target that obtained creation authority
+The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines the request's content reference,
+hash, when it is stored, and its lifetime. Only the target that obtained creation authority
 passes this request to the factory. Since factory execution and initialization
 can run more than once per `(logical key, ObjectGeneration, attempt)`, they must
 safely handle re-execution with the same input.

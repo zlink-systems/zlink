@@ -439,7 +439,8 @@ pins the key-derivation vectors for this preimage shape.
 
 The provider stores and compares each record's value only as bytes, without interpreting
 its meaning. A creation terminal's value is the `creation-operation-terminal-v1` bytes as
-they are (§7). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
+they are (§7). A creation request's value is the encoded creation request bytes as they are
+(`pendingCreation` below). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
 values from that section. Every other record's value is a canonical JSON value that includes at
 least the following fields.
 
@@ -549,8 +550,10 @@ number precision).
 | `aggregate` | The participant marker of the SpotWide relocation this object takes part in ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when the object takes part in none. |
 | `visibleStoreVersion` | Preserves the public `StoreVersion` when it differs from this row's physical version ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when they are equal. |
 
-The creation request record's value is the encoded creation request bytes as they are, with no
-JSON, base64, or separate header. The record is written once, never changed, and holds no
+The creation request's content reference is the key of the creation request record derived from the
+authority identity and `pendingCreation.reservationId`; it isn't stored as a separate field. The record's
+value carries no JSON, base64, or separate header. The requester prepares the encoded bytes and their
+SHA-256 before reservation, and the write below stores them. The record is written once, never changed, and holds no
 reservation state. The Store write that writes `pendingCreation` also writes this record, only when
 it is missing; the write that removes `pendingCreation` (completion, failure, abort, reclaim) and the
 write that deletes that authority also delete this record. It isn't deleted otherwise.
@@ -559,10 +562,10 @@ The node that runs the creation reads the creation request record and verifies t
 the length `requestEncodedSize` and the SHA-256 `requestSha256`. If the record is missing or either
 differs, it doesn't run the factory and records the creation as failed.
 
-The reservation isn't a separate record; it's a state of this one. A reservation is the
+The reservation isn't a separate record; it's a state of the authority record. A reservation is the
 interval during which `allocation.state` is `reserved` and `pendingCreation` is present,
-and `pendingCreation.reservationId` identifies it. No logical key is reserved for it, and
-completing or aborting a reservation another node created is decided from this record and
+and `pendingCreation.reservationId` identifies it. No separate logical key holds reservation state, and
+completing or aborting a reservation another node created is decided from the authority record and
 §7's final-result record alone. Reservation state isn't held outside the fields in the
 table above — reservation information placed in a field only one language reads doesn't
 survive another language's update of that record.
@@ -1035,7 +1038,7 @@ location lookup through `Ready` confirmation. Specifying the same option twice, 
 resubmitting the same call, is `InvalidOperation`.
 
 The creation request's encoded size is at most 1 MiB (1,048,576 bytes). Actor and User Spot request
-bytes go as they are into the value of §3.4's creation request record, and this limit equals the Store
+bytes go as they are into the value of [§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)'s creation request record, and this limit equals the Store
 value limit ([02 §3](02-location-store-redis.en.md#3-key-value-version-and-clock)). They aren't stored in the
 Relocation Store.
 

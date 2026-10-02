@@ -439,7 +439,7 @@ Actor and User Spot manager create, and target-owned Instance activation,
 use a generic reservation to create the final object/owner generation and
 a `Creating` row.
 
-- A creation record preserves the object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence, and the content reference/hash of a complete request envelope within the [size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).
+- A creation record preserves the object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence, and the [content reference](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record)/hash of a complete request envelope within the [size limit](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).
 - This value, preserved in the pending current row, is called the `stored creation intent`. During recovery, this record can be scanned to confirm the fence value and receipt still match exactly, and used to restore state.
 - The application code that actually creates the object is called the [Factory](../00-foundation/02-glossary.en.md#factory). Once Factory, initialize, and initial membership finish, the reservation commit and the `Ready` CAS run under the same fence.
 - Only target-owned Instance cold activation additionally fixes the [durable activation inbox](../00-foundation/02-glossary.en.md#durable-activation-inbox)'s first record before commit.
