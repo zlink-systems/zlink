@@ -72,7 +72,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
         var first = Request(prepare);
         var duplicate = Request(prepare);
-        using var otherMessage = Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare));
+        using var otherMessage = Message.From(
+            ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare)
+        );
         var otherConnectionReply = otherSource
             .Request()
             .Message(otherMessage)
@@ -81,21 +83,59 @@ public sealed class CanonicalActorJoinIngressReplyTests
             .Reply;
         var differentIdentityReplies = new[]
         {
-            prepare with { SourceNodeRid = RoutingId.From("other-source") },
-            prepare with { SourceNodeGeneration = prepare.SourceNodeGeneration + 1 },
-            prepare with { Coordinator = prepare.Coordinator with { ExpectedAuthorityStoreVersion = "other-version" } },
-            prepare with { Target = prepare.Target with { OwnerId = "other-owner" } },
-            prepare with { Object = prepare.Object with { ObjectId = "other-actor" } },
-        }.Select(Request).ToArray();
-        foreach (var other in new[]
+            prepare with
+            {
+                SourceNodeRid = RoutingId.From("other-source"),
+            },
+            prepare with
+            {
+                SourceNodeGeneration = prepare.SourceNodeGeneration + 1,
+            },
+            prepare with
+            {
+                Coordinator = prepare.Coordinator with
+                {
+                    ExpectedAuthorityStoreVersion = "other-version",
+                },
+            },
+            prepare with
+            {
+                Target = prepare.Target with { OwnerId = "other-owner" },
+            },
+            prepare with
+            {
+                Object = prepare.Object with { ObjectId = "other-actor" },
+            },
+        }
+            .Select(Request)
+            .ToArray();
+        foreach (
+            var other in new[]
+            {
+                (
+                    prepare.Coordinator with
+                    {
+                        ExpectedAuthorityStoreVersion = "other-version",
+                    },
+                    prepare.Object
+                ),
+                (prepare.Coordinator, prepare.Object with { ObjectId = "other-actor" }),
+            }
+        )
         {
-            (prepare.Coordinator with { ExpectedAuthorityStoreVersion = "other-version" }, prepare.Object),
-            (prepare.Coordinator, prepare.Object with { ObjectId = "other-actor" }),
-        })
-        {
-            using var chunk = Message.From(ZLinkServiceWireCodec.EncodeRelocationState(
-                new(prepare.RelocationId, prepare.TargetAttemptGeneration, other.Item1,
-                    1, other.Item2, 0, payload.Chunk(0))));
+            using var chunk = Message.From(
+                ZLinkServiceWireCodec.EncodeRelocationState(
+                    new(
+                        prepare.RelocationId,
+                        prepare.TargetAttemptGeneration,
+                        other.Item1,
+                        1,
+                        other.Item2,
+                        0,
+                        payload.Chunk(0)
+                    )
+                )
+            );
             await runtime.Source.Send().Message(chunk).Async(CancellationToken.None).Admitted;
         }
         var conflict = prepare with { PayloadChecksumCrc32c = prepare.PayloadChecksumCrc32c ^ 1 };
@@ -182,7 +222,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
             var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => ignored);
             Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
         }
-        var otherTimeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => otherConnectionReply);
+        var otherTimeout = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+            otherConnectionReply
+        );
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, otherTimeout.Result);
     }
 
