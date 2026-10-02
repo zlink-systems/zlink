@@ -1410,7 +1410,8 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
         creating_payload.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
     object_reserve_request_t reserve_request;
     reserve_request.operation_deadline =
-      std::chrono::system_clock::now () + (deadline - std::chrono::steady_clock::now ());
+      std::chrono::time_point_cast<std::chrono::system_clock::duration> (
+        std::chrono::system_clock::now () + (deadline - std::chrono::steady_clock::now ()));
     reserve_request.key = key;
     reserve_request.intent.stable_type = stable_type;
     reserve_request.intent.request_content_reference =
