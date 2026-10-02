@@ -40,12 +40,14 @@ import java.util.stream.Collectors;
 
 /** Owns one classic fanout receive path for each configured manual endpoint. */
 final class ZLinkManualFanoutRuntime implements AutoCloseable {
+    private static final long DISCOVERY_TICK_MILLIS = 10;
     private static final Logger LOGGER = Logger.getLogger(ZLinkManualFanoutRuntime.class.getName());
 
     private final ZLinkChannelBackendAdapter backend;
     private final ZLinkMonitoringBackendAdapter monitoring;
     private final ZLinkBackendContext context;
     private final BiConsumer<String, ZLinkBackendTopicMessage> dispatch;
+    private final Runnable topologySignal;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Set<String>> desired = new LinkedHashMap<>();
     private final Map<String, Connection> connections = new LinkedHashMap<>();
@@ -66,7 +68,8 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             ScheduledExecutorService scheduler,
             Executor infrastructureExecutor,
             BiConsumer<String, ZLinkBackendTopicMessage> dispatch,
-            Map<String, List<String>> applicationTopics) {
+            Map<String, List<String>> applicationTopics,
+            Runnable topologySignal) {
         this.backend = Objects.requireNonNull(backend, "backend");
         this.monitoring = monitoring;
         this.context = Objects.requireNonNull(context, "context");
@@ -75,6 +78,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 Objects.requireNonNull(infrastructureExecutor, "infrastructureExecutor");
         this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
         this.applicationTopics = Map.copyOf(applicationTopics);
+        this.topologySignal = Objects.requireNonNull(topologySignal, "topologySignal");
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -144,7 +148,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                                 endpoints.forEach(endpoint -> open(channel, endpoint, null)));
         ScheduledFuture<?> scheduled =
                 scheduler.scheduleAtFixedRate(
-                        () -> signalTick(start.epoch()), 0, 10, TimeUnit.MILLISECONDS);
+                        () -> signalTick(start.epoch()),
+                        0,
+                        DISCOVERY_TICK_MILLIS,
+                        TimeUnit.MILLISECONDS);
         boolean cancel =
                 inStateLane(
                         () -> {
@@ -387,6 +394,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     }
 
     private void clearAdmittedTick(CompletableFuture<Void> token) {
+        topologySignal.run();
         inStateLane(
                 () -> {
                     if (admittedTick == token) {
@@ -658,13 +666,16 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 () ->
                         connections.values().stream()
                                 .filter(connection -> connection.channelName.equals(channelName))
-                                .filter(
-                                        connection ->
-                                                connection.phase == ConnectionPhase.RECEIVABLE)
                                 .map(
                                         connection ->
                                                 new PublisherSnapshot(
-                                                        connection.publisherId, connection.ready))
+                                                        connection.publisherId,
+                                                        connection.phase
+                                                                        == ConnectionPhase
+                                                                                .RECEIVABLE
+                                                                && connection.ready,
+                                                        connection.phase
+                                                                != ConnectionPhase.CLOSING))
                                 .toList());
     }
 
@@ -725,7 +736,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 || "Closed".equals(event);
     }
 
-    record PublisherSnapshot(RoutingId nodeRid, boolean ready) {}
+    record PublisherSnapshot(RoutingId nodeRid, boolean ready, boolean connecting) {}
 
     private record StartState(Map<String, List<String>> initial, long epoch) {}
 

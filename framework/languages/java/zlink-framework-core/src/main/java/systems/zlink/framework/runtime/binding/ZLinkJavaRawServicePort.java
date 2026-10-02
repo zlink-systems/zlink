@@ -4,12 +4,14 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -235,6 +237,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             .whenComplete((ignored, failure) -> Message.closeAll(ownedMessages));
             completionOwns = true;
             return completion;
+        } catch (RuntimeException failure) {
+            RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
+            return CompletableFuture.failedFuture(
+                    terminal == RequestResult.INTERNAL_ERROR
+                            ? failure
+                            : new ZlinkRequestException(terminal).initCause(failure));
         } finally {
             if (!completionOwns) {
                 Message.closeAll(ownedMessages);

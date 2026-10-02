@@ -56,11 +56,17 @@ internal sealed class RequestPerformer(
                 .ConfigureAwait(false);
 
             var status = (int)response.StatusCode;
-            if (options.Cookies && response.Headers.TryGetValues("Set-Cookie", out var setCookies))
+            if (
+                options.Cookies
+                && response.Headers.TryGetValues(HttpHeaderLookup.SetCookie, out var setCookies)
+            )
                 foreach (var setCookie in setCookies)
                     cookieJar.Store(current.Host, setCookie);
 
-            var location = response.Headers.TryGetValues("Location", out var locations)
+            var location = response.Headers.TryGetValues(
+                HttpHeaderLookup.Location,
+                out var locations
+            )
                 ? locations.FirstOrDefault()
                 : null;
             if (
@@ -127,22 +133,22 @@ internal sealed class RequestPerformer(
             Version = HttpVersion.Version11,
         };
 
-        var contentType = HttpHeaderLookup.Find(requestHeaders, "content-type");
+        var contentType = HttpHeaderLookup.Find(requestHeaders, HttpHeaderLookup.ContentTypeKey);
         var streaming = bodyProvider is not null;
         HttpContent? content = null;
         if (bodyProvider is not null)
         {
             content = new StreamContent(new ProviderReadStream(bodyProvider));
             content.Headers.TryAddWithoutValidation(
-                "Content-Type",
-                contentType ?? "application/octet-stream"
+                HttpHeaderLookup.ContentType,
+                contentType ?? System.Net.Mime.MediaTypeNames.Application.Octet
             );
         }
         else if (body is not null)
         {
             content = new ByteArrayContent(body);
             if (contentType is not null)
-                content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+                content.Headers.TryAddWithoutValidation(HttpHeaderLookup.ContentType, contentType);
         }
 
         message.Content = content;
@@ -152,11 +158,20 @@ internal sealed class RequestPerformer(
         // HttpListener (and many servers) do not emit 100-Continue; waiting for it would deadlock
         // a streamed/chunked upload. We never use the Expect/continue handshake.
         message.Headers.ExpectContinue = false;
-        message.Headers.TryAddWithoutValidation("User-Agent", HttpClientVersion.UserAgent);
-        message.Headers.TryAddWithoutValidation("Accept", "application/json");
+        message.Headers.TryAddWithoutValidation(
+            HttpHeaderLookup.UserAgent,
+            HttpClientVersion.UserAgent
+        );
+        message.Headers.TryAddWithoutValidation(
+            HttpHeaderLookup.Accept,
+            System.Net.Mime.MediaTypeNames.Application.Json
+        );
 
         if (options.Compression)
-            message.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            message.Headers.TryAddWithoutValidation(
+                HttpHeaderLookup.AcceptEncoding,
+                ResponseCompression.AcceptedEncodings
+            );
 
         ApplyHeaders(message, options.Headers, keepAuthorization);
         ApplyHeaders(message, requestHeaders, keepAuthorization);
@@ -164,9 +179,13 @@ internal sealed class RequestPerformer(
         if (options.Cookies)
         {
             var path = HttpRedirectPolicy.PathOf(target);
-            var cookieHeader = cookieJar.HeaderFor(target.Host, path, target.Scheme == "https");
+            var cookieHeader = cookieJar.HeaderFor(
+                target.Host,
+                path,
+                target.Scheme == Uri.UriSchemeHttps
+            );
             if (cookieHeader.Length > 0)
-                message.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+                message.Headers.TryAddWithoutValidation(HttpHeaderLookup.Cookie, cookieHeader);
         }
 
         return message;
@@ -180,12 +199,12 @@ internal sealed class RequestPerformer(
     {
         foreach (var (name, value) in headers)
         {
-            if (name.Equals("content-type", StringComparison.OrdinalIgnoreCase))
+            if (name.Equals(HttpHeaderLookup.ContentType, StringComparison.OrdinalIgnoreCase))
                 continue; // routed to the content above
 
             if (
                 !keepAuthorization
-                && name.Equals("authorization", StringComparison.OrdinalIgnoreCase)
+                && name.Equals(HttpHeaderLookup.Authorization, StringComparison.OrdinalIgnoreCase)
             )
                 continue;
 

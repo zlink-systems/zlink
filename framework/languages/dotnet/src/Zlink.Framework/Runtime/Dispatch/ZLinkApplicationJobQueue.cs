@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Dispatch;
@@ -7,8 +8,10 @@ internal readonly record struct ZLinkApplicationJobQueueCapacity(
     ulong? ConfiguredManualMax,
     ulong EffectiveProcessorCount,
     ulong EffectiveMaxQueuedApplicationJobs,
-    uint ConfiguredPauseThresholdPercent = 80,
-    uint ConfiguredResumeThresholdPercent = 60
+    uint ConfiguredPauseThresholdPercent =
+        ZLinkInboundDispatchOptionsModel.DefaultPauseThresholdPercent,
+    uint ConfiguredResumeThresholdPercent =
+        ZLinkInboundDispatchOptionsModel.DefaultResumeThresholdPercent
 )
 {
     internal ulong PausePermitCount =>
@@ -43,8 +46,8 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
         ZLinkApplicationJobQueueProfile profile,
         ulong? configuredManualMax,
         ulong effectiveProcessorCount,
-        uint pauseThresholdPercent = 80,
-        uint resumeThresholdPercent = 60
+        uint pauseThresholdPercent = ZLinkInboundDispatchOptionsModel.DefaultPauseThresholdPercent,
+        uint resumeThresholdPercent = ZLinkInboundDispatchOptionsModel.DefaultResumeThresholdPercent
     )
     {
         if (!Enum.IsDefined(profile))
@@ -53,7 +56,7 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
             );
         if (configuredManualMax is 0 or > MaximumQueueLimit)
             throw new ZLinkConfigurationException(
-                $"MaxQueuedApplicationJobs must be between 1 and {MaximumQueueLimit}."
+                $"MaxQueuedApplicationJobs must be positive and at most {MaximumQueueLimit}."
             );
         ValidatePressureThresholds(pauseThresholdPercent, resumeThresholdPercent);
 
@@ -81,7 +84,7 @@ internal static class ZLinkApplicationJobQueueCapacityResolver
         }
         if (automatic > MaximumQueueLimit)
             throw new ZLinkConfigurationException(
-                "The automatic Application Job Queue limit exceeds 2,147,483,647."
+                $"The automatic Application Job Queue limit exceeds {MaximumQueueLimit}."
             );
 
         return new ZLinkApplicationJobQueueCapacity(

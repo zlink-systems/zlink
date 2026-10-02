@@ -119,7 +119,9 @@ final class ZLinkUserSpotRetireScheduler {
                         .count();
         for (long index = 0; index < count; index++) {
             systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.increment(
-                    "zlink.drain.actors.handed_off", Map.of());
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                            .DRAIN_ACTORS_HANDED_OFF_NAME,
+                    Map.of());
         }
     }
 

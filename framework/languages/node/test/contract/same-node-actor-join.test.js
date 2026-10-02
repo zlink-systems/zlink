@@ -9,6 +9,8 @@ const { runActorHandlerWithDeferredJoins } = require('../../packages/framework/d
 
 function fixture({ storeFailure = false, lifecycleFailure = false, entry = false, rejected = false, sameTarget = false, sourceLeave, admissionWaitForAbort = false } = {}) {
   const events = [];
+  let admissionEntered;
+  const admissionEntry = new Promise(resolve => { admissionEntered = resolve; });
   let joinSignal;
   const completions = [];
   const shutdown = new AbortController();
@@ -53,7 +55,8 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
     spot: {
       async onActorJoin() {
         events.push('admission');
-        if (admissionWaitForAbort) {
+        admissionEntered();
+        if (admissionWaitForAbort && !joinSignal.aborted) {
           await new Promise(resolve => joinSignal.addEventListener('abort', resolve, { once: true }));
         }
         return { accepted: !rejected };
@@ -86,7 +89,7 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
   };
   state.getOrStartCreation('player', false, async () => ({ status: 'created', actor }));
   state.bindActor(actor, context);
-  return { state, events, completions, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
+  return { state, events, completions, admissionEntry, frameworkJoined: () => frameworkJoined, location: () => location, async run(timeoutMs) {
     try {
       await runActorHandlerWithDeferredJoins(() => {
         const call = entry ? context.joinEntrySpot() : context.joinSpot('room');
@@ -157,9 +160,16 @@ for (const entry of [false, true]) {
   });
 }
 
-test('same-node Join deadline expires during admission before Store commit', async () => {
+test('same-node Join deadline expires during admission before Store commit', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture({ admissionWaitForAbort: true });
-  await f.run(10);
+  const pending = f.run(10);
+  await f.admissionEntry;
+  now = 10;
+  t.mock.timers.tick(10);
+  await pending;
   assert.deepEqual(f.events, ['admission', 'completion:failed']);
   assert.equal(f.location().membershipEpoch, 1n);
 });

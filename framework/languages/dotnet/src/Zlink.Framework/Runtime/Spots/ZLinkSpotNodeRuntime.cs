@@ -1332,10 +1332,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             )
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"entry_spot_location_tracked node={Node.RoutingId} "
-                + $"spot={EntrySpotId} spot_gen={_entrySpot.LifecycleGeneration} "
-                + $"node_gen={nodeGeneration} authority_gen={_entrySpot.LifecycleGeneration} "
-                + $"status={status}"
+            $"entry_spot_location_tracked node={Node.RoutingId} spot={EntrySpotId} spot_gen={_entrySpot.LifecycleGeneration} node_gen={nodeGeneration} authority_gen={_entrySpot.LifecycleGeneration} status={status}"
         );
         if (status != ZLinkLocationWriteStatus.Stored)
             throw new ZLinkFrameworkException(

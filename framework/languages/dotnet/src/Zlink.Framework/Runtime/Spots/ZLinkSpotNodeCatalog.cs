@@ -168,8 +168,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 //  남기지 않으면 deadline 소진의 이유를 밖에서 알 수 없다.
                 if (_spots.Count != 0)
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"spot_drain_pending count={_spots.Count} "
-                            + $"spots={string.Join(",", _spots.Keys)}"
+                        $"spot_drain_pending count={_spots.Count} spots={string.Join(",", _spots.Keys)}"
                     );
                 return _spots.Count == 0;
             })
@@ -324,7 +323,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             catch (Exception exception)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"relocation_failed spot={unit.Activation.SpotId} " + $"error={exception}"
+                    $"relocation_failed spot={unit.Activation.SpotId} error={exception}"
                 );
                 return ZLinkRelocationUnitResult.Terminal(
                     ZLinkFrameworkRelocationReason.RelocationFailed,

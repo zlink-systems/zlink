@@ -634,8 +634,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         )
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"relocation_session_route_retry actor={actorState.ActorId} "
-                                + $"handoff={handoffId} attempt={attempt}"
+                            $"relocation_session_route_retry actor={actorState.ActorId} handoff={handoffId} attempt={attempt}"
                         );
                         await Task.Delay(
                                 SessionRouteConvergenceRetryDelay * attempt,
@@ -676,8 +675,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             // identity: a late ACK must never commit, so the route is
             // terminal for this handoff.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_session_route_fenced actor={actorState.ActorId} "
-                    + $"handoff={handoffId}"
+                $"relocation_session_route_fenced actor={actorState.ActorId} handoff={handoffId}"
             );
             return;
         }
@@ -1168,9 +1166,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_begin actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence} reply={reply is not null} "
-                + $"has_reply_route={job.CanonicalRequest is { ReplyRouteId: not 0 }}"
+            $"canonical_actor_replay_completion_begin actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} reply={reply is not null} has_reply_route={job.CanonicalRequest is { ReplyRouteId: not 0 }}"
         );
         ZLinkCanonicalTerminalCompletion? completion = null;
         byte[]? replyFrame = null;
@@ -1201,16 +1197,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         }
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_handled actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence} "
-                + $"has_completion={completion is not null}"
+            $"canonical_actor_replay_handled actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} has_completion={completion is not null}"
         );
         if (completion is not null)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_begin actor={actorState.ActorId} "
-                    + $"accepted_sequence={job.AcceptedSequence} "
-                    + $"reply_route={request!.ReplyRouteId}"
+                $"canonical_actor_reply_relay_begin actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} reply_route={request!.ReplyRouteId}"
             );
             var acknowledgement = await TryRelayCanonicalReplyAsync(
                     RoutingId.FromHex(completion.SourceNodeRid),
@@ -1232,9 +1224,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_result actor={actorState.ActorId} "
-                    + $"accepted_sequence={job.AcceptedSequence} "
-                    + $"acknowledgement={acknowledgement}"
+                $"canonical_actor_reply_relay_result actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} acknowledgement={acknowledgement}"
             );
             if (
                 !await CompleteCanonicalReplyDeliveryAsync(
@@ -1252,8 +1242,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         actorState.Handoff.AcknowledgeCanonicalReplayThrough(job.AcceptedSequence);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_end actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence}"
+            $"canonical_actor_replay_completion_end actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence}"
         );
     }
 

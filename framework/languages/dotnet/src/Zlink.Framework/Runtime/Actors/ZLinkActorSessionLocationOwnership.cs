@@ -4,6 +4,8 @@ namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
 {
+    private const string SelfTeardownOperationName = "actor-self-teardown";
+
     public async ValueTask RollbackTransferredActorAsync(
         string actorId,
         CancellationToken cancellationToken = default,
@@ -446,7 +448,7 @@ internal sealed partial class ZLinkActorSessionManager
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"deferred actor teardown failed for '{state.ActorId}': {failure.Message}"
             );
-            StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
+            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
         }
     }
 
@@ -516,7 +518,7 @@ internal sealed partial class ZLinkActorSessionManager
                 );
             }
 
-            StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
+            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
         }
     }
 

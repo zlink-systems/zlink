@@ -833,11 +833,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 //  The message says the authority changed but not how, so
                 //  the axis that actually moved never reaches a log.
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"handoff_cas_conflict actor={actorId} "
-                        + $"expected_version={snapshot.StoreVersion} "
-                        + $"expected_target_gen={targetAuthorityOwnerGeneration} "
-                        + $"current={conflict.Current.GetType().Name} "
-                        + $"current_detail={DescribeAuthority(conflict.Current)}"
+                    $"handoff_cas_conflict actor={actorId} expected_version={snapshot.StoreVersion} expected_target_gen={targetAuthorityOwnerGeneration} current={conflict.Current.GetType().Name} current_detail={DescribeAuthority(conflict.Current)}"
                 );
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,

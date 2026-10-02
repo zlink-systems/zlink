@@ -19,7 +19,10 @@ internal static class ZLinkLocationStorePages
                     var page = await store
                         .ListMeshNodesAsync(
                             meshName,
-                            new ZLinkPageRequest(1000, continuationToken),
+                            new ZLinkPageRequest(
+                                ZLinkPageRequestPolicy.MaximumPageSize,
+                                continuationToken
+                            ),
                             cancellationToken
                         )
                         .ConfigureAwait(false);

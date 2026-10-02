@@ -1,16 +1,8 @@
 package systems.zlink.stream.connector;
 
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.JsonDeserializer;
-import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.module.SimpleModule;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 
@@ -19,8 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 public final class ZLinkStreamJson {
-    public static final String CONTENT_TYPE = "application/json";
-    private static final ObjectMapper MAPPER = ZLinkFrameworkJsonProfile.mapper(routingIdModule());
+    public static final String CONTENT_TYPE = ZLinkFrameworkJsonProfile.CONTENT_TYPE;
+    private static final ObjectMapper MAPPER = ZLinkFrameworkJsonProfile.mapper();
 
     private ZLinkStreamJson() {}
 
@@ -134,32 +126,6 @@ public final class ZLinkStreamJson {
 
     private static String valueTypeName(Object value) {
         return value == null ? "null" : value.getClass().getName();
-    }
-
-    private static SimpleModule routingIdModule() {
-        SimpleModule module = new SimpleModule("zlink-routing-id");
-        module.addSerializer(
-                RoutingId.class,
-                new JsonSerializer<>() {
-                    @Override
-                    public void serialize(
-                            RoutingId value,
-                            JsonGenerator generator,
-                            SerializerProvider serializers)
-                            throws IOException {
-                        generator.writeString(value.toHex());
-                    }
-                });
-        module.addDeserializer(
-                RoutingId.class,
-                new JsonDeserializer<>() {
-                    @Override
-                    public RoutingId deserialize(JsonParser parser, DeserializationContext context)
-                            throws IOException {
-                        return RoutingId.fromHex(parser.getValueAsString());
-                    }
-                });
-        return module;
     }
 
     private enum JsonCodec implements ZLinkStreamTypedCodec {

@@ -188,7 +188,6 @@ void zlink::router_t::discard_staged_record (const blob_t &routing_id_,
     std::lock_guard<std::mutex> lock (state->mutex);
     const zlink_routing_id_t &source = state->recv.source_node_rid;
     if (!state->recv.active
-        || state->recv.family != part_helper_internal::recv_family_router
         || source.size != routing_id_.size ()
         || memcmp (source.data, routing_id_.data (), source.size) != 0)
         return;

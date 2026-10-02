@@ -5,14 +5,17 @@ using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -842,8 +845,12 @@ public sealed class RelocationBehaviorConformanceTests
         }
     }
 
-    [Fact]
-    public async Task ActorJoin_target_ready_submit_failure_reuses_staging_on_exact_prepare_retry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActorJoin_target_ready_submit_failure_reuses_staging_on_exact_prepare_retry(
+        bool sourcePreserves
+    )
     {
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(
@@ -934,6 +941,8 @@ public sealed class RelocationBehaviorConformanceTests
             transport.ReleaseTargetReadySend.TrySetResult();
             _ = await retry;
             transport.SubmitRetriedTargetReady();
+            await transport.AbortRetriedTargetPrepareAsync();
+            Assert.False(transport.TargetRollbackDestroyStarted.Task.IsCompleted);
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.True(
                 target.Runtime.TryGetCreatedActorState(
@@ -942,6 +951,42 @@ public sealed class RelocationBehaviorConformanceTests
                     out _
                 )
             );
+            if (sourcePreserves)
+            {
+                var repository = new ZLinkProviderLocationRepository(locationStore);
+                var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+                var authority = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(key)
+                    )
+                    .Snapshot;
+                Assert.NotNull(
+                    await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+                        repository
+                    ).TryPreserveSourceAsync(
+                        key,
+                        authority,
+                        transport.RelocationId,
+                        CancellationToken.None
+                    )
+                );
+                await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(3)
+                );
+                transport.ReleaseTargetRollbackDestroy.TrySetResult();
+                await transport.TargetRollbackDestroyCompleted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(3)
+                );
+                Assert.False(
+                    target.Runtime.TryGetCreatedActorState(
+                        actorId,
+                        RelocationBehaviorHost.ActorType,
+                        out _
+                    )
+                );
+                Assert.False(trace.HasTargetAuthorityMutation);
+                return;
+            }
             //  Relocation flow §4.4–4.5: READY alone never starts the target
             //  CAS. The source's own Prepare reaches the reused staging, and
             //  only its verified cutover opens the CAS and the lifecycle.
@@ -2414,6 +2459,17 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
     internal int DataSendCount;
     internal int TargetAbortCallCount => Volatile.Read(ref _targetAbortCallCount);
+    internal Guid RelocationId =>
+        ZLinkRelocationTransferPayload
+            .DecodeEnvelope(
+                (
+                    _preparePayload
+                    ?? throw new InvalidOperationException(
+                        "No canonical prepare payload was captured."
+                    )
+                ).Encoded
+            )
+            .AggregateId;
     private int _targetRollbackDestroyCount;
     private int _targetPrepareCallCount;
     private int _targetAbortCallCount;
@@ -2441,13 +2497,17 @@ internal sealed class CanonicalRelocationTransportProbe
             ReleaseTargetReadySend.TrySetResult();
     }
 
-    internal void FailNextTargetReadySend() => Interlocked.Exchange(ref _failTargetReadyOnce, 1);
+    internal void FailNextTargetReadySend() =>
+        ((ReadyGatedCanonicalRelocationTarget)_gatedTarget!).FailNextNativeReply();
 
-    internal ICanonicalRelocationTarget WrapTarget(ICanonicalRelocationTarget target)
+    internal ICanonicalRelocationTarget WrapTarget(
+        ICanonicalRelocationTarget target,
+        ZLinkManagedMeshNode node
+    )
     {
         _target = target;
         _gatedTarget = _holdTargetReady
-            ? new ReadyGatedCanonicalRelocationTarget(target, this)
+            ? new ReadyGatedCanonicalRelocationTarget(target, this, node)
             : target;
         return _gatedTarget;
     }
@@ -2731,9 +2791,25 @@ internal sealed class CanonicalRelocationTransportProbe
 
     private sealed class ReadyGatedCanonicalRelocationTarget(
         ICanonicalRelocationTarget inner,
-        CanonicalRelocationTransportProbe probe
+        CanonicalRelocationTransportProbe probe,
+        ZLinkManagedMeshNode node
     ) : ICanonicalRelocationTarget
     {
+        internal void FailNextNativeReply()
+        {
+            Interlocked.Exchange(ref probe._failTargetReadyOnce, 1);
+            node.NativeTerminalReplySubmitOverride = (_, command) =>
+            {
+                if (
+                    command != ServiceWireConstants.Command.RelocationReady
+                    || Interlocked.Exchange(ref probe._failTargetReadyOnce, 0) == 0
+                )
+                    return null;
+                probe.TargetReadyFailureInjected.TrySetResult();
+                return SubmitResult.Terminated;
+            };
+        }
+
         public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             ZLinkRelocationEnvelope envelope,
@@ -2763,7 +2839,10 @@ internal sealed class CanonicalRelocationTransportProbe
                 probe.DuplicateTargetPrepareRejected.TrySetResult();
                 throw;
             }
-            if (Interlocked.Exchange(ref probe._failTargetReadyOnce, 0) != 0)
+            if (
+                node.NativeTerminalReplySubmitOverride is null
+                && Interlocked.Exchange(ref probe._failTargetReadyOnce, 0) != 0
+            )
             {
                 probe.TargetReadyFailureInjected.TrySetResult();
                 throw new IOException("Injected READY terminal failure.");
@@ -2925,7 +3004,10 @@ internal class ProbedBackendSpotNode : DispatchProxy
         )
         {
             canonical.SetCanonicalRelocationTarget(
-                _probe.WrapTarget((ICanonicalRelocationTarget)args[0]!)
+                _probe.WrapTarget(
+                    (ICanonicalRelocationTarget)args[0]!,
+                    ((ZLinkBackendSpotNodeWrapper)_target).NativeNode
+                )
             );
             return null;
         }

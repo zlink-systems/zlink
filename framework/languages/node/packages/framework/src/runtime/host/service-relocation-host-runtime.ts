@@ -395,8 +395,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * Terminal restore failures (assembly/checksum/factory/restore error): the
    * target already sent relocationFailed (command 53) once. An exact-identity
    * Prepare resend replays the stored response rather than retrying the
-   * restore; a different exact identity reusing the same RelocationId+attempt
-   * key supersedes the stale entry (spec 28 §3, §9).
+   * restore. A different exact identity never changes this entry (spec 28 §4.3).
    */
   private readonly targetReadyFailures = new Map<
     string,
@@ -861,47 +860,57 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       const operationKey = relocationStagingId(request);
       const fingerprint = stringifyWire(request);
+      const readyFailure = this.targetReadyFailures.get(operationKey);
+      const readyPending = this.targetReadyResponses.get(operationKey);
+      let operation = this.targetPrepareOperations.get(operationKey);
+      const acceptedFingerprint =
+        readyFailure?.fingerprint ??
+        readyPending?.fingerprint ??
+        operation?.fingerprint ??
+        this.targetAssemblies.get(operationKey)?.fingerprint ??
+        this.targetStages.get(operationKey)?.offer.prepareFingerprint ??
+        this.terminalTargets.get(operationKey);
+      if (request.sourceNodeRid !== String(record.sourceNodeRid)) return true;
+      if (acceptedFingerprint !== undefined && acceptedFingerprint !== fingerprint) {
+        if (!samePrepareIdentity(acceptedFingerprint, request)) return true;
+        this.replyPrepare(
+          record,
+          relocationFailed(request, ServiceWireFrameworkErrorCode.relocationDataLost)
+        );
+        return true;
+      }
       // A restore that failed outright is terminal: the source observes the
       // same explicit relocationFailed on every identical Prepare resend
-      // rather than a silent stall. A different exact identity reusing the
-      // same RelocationId+attempt key supersedes the stale failure — the
-      // newer attempt wins (spec 28 §3).
-      const readyFailure = this.targetReadyFailures.get(operationKey);
+      // rather than a silent stall.
       if (readyFailure !== undefined) {
-        if (readyFailure.fingerprint === fingerprint) {
-          this.replyPrepare(record, readyFailure.response);
-          return true;
-        }
-        this.targetReadyFailures.delete(operationKey);
+        this.replyPrepare(record, readyFailure.response);
+        return true;
       }
       // Spec 28: an exact-identity Restore resend against staging that
       // already restored successfully reuses that staging — it re-submits
       // READY rather than restarting the restore.
-      const readyPending = this.targetReadyResponses.get(operationKey);
       if (readyPending !== undefined) {
-        if (readyPending.fingerprint !== fingerprint) {
-          throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
-        }
         this.submitTargetReady(meshName, operationKey, record, readyPending.response);
         return true;
-      }
-      let operation = this.targetPrepareOperations.get(operationKey);
-      if (operation !== undefined && operation.fingerprint !== fingerprint) {
-        throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
       }
       if (operation === undefined) {
         // The prepare turn must not block the ordered dispatch lane: the
         // payload chunks that complete this operation arrive as later records
         // on the same connection. Register the assembly synchronously, then
         // finish the restore and the Ready reply asynchronously.
-        this.registerTargetAssembly(operationKey, request, String(record.sourceNodeRid));
-        const promise = this.handlePrepareControl(
-          meshName,
-          operationKey,
-          request,
-          record.sourceNodeRid,
-          signal
-        );
+        let promise: Promise<ServiceMaintenanceRelocationReady>;
+        try {
+          this.registerTargetAssembly(operationKey, request, String(record.sourceNodeRid));
+          promise = this.handlePrepareControl(
+            meshName,
+            operationKey,
+            request,
+            record.sourceNodeRid,
+            signal
+          );
+        } catch (error) {
+          promise = Promise.reject(error);
+        }
         operation = { fingerprint, promise };
         this.targetPrepareOperations.set(operationKey, operation);
         void promise
@@ -1032,7 +1041,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       String(sourceNodeRid) !== pending.authenticatedSourceNodeRid ||
       request.senderRole !== 'source' ||
       !sameCoordinator(request.coordinator, pending.prepare.coordinator) ||
-      stringifyWire(request.object) !== stringifyWire(pending.prepare.object)
+      !sameRelocationObject(request.object, pending.prepare.object)
     ) {
       // Spec 28 §4.3 — a chunk with a different exact identity is never
       // attached to an in-progress assembly; it is discarded.
@@ -1056,14 +1065,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): TargetPayloadAssembly {
     const existing = this.targetAssemblies.get(operationKey);
     if (existing !== undefined) {
-      if (existing.fingerprint !== stringifyWire(request)) {
-        // Same exact identity with a different declared length or checksum is
-        // an explicit conflict failure; the existing assembly is neither
-        // reused nor overwritten (spec 28 §4.3).
-        throw existing.assembly.fail(
-          `Relocation '${operationKey}' repeated Prepare with a conflicting manifest.`
-        );
-      }
       return existing;
     }
     const pending: TargetPayloadAssembly = {
@@ -1078,15 +1079,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     };
     this.targetAssemblies.set(operationKey, pending);
     if (this.relocationIntegrityFaultGate()?.consumeIdentityConflict() === true) {
-      // Route a same-identity, different-manifest delivery through the normal
-      // conflict branch so existing staging is neither reused nor overwritten.
-      return this.registerTargetAssembly(
-        operationKey,
-        {
-          ...request,
-          payloadChecksumCrc32c: request.payloadChecksumCrc32c ^ 1
-        },
-        authenticatedSourceNodeRid
+      throw new ServiceRelocationDataLostError(
+        pending.assembly.fail(
+          `Relocation '${operationKey}' repeated Prepare with a conflicting manifest.`
+        ).message
       );
     }
     return pending;
@@ -2784,14 +2780,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     stagingId: string,
     request: ServiceMaintenanceRelocationPrepare,
-    sourceNodeRid: RoutingId | null,
+    sourceNodeRid: RoutingId,
     signal?: AbortSignal
   ): Promise<ServiceMaintenanceRelocationReady> {
-    if (sourceNodeRid === null || String(sourceNodeRid) !== request.sourceNodeRid) {
-      throw new Error(
-        'Relocation prepare source node fence does not match the authenticated peer.'
-      );
-    }
     const targetStatus = this.requireMeshNode(meshName).status();
     const targetOwner = this.options.currentOwner();
     const targetDescriptor = this.options.localDescriptor?.(meshName);
@@ -2809,24 +2800,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const fingerprint = stringifyWire(request);
     const existing = this.targetStages.get(stagingId);
     if (existing !== undefined) {
-      if (
-        existing.offer.authenticatedSourceNodeRid !== String(sourceNodeRid) ||
-        existing.offer.prepareFingerprint !== fingerprint
-      ) {
-        throw new Error('Relocation prepare retry source node changed.');
-      }
       return relocationReady(request);
     }
     const terminal = this.terminalTargets.get(stagingId);
     if (terminal !== undefined) {
-      if (terminal !== fingerprint) {
-        throw new Error(`Relocation '${stagingId}' repeated Prepare with different bytes.`);
-      }
       this.terminalTargets.touch(stagingId);
       return relocationReady(request);
     }
     const pendingAssembly = this.targetAssemblies.get(stagingId);
-    if (pendingAssembly === undefined || pendingAssembly.fingerprint !== fingerprint) {
+    if (pendingAssembly === undefined) {
       throw new Error(`Relocation '${stagingId}' has no matching payload assembly.`);
     }
     // The directly transferred payload replaces the shared durable root: the
@@ -5213,10 +5195,49 @@ function sameCoordinator(
 ): boolean {
   return (
     left.ownerId === right.ownerId &&
-    left.leaseGeneration === right.leaseGeneration &&
+    BigInt(left.leaseGeneration) === right.leaseGeneration &&
     left.nodeRid === right.nodeRid &&
-    left.nodeGeneration === right.nodeGeneration &&
+    BigInt(left.nodeGeneration) === right.nodeGeneration &&
     left.expectedAuthorityStoreVersion === right.expectedAuthorityStoreVersion
+  );
+}
+
+function sameRelocationTarget(
+  left: ServiceWireRelocationTarget,
+  right: ServiceWireRelocationTarget
+): boolean {
+  return (
+    left.nodeRid === right.nodeRid &&
+    BigInt(left.nodeGeneration) === right.nodeGeneration &&
+    left.ownerId === right.ownerId &&
+    BigInt(left.ownerLeaseGeneration) === right.ownerLeaseGeneration
+  );
+}
+
+function sameRelocationObject(
+  left: ServiceWireRelocationObject,
+  right: ServiceWireRelocationObject
+): boolean {
+  if (left.kind !== right.kind || BigInt(left.objectGeneration) !== right.objectGeneration) {
+    return false;
+  }
+  if (left.kind === 'actor' && right.kind === 'actor') {
+    return (
+      left.actorId === right.actorId &&
+      BigInt(left.expectedAuthorityOwnerGeneration) === right.expectedAuthorityOwnerGeneration
+    );
+  }
+  if (left.kind === 'userSpot' && right.kind === 'userSpot') {
+    return (
+      left.spotId === right.spotId &&
+      BigInt(left.expectedAuthorityOwnerGeneration) === right.expectedAuthorityOwnerGeneration
+    );
+  }
+  return (
+    left.kind === 'instanceSpot' &&
+    right.kind === 'instanceSpot' &&
+    left.spotId === right.spotId &&
+    left.stableType === right.stableType
   );
 }
 
@@ -5546,7 +5567,7 @@ function validatePrepareEnvelope(
   if (
     !sameWireId(request.relocation, relocationWireId(envelope.aggregateId)) ||
     request.applicationVersion !== envelope.applicationVersion ||
-    stringifyWire(request.object) !== stringifyWire(relocationObject(envelope))
+    !sameRelocationObject(request.object, relocationObject(envelope))
   ) {
     throw new Error('Relocation Prepare does not match its immutable root identity.');
   }
@@ -5563,16 +5584,9 @@ function validateTargetOneWayControl(
     !sameWireId(request.relocation, prepare.relocation) ||
     request.targetAttemptGeneration !== prepare.targetAttemptGeneration ||
     !sameCoordinator(request.coordinator, prepare.coordinator) ||
-    stringifyWire(request.object) !==
-      stringifyWire(request.kind === 'data' ? request.object : prepare.object)
+    (request.kind === 'cutover' && !sameRelocationObject(request.object, prepare.object))
   ) {
     throw new Error('Relocation one-way control changed its exact Prepare fence.');
-  }
-  if (
-    request.kind === 'cutover' &&
-    stringifyWire(request.object) !== stringifyWire(prepare.object)
-  ) {
-    throw new Error('Relocation Cutover changed its prepared object.');
   }
 }
 
@@ -5702,6 +5716,20 @@ function stringifyWire(value: unknown): string {
   return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
 }
 
+function samePrepareIdentity(
+  acceptedFingerprint: string,
+  incoming: ServiceMaintenanceRelocationPrepare
+): boolean {
+  const accepted = JSON.parse(acceptedFingerprint) as ServiceMaintenanceRelocationPrepare;
+  return (
+    accepted.sourceNodeRid === incoming.sourceNodeRid &&
+    BigInt(accepted.sourceNodeGeneration) === incoming.sourceNodeGeneration &&
+    sameCoordinator(accepted.coordinator, incoming.coordinator) &&
+    sameRelocationTarget(accepted.target, incoming.target) &&
+    sameRelocationObject(accepted.object, incoming.object)
+  );
+}
+
 function validateControlResponse(
   request: ZLinkServiceRelocationControlRequest,
   response: ZLinkServiceRelocationControlResponse
@@ -5712,8 +5740,8 @@ function validateControlResponse(
     !sameWireId(response.relocation, request.relocation) ||
     response.targetAttemptGeneration !== request.targetAttemptGeneration ||
     !sameCoordinator(response.coordinator, request.coordinator) ||
-    stringifyWire(response.target) !== stringifyWire(request.target) ||
-    stringifyWire(response.object) !== stringifyWire(request.object) ||
+    !sameRelocationTarget(response.target, request.target) ||
+    !sameRelocationObject(response.object, request.object) ||
     response.senderRole !== 'target'
   ) {
     throw new Error('Relocation control response does not match the request fence.');
@@ -5736,8 +5764,8 @@ function validateControlFailureResponse(
     !sameWireId(response.relocation, request.relocation) ||
     response.targetAttemptGeneration !== request.targetAttemptGeneration ||
     !sameCoordinator(response.coordinator, request.coordinator) ||
-    stringifyWire(response.target) !== stringifyWire(request.target) ||
-    stringifyWire(response.object) !== stringifyWire(request.object) ||
+    !sameRelocationTarget(response.target, request.target) ||
+    !sameRelocationObject(response.object, request.object) ||
     response.senderRole !== 'target'
   ) {
     throw new Error('Relocation control response does not match the request fence.');

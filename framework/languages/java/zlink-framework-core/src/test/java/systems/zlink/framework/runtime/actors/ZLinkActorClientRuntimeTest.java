@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -469,6 +470,44 @@ final class ZLinkActorClientRuntimeTest {
 
         ZLinkFrameworkException frameworkError = (ZLinkFrameworkException) error.getCause();
         assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, frameworkError.kind());
+    }
+
+    @Test
+    void actorRequestDoesNotInferBindingResultFromExceptionMessage() {
+        for (String token : List.of("NOT_CONNECTED", "NOT_FOUND", "CONFLICT")) {
+            RuntimeException failure = new IllegalStateException("Backend failure: " + token);
+            ZLinkActorClientRuntime client =
+                    new ZLinkActorClientRuntime(
+                            () ->
+                                    new RecordingSpotNode() {
+                                        @Override
+                                        public CompletionStage<List<Message>> requestToActor(
+                                                ZLinkBackendActorRef actor,
+                                                List<Message> parts,
+                                                SendFlags flags,
+                                                Duration timeout) {
+                                            return CompletableFuture.failedFuture(failure);
+                                        }
+                                    },
+                            new ZLinkStoreLocationResolvers(
+                                    ZLinkRegisteredLocationStores.fromUnified(
+                                            storeWithActor("actor-1")),
+                                    new ZLinkLocationOptions()),
+                            new ZLinkJsonMessageSerializer(),
+                            Duration.ofSeconds(5),
+                            ZLinkTestAdmissionFactory.create());
+
+            CompletionException error =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    client.requestToActor("actor-1", new Ping("hello"))
+                                            .submit(Pong.class)
+                                            .toCompletableFuture()
+                                            .join());
+
+            assertSame(failure, error.getCause(), token);
+        }
     }
 
     @Test

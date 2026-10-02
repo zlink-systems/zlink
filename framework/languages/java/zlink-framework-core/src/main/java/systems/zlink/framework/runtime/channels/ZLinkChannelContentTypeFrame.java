@@ -8,7 +8,8 @@ import java.util.Objects;
 
 /** Carries the framework-selected application content type inside internal frames. */
 public final class ZLinkChannelContentTypeFrame {
-    public static final String DEFAULT_CONTENT_TYPE = "application/json";
+    public static final String DEFAULT_CONTENT_TYPE =
+            systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile.CONTENT_TYPE;
     private static final String PREFIX = "__zlink.content-type\n";
 
     private ZLinkChannelContentTypeFrame() {}

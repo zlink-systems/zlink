@@ -28,9 +28,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final Logger LOGGER =
             Logger.getLogger(DefaultZLinkStreamConnector.class.getName());
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
-    private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
-    private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
-    private static final int MAX_PACKET_NAME_BYTES = 255;
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ScheduledExecutorService timeouts =
@@ -717,7 +714,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         if (packetName.startsWith(RESERVED_PACKET_NAME_PREFIX)) {
             throw ZLinkStreamException.validationFailed("packetName uses a reserved zlink prefix");
         }
-        if (packetName.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
+        if (packetName.getBytes(StandardCharsets.UTF_8).length
+                > ZLinkStreamWireProtocol.MAX_PACKET_NAME_BYTES) {
             throw ZLinkStreamException.validationFailed(
                     "packetName must not exceed 255 UTF-8 bytes");
         }

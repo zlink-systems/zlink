@@ -4,15 +4,18 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Request metric state shared by all MeshNode request surfaces. */
 public final class ZLinkRequestMetrics {
     public static final long NO_START = Long.MIN_VALUE;
+    private static final int MAX_FAILURE_CAUSE_DEPTH = 16;
     private static final ConcurrentHashMap<String, Series> NODE = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Series> CHANNEL = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Series> SPOT = new ConcurrentHashMap<>();
@@ -23,23 +26,23 @@ public final class ZLinkRequestMetrics {
     private ZLinkRequestMetrics() {}
 
     public static Series node(String meshName) {
-        return series(NODE, meshName, "node");
+        return series(NODE, meshName, ZLinkDispatchErrorSurface.NODE.traceName());
     }
 
     public static Series channel(String meshName) {
-        return series(CHANNEL, meshName, "channel");
+        return series(CHANNEL, meshName, ZLinkDispatchErrorSurface.CHANNEL.traceName());
     }
 
     public static Series spot(String meshName) {
-        return series(SPOT, meshName, "spot");
+        return series(SPOT, meshName, ZLinkDispatchErrorSurface.SPOT_ROUTE.traceName());
     }
 
     public static Series instanceSpot(String meshName) {
-        return series(INSTANCE_SPOT, meshName, "instance_spot");
+        return series(INSTANCE_SPOT, meshName, ZLinkDispatchErrorSurface.INSTANCE_SPOT.traceName());
     }
 
     public static Series actor(String meshName) {
-        return series(ACTOR, meshName, "actor");
+        return series(ACTOR, meshName, ZLinkDispatchErrorSurface.SPOT_ACTOR.traceName());
     }
 
     public static boolean durationEnabled() {
@@ -65,8 +68,8 @@ public final class ZLinkRequestMetrics {
         Outcome outcome = outcome(failure);
         if (elapsedNanos >= 0L) {
             ZLinkRuntimeMetrics.record(
-                    "zlink.mesh_node.request.duration",
-                    elapsedNanos / 1_000_000_000.0,
+                    ZLinkRuntimeMetrics.Metric.REQUEST_DURATION.metricName(),
+                    (double) elapsedNanos / TimeUnit.SECONDS.toNanos(1),
                     switch (outcome) {
                         case COMPLETED -> series.completed;
                         case FAILED -> series.failed;
@@ -74,7 +77,8 @@ public final class ZLinkRequestMetrics {
                     });
         }
         if (outcome == Outcome.TIMED_OUT) {
-            ZLinkRuntimeMetrics.increment("zlink.mesh_node.request.timeouts", series.request);
+            ZLinkRuntimeMetrics.increment(
+                    ZLinkRuntimeMetrics.Metric.REQUEST_TIMEOUTS.metricName(), series.request);
         }
     }
 
@@ -101,7 +105,7 @@ public final class ZLinkRequestMetrics {
             return Outcome.COMPLETED;
         }
         Throwable current = failure;
-        for (int depth = 0; current != null && depth < 16; depth++) {
+        for (int depth = 0; current != null && depth < MAX_FAILURE_CAUSE_DEPTH; depth++) {
             if (current instanceof TimeoutException
                     || current instanceof ZlinkRequestException request
                             && request.getResult() == RequestResult.TIMED_OUT
@@ -119,9 +123,18 @@ public final class ZLinkRequestMetrics {
     }
 
     private enum Outcome {
-        COMPLETED,
-        FAILED,
-        TIMED_OUT
+        COMPLETED("completed"),
+        FAILED("failed"),
+        TIMED_OUT("timed_out");
+        private final String wire;
+
+        Outcome(String wire) {
+            this.wire = wire;
+        }
+
+        String wire() {
+            return wire;
+        }
     }
 
     public static final class Series {
@@ -132,10 +145,36 @@ public final class ZLinkRequestMetrics {
         private final Map<String, String> timedOut;
 
         private Series(String meshName, String surface) {
-            request = Map.of("mesh_name", meshName, "surface", surface);
-            completed = Map.of("mesh_name", meshName, "surface", surface, "outcome", "completed");
-            failed = Map.of("mesh_name", meshName, "surface", surface, "outcome", "failed");
-            timedOut = Map.of("mesh_name", meshName, "surface", surface, "outcome", "timed_out");
+            request =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            meshName,
+                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
+                            surface);
+            completed =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            meshName,
+                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
+                            surface,
+                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
+                            Outcome.COMPLETED.wire());
+            failed =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            meshName,
+                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
+                            surface,
+                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
+                            Outcome.FAILED.wire());
+            timedOut =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            meshName,
+                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
+                            surface,
+                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
+                            Outcome.TIMED_OUT.wire());
         }
 
         private void registerInflight() {

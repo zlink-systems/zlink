@@ -13,7 +13,7 @@ public final class ZLinkAuthorityKeyCodec {
                 systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireValid(
                                 spotId)
                         .getBytes(StandardCharsets.UTF_8);
-        return encode("zla1:s:", identity, "Spot");
+        return encode(spotPrefix(), identity, "Spot");
     }
 
     public static String actor(String actorId) {
@@ -21,7 +21,7 @@ public final class ZLinkAuthorityKeyCodec {
             throw new IllegalArgumentException("actorId is required");
         }
         byte[] identity = actorId.getBytes(StandardCharsets.UTF_8);
-        return encode("zla1:a:", identity, "Actor");
+        return encode(actorPrefix(), identity, "Actor");
     }
 
     private static String encode(String prefix, byte[] identity, String kind) {

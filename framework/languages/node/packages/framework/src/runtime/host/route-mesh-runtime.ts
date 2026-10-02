@@ -26,8 +26,13 @@ import {
 import { debugPendingWorkNames, isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   runtimeStateIsReady,
+  topologyObservationIsTerminal,
   topologyRuntimeIsReady
 } from '../foundation/runtime-state-projections';
+import {
+  MeshNodeRuntimeState,
+  MeshPeerRuntimeState
+} from '../foundation/service-runtime-contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -79,7 +84,6 @@ export interface ZLinkLocalPlacementCounts {
 
 interface ZLinkMeshDrainState {
   state: ZLinkTopologyState;
-  sequence: bigint;
   deadline?: Date;
   operation?: Promise<ZLinkMeshDrainResult>;
   result?: ZLinkMeshDrainResult;
@@ -90,9 +94,6 @@ interface ZLinkMeshDrainState {
 
 export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   private readonly states = new Map<string, ZLinkMeshDrainState>();
-  private readonly placementFingerprints = new Map<string, string>();
-  private readonly peerFingerprints = new Map<string, Map<string, string>>();
-  private readonly locationStoreHealthFingerprints = new Map<string, boolean>();
   private placementObserver?: ReturnType<typeof setInterval>;
   private hostOperation?: Promise<ZLinkMeshDrainResult>;
   private shutdownOperation?: Promise<ZLinkMeshDrainResult>;
@@ -103,7 +104,6 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       options.admission.register(meshName);
       this.states.set(meshName, {
         state: ZLinkTopologyState.Starting,
-        sequence: 0n,
         waiters: [],
         observers: new Set()
       });
@@ -118,6 +118,12 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   }
 
   snapshot(meshName: string): ZLinkRouteMeshStatus {
+    const published = this.publishCurrentStatus(meshName, this.requireState(meshName));
+    if (published === undefined) throw routeNotFound(meshName);
+    return published;
+  }
+
+  private buildSnapshot(meshName: string, sequence: bigint): ZLinkRouteMeshStatus {
     const drain = this.requireState(meshName);
     const node = this.options.meshNode(meshName);
     if (node === undefined) throw routeNotFound(meshName);
@@ -215,20 +221,15 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         isAvailable: placementAvailable,
         activeActorCount: populationCapacity?.actors.active ?? 0,
         activeSpotCount: populationCapacity?.spots.active ?? 0,
-        unavailableReason: placementAvailable
-          ? undefined
-          : localTopologyState !== ZLinkTopologyState.Ready
-            ? ZLinkTopologyReason.RuntimeNotReady
-            : !locationStoreHealthy
-              ? ZLinkTopologyReason.LocationUnavailable
-              : placementWeight <= 0
-                ? ZLinkTopologyReason.NoReadyTarget
-                : ZLinkTopologyReason.CapacityExceeded
+        unavailableReason: placementUnavailableReason(
+          placementAvailable,
+          hostState,
+          locationStoreHealthy
+        )
       },
-      sequence: drain.sequence > status.lastChangedMs ? drain.sequence : status.lastChangedMs,
+      sequence,
       observedAt: new Date()
     };
-    drain.lastSnapshot = snapshot;
     return snapshot;
   }
 
@@ -240,16 +241,15 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     const state = this.requireState(meshName);
     if (!Number.isInteger(capacity) || capacity <= 0)
       throw new RangeError('Observer capacity must be positive.');
-    if (state.observers.size === 0) this.seedPlacementFingerprint(meshName);
+    const snapshot = this.snapshot(meshName);
     const queue = new RuntimeEventQueue<ZLinkRouteMeshStatus>(capacity, signal);
+    state.observers.add(queue);
+    this.startPlacementObserver();
     queue.onClose(() => {
       state.observers.delete(queue);
       this.stopPlacementObserverIfIdle();
     });
-    const initial = this.snapshot(meshName);
-    state.observers.add(queue);
-    queue.push(initial, meshName);
-    this.startPlacementObserver();
+    this.publishStatus(meshName, queue, snapshot);
     return queue;
   }
 
@@ -258,72 +258,23 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   }
 
   hostStateChanged(): void {
-    for (const [meshName, state] of this.states) {
-      state.sequence += 1n;
-      let snapshot: ZLinkRouteMeshStatus;
-      try {
-        snapshot = this.snapshot(meshName);
-      } catch {
-        continue;
-      }
-      for (const observer of state.observers) observer.push(snapshot, meshName);
-    }
+    for (const [meshName, state] of this.states) this.publishCurrentStatus(meshName, state);
   }
 
   stopObservers(): void {
     for (const [meshName, state] of this.states) {
-      state.sequence += 1n;
-      let terminal: ZLinkRouteMeshStatus | undefined;
-      try {
-        const current = this.snapshot(meshName);
-        const terminalSequence =
-          current.sequence >= state.sequence ? current.sequence + 1n : state.sequence;
-        state.sequence = terminalSequence;
-        terminal = {
-          ...current,
-          state: ZLinkTopologyState.Stopped,
-          isReady: false,
-          channels: current.channels.map((channel) => ({
-            ...channel,
-            isReady: false
-          })),
-          placement: {
-            ...current.placement,
-            isAvailable: false,
-            unavailableReason: ZLinkTopologyReason.RuntimeNotReady
-          },
-          sequence: terminalSequence,
-          observedAt: new Date()
-        };
-      } catch {
-        const current = state.lastSnapshot;
-        if (current !== undefined) {
-          const terminalSequence =
-            current.sequence >= state.sequence ? current.sequence + 1n : state.sequence;
-          state.sequence = terminalSequence;
-          terminal = {
-            ...current,
-            state: ZLinkTopologyState.Stopped,
-            isReady: false,
-            channels: current.channels.map((channel) => ({
-              ...channel,
-              isReady: false
-            })),
-            placement: {
-              ...current.placement,
-              isAvailable: false,
-              unavailableReason: ZLinkTopologyReason.RuntimeNotReady
-            },
-            sequence: terminalSequence,
-            observedAt: new Date()
-          };
-        }
+      const published = state.lastSnapshot;
+      if (published !== undefined && topologyObservationIsTerminal(published.state)) continue;
+      const current = published ?? this.publishCurrentStatus(meshName, state);
+      if (current === undefined) {
+        for (const observer of [...state.observers]) observer.close();
+      } else {
+        this.publishSnapshot(
+          meshName,
+          state,
+          terminalSnapshot(current, ZLinkTopologyState.Stopped)
+        );
       }
-      for (const observer of [...state.observers]) {
-        if (terminal === undefined) observer.close();
-        else observer.seal(terminal, meshName);
-      }
-      state.observers.clear();
     }
   }
 
@@ -670,64 +621,61 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   private transition(meshName: string, state: ZLinkMeshDrainState, next: ZLinkTopologyState): void {
     if (state.state === next) return;
     state.state = next;
-    state.sequence += 1n;
-    let current: ZLinkRouteMeshStatus | undefined;
-    let snapshotAvailable = false;
-    try {
-      current = this.snapshot(meshName);
-      snapshotAvailable = true;
-    } catch {
-      current = state.lastSnapshot;
-    }
-    const terminal = next === ZLinkTopologyState.Stopped || next === ZLinkTopologyState.Failed;
-    if (current !== undefined) {
-      if (terminal) {
-        const terminalSequence =
-          current.sequence >= state.sequence ? current.sequence + 1n : state.sequence;
-        state.sequence = terminalSequence;
-        const terminalStatus = {
-          ...current,
-          state: next,
-          isReady: false,
-          channels: current.channels.map((channel) => ({
-            ...channel,
-            isReady: false
-          })),
-          placement: {
-            ...current.placement,
-            isAvailable: false,
-            unavailableReason: ZLinkTopologyReason.RuntimeNotReady
-          },
-          sequence: terminalSequence,
-          observedAt: new Date()
-        };
-        for (const observer of state.observers) observer.seal(terminalStatus, meshName);
-      } else if (snapshotAvailable) {
-        for (const observer of state.observers) observer.push(current, meshName);
-      }
-    }
-    if (terminal) {
-      if (current === undefined) {
-        for (const observer of state.observers) observer.close();
-      }
-      state.observers.clear();
-      this.stopPlacementObserverIfIdle();
+    const published = this.publishCurrentStatus(meshName, state);
+    if (topologyObservationIsTerminal(next) && published === undefined) {
+      for (const observer of [...state.observers]) observer.close();
     }
   }
 
-  private seedPlacementFingerprint(meshName: string): void {
-    this.locationStoreHealthFingerprints.set(
-      meshName,
-      this.options.isLocationStoreHealthy?.() ?? true
-    );
-    const descriptor = this.options.meshNodeDescriptor?.(meshName);
-    if (descriptor !== undefined) {
-      this.placementFingerprints.set(meshName, placementFingerprint(descriptor));
+  private publishCurrentStatus(
+    meshName: string,
+    state: ZLinkMeshDrainState
+  ): ZLinkRouteMeshStatus | undefined {
+    const published = state.lastSnapshot;
+    if (published !== undefined && topologyObservationIsTerminal(published.state)) return published;
+    const desired = topologyObservationIsTerminal(state.state)
+      ? state.state
+      : topologyStateForHost(
+          this.options.hostState?.() ?? ZLinkFrameworkRuntimeState.Serving,
+          state.state
+        );
+    if (published !== undefined && topologyObservationIsTerminal(desired)) {
+      return this.publishSnapshot(meshName, state, terminalSnapshot(published, desired));
     }
-    this.peerFingerprints.set(
+    if (this.options.meshNode(meshName) === undefined) return undefined;
+    const current = this.buildSnapshot(meshName, published?.sequence ?? 0n);
+    return this.publishSnapshot(
       meshName,
-      peerFingerprintMap(this.options.meshNode(meshName)?.peers() ?? [])
+      state,
+      topologyObservationIsTerminal(current.state)
+        ? terminalSnapshot(current, current.state)
+        : current
     );
+  }
+
+  private publishSnapshot(
+    meshName: string,
+    state: ZLinkMeshDrainState,
+    current: ZLinkRouteMeshStatus
+  ): ZLinkRouteMeshStatus {
+    const published = state.lastSnapshot;
+    if (published !== undefined && samePublicRouteMeshStatus(published, current)) return published;
+    const next = { ...current, sequence: (published?.sequence ?? 0n) + 1n, observedAt: new Date() };
+    state.lastSnapshot = next;
+    for (const observer of [...state.observers]) this.publishStatus(meshName, observer, next);
+    return next;
+  }
+
+  private publishStatus(
+    meshName: string,
+    observer: RuntimeEventQueue<ZLinkRouteMeshStatus>,
+    status: ZLinkRouteMeshStatus
+  ): void {
+    if (topologyObservationIsTerminal(status.state)) {
+      observer.seal(status, meshName);
+    } else {
+      observer.push(status, meshName);
+    }
   }
 
   private startPlacementObserver(): void {
@@ -740,46 +688,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   }
 
   private stopPlacementObserverIfIdle(): void {
-    if ([...this.states.values()].some((state) => state.observers.size > 0)) return;
+    for (const state of this.states.values()) {
+      if (state.observers.size > 0) return;
+    }
     if (this.placementObserver !== undefined) clearInterval(this.placementObserver);
     this.placementObserver = undefined;
   }
 
   private observePlacementChanges(): void {
     for (const [meshName, state] of this.states) {
-      if (state.observers.size === 0) continue;
-      const locationStoreHealthy = this.options.isLocationStoreHealthy?.() ?? true;
-      if (locationStoreHealthy !== this.locationStoreHealthFingerprints.get(meshName)) {
-        this.locationStoreHealthFingerprints.set(meshName, locationStoreHealthy);
-        state.sequence += 1n;
-        for (const observer of state.observers) {
-          observer.push(this.snapshot(meshName), meshName);
-        }
-      }
-      const descriptor = this.options.meshNodeDescriptor?.(meshName);
-      if (descriptor === undefined) continue;
-      const fingerprint = placementFingerprint(descriptor);
-      const previous = this.placementFingerprints.get(meshName);
-      this.placementFingerprints.set(meshName, fingerprint);
-      const node = this.options.meshNode(meshName);
-      if (previous !== undefined && previous !== fingerprint) {
-        state.sequence += 1n;
-        for (const observer of state.observers) {
-          observer.push(this.snapshot(meshName), meshName);
-        }
-      }
-
-      const previousPeers = this.peerFingerprints.get(meshName) ?? new Map();
-      const peers = node?.peers() ?? [];
-      const nextPeers = peerFingerprintMap(peers);
-      this.peerFingerprints.set(meshName, nextPeers);
-      for (const peerRid of new Set([...previousPeers.keys(), ...nextPeers.keys()])) {
-        if (previousPeers.get(peerRid) === nextPeers.get(peerRid)) continue;
-        state.sequence += 1n;
-        for (const observer of state.observers) {
-          observer.push(this.snapshot(meshName), meshName);
-        }
-      }
+      this.publishCurrentStatus(meshName, state);
     }
   }
 
@@ -787,6 +705,77 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     const state = this.states.get(meshName);
     if (state !== undefined) return state;
     throw routeNotFound(meshName);
+  }
+}
+
+function terminalSnapshot(
+  current: ZLinkRouteMeshStatus,
+  state: ZLinkTopologyState
+): ZLinkRouteMeshStatus {
+  return {
+    ...current,
+    state,
+    isReady: false,
+    channels: current.channels.map((channel) => ({ ...channel, isReady: false })),
+    placement: {
+      ...current.placement,
+      isAvailable: false,
+      unavailableReason: ZLinkTopologyReason.RuntimeNotReady
+    }
+  };
+}
+
+function samePublicRouteMeshStatus(
+  left: ZLinkRouteMeshStatus,
+  right: ZLinkRouteMeshStatus
+): boolean {
+  return (
+    left.meshName === right.meshName &&
+    left.state === right.state &&
+    left.isReady === right.isReady &&
+    left.readyPeerCount === right.readyPeerCount &&
+    left.placement.isAvailable === right.placement.isAvailable &&
+    left.placement.activeActorCount === right.placement.activeActorCount &&
+    left.placement.activeSpotCount === right.placement.activeSpotCount &&
+    left.placement.unavailableReason === right.placement.unavailableReason &&
+    left.channels.length === right.channels.length &&
+    left.channels.every((channel, index) => {
+      const other = right.channels[index]!;
+      return (
+        channel.channelName === other.channelName &&
+        channel.isReady === other.isReady &&
+        channel.readyTargetCount === other.readyTargetCount
+      );
+    }) &&
+    left.peers.length === right.peers.length &&
+    left.peers.every((peer, index) => {
+      const other = right.peers[index]!;
+      return (
+        peer.nodeRid === other.nodeRid &&
+        peer.state === other.state &&
+        peer.unavailableReason === other.unavailableReason
+      );
+    })
+  );
+}
+
+function placementUnavailableReason(
+  available: boolean,
+  hostState: ZLinkFrameworkRuntimeState,
+  locationStoreHealthy: boolean
+): ZLinkTopologyReason | undefined {
+  if (available) return undefined;
+  switch (hostState) {
+    case ZLinkFrameworkRuntimeState.Relocating:
+    case ZLinkFrameworkRuntimeState.Relocated:
+    case ZLinkFrameworkRuntimeState.Draining:
+      return ZLinkTopologyReason.Draining;
+    case ZLinkFrameworkRuntimeState.Serving:
+      return !locationStoreHealthy
+        ? ZLinkTopologyReason.LocationUnavailable
+        : ZLinkTopologyReason.CapacityExceeded;
+    default:
+      return ZLinkTopologyReason.RuntimeNotReady;
   }
 }
 
@@ -810,51 +799,12 @@ function topologyStateForHost(
   }
 }
 
-function placementFingerprint(descriptor: ZLinkMeshNodeDescriptor): string {
-  const spotTypes = [...descriptor.populationCapacity.spotTypes]
-    .sort((left, right) => {
-      const kind = left.objectKind.localeCompare(right.objectKind);
-      return kind !== 0 ? kind : left.stableType.localeCompare(right.stableType);
-    })
-    .map((entry) => [
-      entry.objectKind,
-      entry.stableType,
-      entry.active,
-      entry.reserved,
-      entry.limit
-    ]);
-  return JSON.stringify([
-    descriptor.objectRole,
-    descriptor.placementWeight,
-    descriptor.populationCapacity.actors,
-    descriptor.populationCapacity.spots,
-    spotTypes,
-    descriptor.activationConcurrency,
-    Object.entries(descriptor.channelWeights).sort(([left], [right]) => left.localeCompare(right))
-  ]);
-}
-
 function hasRemainingCapacity(capacity: {
   readonly active: number;
   readonly limit: number;
   readonly reserved?: number;
 }): boolean {
   return capacity.limit === 0 || capacity.active + (capacity.reserved ?? 0) < capacity.limit;
-}
-
-function peerFingerprintMap(peers: ReturnType<ZLinkBackendMeshNode['peers']>): Map<string, string> {
-  return new Map(
-    peers.map((peer) => [
-      String(peer.routingId),
-      JSON.stringify([
-        peer.lifecycleGeneration.toString(),
-        peer.descriptorRevision.toString(),
-        peer.endpoint,
-        peer.state,
-        peer.lastError
-      ])
-    ])
-  );
 }
 
 export class ZLinkDrainingStatePublishError extends Error {
@@ -885,33 +835,32 @@ function multiMeshDrainError(): ZLinkFrameworkException {
   );
 }
 
-function backendState(state: number): ZLinkTopologyState {
+function backendState(state: MeshNodeRuntimeState): ZLinkTopologyState {
   switch (state) {
-    case 1:
+    case MeshNodeRuntimeState.Preparing:
       return ZLinkTopologyState.Starting;
-    case 2:
-    case 3:
-    case 4:
+    case MeshNodeRuntimeState.Serving:
       return ZLinkTopologyState.Ready;
-    case 5:
+    case MeshNodeRuntimeState.Retiring:
+    case MeshNodeRuntimeState.Draining:
       return ZLinkTopologyState.Stopping;
-    case 6:
+    case MeshNodeRuntimeState.Stopped:
       return ZLinkTopologyState.Stopped;
     default:
       return ZLinkTopologyState.Failed;
   }
 }
 
-function peerState(state: number): ZLinkPeerState {
+function peerState(state: MeshPeerRuntimeState): ZLinkPeerState {
   switch (state) {
-    case 3:
+    case MeshPeerRuntimeState.Serving:
       return ZLinkPeerState.Ready;
-    case 4:
+    case MeshPeerRuntimeState.Draining:
       return ZLinkPeerState.Draining;
-    case 6:
+    case MeshPeerRuntimeState.NotRequired:
       return ZLinkPeerState.NotRequired;
-    case 1:
-    case 2:
+    case MeshPeerRuntimeState.Connecting:
+    case MeshPeerRuntimeState.Preparing:
       return ZLinkPeerState.Connecting;
     default:
       return ZLinkPeerState.NotConnected;

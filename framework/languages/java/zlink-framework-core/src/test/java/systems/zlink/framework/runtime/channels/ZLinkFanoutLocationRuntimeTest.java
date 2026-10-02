@@ -15,6 +15,8 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationPage;
 import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
+import systems.zlink.framework.monitoring.ZLinkTopologyReason;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
@@ -42,6 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -58,6 +61,207 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkFanoutLocationRuntimeTest {
+    @Test
+    void drainingPublisherRemainsVisibleInPublicStatusWithoutATransport() throws Exception {
+        TestStore store = new TestStore();
+        var row = descriptor();
+        store.rows =
+                List.of(
+                        new ZLinkFanoutPublisherDescriptor(
+                                row.channelName(),
+                                row.publisherRid(),
+                                row.lifecycleGeneration(),
+                                row.descriptorRevision(),
+                                row.endpoint(),
+                                ZLinkFrameworkRuntimeState.DRAINING,
+                                row.securityIdentity(),
+                                row.ownerId(),
+                                row.leaseGeneration(),
+                                row.updatedAt()));
+        try (Fixture fixture = new Fixture(store)) {
+            var sockets = new ZLinkChannelSocketRegistry();
+            var channel = new ChannelRegistration("events", ChannelKind.FANOUT);
+            channel.enableSubscriber();
+            sockets.registerChannel(channel);
+            var view =
+                    new ZLinkFanoutRuntimeView(
+                            sockets,
+                            () -> fixture.runtime,
+                            () -> null,
+                            () -> ZLinkFrameworkRuntimeState.SERVING);
+            fixture.start();
+            awaitCondition(() -> !view.snapshot("events").publishers().isEmpty());
+            var publisher = view.snapshot("events").publishers().getFirst();
+            assertEquals(ZLinkPeerState.DRAINING, publisher.state());
+            assertEquals(ZLinkTopologyReason.DRAINING, publisher.unavailableReason().orElseThrow());
+            assertTrue(fixture.subscribers.isEmpty());
+        }
+    }
+
+    @Test
+    void servingPublisherDrainsClosesAndCanConnectAgain() throws Exception {
+        TestStore store = new TestStore();
+        var row = descriptor();
+        store.rows = List.of(row);
+        try (Fixture fixture = new Fixture(store)) {
+            var sockets = new ZLinkChannelSocketRegistry();
+            var channel = new ChannelRegistration("events", ChannelKind.FANOUT);
+            channel.enableSubscriber();
+            sockets.registerChannel(channel);
+            var view =
+                    new ZLinkFanoutRuntimeView(
+                            sockets,
+                            () -> fixture.runtime,
+                            () -> null,
+                            () -> ZLinkFrameworkRuntimeState.SERVING);
+            fixture.start();
+            ControlledSubscriber first = fixture.awaitSubscriber();
+            store.rows =
+                    List.of(
+                            new ZLinkFanoutPublisherDescriptor(
+                                    row.channelName(),
+                                    row.publisherRid(),
+                                    row.lifecycleGeneration(),
+                                    row.descriptorRevision() + 1,
+                                    row.endpoint(),
+                                    ZLinkFrameworkRuntimeState.DRAINING,
+                                    row.securityIdentity(),
+                                    row.ownerId(),
+                                    row.leaseGeneration(),
+                                    row.updatedAt()));
+            awaitCondition(() -> first.closed);
+            var publisher = view.snapshot("events").publishers().getFirst();
+            assertEquals(ZLinkPeerState.DRAINING, publisher.state());
+            assertEquals(ZLinkTopologyReason.DRAINING, publisher.unavailableReason().orElseThrow());
+            assertEquals(1, first.closeCalls.get());
+            assertEquals(1, fixture.subscribers.size());
+            store.rows =
+                    List.of(
+                            new ZLinkFanoutPublisherDescriptor(
+                                    row.channelName(),
+                                    row.publisherRid(),
+                                    row.lifecycleGeneration() + 1,
+                                    row.descriptorRevision() + 2,
+                                    row.endpoint(),
+                                    ZLinkFrameworkRuntimeState.SERVING,
+                                    row.securityIdentity(),
+                                    row.ownerId(),
+                                    row.leaseGeneration(),
+                                    row.updatedAt()));
+            ControlledSubscriber successor = fixture.awaitSubscriber();
+            assertFalse(successor.closed);
+            assertEquals(2, fixture.subscribers.size());
+            assertEquals(1, view.snapshot("events").publishers().size());
+            assertEquals(
+                    ZLinkPeerState.CONNECTING,
+                    view.snapshot("events").publishers().getFirst().state());
+            store.rows = List.of();
+            awaitCondition(() -> successor.closed);
+            assertTrue(view.snapshot("events").publishers().isEmpty());
+        }
+    }
+
+    @Test
+    void setupFailureRetainsCleanupFailure() throws Exception {
+        var setupFailure = new IllegalStateException("channel setup failed");
+        var cleanupFailure = new IllegalStateException("subscriber close failed");
+        TestStore store = new TestStore();
+        store.rows = List.of(descriptor());
+        try (var logged = new LoggedFailure(setupFailure);
+                Fixture fixture =
+                        new Fixture(
+                                store,
+                                subscriber -> {
+                                    store.rows = List.of();
+                                    subscriber.channelFailure = setupFailure;
+                                    subscriber.closeFailure = cleanupFailure;
+                                },
+                                ignored -> {})) {
+            fixture.start();
+            assertEquals(setupFailure, logged.failure.get(1, TimeUnit.SECONDS));
+            assertEquals(List.of(cleanupFailure), List.of(setupFailure.getSuppressed()));
+        }
+    }
+
+    @Test
+    void unregisteredConnectionRetainsBothCleanupFailures() throws Exception {
+        var monitorFailure = new IllegalStateException("monitor close failed");
+        var subscriberFailure = new IllegalStateException("subscriber close failed");
+        var holder = new java.util.concurrent.atomic.AtomicReference<Fixture>();
+        TestStore store = new TestStore();
+        store.rows = List.of(descriptor());
+        try (var logged = new LoggedFailure(monitorFailure);
+                Fixture fixture =
+                        new Fixture(
+                                store,
+                                subscriber -> {
+                                    subscriber.monitor.closeFailure = monitorFailure;
+                                    subscriber.closeFailure = subscriberFailure;
+                                },
+                                ignored -> holder.get().runtime.stop())) {
+            holder.set(fixture);
+            fixture.start();
+            assertEquals(monitorFailure, logged.failure.get(1, TimeUnit.SECONDS));
+            assertEquals(List.of(subscriberFailure), List.of(monitorFailure.getSuppressed()));
+            assertEquals(1, fixture.subscribers.getFirst().monitor.closeCalls.get());
+            assertEquals(1, fixture.subscribers.getFirst().closeCalls.get());
+        }
+    }
+
+    private static final class LoggedFailure extends java.util.logging.Handler
+            implements AutoCloseable {
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkFanoutLocationRuntime.class.getName());
+        private final Throwable expected;
+        private final CompletableFuture<Throwable> failure = new CompletableFuture<>();
+
+        private LoggedFailure(Throwable expected) {
+            this.expected = expected;
+            logger.addHandler(this);
+        }
+
+        @Override
+        public void publish(java.util.logging.LogRecord record) {
+            if (record.getThrown() == expected) {
+                failure.complete(expected);
+            }
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {
+            logger.removeHandler(this);
+        }
+    }
+
+    @Test
+    void disconnectFailureStillClosesResourcesAndFailsStop() throws Exception {
+        TestStore store = new TestStore();
+        store.rows = List.of(descriptor());
+        Fixture fixture = new Fixture(store);
+        try {
+            fixture.start();
+            ControlledSubscriber subscriber = fixture.awaitSubscriber();
+            var failure = new IllegalStateException("disconnect failed");
+            subscriber.disconnectFailure = failure;
+            ExecutionException stopped =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    fixture.runtime
+                                            .stop()
+                                            .toCompletableFuture()
+                                            .get(1, TimeUnit.SECONDS));
+            assertEquals(failure, stopped.getCause());
+            assertEquals(1, subscriber.monitor.closeCalls.get());
+            assertEquals(1, subscriber.closeCalls.get());
+        } finally {
+            assertThrows(CompletionException.class, fixture::close);
+        }
+    }
+
     @Test
     void automaticSubscriberUsesApplicationTopicsAndLivenessBeacon() throws Exception {
         TestStore store = new TestStore();
@@ -83,6 +287,10 @@ final class ZLinkFanoutLocationRuntimeTest {
 
             Future<?> monitor = lifecycle.submit(() -> subscriber.monitor.emit("DISCONNECTED"));
             monitor.get(1, TimeUnit.SECONDS);
+            var publisher = runtimeView(fixture).snapshot("events").publishers().getFirst();
+            assertEquals(ZLinkPeerState.NOT_CONNECTED, publisher.state());
+            assertEquals(
+                    ZLinkTopologyReason.NO_READY_PEER, publisher.unavailableReason().orElseThrow());
             CountDownLatch stopReserved = new CountDownLatch(1);
             Future<?> stop =
                     lifecycle.submit(
@@ -112,7 +320,7 @@ final class ZLinkFanoutLocationRuntimeTest {
     }
 
     @Test
-    void connectionSnapshotIsNotReceivableBeforeConnectCommit() throws Exception {
+    void openingPublisherIsConnectingBeforeReceiveCommit() throws Exception {
         TestStore store = new TestStore();
         store.rows = List.of(descriptor());
         try (Fixture fixture = new Fixture(store, true)) {
@@ -121,7 +329,11 @@ final class ZLinkFanoutLocationRuntimeTest {
             assertTrue(subscriber.connectEntered.await(1, TimeUnit.SECONDS));
 
             try {
-                assertTrue(fixture.runtime.publisherSnapshots("events").isEmpty());
+                var publisher = runtimeView(fixture).snapshot("events").publishers().getFirst();
+                assertEquals(ZLinkPeerState.CONNECTING, publisher.state());
+                assertEquals(
+                        ZLinkTopologyReason.NO_READY_PEER,
+                        publisher.unavailableReason().orElseThrow());
                 assertEquals(0, subscriber.readinessWaits);
                 assertEquals(0, subscriber.subscribeCalls);
             } finally {
@@ -246,6 +458,18 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
     }
 
+    private static ZLinkFanoutRuntimeView runtimeView(Fixture fixture) {
+        var sockets = new ZLinkChannelSocketRegistry();
+        var channel = new ChannelRegistration("events", ChannelKind.FANOUT);
+        channel.enableSubscriber();
+        sockets.registerChannel(channel);
+        return new ZLinkFanoutRuntimeView(
+                sockets,
+                () -> fixture.runtime,
+                () -> null,
+                () -> ZLinkFrameworkRuntimeState.SERVING);
+    }
+
     private static ZLinkFanoutPublisherDescriptor descriptor() {
         return new ZLinkFanoutPublisherDescriptor(
                 "events",
@@ -292,12 +516,32 @@ final class ZLinkFanoutLocationRuntimeTest {
                 ZLinkLocationRepository store,
                 boolean blockConnect,
                 Map<String, List<String>> applicationTopics) {
+            this(store, blockConnect, applicationTopics, ignored -> {}, ignored -> {});
+        }
+
+        private Fixture(
+                ZLinkLocationRepository store,
+                java.util.function.Consumer<ControlledSubscriber> setup,
+                java.util.function.Consumer<ControlledSubscriber> beforeMonitorReturn) {
+            this(store, false, Map.of(), setup, beforeMonitorReturn);
+        }
+
+        private Fixture(
+                ZLinkLocationRepository store,
+                boolean blockConnect,
+                Map<String, List<String>> applicationTopics,
+                java.util.function.Consumer<ControlledSubscriber> setup,
+                java.util.function.Consumer<ControlledSubscriber> beforeMonitorReturn) {
             runtime =
                     new ZLinkFanoutLocationRuntime(
                             store,
                             () -> new ZLinkLocationOwnerToken("owner", 3),
-                            new Backend(subscribers, created, blockConnect),
-                            socket -> ((ControlledSubscriber) socket).monitor,
+                            new Backend(subscribers, created, blockConnect, setup),
+                            socket -> {
+                                var subscriber = (ControlledSubscriber) socket;
+                                beforeMonitorReturn.accept(subscriber);
+                                return subscriber.monitor;
+                            },
                             new Context(),
                             new ZLinkChannelSocketRegistry(),
                             scheduler,
@@ -338,9 +582,12 @@ final class ZLinkFanoutLocationRuntimeTest {
                         subscriber.releaseConnect.countDown();
                         subscriber.releaseReceive.countDown();
                     });
-            runtime.close();
-            scheduler.shutdownNow();
-            infrastructure.shutdownNow();
+            try {
+                runtime.close();
+            } finally {
+                scheduler.shutdownNow();
+                infrastructure.shutdownNow();
+            }
         }
     }
 
@@ -421,19 +668,23 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final List<ControlledSubscriber> subscribers;
         private final LinkedBlockingQueue<ControlledSubscriber> created;
         private final boolean blockConnect;
+        private final java.util.function.Consumer<ControlledSubscriber> setup;
 
         private Backend(
                 List<ControlledSubscriber> subscribers,
                 LinkedBlockingQueue<ControlledSubscriber> created,
-                boolean blockConnect) {
+                boolean blockConnect,
+                java.util.function.Consumer<ControlledSubscriber> setup) {
             this.subscribers = subscribers;
             this.created = created;
             this.blockConnect = blockConnect;
+            this.setup = setup;
         }
 
         @Override
         public ZLinkBackendSubscriberSocket createSubscriberSocket(ZLinkBackendContext context) {
             ControlledSubscriber subscriber = new ControlledSubscriber(blockConnect);
+            setup.accept(subscriber);
             subscribers.add(subscriber);
             created.add(subscriber);
             return subscriber;
@@ -474,6 +725,9 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final CountDownLatch releaseConnect = new CountDownLatch(1);
         private final CountDownLatch subscribeEntered = new CountDownLatch(1);
         private final CountDownLatch releaseReceive = new CountDownLatch(1);
+        private volatile RuntimeException disconnectFailure;
+        private volatile RuntimeException channelFailure;
+        private volatile RuntimeException closeFailure;
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final List<String> events = new CopyOnWriteArrayList<>();
@@ -490,7 +744,11 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public void setChannelName(String channelName) {}
+        public void setChannelName(String channelName) {
+            if (channelFailure != null) {
+                throw channelFailure;
+            }
+        }
 
         @Override
         public void setSubscription(String topic) {
@@ -551,6 +809,9 @@ final class ZLinkFanoutLocationRuntimeTest {
         public void disconnect(String endpoint) {
             disconnectCalls.incrementAndGet();
             events.add("disconnect");
+            if (disconnectFailure != null) {
+                throw disconnectFailure;
+            }
         }
 
         @Override
@@ -568,6 +829,9 @@ final class ZLinkFanoutLocationRuntimeTest {
             closed = true;
             closeCalls.incrementAndGet();
             events.add("close");
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
         }
     }
 
@@ -578,6 +842,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CompletableFuture<Void> handlerReady = new CompletableFuture<>();
         private volatile boolean closed;
+        private volatile RuntimeException closeFailure;
 
         private void emit(String event) {
             events.add(new ZLinkBackendSocketMonitorEvent(event, Optional.empty(), "", ""));
@@ -615,6 +880,9 @@ final class ZLinkFanoutLocationRuntimeTest {
             closed = true;
             readable.release();
             closeCalls.incrementAndGet();
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
         }
     }
 

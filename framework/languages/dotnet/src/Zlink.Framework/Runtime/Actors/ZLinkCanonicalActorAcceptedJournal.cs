@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Streams;
@@ -18,6 +19,9 @@ internal sealed record ZLinkCanonicalActorAcceptedFrame(
 
 internal static class ZLinkCanonicalActorAcceptedJournal
 {
+    private const byte FramePayloadVersion = 1;
+    private const byte BoundSessionFramePayloadVersion = 2;
+    private const uint RequestFlag = 1U;
     private const string FrameContentType = "application/x-zlink-actor-frame-v1";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
@@ -40,7 +44,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
                 "The accepted Actor frame does not match its request-source identity."
             );
         var operation = frame.RouteContext.OperationId;
-        var request = (frame.Flags & 1U) != 0;
+        var request = (frame.Flags & RequestFlag) != 0;
         var replyRoute = frame.RelocationReplyRouteId;
         if (
             operation == default
@@ -58,8 +62,16 @@ internal static class ZLinkCanonicalActorAcceptedJournal
             );
 
         using var stream = new MemoryStream();
-        stream.WriteByte(request ? (byte)10 : (byte)9);
-        stream.WriteByte(boundSession is null ? (byte)1 : (byte)4);
+        stream.WriteByte(
+            request
+                ? (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
+                : (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+        );
+        stream.WriteByte(
+            boundSession is null
+                ? (byte)ServiceWireCodec.FrozenSourceKind.Node
+                : (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+        );
         using (var identity = new MemoryStream())
         {
             Text8(identity, source.NodeRid.ToHex());
@@ -93,7 +105,12 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         stream.WriteByte(0); // metadata is carried byte-exact in the frame header
         U64(stream, operation.High);
         U64(stream, operation.Low);
-        U32(stream, request ? 4U : 0U);
+        U32(
+            stream,
+            request
+                ? (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
+                : (uint)ServiceWireCodec.MeshOperationKind.None
+        );
         U16(stream, request ? (ushort)sizeof(ulong) : (ushort)0);
         if (request)
             U64(stream, replyRoute);
@@ -134,10 +151,22 @@ internal static class ZLinkCanonicalActorAcceptedJournal
             throw new InvalidDataException("The accepted Actor frozen record is malformed.");
         var reader = new Reader(encoded);
         var kind = reader.Byte();
-        if (kind is not (9 or 10))
+        if (
+            kind
+            is not (
+                (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+                or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
+            )
+        )
             throw new InvalidDataException("The accepted Actor record kind is invalid.");
         var sourceKind = reader.Byte();
-        if (sourceKind is not (1 or 4))
+        if (
+            sourceKind
+            is not (
+                (byte)ServiceWireCodec.FrozenSourceKind.Node
+                or (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
+            )
+        )
             throw new InvalidDataException("The accepted Actor source kind is invalid.");
         var sourceReader = new Reader(reader.Bytes(reader.U16()));
         var sourceNodeRid = TextRid(sourceReader.Text8());
@@ -151,7 +180,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
             sourceNodeGeneration
         );
         ZLinkActorBoundSessionHandoffFence? boundSession = null;
-        if (sourceKind == 4)
+        if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
         {
             var sourceActorId = sourceReader.Text8();
             var sourceActorGeneration = sourceReader.U64();
@@ -176,9 +205,17 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         var operation = new MeshOperationId(reader.U64(), reader.U64());
         var operationKind = reader.U32();
         var replyReader = new Reader(reader.Bytes(reader.U16()));
-        var replyRoute = kind == 10 ? replyReader.U64() : 0;
+        var replyRoute =
+            kind == (byte)ServiceWireCodec.MeshRecordKind.ActorRequest ? replyReader.U64() : 0;
         replyReader.End();
-        if (operationKind != (kind == 10 ? 4U : 0U))
+        if (
+            operationKind
+            != (
+                kind == (byte)ServiceWireCodec.MeshRecordKind.ActorRequest
+                    ? (uint)ServiceWireCodec.MeshOperationKind.ActorRequest
+                    : (uint)ServiceWireCodec.MeshOperationKind.None
+            )
+        )
             throw new InvalidDataException("The accepted Actor operation kind is invalid.");
         var actor = new ZLinkBackendActorRef(default, reader.Text8(), reader.U64());
         var targetNodeRid = TextRid(reader.Text8());
@@ -217,7 +254,9 @@ internal static class ZLinkCanonicalActorAcceptedJournal
     private static byte[] EncodeFramePayload(ZLinkActorHandoffFrame frame)
     {
         using var stream = new MemoryStream();
-        stream.WriteByte(frame.BoundSessionSource is null ? (byte)1 : (byte)2);
+        stream.WriteByte(
+            frame.BoundSessionSource is null ? FramePayloadVersion : BoundSessionFramePayloadVersion
+        );
         Bytes8(stream, frame.ReplyActorNodeRid);
         U64(stream, frame.ReplyActorGeneration);
         Bytes8(stream, frame.SourceSessionRid);
@@ -248,7 +287,10 @@ internal static class ZLinkCanonicalActorAcceptedJournal
     {
         var reader = new Reader(encoded);
         var payloadVersion = reader.Byte();
-        if (payloadVersion is not (1 or 2) || (payloadVersion == 2) != (boundSession is not null))
+        if (
+            payloadVersion is not (FramePayloadVersion or BoundSessionFramePayloadVersion)
+            || (payloadVersion == BoundSessionFramePayloadVersion) != (boundSession is not null)
+        )
             throw new InvalidDataException("The accepted Actor frame payload version is invalid.");
         var replyActorRid = reader.Bytes(reader.Byte()).ToArray();
         var replyActorGeneration = reader.U64();
@@ -263,7 +305,10 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         if (boundSession is not null)
             boundSession = boundSession with { BindingToken = reader.Text8() };
         reader.End();
-        if (hop > 8 || ((flags & 1U) != 0) != (replyRoute != 0))
+        if (
+            hop > ZLinkServiceWireCodec.MessageFollowMaximumHopCount
+            || ((flags & RequestFlag) != 0) != (replyRoute != 0)
+        )
             throw new InvalidDataException("The accepted Actor route context is invalid.");
         return new ZLinkActorHandoffFrame(
             replyActorRid,

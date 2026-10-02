@@ -47,11 +47,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null)
         );
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"entry_target_resolved node={target.Rid} spot={target.EntrySpotId} "
-                + $"spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} "
-                + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
-                + $"lease_gen={snapshot.OwnerLeaseGeneration} "
-                + $"descriptor_revision={target.DescriptorRevision}"
+            $"entry_target_resolved node={target.Rid} spot={target.EntrySpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration} descriptor_revision={target.DescriptorRevision}"
         );
         var effectiveDeadline =
             absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
@@ -541,12 +537,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                                 (frames, remaining, token) =>
                                 {
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"admit_request_sent actor={actor.Context.ActorId} "
-                                            + $"target_node={snapshot.NodeRid} spot={snapshot.SpotId} "
-                                            + $"spot_gen={snapshot.Generation} "
-                                            + $"node_gen={snapshot.NodeGeneration} "
-                                            + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
-                                            + $"lease_gen={snapshot.OwnerLeaseGeneration}"
+                                        $"admit_request_sent actor={actor.Context.ActorId} target_node={snapshot.NodeRid} spot={snapshot.SpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration}"
                                     );
                                     return runtime.RequestToSpotViaRouterChannelAsync(
                                         snapshot.RouterChannelId,
@@ -591,7 +582,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 $"source_rejected site={1} token_empty={{string.IsNullOrEmpty(admissionReply.ReservationToken)}}"
             );
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                "actor_join_rejected site=remote_admission"
+                $"actor_join_rejected site=remote_admission"
             );
             return new ZLinkActorJoinResult.Rejected(admissionReplyMessage);
         }
@@ -1555,8 +1546,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         //  made its absence read as "never reached" when it only meant the
         //  other arm ran.
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bound_seal_begin actor={actorId} session_node={sessionOwnerNode} "
-                + $"local={sessionOwnerNode == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId}"
+            $"bound_seal_begin actor={actorId} session_node={sessionOwnerNode} local={sessionOwnerNode == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId}"
         );
         _ = await runtime
             .SealSessionRelocationAsync(

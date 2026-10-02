@@ -180,7 +180,7 @@ final class ZLinkJavaRawMeshNode
     private volatile Map<RoutingId, Long> selectedRoutes = Map.of();
     private final Map<RoutingId, String> admissionControlReadyConnections =
             new ConcurrentHashMap<>();
-    private final Map<RoutingId, Long> nextAnnouncementNanos = new ConcurrentHashMap<>();
+    final Map<RoutingId, Long> announcedRouteGenerations = new ConcurrentHashMap<>();
     private volatile RoutingId routingId;
     private volatile String bindEndpoint;
     private volatile String advertiseHost;
@@ -865,7 +865,6 @@ final class ZLinkJavaRawMeshNode
         peerIntentRoutingIds.remove(intent);
         if (expectedRoutingId != null) {
             rejectedPeers.remove(expectedRoutingId);
-            nextAnnouncementNanos.put(expectedRoutingId, 0L);
         }
         try {
             // Publish the intent and its admission fence before native
@@ -986,14 +985,20 @@ final class ZLinkJavaRawMeshNode
         PeerIntent removed = peerIntents.remove(connectionIntentId);
         closedPeerIntents.remove(connectionIntentId);
         closeRequestedPeerIntents.remove(connectionIntentId);
-        peerIntentRoutingIds.remove(connectionIntentId);
+        RoutingId learnedRoutingId = peerIntentRoutingIds.remove(connectionIntentId);
         if (removed != null && router != null) {
             if (removed.expectedRoutingId() != null) {
                 notRequiredPeers.remove(removed.expectedRoutingId());
                 rejectedPeers.remove(removed.expectedRoutingId());
-                nextAnnouncementNanos.remove(removed.expectedRoutingId());
                 disconnectAdmitted(removed.expectedRoutingId());
                 forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
+            }
+            RoutingId announcementRid =
+                    removed.expectedRoutingId() != null
+                            ? removed.expectedRoutingId()
+                            : learnedRoutingId;
+            if (announcementRid != null) {
+                announcedRouteGenerations.remove(announcementRid);
             }
             if (disconnectEndpoint) {
                 router.disconnect(removed.endpoint());
@@ -2041,7 +2046,7 @@ final class ZLinkJavaRawMeshNode
                                                                 targetNodeRid,
                                                                 targetSpotId,
                                                                 correlation,
-                                                                requestResult(failure),
+                                                                requestResult(failure, false),
                                                                 List.of())),
                         ZLinkBackendReceived::close);
             } finally {
@@ -2171,7 +2176,7 @@ final class ZLinkJavaRawMeshNode
                             (replyFrames, requestFailure) ->
                                     forwardRelocationReply(
                                             stale.correlation(),
-                                            requestResult(requestFailure),
+                                            requestResult(requestFailure, false),
                                             replyFrames == null ? List.of() : replyFrames,
                                             reply,
                                             onFailure));
@@ -2719,7 +2724,7 @@ final class ZLinkJavaRawMeshNode
         requestApplication(route.targetNodeRid(), frames, remainingTimeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure);
+                            RequestResult result = requestResult(failure, false);
                             List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
@@ -2961,7 +2966,7 @@ final class ZLinkJavaRawMeshNode
                                         operation.id(),
                                         actor,
                                         correlation,
-                                        requestResult(failure),
+                                        requestResult(failure, false),
                                         replyFrames == null ? List.of() : replyFrames));
         return operation
                 .completion()
@@ -3580,7 +3585,7 @@ final class ZLinkJavaRawMeshNode
                         timeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure);
+                            RequestResult result = requestResult(failure, false);
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
                             }
@@ -3605,13 +3610,17 @@ final class ZLinkJavaRawMeshNode
                                         : ZLinkTerminalWinner.Cause.FAILURE;
     }
 
-    private static RequestResult requestResult(Throwable failure) {
+    static RequestResult requestResult(Throwable failure, boolean initialSubmission) {
         Throwable current = unwrap(failure);
         if (current == null) {
             return RequestResult.OK;
         }
         if (current instanceof ZlinkRequestException requestFailure) {
             return requestFailure.getResult();
+        }
+        if (current instanceof ZlinkSubmitException submitFailure
+                && submitFailure.getResult() == SubmitResult.BACKPRESSURED) {
+            return initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT;
         }
         if (current instanceof TimeoutException) {
             return RequestResult.TIMED_OUT;
@@ -3698,7 +3707,7 @@ final class ZLinkJavaRawMeshNode
                         timeout)
                 .whenComplete(
                         (replyFrames, failure) -> {
-                            RequestResult result = requestResult(failure);
+                            RequestResult result = requestResult(failure, false);
                             if (!terminal.tryWin(requestTerminalCause(result))) {
                                 return;
                             }
@@ -4100,7 +4109,7 @@ final class ZLinkJavaRawMeshNode
                                                 decodeRequestReply(
                                                         target,
                                                         correlation,
-                                                        requestResult(failure),
+                                                        requestResult(failure, false),
                                                         List.of())),
                 ZLinkBackendReceived::close);
     }
@@ -4253,7 +4262,7 @@ final class ZLinkJavaRawMeshNode
                             observeSelectedRoutes();
                         }
                         drainPeerCloseRequests();
-                        announceExpectedPeers(now);
+                        announceExpectedPeers();
                         tickLiveness(now);
                         if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
                             drainIngressBatch(pumpSocket);
@@ -6677,14 +6686,14 @@ final class ZLinkJavaRawMeshNode
     }
 
     /**
-     * The route this peer was admitted on ended. The configured intent stays and Core reconnects
-     * its endpoint (transport-liveness §6); the next selected route needs a new handshake, and an
-     * intent without an expected RID learns its RID again from that handshake. Forgetting the
-     * announcement time lets {@link #announceExpectedPeers} greet the next route at once.
+     * The selected route that established admission has ended. Core owns endpoint reconnect while
+     * the intent remains (transport-liveness §6). Clear the submitted generation so the next
+     * selected route receives HELLO once. An intent without an expected RID resolves it through the
+     * new handshake.
      */
     private void endRouteAdmission(RoutingId peerRid) {
         disconnectAdmitted(peerRid);
-        nextAnnouncementNanos.remove(peerRid);
+        announcedRouteGenerations.remove(peerRid);
         peerIntents.forEach(
                 (intentId, intent) -> {
                     if (intent.expectedRoutingId() == null) {
@@ -6717,11 +6726,11 @@ final class ZLinkJavaRawMeshNode
 
     private void finishPeerIntentClose(long intentId, PeerIntent intent) {
         cleanupClosedPeerEndpoint(intent.endpoint());
-        closeRequestedPeerIntents.remove(intentId);
         // Publishing closed releases replacePeerConnection on the caller
         // thread. Finish endpoint retirement first, so this close cannot
         // disconnect the replacement intent that publication permits.
         closedPeerIntents.add(intentId);
+        closeRequestedPeerIntents.remove(intentId);
     }
 
     private void cleanupClosedPeerEndpoint(String endpoint) {
@@ -6752,57 +6761,69 @@ final class ZLinkJavaRawMeshNode
                 });
     }
 
-    /**
-     * Sends HELLO on every observed selected route that a configured intent owns and that has not
-     * been admitted yet. A new route has no announcement time and is greeted at once; an unanswered
-     * HELLO repeats every 100 ms while the route stays selected.
-     */
-    private void announceExpectedPeers(long nowNanos) {
+    /** Submits HELLO once per selected route generation owned by an unadmitted intent. */
+    private void announceExpectedPeers() {
         if (peerAdmissionSealed.getAsBoolean()) {
             return;
         }
         Map<RoutingId, Long> routes = selectedRoutes;
         Set<RoutingId> owned = new HashSet<>();
-        boolean intentWithoutRoutingId = false;
+        Map.Entry<Long, PeerIntent> intentWithoutRoutingId = null;
         for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
             RoutingId expected =
                     entry.getValue().expectedRoutingId() != null
                             ? entry.getValue().expectedRoutingId()
                             : peerIntentRoutingIds.get(entry.getKey());
             if (expected == null) {
-                intentWithoutRoutingId |=
-                        !closeRequestedPeerIntents.contains(entry.getKey())
-                                && !closedPeerIntents.contains(entry.getKey());
+                if (!closeRequestedPeerIntents.contains(entry.getKey())
+                        && !closedPeerIntents.contains(entry.getKey())) {
+                    intentWithoutRoutingId = entry;
+                }
                 continue;
             }
             owned.add(expected);
-            announce(expected, routes, nowNanos);
+            announce(expected, routes, entry.getKey(), entry.getValue());
         }
-        if (!intentWithoutRoutingId) {
+        if (intentWithoutRoutingId == null) {
             return;
         }
         // An endpoint-only intent cannot address its route before it knows
-        // the peer RID. It greets every selected route no intent owns; the
+        // the peer RID. It submits HELLO on selected routes no intent owns; the
         // advertised endpoint in the reply identifies its own route.
         for (RoutingId peerRid : routes.keySet()) {
             if (!owned.contains(peerRid)) {
-                announce(peerRid, routes, nowNanos);
+                announce(
+                        peerRid,
+                        routes,
+                        intentWithoutRoutingId.getKey(),
+                        intentWithoutRoutingId.getValue());
             }
         }
     }
 
-    private void announce(RoutingId peerRid, Map<RoutingId, Long> routes, long nowNanos) {
-        if (!routes.containsKey(peerRid)
+    private void announce(
+            RoutingId peerRid, Map<RoutingId, Long> routes, long intentId, PeerIntent intent) {
+        Long generation = routes.get(peerRid);
+        if (generation == null
                 || topology.peer(peerRid).isPresent()
                 || notRequiredPeers.contains(peerRid)
-                || nowNanos < nextAnnouncementNanos.getOrDefault(peerRid, 0L)) {
+                || generation.equals(announcedRouteGenerations.get(peerRid))) {
             return;
         }
-        port.send(
-                requireStarted(),
-                peerRid,
-                List.of(wire.encodeAdmission(ServiceWireConstants.COMMAND_HELLO, localDescriptor)));
-        nextAnnouncementNanos.put(peerRid, nowNanos + Duration.ofMillis(100).toNanos());
+        CompletionStage<Void> submission =
+                port.send(
+                        requireStarted(),
+                        peerRid,
+                        List.of(
+                                wire.encodeAdmission(
+                                        ServiceWireConstants.COMMAND_HELLO, localDescriptor)));
+        if (ZLinkOneWayCalls.isImmediateAdmission(submission)
+                || !submission.toCompletableFuture().isCompletedExceptionally()) {
+            announcedRouteGenerations.compute(
+                    peerRid,
+                    (ignored, announced) ->
+                            peerIntents.get(intentId) == intent ? generation : announced);
+        }
     }
 
     private void tickLiveness(long nowNanos) {
@@ -7152,7 +7173,7 @@ final class ZLinkJavaRawMeshNode
                 : Optional.empty();
     }
 
-    private static ZLinkBackendRequestResult backendResult(RequestResult result) {
+    static ZLinkBackendRequestResult backendResult(RequestResult result) {
         return ZLinkBackendRequestResult.valueOf(result.name());
     }
 

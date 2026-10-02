@@ -79,6 +79,8 @@ the peer how much it's OK to send — once the byte sum of messages the peer has
 reaches the send queue's ceiling, sends to that peer are blocked. There are several reasons the
 ceiling gets reached.
 
+<p><a href="/common/diagrams/zlink-tour-en.html#backpressure" target="_blank">▶ Try it in the interactive tour — Backpressure</a></p>
+
 - Sent far more than usual in a short time.
 - Sent the usual count, but the payload was larger, filling the same byte total faster.
 - The network is slow, so the queue isn't draining as fast as usual.

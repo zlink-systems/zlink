@@ -7,9 +7,10 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import java.time.Duration;
 
 public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions {
+    private static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofSeconds(30);
     private int minThreads;
     private int maxThreads = ZLinkWorkerPool.defaultMaxThreads();
-    private Duration idleTimeout = Duration.ofSeconds(30);
+    private Duration idleTimeout = DEFAULT_IDLE_TIMEOUT;
 
     @Override
     public ZLinkWorkerOptionsRegistration minThreads(int minThreads) {

@@ -102,49 +102,28 @@ public sealed class ZLinkObservationQueueTests
     }
 
     [Fact]
-    public async Task Runtime_event_producers_keep_source_identity_across_terminal_state()
+    public async Task Initial_status_is_coalesced_by_the_existing_source_slot()
+    {
+        var queue = new ZLinkObservationQueue<TestStatus>(
+            new TestStatus("channel", 1),
+            false,
+            static status => status.Source,
+            "unit-test"
+        );
+        queue.Publish(new TestStatus("channel", 2), terminal: false);
+        queue.Complete();
+        await using var reader = queue.ReadAllAsync().GetAsyncEnumerator();
+        Assert.True(await reader.MoveNextAsync());
+        Assert.Equal(2UL, reader.Current.Status.Sequence);
+        Assert.Equal(new ZLinkObservationLoss(1, 0), reader.Current.Loss);
+        Assert.False(await reader.MoveNextAsync());
+    }
+
+    [Fact]
+    public async Task Client_server_channel_source_survives_peer_removal_until_channel_terminal()
     {
         var rid = RoutingId.From("observation-source");
         var now = DateTimeOffset.UtcNow;
-        var fanoutIntermediate = new ZLinkFanoutRuntimeEvent.PublisherChanged(
-            1,
-            now,
-            "fanout-channel",
-            new ZLinkFanoutPublisherConnectionSnapshot(
-                rid,
-                3,
-                5,
-                "inproc://publisher",
-                ConnectionIntent: true,
-                Ready: true,
-                ZLinkFanoutPublisherConnectionState.Ready,
-                LastFailure: null
-            )
-        );
-        var fanoutTerminal = new ZLinkFanoutRuntimeEvent.PublisherChanged(
-            2,
-            now,
-            "fanout-channel",
-            fanoutIntermediate.Entry with
-            {
-                ConnectionIntent = false,
-                Ready = false,
-                State = ZLinkFanoutPublisherConnectionState.Disconnected,
-            }
-        );
-        Assert.Equal(fanoutIntermediate.SourceKey, fanoutTerminal.SourceKey);
-        var fanout = new ZLinkObservationQueue<ZLinkFanoutRuntimeEvent>(static item =>
-            item.SourceKey
-        );
-        fanout.Publish(fanoutIntermediate, terminal: false);
-        fanout.Publish(fanoutTerminal, terminal: true);
-        fanout.Complete();
-        await using var fanoutReader = fanout.ReadAllAsync().GetAsyncEnumerator();
-        Assert.True(await fanoutReader.MoveNextAsync());
-        Assert.Same(fanoutTerminal, fanoutReader.Current.Status);
-        Assert.Equal(1UL, fanoutReader.Current.Loss.CoalescedCount);
-        Assert.False(await fanoutReader.MoveNextAsync());
-
         var clientIntermediate = new ZLinkClientServerStatus(
             "client-server-channel",
             Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,

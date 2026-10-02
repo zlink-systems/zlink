@@ -544,9 +544,7 @@ void test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&input[i], 4));
         memset (zlink_msg_data (&input[i]), static_cast<int> ('a' + i), 4);
     }
-    TEST_ASSERT_SUCCESS_ERRNO (stage_recv_sequence (
-      state, recv_family_basic, NULL, NULL, 0, input, 2,
-      std::this_thread::get_id ()));
+    TEST_ASSERT_SUCCESS_ERRNO (stage_recv_sequence (state, NULL, NULL, 0, input, 2));
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         TEST_ASSERT_TRUE (state->recv.active);
@@ -555,17 +553,19 @@ void test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom ()
                           >= inline_recv_part_capacity);
     }
 
-    zlink_msg_t output;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&output));
-    TEST_ASSERT_SUCCESS_ERRNO (take_recv_part (state, &output, &more));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&output));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&output));
-    TEST_ASSERT_SUCCESS_ERRNO (take_recv_part (state, &output, &more));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&output));
-    complete_recv_step (state, more);
+    zlink_msg_t output[2];
+    size_t output_count = 0;
+    recv_record_metadata_t metadata;
+    TEST_ASSERT_EQUAL_INT (staged_recv_record_taken, try_take_staged_recv_record (
+                                                       state, output, 2, &output_count, &metadata));
+    TEST_ASSERT_EQUAL_UINT64 (2, output_count);
+    for (size_t i = 0; i < output_count; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (4, zlink_msg_size (&output[i]));
+        TEST_ASSERT_EQUAL_UINT8 ('a' + i,
+                                 *static_cast<unsigned char *> (zlink_msg_data (&output[i])));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&output[i]));
+    }
+    TEST_ASSERT_FALSE (state->recv.active);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&input[0]));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&input[1]));
 
@@ -581,16 +581,12 @@ void test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom ()
     const size_t impossible_part_count = std::numeric_limits<size_t>::max ();
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      -1, stage_recv_sequence (
-            state, recv_family_basic, NULL, &source_rid, 77, &retained,
-            impossible_part_count, std::this_thread::get_id ()));
+      -1, stage_recv_sequence (state, NULL, &source_rid, 77, &retained, impossible_part_count));
     TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         TEST_ASSERT_FALSE (state->recv.active);
-        TEST_ASSERT_EQUAL_INT (recv_family_none, state->recv.family);
         TEST_ASSERT_TRUE (state->recv.buffered_parts.empty ());
-        TEST_ASSERT_EQUAL_UINT64 (0, state->recv.next_part_index);
         TEST_ASSERT_TRUE (state->recv.return_source_rid_as_null);
         TEST_ASSERT_EQUAL_UINT64 (0, state->recv.source_node_rid.size);
         TEST_ASSERT_EQUAL_UINT64 (0, state->recv.request_seq);

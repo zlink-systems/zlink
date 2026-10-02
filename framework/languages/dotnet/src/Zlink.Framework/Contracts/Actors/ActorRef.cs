@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Systems.Zlink;
 
@@ -69,7 +70,7 @@ public readonly record struct ActorRef(
         if (byteCount > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Actor ID must be 1..255 UTF-8 bytes."
+                $"Actor ID must be non-empty UTF-8 text of at most {byte.MaxValue} bytes."
             );
         return value;
     }
@@ -127,16 +128,16 @@ public readonly record struct ActorRef(
 
                 switch (property)
                 {
-                    case "actorId":
+                    case ZLinkObjectReferenceJsonFields.ActorId:
                         actorId = ReadString(ref reader, property);
                         break;
-                    case "objectGeneration":
+                    case ZLinkObjectReferenceJsonFields.ObjectGeneration:
                         objectGeneration = ReadString(ref reader, property);
                         break;
-                    case "meshName":
+                    case ZLinkObjectReferenceJsonFields.MeshName:
                         meshName = ReadString(ref reader, property);
                         break;
-                    case "nodeRid":
+                    case ZLinkObjectReferenceJsonFields.NodeRid:
                         nodeRid = ReadString(ref reader, property);
                         break;
                     default:
@@ -206,13 +207,13 @@ public readonly record struct ActorRef(
             var nodeRid = ValidateNodeRid(value.NodeRid);
 
             writer.WriteStartObject();
-            writer.WriteString("actorId", actorId);
+            writer.WriteString(ZLinkObjectReferenceJsonFields.ActorId, actorId);
             writer.WriteString(
-                "objectGeneration",
+                ZLinkObjectReferenceJsonFields.ObjectGeneration,
                 objectGeneration.ToString(CultureInfo.InvariantCulture)
             );
-            writer.WriteString("meshName", meshName);
-            writer.WriteString("nodeRid", nodeRid.ToHex());
+            writer.WriteString(ZLinkObjectReferenceJsonFields.MeshName, meshName);
+            writer.WriteString(ZLinkObjectReferenceJsonFields.NodeRid, nodeRid.ToHex());
             writer.WriteEndObject();
         }
 

@@ -10,7 +10,7 @@ namespace Zlink.Framework.UnitTests;
 // the published Draining. Service-wire §5: a repeated Hello/Admit that carries
 // the current descriptor is idempotent - it completes the admission again
 // without re-admitting the peer or resetting its descriptor/liveness epoch.
-public sealed class MeshNodeShutdownSealTests
+public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private const string MeshName = "orders";
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
@@ -116,37 +116,85 @@ public sealed class MeshNodeShutdownSealTests
                 && observation.Peers[0].State == MeshPeerState.Admitted
             );
         });
-        foreach (var (monitor, peerRid, nodeStatus, peers) in observations)
+        // Preserve both nodes' complete event order before an assertion can fail.
+        (MeshMonitorStatus Status, List<MeshMonitorEvent> Events) ObserveMonitor(
+            IMeshNodeMonitor monitor,
+            RoutingId peerRid,
+            string phase
+        )
         {
-            var status = monitor.Status();
-            var peerEvents = new List<MeshMonitorEvent>();
+            var events = new List<MeshMonitorEvent>();
             while (monitor.Recv(RecvFlags.DontWait) is { } meshEvent)
-            {
-                if (meshEvent.PeerRid == peerRid)
-                {
-                    peerEvents.Add(meshEvent);
-                }
-            }
-            var admissions = peerEvents
-                .Select((meshEvent, index) => (meshEvent, index))
-                .Where(item => item.meshEvent.Kind == MeshMonitorEventKind.PeerAdmitted)
-                .Select(item => item.index)
-                .ToArray();
-            Assert.NotEmpty(admissions);
-            for (var index = 1; index < admissions.Length; index++)
-            {
-                Assert.Contains(
-                    peerEvents
-                        .Skip(admissions[index - 1] + 1)
-                        .Take(admissions[index] - admissions[index - 1] - 1),
-                    meshEvent => meshEvent.Kind == MeshMonitorEventKind.PeerClosed
-                );
-            }
+                events.Add(meshEvent);
+            var status = monitor.Status();
+            output.WriteLine(
+                "{0} monitor peer={1} status={2} events=[{3}]",
+                phase,
+                peerRid,
+                System.Text.Json.JsonSerializer.Serialize(status),
+                string.Join(
+                    ", ",
+                    events.Select(meshEvent => $"{meshEvent.Kind}:{meshEvent.PeerRid}")
+                )
+            );
+            return (status, events);
+        }
+        var monitorObservations = observations
+            .Select(observation =>
+                (
+                    Observation: observation,
+                    Snapshot: ObserveMonitor(observation.Monitor, observation.PeerRid, "Initial")
+                )
+            )
+            .ToArray();
+        foreach (var (observation, (status, events)) in monitorObservations)
+        {
+            var (_, peerRid, nodeStatus, peers) = observation;
+            Assert.Single(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind == MeshMonitorEventKind.PeerAdmitted
+            );
+            Assert.DoesNotContain(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind == MeshMonitorEventKind.PeerClosed
+            );
+            Assert.Equal(1UL, status.PeerAdmitted);
             Assert.Equal(0UL, status.ProtocolErrors);
             Assert.Equal(MeshNodeState.Ready, nodeStatus.State);
             Assert.Equal(1U, nodeStatus.AdmittedPeerCount);
             var admitted = Assert.Single(peers, peer => peer.RoutingId == peerRid);
             Assert.Equal(MeshPeerState.Admitted, admitted.State);
+        }
+        var finalObservations = monitorObservations
+            .Select(first =>
+                (
+                    PeerRid: first.Observation.PeerRid,
+                    InitialStatus: first.Snapshot.Status,
+                    Snapshot: ObserveMonitor(
+                        first.Observation.Monitor,
+                        first.Observation.PeerRid,
+                        "Final"
+                    )
+                )
+            )
+            .ToArray();
+        foreach (var (peerRid, initialStatus, (status, events)) in finalObservations)
+        {
+            Assert.DoesNotContain(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind
+                        is MeshMonitorEventKind.PeerAdmitted
+                            or MeshMonitorEventKind.PeerClosed
+            );
+            Assert.Equal(initialStatus.PeerAdmitted, status.PeerAdmitted);
+            Assert.Equal(initialStatus.ProtocolErrors, status.ProtocolErrors);
+            Assert.Equal(initialStatus.PeerRejected, status.PeerRejected);
         }
     }
 
