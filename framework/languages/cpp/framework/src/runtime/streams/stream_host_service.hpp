@@ -12,6 +12,9 @@
 
 #include <zlink/Contracts/Eventing/events.hpp>
 
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -101,6 +104,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
 
   private:
     class listener_t;
+    void refresh_heartbeat_deadline ();
 
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
@@ -116,6 +120,8 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::atomic_bool _stop{false};
     std::vector<std::unique_ptr<listener_t>> _listeners;
     std::vector<std::thread> _threads;
+    boost::asio::io_context _liveness_io;
+    boost::asio::steady_timer _heartbeat_deadline{_liveness_io};
     std::thread _liveness_thread;
 };
 

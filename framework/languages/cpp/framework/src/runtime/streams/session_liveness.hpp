@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <mutex>
 #include <optional>
 
 namespace zlink::framework
@@ -15,7 +14,6 @@ namespace zlink::framework::runtime
 {
 struct session_liveness_t
 {
-    std::mutex gate;
     using clock_t = std::chrono::steady_clock;
     clock_t::time_point last_application_inbound;
     clock_t::time_point last_ping;
@@ -46,21 +44,18 @@ struct session_liveness_t
 
     void record_application_inbound (clock_t::time_point now = clock_t::now ())
     {
-        const std::lock_guard<std::mutex> lock (gate);
-        last_application_inbound = now;
+        last_application_inbound = std::max (last_application_inbound, now);
     }
 
     void record_inbound (clock_t::time_point now = clock_t::now (), bool application = false)
     {
-        const std::lock_guard<std::mutex> lock (gate);
         last_inbound = std::max (last_inbound, now);
         if (application)
-            last_application_inbound = now;
+            last_application_inbound = std::max (last_application_inbound, now);
     }
 
     decision_t evaluate (clock_t::time_point now = clock_t::now ())
     {
-        const std::lock_guard<std::mutex> lock (gate);
         if (forced_reason) {
             return decision_t::none;
         }
@@ -77,10 +72,17 @@ struct session_liveness_t
         return decision_t::none;
     }
 
-    // The terminal close runs once even when sweeps race the reader exit.
+    clock_t::time_point next_due () const noexcept
+    {
+        if (forced_reason)
+            return clock_t::time_point::max ();
+        return std::min ({last_ping + heartbeat_interval, last_inbound + heartbeat_timeout,
+                          last_application_inbound + application_idle_timeout});
+    }
+
+    // The connection execution owner records facts and makes terminal decisions.
     bool try_terminate (stream_close_reason_t reason)
     {
-        const std::lock_guard<std::mutex> lock (gate);
         if (forced_reason) {
             return false;
         }
@@ -88,11 +90,7 @@ struct session_liveness_t
         return true;
     }
 
-    std::optional<stream_close_reason_t> forced ()
-    {
-        const std::lock_guard<std::mutex> lock (gate);
-        return forced_reason;
-    }
+    std::optional<stream_close_reason_t> forced () { return forced_reason; }
 };
 
 }

@@ -2047,6 +2047,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_liveness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
     "framework-unit;framework-contract;stream;liveness")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
   add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
