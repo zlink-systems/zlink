@@ -1281,11 +1281,11 @@ export class ServiceStatefulRuntime {
           reporter.report({
             surface: ZLinkDispatchErrorSurface.SpotRoute,
             messageKind: ZLinkDispatchMessageKind.Send,
-            reason: serviceSpotPublishFailureReason(
-              undefined,
-              this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
-              this.closed
-            ),
+            reason: this.closed
+              ? ZLinkDispatchErrorReason.Shutdown
+              : this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId)
+                ? ZLinkDispatchErrorReason.Backpressure
+                : ZLinkDispatchErrorReason.StaleTarget,
             action: ZLinkDispatchErrorAction.Drop,
             meshName: this.dispatchErrorMeshName,
             channelName,
@@ -5328,28 +5328,6 @@ export class ServiceStatefulRuntime {
 
   private requireOpen(): void {
     if (this.closed) throw new Error('Stateful runtime is closed.');
-  }
-}
-
-function serviceSpotPublishFailureReason(
-  result: number | undefined,
-  routeReady: boolean,
-  closed: boolean
-): 'stale_target' | 'backpressure' | 'shutdown' {
-  if (closed || result === SubmitResult.Terminated) return 'shutdown';
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return 'backpressure';
-    case SubmitResult.NotAdmitted:
-    case SubmitResult.NotConnected:
-    case SubmitResult.NotFound:
-    case SubmitResult.InvalidHandle:
-      return 'stale_target';
-    default:
-      // RawServiceMeshRuntime exposes failed Core submissions as false. A
-      // ready route therefore identifies queue admission failure; a route
-      // that became unready after selection is a stale target.
-      return routeReady ? 'backpressure' : 'stale_target';
   }
 }
 
