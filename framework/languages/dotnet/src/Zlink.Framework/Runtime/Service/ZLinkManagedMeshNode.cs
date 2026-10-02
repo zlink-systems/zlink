@@ -6734,7 +6734,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (ZLinkRelocationDataLostException exception)
         {
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare-manifest", exception);
-            RunInboundOperation(() => SendRelocationPrepareFailureAsync(nativeReply, prepare, exception));
+            RunInboundOperation(() =>
+                SendRelocationPrepareFailureAsync(nativeReply, prepare, exception)
+            );
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
@@ -6936,7 +6938,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     preparation
                 )
             );
-            await SendRelocationPrepareFailureAsync(nativeReply, prepare, exception).ConfigureAwait(false);
+            await SendRelocationPrepareFailureAsync(nativeReply, prepare, exception)
+                .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare", exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }

@@ -1013,7 +1013,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.TargetAttemptGeneration
         );
         if (_staged.TryGetValue(fence, out var entry) && entry is TargetStage stage)
-            _ = stage.RunCanonicalCutoverWarningAsync(() => RunCanonicalCutoverWarningAsync(prepare));
+            _ = stage.RunCanonicalCutoverWarningAsync(() =>
+                RunCanonicalCutoverWarningAsync(prepare)
+            );
     }
 
     internal async ValueTask AbortCanonicalPreparedTargetAsync(

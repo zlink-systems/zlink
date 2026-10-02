@@ -847,7 +847,9 @@ public sealed class RelocationBehaviorConformanceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ActorJoin_target_ready_submit_failure_reuses_staging_on_exact_prepare_retry(bool sourcePreserves)
+    public async Task ActorJoin_target_ready_submit_failure_reuses_staging_on_exact_prepare_retry(
+        bool sourcePreserves
+    )
     {
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(
@@ -952,15 +954,35 @@ public sealed class RelocationBehaviorConformanceTests
             {
                 var repository = new ZLinkProviderLocationRepository(locationStore);
                 var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
-                var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    await repository.ReadAuthorityAsync(key)).Snapshot;
-                Assert.NotNull(await new ZLinkStandaloneActorRelocationPrecommitCoordinator(repository)
-                    .TryPreserveSourceAsync(key, authority, transport.RelocationId, CancellationToken.None));
-                await transport.TargetRollbackDestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                var authority = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(key)
+                    )
+                    .Snapshot;
+                Assert.NotNull(
+                    await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+                        repository
+                    ).TryPreserveSourceAsync(
+                        key,
+                        authority,
+                        transport.RelocationId,
+                        CancellationToken.None
+                    )
+                );
+                await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(3)
+                );
                 transport.ReleaseTargetRollbackDestroy.TrySetResult();
-                await transport.TargetRollbackDestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-                Assert.False(target.Runtime.TryGetCreatedActorState(
-                    actorId, RelocationBehaviorHost.ActorType, out _));
+                await transport.TargetRollbackDestroyCompleted.Task.WaitAsync(
+                    TimeSpan.FromSeconds(3)
+                );
+                Assert.False(
+                    target.Runtime.TryGetCreatedActorState(
+                        actorId,
+                        RelocationBehaviorHost.ActorType,
+                        out _
+                    )
+                );
                 Assert.False(trace.HasTargetAuthorityMutation);
                 return;
             }
@@ -2436,9 +2458,17 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
     internal int DataSendCount;
     internal int TargetAbortCallCount => Volatile.Read(ref _targetAbortCallCount);
-    internal Guid RelocationId => ZLinkRelocationTransferPayload.DecodeEnvelope(
-        (_preparePayload ?? throw new InvalidOperationException("No canonical prepare payload was captured.")).Encoded
-    ).AggregateId;
+    internal Guid RelocationId =>
+        ZLinkRelocationTransferPayload
+            .DecodeEnvelope(
+                (
+                    _preparePayload
+                    ?? throw new InvalidOperationException(
+                        "No canonical prepare payload was captured."
+                    )
+                ).Encoded
+            )
+            .AggregateId;
     private int _targetRollbackDestroyCount;
     private int _targetPrepareCallCount;
     private int _targetAbortCallCount;

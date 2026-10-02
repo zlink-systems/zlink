@@ -1450,8 +1450,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         {
                             //  Location runtime §10: the authority settled
                             //  against this target; its staging is discarded.
-                            if (stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage)) is { } previousPhase)
-                                _ = RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase);
+                            if (
+                                stage.TryBeginSettledCleanup(() =>
+                                    lease.Slot.TryRemoveStage(stage)
+                                ) is
+                                { } previousPhase
+                            )
+                                _ = RegisterTargetAbortLocked(
+                                    key,
+                                    lease.Slot,
+                                    stage,
+                                    previousPhase
+                                );
                             throw;
                         }
                         if (
@@ -1673,7 +1683,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         waiting = true;
                         return;
                     }
-                    if (stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage)) is { } previousPhase)
+                    if (
+                        stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage)) is
+                        { } previousPhase
+                    )
                         _ = RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase);
                 })
                 .ConfigureAwait(false);
@@ -2984,7 +2997,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
                         return ValueTask.CompletedTask;
                     stage.ValidateRetry(prepare, authenticatedSourceNodeRid);
-                    if (stage.TryBeginExplicitAbort(() => lease.Slot.TryRemoveStage(stage)) is { } previousPhase)
+                    if (
+                        stage.TryBeginExplicitAbort(() => lease.Slot.TryRemoveStage(stage)) is
+                        { } previousPhase
+                    )
                         _ = RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase);
                     return ValueTask.CompletedTask;
                 })
@@ -3059,8 +3075,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             )
                                 return (Task?)null;
 
-                            return stage.TryBeginExplicitAbort(() => lease.Slot.TryRemoveStage(stage)) is { } previousPhase
-                                ? RegisterTargetAbortLocked(pair.Key, lease.Slot, stage, previousPhase).Terminal
+                            return
+                                stage.TryBeginExplicitAbort(() => lease.Slot.TryRemoveStage(stage))
+                                    is { } previousPhase
+                                ? RegisterTargetAbortLocked(
+                                    pair.Key,
+                                    lease.Slot,
+                                    stage,
+                                    previousPhase
+                                ).Terminal
                                 : null;
                         })
                         .ConfigureAwait(false);
@@ -3081,7 +3104,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     }
 
     private TargetAbort RegisterTargetAbortLocked(
-        AttemptKey key, AttemptSlot slot, TargetStage stage, TargetReadySubmissionPhase previousPhase)
+        AttemptKey key,
+        AttemptSlot slot,
+        TargetStage stage,
+        TargetReadySubmissionPhase previousPhase
+    )
     {
         var abort = new TargetAbort(stage);
         if (!slot.TrySetAbort(abort))
@@ -3677,7 +3704,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             var previousPhase = AwaitStateLane(
                 _lane.RunAsync(() =>
                 {
-                    if (_readySubmissionPhase is TargetReadySubmissionPhase.Submitted or TargetReadySubmissionPhase.Aborting)
+                    if (
+                        _readySubmissionPhase
+                        is TargetReadySubmissionPhase.Submitted
+                            or TargetReadySubmissionPhase.Aborting
+                    )
                         return (TargetReadySubmissionPhase?)null;
                     var previous = _readySubmissionPhase;
                     _readySubmissionPhase = TargetReadySubmissionPhase.Aborting;
@@ -3700,7 +3731,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             return RemoveForAbort(previousPhase, remove);
         }
 
-        private TargetReadySubmissionPhase? RemoveForAbort(TargetReadySubmissionPhase previousPhase, Func<bool> remove)
+        private TargetReadySubmissionPhase? RemoveForAbort(
+            TargetReadySubmissionPhase previousPhase,
+            Func<bool> remove
+        )
         {
             // Removal is caller-owned and can re-enter the attempt owner, so
             // it deliberately runs outside the TargetStage state lane.
