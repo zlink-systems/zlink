@@ -697,6 +697,9 @@ configuration mistake from a connection failure.
 | **`Manual`** (default) | The receive loop doesn't directly call a handler/error/disconnect/request callback — it puts it in an internal queue. The user explicitly pumps it to run |
 | `Immediate` | Runs directly on the receive path |
 
+The internal queue of `Manual` never delays or refuses registering a callback because of capacity.
+A registered callback runs, in registration order, when the user pumps.
+
 **The reason the default is `Manual` is a game engine constraint**
 (§2.2). Since an engine object can't be handled off the main thread, it
 must be pumped on the main thread to be safe.
