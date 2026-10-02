@@ -41,8 +41,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         if (getState().FindSpotNodeByRoutingId(spotNodeRid) is { } localTarget)
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"entry_join_local_managed actor={actor.Context.ActorId} "
-                    + $"target_node={spotNodeRid}"
+                $"entry_join_local_managed actor={actor.Context.ActorId} target_node={spotNodeRid}"
             );
             return await JoinLocalEntrySpotAsync(
                     localTarget,
@@ -347,8 +346,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     )
                     .ConfigureAwait(false);
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"entry_join_rejected path=local actor={actorState.ActorId} "
-                    + $"created_here={createdHere}"
+                $"entry_join_rejected path=local actor={actorState.ActorId} created_here={createdHere}"
             );
             return new ZLinkActorJoinResult.Rejected(reply);
         }

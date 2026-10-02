@@ -61,7 +61,9 @@ public final class ZLinkFrameworkLifecycle
                 ZLinkChannelRuntimeOptions,
                 ZLinkMessageFlowControl {
     public static final int PHASE = 0;
-    private static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE = Duration.ofSeconds(30);
+    private static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE =
+            ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE;
+    private static final long SHUTDOWN_COMPLETION_ALLOWANCE_SECONDS = 5;
     private final DefaultZLinkFrameworkOptions options;
     private final ZLinkBackendAdapterProvider backendAdapterFactory;
     private final ZLinkHandlerActivator handlerFactory;
@@ -227,7 +229,10 @@ public final class ZLinkFrameworkLifecycle
             var result =
                     current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE)
                             .toCompletableFuture()
-                            .get(SPRING_SHUTDOWN_DRAIN_DEADLINE.toSeconds() + 5, TimeUnit.SECONDS);
+                            .get(
+                                    SPRING_SHUTDOWN_DRAIN_DEADLINE.toSeconds()
+                                            + SHUTDOWN_COMPLETION_ALLOWANCE_SECONDS,
+                                    TimeUnit.SECONDS);
             logTerminationOnce(current, result, null);
         } catch (Throwable failure) {
             logTerminationOnce(current, null, failure);

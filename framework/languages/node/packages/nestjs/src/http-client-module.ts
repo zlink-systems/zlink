@@ -16,6 +16,7 @@ import {
 import type { ZLinkNestIntegrationRuntimeHost } from './framework-integration-contracts';
 import { framework } from './framework-loader';
 import { ZLINK_FRAMEWORK_RUNTIME } from './tokens';
+import { providerToken } from './providers';
 
 export interface ZLinkNamedHttpClientOptions {
   readonly name: string;
@@ -131,8 +132,4 @@ function validateRegistrations(registrations: readonly ZLinkNamedHttpClientOptio
     }
     names.add(name);
   }
-}
-
-function providerToken(provider: Provider): InjectionToken {
-  return typeof provider === 'function' ? provider : provider.provide;
 }

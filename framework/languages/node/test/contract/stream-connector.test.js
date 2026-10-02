@@ -2642,39 +2642,59 @@ test('stream connector shares concurrent connect and closes a connection that co
 
 test('stream connector close reports failure to clean up a late connect result', async () => {
   let resolveConnection;
+  let notifyConnect;
+  const connectStarted = new Promise((resolve) => {
+    notifyConnect = resolve;
+  });
   const connectionReady = new Promise((resolve) => {
     resolveConnection = resolve;
   });
   const connection = new MemoryConnection();
+  const closeFailure = new Error('late connection close failed');
+  let closeCalls = 0;
   connection.close = async () => {
-    throw new Error('late connection close failed');
+    closeCalls++;
+    throw closeFailure;
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory: {
       async connect() {
+        notifyConnect();
         return await connectionReady;
       }
     },
     heartbeat: { enabled: false }
   });
 
+  const errors = [];
+  instance.onErrorReceived((error) => errors.push(error));
   const connecting = instance.connect();
-  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Connecting, 1000);
+  await connectStarted;
   const closing = instance.close();
+  const completed = Promise.all([
+    assert.rejects(connecting, /closed while connecting/),
+    assert.doesNotReject(closing)
+  ]);
   resolveConnection(connection);
 
-  await assert.rejects(() => connecting, /late connection close failed/);
-  await assert.rejects(() => closing, /late connection close failed/);
+  await completed;
+  await instance.dispatch();
+  assert.equal(closeCalls, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, connector.ZlinkStreamErrorCode.Disconnected);
+  assert.equal(errors[0].cause, closeFailure);
+  assert.equal(instance.closeReason, 'ClientClose');
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
 });
 
 test('stream connector concurrent close shares cleanup and remains closed when transport close fails', async () => {
   let closeCalls = 0;
+  const closeFailure = new Error('transport close failed');
   const connection = new MemoryConnection();
   connection.close = async () => {
     closeCalls++;
-    throw new Error('transport close failed');
+    throw closeFailure;
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -2686,20 +2706,28 @@ test('stream connector concurrent close shares cleanup and remains closed when t
     heartbeat: { enabled: false }
   });
   let disconnectedCalls = 0;
+  const errors = [];
+  instance.onErrorReceived((error) => errors.push(error));
   instance.onDisconnected(async () => {
     disconnectedCalls++;
     throw new Error('user callback failed');
   });
   await instance.connect();
 
-  const first = assert.rejects(() => instance.close(), /transport close failed/);
-  const second = assert.rejects(() => instance.close(), /transport close failed/);
+  const first = instance.close();
+  const second = instance.close();
   await Promise.all([first, second]);
   await instance.dispatch();
 
   assert.equal(closeCalls, 1);
   assert.equal(disconnectedCalls, 1);
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+  assert.equal(instance.closeReason, 'ClientClose');
+  const closeErrors = errors.filter(
+    (error) => error.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  assert.equal(closeErrors.length, 1);
+  assert.equal(closeErrors[0].cause, closeFailure);
   await instance.close();
 });
 

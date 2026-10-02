@@ -91,7 +91,7 @@ produced, it completes exactly once with one of the following `ErrorKind`s.
   above.
 
 <a id="bounded-queue-failure"></a>
-**A full queue is not an error.** The work waits until room appears. The only way to slow
+**A full Framework-owned queue is not an error.** The work waits until room appears. The only way to slow
 what is coming in is the `PAUSED` state of
 [§6](../01-execution/04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control).
 
@@ -190,7 +190,7 @@ item below leads to one contract test.
 
 **Bounded queue errors**
 
-- No Request ends because a queue had no room, whether that queue is in the same runtime or on another node.
+- No Request ends because a Framework-owned queue had no room, whether that queue is in the same runtime or on another node.
 - When no node can host the Spot, the call ends with `Unavailable`.
 
 **Typed `Rejected` distinction**

@@ -13,7 +13,13 @@ final class ZLinkStreamPendingRequestsTest {
     @Test
     void cancellationRemovesPendingCorrelationBeforeALateReply() {
         ZLinkStreamPendingRequests pendingRequests = new ZLinkStreamPendingRequests();
-        var pending = pendingRequests.add(7L, "Echo");
+        var pending = new java.util.concurrent.CompletableFuture<ZLinkStreamEncodedPayload>();
+        pendingRequests.add(
+                7L,
+                "Echo",
+                pending,
+                (reply, complete) -> complete.getAsBoolean(),
+                (failure, complete) -> complete.getAsBoolean());
 
         assertTrue(pending.cancel(false));
         assertFalse(pendingRequests.fail(7L, new IllegalStateException("late failure")));

@@ -595,8 +595,9 @@ state.
 **Heartbeat:**
 
 - If on, sends a control ping at the specified interval.
-- If no inbound frame arrives within the specified timeout, treats the
-  transport as disconnected and applies the reconnect policy.
+- If no inbound frame arrives within the specified timeout, counted from the later of the
+  connection establishment time and the last inbound frame, treats the transport as
+  disconnected and applies the reconnect policy.
 - **Even with heartbeat off, it still replies with pong to an inbound
   ping.**
 

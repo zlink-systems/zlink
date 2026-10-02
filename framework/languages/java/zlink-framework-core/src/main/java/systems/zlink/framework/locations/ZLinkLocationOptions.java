@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import java.time.Duration;
 
 public final class ZLinkLocationOptions {
+    private static final Duration ROUTE_CACHE_FORWARDING_SAFETY_MARGIN = Duration.ofSeconds(5);
     private Duration ownerLeaseRenewInterval = Duration.ofSeconds(5);
     private Duration ownerLeaseTtl = Duration.ofSeconds(15);
     private Duration pollingInterval = Duration.ofSeconds(1);
@@ -239,7 +240,9 @@ public final class ZLinkLocationOptions {
             Duration routeCacheMaxAge, Duration messageFollowDuration) {
         if (!routeCacheMaxAge.isZero()
                 && !messageFollowDuration.isZero()
-                && routeCacheMaxAge.compareTo(messageFollowDuration.minusSeconds(5)) > 0) {
+                && routeCacheMaxAge.compareTo(
+                                messageFollowDuration.minus(ROUTE_CACHE_FORWARDING_SAFETY_MARGIN))
+                        > 0) {
             throw new IllegalArgumentException(
                     "routeCacheMaxAge must be at least five seconds shorter than "
                             + "messageFollowDuration when both values are enabled.");

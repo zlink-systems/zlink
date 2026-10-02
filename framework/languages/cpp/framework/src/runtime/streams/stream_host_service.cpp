@@ -621,7 +621,7 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
     asio::steady_timer timer;
     std::function<void ()> cancel;
     std::mutex error_mutex;
-    boost::system::error_code error;
+    result_t<boost::system::error_code> error = result_t<boost::system::error_code>::success ({});
     std::atomic_bool completed{false};
     std::atomic_bool cancel_requested{false};
 
@@ -648,11 +648,11 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
           });
     }
 
-    void complete (const boost::system::error_code &completion_error)
+    void complete (result_t<boost::system::error_code> completion_error)
     {
         {
             const std::lock_guard<std::mutex> lock (error_mutex);
-            error = completion_error;
+            error = std::move (completion_error);
         }
         completed.store (true, std::memory_order_release);
         // Boost >= 1.87 removed cancel(error_code&) from waitable timers.
@@ -666,7 +666,7 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
     boost::system::error_code result ()
     {
         const std::lock_guard<std::mutex> lock (error_mutex);
-        return error;
+        return error.value ();
     }
 };
 
@@ -680,6 +680,7 @@ bool stream_stop_requested (const std::atomic_bool &stop,
 template <typename Start, typename Cancel>
 boost::system::error_code
 run_stream_async_operation (asio::io_context &io,
+                            asio::any_io_executor transport_executor,
                             const std::atomic_bool &stop,
                             Start &&start,
                             Cancel &&cancel,
@@ -689,10 +690,26 @@ run_stream_async_operation (asio::io_context &io,
         return asio::error::operation_aborted;
     }
     auto state = std::make_shared<stream_async_operation_state_t> (io);
-    state->cancel = std::forward<Cancel> (cancel);
+    state->cancel = [transport_executor, cancel = std::forward<Cancel> (cancel)] {
+        asio::post (transport_executor, cancel);
+    };
     state->arm_timer (stop, connection_stop);
-    std::forward<Start> (start) (
-      [state] (const boost::system::error_code &error, std::size_t) { state->complete (error); });
+    asio::post (transport_executor, [start = std::forward<Start> (start), state, &io] () mutable {
+        try {
+            start ([state, &io] (const boost::system::error_code &error, std::size_t) {
+                asio::post (io, [state, error] {
+                    state->complete (result_t<boost::system::error_code>::success (error));
+                });
+            });
+        }
+        catch (...) {
+            asio::post (
+              io,
+              [state, failure = detail::current_exception_result<boost::system::error_code> ()] {
+                  state->complete (failure);
+              });
+        }
+    });
     io.restart ();
     while (!state->completed.load (std::memory_order_acquire)) {
         if (io.run_one () == 0) {
@@ -743,7 +760,7 @@ std::vector<std::uint8_t> read_exact (TStream &socket,
         return bytes;
     }
     const auto error = run_stream_async_operation (
-      io, stop,
+      io, socket.get_executor (), stop,
       [&] (auto completion) {
           asio::async_read (socket, asio::buffer (bytes), asio::transfer_exactly (size),
                             std::move (completion));
@@ -1899,10 +1916,12 @@ class stream_host_service_t::listener_t
                                                   : "bound Session route registration failed");
             }
             actor_gateway.trace_bound_session_send_stage (
-              std::string (actor.actor_id ().value ()), "session_owner_route_publish",
-              "session_rid=" + session_rid.to_hex ()
-                + " binding_generation=" + std::to_string (binding.binding_generation)
-                + " replaced=" + (transition.value ().changed ? "true" : "false"),
+              actor.actor_id ().value (), "session_owner_route_publish",
+              [&] {
+                  return "session_rid=" + session_rid.to_hex ()
+                         + " binding_generation=" + std::to_string (binding.binding_generation)
+                         + " replaced=" + (transition.value ().changed ? "true" : "false");
+              },
               &session_rid);
             if (transition.value ().changed && transition.value ().previous
                 && transition.value ().previous->session_rid
@@ -2031,9 +2050,10 @@ class stream_host_service_t::listener_t
         const auto local = _mesh_node->native_node ().status ();
         const auto bindings = _mesh_node->native_node ().sessions ().bindings (connection);
         auto actor_gateway = _services->get_required<detail::actor_gateway_runtime_t> ();
-        const auto retire_connection =
-          "connection_id=" + connection.connection_id
-          + " connection_generation=" + std::to_string (connection.connection_generation);
+        const auto retire_connection_details = [&connection] {
+            return "connection_id=" + connection.connection_id
+                   + " connection_generation=" + std::to_string (connection.connection_generation);
+        };
         std::vector<std::pair<runtime::stateful::stream_binding_t, task_t<void>>>
           remote_retirements;
         remote_retirements.reserve (bindings.size ());
@@ -2043,11 +2063,14 @@ class stream_host_service_t::listener_t
                                                                                        binding)) {
                     actor_gateway.trace_bound_session_send_stage (
                       binding.actor.key, "session_owner_route_tombstone_stale_ignored",
-                      retire_connection + " session_rid=" + session_rid.to_hex ()
-                        + " binding_generation=" + std::to_string (binding.binding_generation)
-                        + " binding_connection_id=" + binding.connection.connection_id
-                        + " binding_connection_generation="
-                        + std::to_string (binding.connection.connection_generation),
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation)
+                                 + " binding_connection_id=" + binding.connection.connection_id
+                                 + " binding_connection_generation="
+                                 + std::to_string (binding.connection.connection_generation);
+                      },
                       &session_rid);
                     continue;
                 }
@@ -2067,16 +2090,20 @@ class stream_host_service_t::listener_t
                 }
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation);
+                  },
                   &session_rid);
             }
             catch (const std::exception &error) {
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone_failed",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " error=" + error.what (),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " error=" + error.what ();
+                  },
                   &session_rid);
             }
         }
@@ -2085,16 +2112,20 @@ class stream_host_service_t::listener_t
                 co_await retirement;
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation);
+                  },
                   &session_rid);
             }
             catch (const std::exception &error) {
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone_failed",
-                  retire_connection + " session_rid=" + session_rid.to_hex ()
-                    + " binding_generation=" + std::to_string (binding.binding_generation)
-                    + " error=" + error.what (),
+                  [&] {
+                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " error=" + error.what ();
+                  },
                   &session_rid);
             }
         }
@@ -2558,44 +2589,19 @@ class stream_host_service_t::listener_t
         wait_for_retired_core_sessions ();
     }
 
-    struct stream_write_wait_state_t
-    {
-        std::mutex mutex;
-        std::condition_variable condition;
-        bool completed = false;
-        std::atomic_bool cancel_requested{false};
-        boost::system::error_code error;
-
-        void complete (const boost::system::error_code &completion_error)
-        {
-            {
-                const std::lock_guard<std::mutex> lock (mutex);
-                if (completed) {
-                    return;
-                }
-                error = completion_error;
-                completed = true;
-            }
-            condition.notify_all ();
-        }
-
-        boost::system::error_code result ()
-        {
-            const std::lock_guard<std::mutex> lock (mutex);
-            return error;
-        }
-    };
-
     using stream_write_completion_t =
       std::function<void (const boost::system::error_code &, std::size_t)>;
     using stream_write_start_t = std::function<void (stream_write_completion_t)>;
-    using stream_write_cancel_t = std::function<void ()>;
 
     struct stream_write_operation_t
     {
-        std::shared_ptr<stream_write_wait_state_t> state;
+        task_completion_source_t<boost::system::error_code> completion;
         stream_write_start_t start;
-        stream_write_cancel_t cancel;
+
+        void complete (result_t<boost::system::error_code> result)
+        {
+            completion.complete (std::move (result));
+        }
     };
 
     struct stream_write_queue_t
@@ -2612,14 +2618,27 @@ class stream_host_service_t::listener_t
         std::atomic_bool closing{false};
         std::shared_ptr<stream_write_queue_t> write_queue;
 
-        tcp_connection_t () : socket (io), write_queue (std::make_shared<stream_write_queue_t> ())
+        explicit tcp_connection_t (asio::io_context &transport_io) :
+            socket (transport_io), write_queue (std::make_shared<stream_write_queue_t> ())
         {
+        }
+
+        void wake_reader ()
+        {
+            asio::post (io, [] {});
+        }
+
+        void request_close ()
+        {
+            closing.store (true, std::memory_order_release);
+            // Socket close completion이 없어도 permit 대기 reader를 깨웁니다.
+            wake_reader ();
         }
     };
 
     void finish_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
                               const std::shared_ptr<stream_write_operation_t> &operation,
-                              const boost::system::error_code &error)
+                              result_t<boost::system::error_code> result)
     {
         bool start_next = false;
         {
@@ -2639,7 +2658,7 @@ class stream_host_service_t::listener_t
                 start_next = true;
             }
         }
-        operation->state->complete (error);
+        operation->complete (std::move (result));
         if (start_next) {
             start_next_stream_write (owner);
         }
@@ -2657,36 +2676,39 @@ class stream_host_service_t::listener_t
             operation = owner->write_queue->pending.front ();
         }
         if (stream_stop_requested (*_stop, &owner->closing)) {
-            if (!operation->state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
-                operation->cancel ();
-            }
-            finish_stream_write (owner, operation, asio::error::operation_aborted);
+            finish_stream_write (
+              owner, operation,
+              result_t<boost::system::error_code>::success (asio::error::operation_aborted));
             return;
         }
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
-        operation->start (
-          [this, weak_owner, operation] (const boost::system::error_code &error, std::size_t) {
-              if (const auto owner = weak_owner.lock ()) {
-                  finish_stream_write (owner, operation, error);
-              } else {
-                  operation->state->complete (asio::error::operation_aborted);
-              }
-          });
+        try {
+            operation->start (
+              [this, weak_owner, operation] (const boost::system::error_code &error, std::size_t) {
+                  if (const auto owner = weak_owner.lock ()) {
+                      finish_stream_write (owner, operation,
+                                           result_t<boost::system::error_code>::success (error));
+                  } else {
+                      operation->complete (result_t<boost::system::error_code>::success (
+                        asio::error::operation_aborted));
+                  }
+              });
+        }
+        catch (...) {
+            finish_stream_write (owner, operation,
+                                 detail::current_exception_result<boost::system::error_code> ());
+        }
     }
 
-    /* Queues one write on the connection's write queue; empty once the
-     * connection stops. Whoever runs the connection's io (the reader or a
-     * waiting writer) completes it. */
-    template <typename Start, typename Cancel>
-    std::shared_ptr<stream_write_operation_t> queue_stream_write_operation (
-      const std::shared_ptr<tcp_connection_t> &owner, Start &&start, Cancel &&cancel)
+    /* 연결별 송신은 listener executor가 시작하고 completion으로 완료한다. */
+    template <typename Start>
+    std::shared_ptr<stream_write_operation_t>
+    queue_stream_write_operation (const std::shared_ptr<tcp_connection_t> &owner, Start &&start)
     {
         if (stream_stop_requested (*_stop, &owner->closing))
             return {};
         auto operation = std::make_shared<stream_write_operation_t> ();
-        operation->state = std::make_shared<stream_write_wait_state_t> ();
         operation->start = std::forward<Start> (start);
-        operation->cancel = std::forward<Cancel> (cancel);
         bool schedule = false;
         {
             const std::lock_guard<std::mutex> lock (owner->write_queue->mutex);
@@ -2698,44 +2720,13 @@ class stream_host_service_t::listener_t
         }
         if (schedule) {
             const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
-            asio::post (owner->io, [this, weak_owner] {
+            asio::post (_io, [this, weak_owner] {
                 if (const auto owner = weak_owner.lock ()) {
                     start_next_stream_write (owner);
                 }
             });
         }
         return operation;
-    }
-
-    // The caller waits for its own queued write while it runs the connection io.
-    boost::system::error_code
-    wait_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
-                       const std::atomic_bool &stop,
-                       const std::shared_ptr<stream_write_operation_t> &operation)
-    {
-        if (!operation)
-            return asio::error::operation_aborted;
-        std::unique_lock<std::mutex> lock (operation->state->mutex);
-        while (!operation->state->completed) {
-            if (stream_stop_requested (stop, &owner->closing)
-                && !operation->state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
-                /* Cancellation is submitted to the connection's executor. The
-                 * same caller pumps that executor below, so a write that was
-                 * started by the session dispatch executor is drained before
-                 * this synchronous boundary returns. */
-                operation->cancel ();
-            }
-            lock.unlock ();
-            owner->io.restart ();
-            if (owner->io.run_one () == 0) {
-                lock.lock ();
-                operation->state->condition.wait_for (lock, std::chrono::milliseconds (100));
-            } else {
-                lock.lock ();
-            }
-        }
-        lock.unlock ();
-        return operation->state->result ();
     }
 
     struct frame_t
@@ -2792,7 +2783,7 @@ class stream_host_service_t::listener_t
         if (_stop->load (std::memory_order_acquire)) {
             return;
         }
-        auto connection = std::make_shared<tcp_connection_t> ();
+        auto connection = std::make_shared<tcp_connection_t> (_io);
         _acceptor.async_accept (connection->socket,
                                 [this, connection] (const boost::system::error_code &error) {
                                     handle_boost_accept (connection, error);
@@ -2830,9 +2821,10 @@ class stream_host_service_t::listener_t
             track_stream (connection, websocket_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
-                _workers.emplace_back ([this, connection, websocket_connection] {
-                    handle_websocket_connection (connection, websocket_connection);
-                });
+                _workers.emplace_back (
+                  [this, connection, websocket_connection, work = asio::make_work_guard (_io)] {
+                      handle_websocket_connection (connection, websocket_connection);
+                  });
             }
         } else if (stream_uses_tls (_stream)) {
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
@@ -2845,16 +2837,19 @@ class stream_host_service_t::listener_t
             track_stream (connection, tls_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
-                _workers.emplace_back ([this, connection, tls_connection] {
-                    handle_tls_connection (connection, tls_connection);
-                });
+                _workers.emplace_back (
+                  [this, connection, tls_connection, work = asio::make_work_guard (_io)] {
+                      handle_tls_connection (connection, tls_connection);
+                  });
             }
 #else
             close_connection (connection->socket);
 #endif
         } else {
             const std::lock_guard<std::mutex> lock (_workers_mutex);
-            _workers.emplace_back ([this, connection] { handle_connection (connection); });
+            _workers.emplace_back ([this, connection, work = asio::make_work_guard (_io)] {
+                handle_connection (connection);
+            });
         }
         start_boost_accept ();
     }
@@ -2862,7 +2857,6 @@ class stream_host_service_t::listener_t
     void close_tcp_socket (tcp::socket &socket) noexcept
     {
         boost::system::error_code ignored;
-        const std::lock_guard<std::mutex> lock (_io_mutex);
         socket.shutdown (tcp::socket::shutdown_both, ignored);
         socket.close (ignored);
     }
@@ -2871,14 +2865,10 @@ class stream_host_service_t::listener_t
     {
         const std::lock_guard<std::mutex> lock (_sockets_mutex);
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
-        _sockets[&owner->socket] = [weak_owner] {
+        _sockets[&owner->socket] = [this, weak_owner] {
             if (const auto owner = weak_owner.lock ()) {
-                owner->closing.store (true, std::memory_order_release);
-                /* A synchronous read must be interrupted from the stopping
-                 * thread; the completion and final close still run through
-                 * the connection worker's normal teardown. */
-                cancel_stream (owner->socket);
-                asio::post (owner->io, [weak_owner] {
+                owner->request_close ();
+                asio::post (_io, [weak_owner] {
                     if (const auto owner = weak_owner.lock ())
                         close_stream (owner->socket);
                 });
@@ -2893,16 +2883,10 @@ class stream_host_service_t::listener_t
         const std::lock_guard<std::mutex> lock (_sockets_mutex);
         const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
         const auto weak_stream = std::weak_ptr<TStream> (stream);
-        _sockets[&stream->next_layer ()] = [weak_owner, weak_stream] {
+        _sockets[&stream->next_layer ()] = [this, weak_owner, weak_stream] {
             if (const auto owner = weak_owner.lock ()) {
-                owner->closing.store (true, std::memory_order_release);
-                if (const auto stream = weak_stream.lock ()) {
-                    /* Interrupt a synchronous read immediately. Pending
-                     * async writes observe owner->closing and drain their
-                     * completion on owner->io before teardown finishes. */
-                    cancel_stream (*stream);
-                }
-                asio::post (owner->io, [weak_stream] {
+                owner->request_close ();
+                asio::post (_io, [weak_stream] {
                     if (const auto stream = weak_stream.lock ())
                         close_stream (*stream);
                 });
@@ -2933,25 +2917,6 @@ class stream_host_service_t::listener_t
     }
 
     void close_connection (tcp::socket &socket) noexcept { close_tcp_socket (socket); }
-
-    void close_connection (websocket_stream_t &stream) noexcept
-    {
-        boost::system::error_code ignored;
-        {
-            const std::lock_guard<std::mutex> lock (_io_mutex);
-            if (stream.is_open ()) {
-                stream.close (websocket::close_code::normal, ignored);
-            }
-        }
-        close_tcp_socket (stream.next_layer ());
-    }
-
-#ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
-    void close_connection (ssl::stream<tcp::socket> &stream) noexcept
-    {
-        close_tcp_socket (stream.next_layer ());
-    }
-#endif
 
     template <typename TStream>
     std::optional<frame_t>
@@ -2993,7 +2958,8 @@ class stream_host_service_t::listener_t
     {
         beast::flat_buffer buffer;
         const auto error = run_stream_async_operation (
-          io, *_stop, [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
+          io, socket.get_executor (), *_stop,
+          [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
           [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop);
         if (error) {
             throw boost::system::system_error (error);
@@ -3064,8 +3030,7 @@ class stream_host_service_t::listener_t
         auto frame = encode_frame_bytes (header, payload);
         const auto weak_connection = std::weak_ptr<TStream> (connection);
         return queue_stream_write_operation (
-          owner,
-          [weak_connection, frame] (auto completion) mutable {
+          owner, [weak_connection, frame] (auto completion) mutable {
               if (const auto connection = weak_connection.lock ()) {
                   asio::async_write (
                     *connection, asio::buffer (*frame),
@@ -3075,14 +3040,6 @@ class stream_host_service_t::listener_t
                     });
               } else {
                   completion (asio::error::operation_aborted, 0);
-              }
-          },
-          [weak_owner = std::weak_ptr<tcp_connection_t> (owner), weak_connection] {
-              if (const auto connection_owner = weak_owner.lock ()) {
-                  asio::post (connection_owner->io, [weak_connection] {
-                      if (const auto connection = weak_connection.lock ())
-                          cancel_stream (*connection);
-                  });
               }
           });
     }
@@ -3096,8 +3053,7 @@ class stream_host_service_t::listener_t
         auto frame = encode_frame_bytes (header, payload);
         const auto weak_connection = std::weak_ptr<websocket_stream_t> (connection);
         return queue_stream_write_operation (
-          owner,
-          [weak_connection, frame] (auto completion) mutable {
+          owner, [weak_connection, frame] (auto completion) mutable {
               if (const auto connection = weak_connection.lock ()) {
                   connection->binary (true);
                   connection->async_write (
@@ -3109,30 +3065,25 @@ class stream_host_service_t::listener_t
               } else {
                   completion (asio::error::operation_aborted, 0);
               }
-          },
-          [weak_owner = std::weak_ptr<tcp_connection_t> (owner), weak_connection] {
-              if (const auto connection_owner = weak_owner.lock ()) {
-                  asio::post (connection_owner->io, [weak_connection] {
-                      if (const auto connection = weak_connection.lock ())
-                          cancel_stream (connection->next_layer ());
-                  });
-              }
           });
     }
 
-    // Writes one frame and waits for its completion.
     template <typename TStream>
-    void write_frame (const std::shared_ptr<tcp_connection_t> &owner,
-                      const std::shared_ptr<TStream> &connection,
-                      const stream_header_t &header,
-                      const zlink::message_t &payload)
+    task_t<void> submit_frame (std::shared_ptr<tcp_connection_t> owner,
+                               std::shared_ptr<TStream> connection,
+                               stream_header_t header,
+                               zlink::message_t payload)
     {
-        const auto error =
-          wait_stream_write (owner, *_stop, queue_frame (owner, connection, header, payload));
-        if (error) {
-            throw boost::system::system_error (error);
-        }
+        auto operation = queue_frame (owner, connection, header, payload);
+        if (!operation)
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              asio::error::make_error_code (asio::error::operation_aborted).message ());
+        const auto error = co_await operation->completion.task ();
+        if (error)
+            throw framework_exception_t (framework_error_kind_t::unavailable, error.message ());
         trace_stream_host ("write-completion", _stream, header, "result=success");
+        co_return;
     }
 
     template <typename TStream>
@@ -3147,27 +3098,15 @@ class stream_host_service_t::listener_t
         }
         auto error_header = detail::stream_runtime_t::make_terminal_header (
           stream, stream_message_kind_t::error, request_header);
-        write_frame (owner, connection, error_header, stream_error_payload (error));
-    }
-
-    template <typename TStream>
-    void flush_writes (const std::shared_ptr<tcp_connection_t> &owner,
-                       const std::shared_ptr<TStream> &connection,
-                       stream_t &stream,
-                       std::size_t &flushed)
-    {
-        const auto headers = _runtime.written_headers (stream);
-        const auto payloads = _runtime.written_payloads (stream);
-        for (; flushed < headers.size (); ++flushed) {
-            write_frame (owner, connection, headers[flushed], payloads[flushed]);
-        }
+        if (!queue_frame (owner, connection, error_header, stream_error_payload (error)))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "STREAM error reply connection is closing");
     }
 
     template <typename TStream>
     void handle_stream_connection (std::shared_ptr<tcp_connection_t> owner,
                                    std::shared_ptr<TStream> connection,
                                    tcp::socket *tracked_socket,
-                                   bool attach_immediate_writer,
                                    asio::io_context &io)
     {
         auto cleanup = std::unique_ptr<tcp::socket, std::function<void (tcp::socket *)>> (
@@ -3178,18 +3117,35 @@ class stream_host_service_t::listener_t
         if (draining ()) {
             /* graceful-drain-handoff §5: brand-new connections on a draining
              * node receive session-closing(server_drain) and are closed. */
+            detail::stream_header_t closing (stream_message_kind_t::control, stream_codec_t::raw,
+                                             stream_header_flags_t::none, std::nullopt,
+                                             "session-closing", {});
             try {
                 const auto payload_bytes =
                   detail::stream_runtime_t::encode_session_closing_payload (
                     stream_close_reason_t::server_drain, "node is draining");
-                detail::stream_header_t closing (stream_message_kind_t::control,
-                                                 stream_codec_t::raw, stream_header_flags_t::none,
-                                                 std::nullopt, "session-closing", {});
                 const auto closing_payload = zlink::message_t::from (
                   std::string (payload_bytes.begin (), payload_bytes.end ()));
-                write_frame (owner, connection, closing, closing_payload);
+                auto pending = std::make_shared<task_t<void>> (
+                  submit_frame (owner, connection, closing, closing_payload));
+                auto deferred_cleanup = std::make_shared<decltype (cleanup)> (std::move (cleanup));
+                detail::observe_task_completion (
+                  *pending,
+                  [this, pending, owner, connection, closing, deferred_cleanup,
+                   work = asio::make_work_guard (_io)] (const result_t<void> &result) mutable {
+                      asio::post (_io, [this, owner, connection, closing, result,
+                                        deferred_cleanup = std::move (deferred_cleanup),
+                                        work = std::move (work)] () mutable {
+                          if (!result)
+                              report_packet_dispatch_error (closing, result);
+                          close_stream (*connection);
+                          deferred_cleanup.reset ();
+                      });
+                  });
             }
             catch (...) {
+                report_packet_dispatch_error (closing, detail::current_exception_result<void> ());
+                asio::post (_io, [connection] { close_stream (*connection); });
             }
             return;
         }
@@ -3242,39 +3198,29 @@ class stream_host_service_t::listener_t
                     });
               });
         }
-        if (attach_immediate_writer) {
-            _runtime.attach_transport_writer (
-              stream,
-              [this, owner, connection] (const stream_header_t &header,
-                                         const zlink::message_t &payload,
-                                         std::optional<std::chrono::milliseconds>) -> task_t<void> {
-                  try {
-                      write_frame (owner, connection, header, payload);
-                  }
-                  catch (const framework_exception_t &) {
-                      throw;
-                  }
-                  catch (const std::exception &error) {
-                      throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                   error.what ());
-                  }
-                  co_return;
-              });
-        }
-        std::size_t flushed = 0;
+        _runtime.attach_transport_writer (
+          stream,
+          [this, owner, connection] (const stream_header_t &header, const zlink::message_t &payload,
+                                     std::optional<std::chrono::milliseconds>) -> task_t<void> {
+              return submit_frame (owner, connection, header, payload);
+          });
         bool connected_session = false;
         std::optional<stream_error_t> session_transport_error;
         auto liveness = std::make_shared<session_liveness_t> ();
         try {
-            if (auto connected = _runtime.dispatch_connected (session, stream); !connected) {
+            if (auto connected = _runtime.dispatch_connected_async (
+                  session, stream,
+                  [this, connection] (const result_t<void> &result) {
+                      if (!result)
+                          request_close (*connection);
+                  });
+                !connected) {
                 return;
             }
             connected_session = true;
             record_connection_opened ();
-            // close_connection owns the _io_mutex acquisition itself.
             register_active_stream (stream, liveness,
                                     [this, connection] { request_close (*connection); });
-            flush_writes (owner, connection, stream, flushed);
             auto receive_lease = _receive_scheduler.register_connection ();
             while (
               !_stop->load (std::memory_order_acquire)
@@ -3326,22 +3272,21 @@ class stream_host_service_t::listener_t
                     std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                     if (received_frame.header.kind () == stream_message_kind_t::send
                         || received_frame.header.kind () == stream_message_kind_t::request) {
-                        /* Permit before dispatch (Application job queue §3). While the
-                         * supply is pending this reader keeps running the connection
-                         * io, so queued writes such as heartbeat replies complete
-                         * (messaging hot path I1). The supply wakes the io. */
+                        /* Application job queue §3의 dispatch 전 permit 공급을
+                         * 기다립니다. 공급·종료 알림이 reader io를 깨우며, listener
+                         * io는 송신 completion을 계속 처리합니다(hot path I1). */
                         application_job_queue_t::supply_request_t supply;
                         std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
                         const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
                             if (const auto connection_owner = weak_owner.lock ())
-                                asio::post (connection_owner->io, [] {});
+                                connection_owner->wake_reader ();
                         };
                         while (!(reserved = supply.take (*_application_jobs,
                                                          std::chrono::milliseconds::zero (), wake))
                                && !stream_stop_requested (*_stop, &owner->closing)) {
                             io.restart ();
                             const auto running = asio::make_work_guard (io);
-                            io.run_one_for (std::chrono::milliseconds (50));
+                            io.run_one ();
                         }
                         if (!reserved || !*reserved)
                             break;
@@ -3367,6 +3312,9 @@ class stream_host_service_t::listener_t
                                       write_error_frame (owner, connection, stream, header, result);
                                   }
                                   catch (...) {
+                                      report_packet_dispatch_error (
+                                        header, detail::current_exception_result<void> ());
+                                      request_close (*connection);
                                   }
                               }
                           }
@@ -3388,10 +3336,12 @@ class stream_host_service_t::listener_t
                                 write_error_frame (owner, connection, stream, header, dispatched);
                             }
                             catch (...) {
+                                report_packet_dispatch_error (
+                                  header, detail::current_exception_result<void> ());
+                                request_close (*connection);
                             }
                         }
                     }
-                    flush_writes (owner, connection, stream, flushed);
                 }
             }
         }
@@ -3435,7 +3385,8 @@ class stream_host_service_t::listener_t
             }
         }
         if (connected_session) {
-            owner->closing.store (true, std::memory_order_release);
+            owner->request_close ();
+            asio::post (_io, [connection] { close_stream (*connection); });
             if (connection_state->replacement) {
                 connection_state->replacement->deactivate ();
             }
@@ -3472,7 +3423,7 @@ class stream_host_service_t::listener_t
             }
             _runtime.drain_async_dispatch (stream);
         }
-        close_connection (*connection);
+        asio::post (_io, [connection] { close_stream (*connection); });
     }
 
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
@@ -3481,7 +3432,7 @@ class stream_host_service_t::listener_t
     {
         try {
             const auto error = run_stream_async_operation (
-              owner->io, *_stop,
+              owner->io, connection->get_executor (), *_stop,
               [&] (auto completion) {
                   connection->async_handshake (
                     ssl::stream_base::server,
@@ -3500,7 +3451,7 @@ class stream_host_service_t::listener_t
             _sockets.erase (&connection->next_layer ());
             return;
         }
-        handle_stream_connection (owner, connection, &connection->next_layer (), true, owner->io);
+        handle_stream_connection (owner, connection, &connection->next_layer (), owner->io);
     }
 #endif
 
@@ -3509,7 +3460,7 @@ class stream_host_service_t::listener_t
     {
         try {
             const auto error = run_stream_async_operation (
-              owner->io, *_stop,
+              owner->io, connection->get_executor (), *_stop,
               [&] (auto completion) {
                   connection->async_accept (
                     [completion = std::move (completion)] (
@@ -3528,14 +3479,14 @@ class stream_host_service_t::listener_t
             _sockets.erase (&connection->next_layer ());
             return;
         }
-        handle_stream_connection (owner, connection, &connection->next_layer (), true, owner->io);
+        handle_stream_connection (owner, connection, &connection->next_layer (), owner->io);
     }
 
     void handle_connection (std::shared_ptr<tcp_connection_t> connection)
     {
         handle_stream_connection (connection,
                                   std::shared_ptr<tcp::socket> (connection, &connection->socket),
-                                  &connection->socket, true, connection->io);
+                                  &connection->socket, connection->io);
     }
 
     detail::stream_runtime_t _runtime;
@@ -3553,7 +3504,6 @@ class stream_host_service_t::listener_t
     runtime::state_lane_t _active_streams_lane{_active_streams_lane_executor};
     std::vector<active_session_t> _active_streams;
     asio::io_context _io;
-    std::mutex _io_mutex;
     tcp::acceptor _acceptor;
     asio::steady_timer _accept_retry_timer;
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL

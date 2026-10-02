@@ -32,7 +32,7 @@ export interface ZLinkWorkerCall<T> {
 export interface ZLinkSpotCommonContext<TSpot = ZLinkSpot> {
   readonly meshName: string;
   readonly spotId: SpotId;
-  readonly objectGeneration: number;
+  readonly objectGeneration: bigint;
   readonly nodeRid: RoutingId;
   readonly outbound: ZLinkSpotOutbound;
   addTimer<THandler extends ZLinkSpotTimerHandler<TSpot>>(

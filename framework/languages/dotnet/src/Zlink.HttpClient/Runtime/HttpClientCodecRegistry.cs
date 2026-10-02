@@ -6,7 +6,7 @@ namespace Zlink.HttpClient.Runtime;
 
 internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLinkCodecRegistrar
 {
-    private const string JsonContentType = "application/json";
+    private const string JsonContentType = System.Net.Mime.MediaTypeNames.Application.Json;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ZLinkSerializerSelectionRegistry _serializerSelections;

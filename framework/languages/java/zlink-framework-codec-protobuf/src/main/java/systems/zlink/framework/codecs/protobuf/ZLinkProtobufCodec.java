@@ -7,6 +7,7 @@ import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
 import systems.zlink.stream.connector.ZLinkStreamTypedCodec;
 
 public final class ZLinkProtobufCodec implements ZLinkCodecExtension, ZLinkStreamTypedCodec {
+    private static final String CONTENT_TYPE = "application/x-protobuf";
     private static final ZLinkProtobufCodec DEFAULT = new ZLinkProtobufCodec();
 
     private ZLinkProtobufCodec() {}
@@ -28,9 +29,9 @@ public final class ZLinkProtobufCodec implements ZLinkCodecExtension, ZLinkStrea
     @Override
     public void register(ZLinkCodecRegistrar codecs) {
         codecs.addSerializer(
-                "application/x-protobuf",
+                CONTENT_TYPE,
                 ZLinkProtobufMessageSerializer.INSTANCE,
                 ZLinkProtobufMessageSerializer::canSerialize);
-        codecs.addStreamCodec("application/x-protobuf", ZLinkStreamCodec.PROTOBUF);
+        codecs.addStreamCodec(CONTENT_TYPE, ZLinkStreamCodec.PROTOBUF);
     }
 }

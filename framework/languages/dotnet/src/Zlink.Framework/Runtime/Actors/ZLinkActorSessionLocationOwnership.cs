@@ -4,6 +4,8 @@ namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
 {
+    private const string SelfTeardownOperationName = "actor-self-teardown";
+
     public async ValueTask RollbackTransferredActorAsync(
         string actorId,
         CancellationToken cancellationToken = default,
@@ -68,33 +70,67 @@ internal sealed partial class ZLinkActorSessionManager
                     .NotifyEntrySpotActorLeftAsync(actor, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
         }
-        finally
+        catch (Exception failure)
         {
-            // OnLeave is one-way. Report callback errors through the receiver,
-            // but completion (including failure) releases the source obligation.
-            completion.TrySetResult();
+            // The one-way receiver acknowledges the notification independently
+            // of its outcome. Source retirement owns the failure diagnostic.
+            completion.TrySetException(failure);
+            return;
         }
+        completion.TrySetResult();
     }
 
     public async ValueTask FinalizeMigratedSourceAsync(
         ZLinkActorRuntimeState state,
         ZLinkBackendActorRef sourceActor,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Func<ValueTask>? prepareSource = null
     )
     {
+        if (!state.Handoff.IsSourceMigrationInProgress)
+            return;
+
+        List<Exception>? failures = null;
+        if (prepareSource is not null)
+        {
+            try
+            {
+                await prepareSource().ConfigureAwait(false);
+            }
+            catch (Exception failure)
+            {
+                (failures ??= []).Add(failure);
+            }
+        }
+
         // Spec 15 §4.2: commit does not complete source membership lifecycle.
         // This is the retirement gate for Join and maintenance alike. A remote
-        // Join registers its one-way leave obligation at seal; keep the source
-        // instance and ingress/Message Follow state until its callback ends.
-        if (state.Handoff.SourceMembershipLeaveCompletion is { } leaveCompletion)
-            await leaveCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Join registers its one-way leave obligation at seal. Wait for its
+        // completion within the caller's cleanup deadline before retiring the
+        // source application instance.
+        try
+        {
+            if (state.Handoff.SourceMembershipLeaveCompletion is { } leaveCompletion)
+                await leaveCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            (failures ??= []).Add(failure);
+        }
 
         // The source stops owning disconnect cleanup, but its exact
         // bound-session fence remains available while Message Follow can
         // forward delayed frames to the target actor. Only a rebind or
         // disconnect invalidates that binding (spec 31 §6).
-        if (state.TryGetBoundSession(out var boundSession))
-            runtime.RetireMigratedActorSession(state.ActorId, boundSession.BindingToken);
+        try
+        {
+            if (state.TryGetBoundSession(out var boundSession))
+                runtime.RetireMigratedActorSession(state.ActorId, boundSession.BindingToken);
+        }
+        catch (Exception failure)
+        {
+            (failures ??= []).Add(failure);
+        }
 
         var terminal = state.BeginHandlerActivationCompletion(() =>
         {
@@ -103,11 +139,16 @@ internal sealed partial class ZLinkActorSessionManager
         });
         if (terminal.RequiresDispatchRelease)
         {
-            _ = ObserveDeferredMigratedSourceFinalizationAsync(state, terminal.Completion);
+            _ = ObserveDeferredMigratedSourceFinalizationAsync(
+                state,
+                terminal.Completion,
+                failures
+            );
             return;
         }
 
-        _ = await terminal.Completion.ConfigureAwait(false);
+        await ObserveDeferredMigratedSourceFinalizationAsync(state, terminal.Completion, failures)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask PrepareForTransferredActivationAsync(
@@ -407,13 +448,14 @@ internal sealed partial class ZLinkActorSessionManager
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"deferred actor teardown failed for '{state.ActorId}': {failure.Message}"
             );
-            StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
+            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
         }
     }
 
-    private static async Task ObserveDeferredMigratedSourceFinalizationAsync(
+    private async Task ObserveDeferredMigratedSourceFinalizationAsync(
         ZLinkActorRuntimeState state,
-        Task<bool> completion
+        Task<bool> completion,
+        List<Exception>? failures
     )
     {
         try
@@ -422,10 +464,13 @@ internal sealed partial class ZLinkActorSessionManager
         }
         catch (Exception exception)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"deferred source finalization failed for actor '{state.ActorId}': {exception.Message}"
-            );
+            (failures ??= []).Add(exception);
         }
+        if (failures is not null)
+            runtime.ErrorSink.ReportRuntimeTaskException(
+                $"actor-source-handoff-cleanup:{state.ActorId}",
+                failures.Count == 1 ? failures[0] : new AggregateException(failures)
+            );
     }
 
     private async Task CompleteDeferredActorTeardownAsync(
@@ -473,7 +518,7 @@ internal sealed partial class ZLinkActorSessionManager
                 );
             }
 
-            StartActorTeardownReconciliation(state, nativeActor, "actor-self-teardown");
+            StartActorTeardownReconciliation(state, nativeActor, SelfTeardownOperationName);
         }
     }
 

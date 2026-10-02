@@ -169,7 +169,7 @@ internal sealed class ZLinkNativeActorJoinOperation(
 
     private static ZLinkActorJoinResult.Rejected RejectedWithTrace(ZLinkMessage reply)
     {
-        ZLinkFrameworkDebugLog.SpotDiscovery("actor_join_rejected site=remote_joiner_tail");
+        ZLinkFrameworkDebugLog.SpotDiscovery($"actor_join_rejected site=remote_joiner_tail");
         return new ZLinkActorJoinResult.Rejected(reply);
     }
 }

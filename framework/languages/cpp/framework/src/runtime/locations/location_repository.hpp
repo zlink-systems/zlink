@@ -529,8 +529,9 @@ class location_repository_t
     {
         if (cancellation.stop_requested ())
             return task_t<std::optional<std::vector<aggregate_participant_t>>> (
-              detail::boundary_failure<std::optional<std::vector<aggregate_participant_t>>> (
-                detail::boundary_error_t::cancelled, "aggregate read cancelled"));
+              detail::result_access_t::failure<
+                std::optional<std::vector<aggregate_participant_t>>> (
+                detail::make_cancellation_exception ("aggregate read cancelled")));
         return task_t<std::optional<std::vector<aggregate_participant_t>>> (
           result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
     }

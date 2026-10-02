@@ -6,6 +6,15 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
+const {
   ZLinkRoutedSpotPacketDispatch
 } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
 const {
@@ -33,8 +42,9 @@ async function createEntryFixture(entrySpotType, packetHandlers = [], options = 
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', PlayerFactory]]),
     actorMeshNameProvider: () => 'test.mesh'
-  });
+  }, detachedTaskRunner);
   const activation = new framework.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType,
     nativeSpot: { routingId: 'entry-test', async dispose() {} },
     nodeRid: 'node-test',

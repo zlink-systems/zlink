@@ -2,9 +2,21 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Contracts.Locations;
+
+internal static class ZLinkLocationRecordJsonFields
+{
+    internal const string RoutingIdHex = "routingIdHex";
+    internal const string UpdatedAtEpochMs = "updatedAtEpochMs";
+    internal const string ServerRoutingIdHex = "serverRoutingIdHex";
+    internal const string PublisherRoutingIdHex = "publisherRoutingIdHex";
+    internal const string OwnerId = "ownerId";
+    internal const string LeaseGeneration = "leaseGeneration";
+    internal const string RecordVersion = "recordVersion";
+}
 
 // Canonical epoch-millisecond timestamp encoding shared by the descriptor
 // records' `updatedAtEpochMs` field (21-location-runtime.md#2.4: "timestamps
@@ -64,7 +76,7 @@ internal sealed class ZLinkEpochMillisecondsJsonConverter : JsonConverter<DateTi
 /// </summary>
 internal sealed record ZLinkMeshNodeDescriptor(
     string MeshName,
-    [property: JsonPropertyName("routingIdHex")] RoutingId Rid,
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.RoutingIdHex)] RoutingId Rid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
         ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
@@ -75,7 +87,7 @@ internal sealed record ZLinkMeshNodeDescriptor(
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
         long LeaseGeneration,
-    [property: JsonPropertyName("updatedAtEpochMs")]
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.UpdatedAtEpochMs)]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
         DateTimeOffset UpdatedAt
 )
@@ -95,7 +107,7 @@ internal sealed record ZLinkMeshNodeDescriptor(
 
     public string? EntrySpotId { get; init; }
 
-    public int PlacementWeight { get; init; } = 100;
+    public int PlacementWeight { get; init; } = ZLinkSpotNodeRegistration.DefaultPlacementWeight;
 
     public ZLinkPlacementCapacity Capacity { get; init; } =
         new(
@@ -104,7 +116,8 @@ internal sealed record ZLinkMeshNodeDescriptor(
             Array.Empty<ZLinkSpotTypeCapacity>()
         );
 
-    public ZLinkActivationConcurrency ActivationConcurrency { get; init; } = new(0, 128);
+    public ZLinkActivationConcurrency ActivationConcurrency { get; init; } =
+        new(0, ZLinkSpotNodeRegistration.DefaultActivationConcurrencyLimit);
 }
 
 // Embedded as the authority record's allocation.descriptor field
@@ -112,7 +125,7 @@ internal sealed record ZLinkMeshNodeDescriptor(
 // the C# property name Rid.
 internal readonly record struct ZLinkMeshNodeDescriptorKey(
     string MeshName,
-    [property: JsonPropertyName("routingIdHex")] RoutingId Rid
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.RoutingIdHex)] RoutingId Rid
 );
 
 // Field names/types/converters below are the canonical opaque-record
@@ -120,7 +133,8 @@ internal readonly record struct ZLinkMeshNodeDescriptorKey(
 // table).
 internal sealed record ZLinkClientServerServerDescriptor(
     string ChannelName,
-    [property: JsonPropertyName("serverRoutingIdHex")] RoutingId ServerRid,
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.ServerRoutingIdHex)]
+        RoutingId ServerRid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
         ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
@@ -133,7 +147,7 @@ internal sealed record ZLinkClientServerServerDescriptor(
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
         long LeaseGeneration,
-    [property: JsonPropertyName("updatedAtEpochMs")]
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.UpdatedAtEpochMs)]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
         DateTimeOffset UpdatedAt
 );
@@ -147,7 +161,8 @@ internal readonly record struct ZLinkClientServerServerDescriptorKey(
 // (21-location-runtime.md#2.4's fanout publisher descriptor table).
 internal sealed record ZLinkFanoutPublisherDescriptor(
     string ChannelName,
-    [property: JsonPropertyName("publisherRoutingIdHex")] RoutingId PublisherRid,
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.PublisherRoutingIdHex)]
+        RoutingId PublisherRid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
         ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
@@ -159,7 +174,7 @@ internal sealed record ZLinkFanoutPublisherDescriptor(
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
         long LeaseGeneration,
-    [property: JsonPropertyName("updatedAtEpochMs")]
+    [property: JsonPropertyName(ZLinkLocationRecordJsonFields.UpdatedAtEpochMs)]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
         DateTimeOffset UpdatedAt
 );

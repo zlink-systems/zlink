@@ -565,7 +565,7 @@ task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t
         }
     }
     catch (...) {
-        co_return current_exception_result<zlink::message_t> ("spot handler threw an exception");
+        co_return current_exception_result<zlink::message_t> ();
     }
 }
 
@@ -1003,30 +1003,17 @@ class spot_context_t
               auto completion = std::make_shared<task_completion_source_t<result_type>> ();
               auto task = completion->task ();
               auto shared_work = std::make_shared<TWork> (std::move (work));
-              auto completed = std::make_shared<std::atomic_bool> (false);
-              const auto scheduled =
-                scheduler->try_schedule ([scheduler, shared_work, completion, completed,
-                                          cancellation] (std::stop_token) mutable {
+              const auto scheduled = scheduler->try_schedule (
+                [shared_work, completion, cancellation] (std::stop_token) mutable {
                     auto result = detail::run_worker_body<result_type> (*shared_work, cancellation);
                     if (cancellation.stop_requested ()) {
-                        completed->store (true);
                         return;
                     }
-                    if (!completed->exchange (true)) {
-                        auto complete_result = [completion,
-                                                result = std::move (result)] () mutable {
-                            completion->complete (std::move (result));
-                        };
-                        scheduler->post_owner (std::move (complete_result));
-                    }
+                    completion->complete (std::move (result));
                 });
               if (!scheduled) {
-                  completed->store (true);
-                  auto complete_full = [completion] () mutable {
-                      completion->complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  };
-                  scheduler->post_owner (std::move (complete_full));
+                  completion->complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return task;
           },
@@ -1100,10 +1087,8 @@ class spot_context_t
                 });
               if (!scheduled) {
                   completed->store (true);
-                  scheduler->post_owner ([completion] {
-                      completion->complete (result_t<result_type>::failure (
-                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
-                  });
+                  completion->complete (result_t<result_type>::failure (
+                    framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
               }
               return result;
           },
@@ -1112,17 +1097,18 @@ class spot_context_t
 
     std::vector<spot_packet_descriptor_t> packet_registry () const;
 
-    template <typename TActor>
-    task_t<actor_ref_t> leave_actor (const actor_ref_t &actor_ref, TActor &actor)
+    template <typename TActor> task_t<void> leave_actor (TActor &actor)
     {
-        return leave_actor_erased (
-          actor_ref, std::type_index (typeid (TActor)), &actor,
+        (void) co_await leave_actor_erased (
+          _state, actor.context ().actor_ref (), actor.context (),
+          std::type_index (typeid (TActor)), &actor,
           [] (void *actor_instance, const actor_ref_t &committed) {
               auto &typed_actor = *static_cast<TActor *> (actor_instance);
               if constexpr (requires { typed_actor.set_actor_ref (committed); }) {
                   typed_actor.set_actor_ref (committed);
               }
           });
+        co_return;
     }
 
     template <typename THandler>
@@ -1245,8 +1231,10 @@ class spot_context_t
                                              std::string packet_name,
                                              zlink::message_t payload);
     spot_context_t &register_packet_erased (std::string packet_name, std::type_index payload_type);
-    task_t<actor_ref_t>
-    leave_actor_erased (const actor_ref_t &actor_ref,
+    static task_t<actor_ref_t>
+    leave_actor_erased (std::shared_ptr<detail::spot_context_state_t> state,
+                        actor_ref_t actor_ref,
+                        actor_context_t &actor_context,
                         std::type_index actor_type,
                         void *actor,
                         std::function<void (void *, const actor_ref_t &)> update_actor_ref);

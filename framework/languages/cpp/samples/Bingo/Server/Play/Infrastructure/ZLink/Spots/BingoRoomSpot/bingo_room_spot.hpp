@@ -193,7 +193,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             if (resumed == _pending_joins.end () || resumed->second.room_id () != request.room_id ()
                 || !_game.can_accept_player ()) {
                 _pending_joins.erase (actor.actor_id);
-                (void) co_await _context->leave_actor (actor_ref_for (actor), actor);
+                co_await _context->leave_actor (actor);
                 co_return;
             }
             // --8<-- [end:doc-bingo-room-join]
@@ -315,17 +315,11 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         }
         for (auto *actor : leaving) {
             actor->mark_for_destroy_after_room_leave ();
-            const auto before = actor_ref_for (*actor);
-            (void) co_await _context->leave_actor (before, *actor);
+            co_await _context->leave_actor (*actor);
         }
         co_return;
     }
     // --8<-- [end:doc-bingo-room-cleanup]
-
-    static actor_ref_t actor_ref_for (const player_actor_t &actor)
-    {
-        return actor.context ().actor_ref ();
-    }
 
     std::optional<spot_context_t> _context;
     bingo_room_game_t _game;

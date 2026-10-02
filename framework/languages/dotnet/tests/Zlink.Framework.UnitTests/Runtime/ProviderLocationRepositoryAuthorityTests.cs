@@ -1802,11 +1802,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             );
     }
 
-    [Fact]
-    public async Task SharedOpaqueProvider_AggregateCommitRetriesCapacityContention()
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(65, 0)]
+    [InlineData(1, 5100)]
+    public async Task SharedOpaqueProvider_AggregateCommitRetriesCapacityContention(
+        int conflicts,
+        int providerLatencyMilliseconds
+    )
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
-        var provider = new AggregateCommitConflictOnceLocationStore(inner);
+        var provider = new AggregateCommitConflictLocationStore(inner);
         var repository = new ZLinkProviderLocationRepository(provider);
         var sourceOwner = await ClaimAsync(repository, "source-owner");
         var targetOwner = await ClaimAsync(repository, "target-owner");
@@ -1851,13 +1857,14 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.PrepareAggregateAsync(request)
         );
 
-        provider.ConflictNextAggregateCommit = true;
+        provider.RemainingCommitConflicts = conflicts;
+        provider.CommitConflictLatency = TimeSpan.FromMilliseconds(providerLatencyMilliseconds);
 
         Assert.Equal(
             ZLinkAggregateCommitResult.Committed,
             await repository.CommitAggregateAsync(prepared.Fence)
         );
-        Assert.Equal(2, provider.AggregateCommitAttempts);
+        Assert.Equal(conflicts + 1, provider.AggregateCommitAttempts);
         foreach (var participant in participants)
         {
             var authority = Assert
@@ -3901,10 +3908,12 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         }
     }
 
-    private sealed class AggregateCommitConflictOnceLocationStore(IZLinkLocationStore inner)
+    private sealed class AggregateCommitConflictLocationStore(IZLinkLocationStore inner)
         : IZLinkLocationStore
     {
-        public bool ConflictNextAggregateCommit { get; set; }
+        public int RemainingCommitConflicts { get; set; }
+
+        public TimeSpan CommitConflictLatency { get; set; }
 
         public int AggregateCommitAttempts { get; private set; }
 
@@ -3913,7 +3922,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             CancellationToken cancellationToken = default
         ) => inner.ReadAsync(key, cancellationToken);
 
-        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
             CancellationToken cancellationToken = default
         )
@@ -3936,15 +3945,15 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             )
             {
                 AggregateCommitAttempts++;
-                if (ConflictNextAggregateCommit)
+                if (RemainingCommitConflicts > 0)
                 {
-                    ConflictNextAggregateCommit = false;
-                    return ValueTask.FromResult<ZLinkStoreWriteResult>(
-                        new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow)
-                    );
+                    RemainingCommitConflicts--;
+                    if (CommitConflictLatency > TimeSpan.Zero)
+                        await Task.Delay(CommitConflictLatency, cancellationToken);
+                    return new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow);
                 }
             }
-            return inner.WriteAsync(request, cancellationToken);
+            return await inner.WriteAsync(request, cancellationToken);
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(

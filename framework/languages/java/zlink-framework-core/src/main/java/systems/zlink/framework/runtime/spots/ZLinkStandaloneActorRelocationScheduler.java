@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -56,14 +57,19 @@ final class ZLinkStandaloneActorRelocationScheduler {
             ZLinkRelocationTransitionClient.Settlement settlement) {
         return switch (settlement) {
             case TARGET_COMMITTED -> {
-                yield source.completeSourceQueueCommit()
-                        .thenCompose(ignored -> source.cleanupLocal())
-                        .thenCompose(cleaned -> source.discardInitialAfterCommit())
+                yield ZLinkRelocationHandOff.completeSourceCleanup(
+                                List.of(
+                                        source::completeSourceQueueCommit,
+                                        source::cleanupLocal,
+                                        source::discardInitialAfterCommit))
                         .thenRun(
                                 () ->
                                         systems.zlink.framework.runtime.internal.metrics
                                                 .ZLinkRuntimeMetrics.increment(
-                                                "zlink.drain.actors.handed_off", Map.of()));
+                                                systems.zlink.framework.runtime.internal.metrics
+                                                        .ZLinkRuntimeMetrics
+                                                        .DRAIN_ACTORS_HANDED_OFF_NAME,
+                                                Map.of()));
             }
             case SOURCE_PRESERVED ->
                     source.abort()

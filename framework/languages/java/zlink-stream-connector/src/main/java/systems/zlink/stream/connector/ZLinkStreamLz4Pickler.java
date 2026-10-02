@@ -6,8 +6,10 @@ import net.jpountz.lz4.LZ4Factory;
 import java.util.Arrays;
 
 final class ZLinkStreamLz4Pickler {
-    private static final int DEFAULT_MAX_DECOMPRESSED_PAYLOAD_SIZE = 64 * 1024;
     private static final int VERSION_MASK = 0x07;
+    private static final int DIFF_WIDTH_SHIFT = 6;
+    private static final int DIFF_WIDTH_MASK = 0x03;
+    private static final int INTEGER_DIFF_WIDTH_CODE = DIFF_WIDTH_MASK;
     private static final LZ4Factory LZ4 = LZ4Factory.fastestInstance();
 
     private ZLinkStreamLz4Pickler() {}
@@ -36,7 +38,7 @@ final class ZLinkStreamLz4Pickler {
     }
 
     static byte[] unpickle(byte[] source) {
-        return unpickle(source, DEFAULT_MAX_DECOMPRESSED_PAYLOAD_SIZE);
+        return unpickle(source, ZLinkStreamConnectorOptions.DEFAULT_MAX_PAYLOAD_SIZE);
     }
 
     static byte[] unpickle(byte[] source, int maxDecompressedSize) {
@@ -80,8 +82,8 @@ final class ZLinkStreamLz4Pickler {
         if (version != 0) {
             throw new IllegalArgumentException("unsupported LZ4 pickle version: " + version);
         }
-        int sizeOfDiff = (header >> 6) & 0x03;
-        if (sizeOfDiff == 3) {
+        int sizeOfDiff = (header >> DIFF_WIDTH_SHIFT) & DIFF_WIDTH_MASK;
+        if (sizeOfDiff == INTEGER_DIFF_WIDTH_CODE) {
             sizeOfDiff = Integer.BYTES;
         }
         int dataOffset = 1 + sizeOfDiff;
@@ -94,30 +96,33 @@ final class ZLinkStreamLz4Pickler {
     }
 
     private static int effectiveSizeOf(int value) {
-        if (value < 0 || value > 0xFFFF) {
+        if (value < 0 || value > ZLinkStreamWireProtocol.MAX_UNSIGNED_SHORT) {
             return Integer.BYTES;
         }
-        if (value > 0xFF) {
+        if (value > ZLinkStreamWireProtocol.MAX_UNSIGNED_BYTE) {
             return Short.BYTES;
         }
         return Byte.BYTES;
     }
 
     private static byte encodeHeaderByte(int sizeOfDiff) {
-        int encodedSize = sizeOfDiff == Integer.BYTES ? 3 : sizeOfDiff;
-        return (byte) ((encodedSize & 0x03) << 6);
+        int encodedSize = sizeOfDiff == Integer.BYTES ? INTEGER_DIFF_WIDTH_CODE : sizeOfDiff;
+        return (byte) ((encodedSize & DIFF_WIDTH_MASK) << DIFF_WIDTH_SHIFT);
     }
 
     private static void pokeLittleEndian(byte[] target, int offset, int value, int size) {
         for (int i = 0; i < size; i++) {
-            target[offset + i] = (byte) ((value >>> (i * 8)) & 0xFF);
+            target[offset + i] =
+                    (byte)
+                            ((value >>> (i * Byte.SIZE))
+                                    & ZLinkStreamWireProtocol.MAX_UNSIGNED_BYTE);
         }
     }
 
     private static long peekLittleEndian(byte[] source, int offset, int size) {
         long result = 0;
         for (int i = 0; i < size; i++) {
-            result |= (long) Byte.toUnsignedInt(source[offset + i]) << (i * 8);
+            result |= (long) Byte.toUnsignedInt(source[offset + i]) << (i * Byte.SIZE);
         }
         return result;
     }

@@ -5,6 +5,15 @@ const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const spots = require('../../packages/framework/dist/runtime/spots');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 async function waitFor(condition, label, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
@@ -194,6 +203,7 @@ test('Entry Spot routed actor packet replies with its current actor packet targe
     async dispose() {}
   };
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     actorRequestHandlers: [{
       entrySpotType: EntrySpot,
@@ -335,6 +345,7 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
   }
 
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot: {
       routingId: 'play-node-b-entry',
@@ -467,6 +478,7 @@ test('Entry Spot routed bound session command decodes registered channel seriali
     async dispose() {}
   };
   const activation = new spots.ZLinkEntrySpotActivation({
+    detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
     nativeSpot,
     nativeNode: { routingId: 'session-node' },
@@ -560,6 +572,43 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
   assert.equal(
     runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
     undefined
+  );
+});
+
+test('runtime host publishes only the resolved authority route for User membership', () => {
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: { useInMemoryStores: true },
+      routeChannels: ['bingo.room.route']
+    })
+  });
+  const state = {
+    spotId: 'bingo-room-1',
+    spotGeneration: 7n,
+    nativeActorRef: { nodeRid: 'play-node-1', actorId: 'player-2', generation: 1n }
+  };
+  runtime.setActorManager({ getState() { return state; } });
+
+  assert.equal(
+    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    undefined
+  );
+  const readyRoute = {
+    routerChannelId: 'bingo.room.route',
+    targetNodeRid: 'play-node-1',
+    spotId: state.spotId,
+    spotKind: framework.ZLinkSpotKind.User,
+    targetSpotGeneration: 7n,
+    targetNodeGeneration: 11n,
+    authorityOwnerGeneration: 13n,
+    targetOwnerId: 'play-owner',
+    ownerLeaseGeneration: 17n,
+    authorityStoreVersion: 'room-ready'
+  };
+  state.remoteActorPacketTarget = readyRoute;
+  assert.strictEqual(
+    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    readyRoute
   );
 });
 

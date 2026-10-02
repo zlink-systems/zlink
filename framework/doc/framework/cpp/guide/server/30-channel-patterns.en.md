@@ -55,6 +55,8 @@ that uses all three ends up with three separate listeners.
 <iframe class="zlink-diagram" src="/common/diagrams/30-wiring-en.html" title="The three patterns open different sockets" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/30-wiring-en.html" target="_blank">↗ View larger</a></p>
 
+<p><a href="/common/diagrams/zlink-tour-en.html#meshchannel" target="_blank">▶ Try it in the interactive tour — RouteMesh, ClientServer, and Fanout wiring</a></p>
+
 | | Listener it opens | Unit of connection | When you add a channel |
 | --- | --- | --- | --- |
 | RouteMesh | One ROUTER per MeshNode | A peer connection between nodes | **No socket is added** |
@@ -295,6 +297,8 @@ A [Spot](21-spot.en.md) is a stateful object found by id, and it processes the w
 it in a single line. Exchanging events between such Spots over a RouteMesh channel is called
 Logical Multicast. There is no separate socket, and the receiving side is confined to the Spots
 subscribed to the same topic on that channel.
+
+<p><a href="/common/diagrams/zlink-tour-en.html#meshpubsub" target="_blank">▶ Try it in the interactive tour — RouteMesh pub/sub</a></p>
 
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp:doc-multicast-publish"

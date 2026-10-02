@@ -117,12 +117,16 @@ export class ZLinkChannelRuntimeManager {
   }
 
   fanoutTopology(channelName: string) {
-    return { descriptors: this.sockets.fanoutActiveTargets(channelName) };
+    return {
+      descriptors:
+        this.lifecycle.fanoutTopologyTargets(channelName) ??
+        this.sockets.fanoutActiveTargets(channelName)
+    };
   }
 
   observeClientServerTopology(channelName: string, changed: () => void): () => void {
     const monitor = this.sockets.clientServerMonitoringSource(channelName);
-    monitor.onEvent(changed);
+    monitor.onChange(changed);
     return () => {
       void monitor.dispose();
     };

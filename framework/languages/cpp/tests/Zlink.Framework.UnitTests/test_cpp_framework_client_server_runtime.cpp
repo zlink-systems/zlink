@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <future>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -803,29 +804,57 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
     const auto timed_out =
       client_server_operation_exception (operation_terminal_t::timed_out, "request");
-    assert (timed_out.kind () == framework_error_kind_t::deadline_exceeded);
-    assert (zlink::framework::detail::boundary_state (timed_out) == boundary_error_t::timed_out);
+    assert (zlink::framework::detail::framework_error (timed_out)->kind ()
+            == framework_error_kind_t::deadline_exceeded);
+    assert (zlink::framework::detail::boundary_state (
+              *zlink::framework::detail::framework_error (timed_out))
+            == boundary_error_t::timed_out);
 
     const auto cancelled =
       client_server_operation_exception (operation_terminal_t::cancelled, "request");
-    assert (cancelled.kind () == framework_error_kind_t::invalid_operation);
-    assert (zlink::framework::detail::boundary_state (cancelled) == boundary_error_t::cancelled);
+    assert (zlink::framework::detail::framework_error (cancelled) == nullptr);
+    try {
+        std::rethrow_exception (cancelled);
+        assert (false);
+    }
+    catch (const std::system_error &error) {
+        assert (zlink::framework::detail::is_cancellation_exception (error));
+    }
+    const auto cancelled_result =
+      zlink::framework::detail::result_access_t::failure<void> (cancelled);
+    assert (!cancelled_result && cancelled_result.error () == nullptr);
+    assert (cancelled_result.exception () == cancelled);
+    try {
+        cancelled_result.value ();
+        assert (false);
+    }
+    catch (const std::system_error &error) {
+        assert (error.code () == std::errc::operation_canceled);
+    }
 
     const auto disconnected =
       client_server_operation_exception (operation_terminal_t::transport_failed, "request");
-    assert (disconnected.kind () == framework_error_kind_t::unavailable);
-    assert (zlink::framework::detail::boundary_state (disconnected)
+    assert (zlink::framework::detail::framework_error (disconnected)->kind ()
+            == framework_error_kind_t::unavailable);
+    assert (zlink::framework::detail::boundary_state (
+              *zlink::framework::detail::framework_error (disconnected))
             == boundary_error_t::disconnected);
 
     const auto shutdown =
       client_server_operation_exception (operation_terminal_t::shutdown, "request");
-    assert (shutdown.kind () == framework_error_kind_t::shutting_down);
-    assert (zlink::framework::detail::boundary_state (shutdown) == boundary_error_t::shutdown);
+    assert (zlink::framework::detail::framework_error (shutdown)->kind ()
+            == framework_error_kind_t::shutting_down);
+    assert (zlink::framework::detail::boundary_state (
+              *zlink::framework::detail::framework_error (shutdown))
+            == boundary_error_t::shutdown);
 
     const auto invalid =
       client_server_operation_exception (operation_terminal_t::completed, "request");
-    assert (invalid.kind () == framework_error_kind_t::internal_failure);
-    assert (zlink::framework::detail::boundary_state (invalid) == boundary_error_t::none);
+    assert (zlink::framework::detail::framework_error (invalid)->kind ()
+            == framework_error_kind_t::internal_failure);
+    assert (zlink::framework::detail::boundary_state (
+              *zlink::framework::detail::framework_error (invalid))
+            == boundary_error_t::none);
 }
 
 } // namespace
@@ -838,6 +867,11 @@ class observation_1295_drain_probe_t final
       public zlink::framework::runtime::hosted_service_lifecycle_t
 {
   public:
+    explicit observation_1295_drain_probe_t (std::shared_ptr<std::atomic_bool> called) :
+        _called (std::move (called))
+    {
+    }
+
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         _runtime = &services.get_required<zlink::framework::client_server_runtime_t> ();
@@ -846,6 +880,7 @@ class observation_1295_drain_probe_t final
     void stop () noexcept override {}
     bool drain_sessions_until (std::chrono::steady_clock::time_point) noexcept override
     {
+        _called->store (true, std::memory_order_release);
         const auto status = _runtime->snapshot ("1295-zero-weight");
         assert (status.state == zlink::framework::topology_state_t::stopping);
         assert (!status.is_ready);
@@ -857,6 +892,7 @@ class observation_1295_drain_probe_t final
     }
 
   private:
+    std::shared_ptr<std::atomic_bool> _called;
     zlink::framework::client_server_runtime_t *_runtime = nullptr;
 };
 
@@ -961,8 +997,10 @@ void verify_reconnecting_target_status ()
 
 void verify_draining_host_target_status ()
 {
+    auto called = std::make_shared<std::atomic_bool> (false);
     with_observation_runtime ([] (auto &, auto &, const auto &) {},
-                              std::make_unique<observation_1295_drain_probe_t> ());
+                              std::make_unique<observation_1295_drain_probe_t> (called));
+    assert (called->load (std::memory_order_acquire));
 }
 
 void verify_status_sequence_tracks_current_readiness ()

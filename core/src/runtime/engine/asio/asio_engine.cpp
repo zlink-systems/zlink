@@ -400,6 +400,10 @@ void zlink::asio_engine_t::terminate ()
     _connection_facade.terminating = true;
     _connection_facade.callback_guard.reset ();
 
+    emit_disconnected (
+      _connection_facade.socket && _connection_facade.socket->is_ctx_terminated ()
+        ? ZLINK_DISCONNECT_CTX_TERM
+        : ZLINK_DISCONNECT_UNKNOWN);
     unplug ();
 
     //  Avoid re-entrant poll() during teardown: SSL/WebSocket callbacks can still
@@ -1911,21 +1915,28 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
         disconnect_reason = ZLINK_DISCONNECT_TRANSPORT_ERROR;
     }
 
-    zlink::blob_t routing_id;
-    if (_connection_facade.session)
-        _connection_facade.session->snapshot_peer_routing_id (&routing_id);
-    if (_connection_facade.session->try_claim_transport_disconnected_event ()) {
-        _connection_facade.socket->event_disconnected (
-          _endpoint_uri_pair, disconnect_reason, routing_id.data (),
-          routing_id.size (), _connection_facade.session->transport_lane (),
-          _connection_facade.session->transport_pair_id (),
-          _connection_facade.session->transport_pair_generation ());
-    }
+    emit_disconnected (disconnect_reason);
     _connection_facade.session->flush ();
     _connection_facade.session->engine_error (!_connection_facade.handshaking, reason_);
     unplug ();
 
     destroy_after_callbacks ();
+}
+
+void zlink::asio_engine_t::emit_disconnected (uint64_t reason_)
+{
+    if (!_connection_facade.session || _endpoint_uri_pair.connection_id == 0)
+        return;
+    zlink::blob_t routing_id;
+    _connection_facade.session->snapshot_peer_routing_id (&routing_id);
+    if (_connection_facade.session->try_claim_transport_disconnected_event (
+          _endpoint_uri_pair.connection_id)) {
+        _connection_facade.socket->event_disconnected (
+          _endpoint_uri_pair, reason_, routing_id.data (), routing_id.size (),
+          _connection_facade.session->transport_lane (),
+          _connection_facade.session->transport_pair_id (),
+          _connection_facade.session->transport_pair_generation ());
+    }
 }
 
 void zlink::asio_engine_t::destroy_after_callbacks ()

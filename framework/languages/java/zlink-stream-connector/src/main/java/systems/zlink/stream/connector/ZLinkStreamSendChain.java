@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -25,10 +26,58 @@ final class ZLinkStreamSendChain {
     CompletableFuture<Void> enqueueDeferred(
             Supplier<CompletionStage<Void>> write, Consumer<Throwable> writeFailure) {
         Write operation = new Write(write, writeFailure);
+        admit(operation, () -> {});
+        return operation.publication;
+    }
+
+    CompletableFuture<ZLinkStreamEncodedPayload> enqueueRequestDeferred(
+            Supplier<CompletionStage<Void>> write,
+            Consumer<Throwable> writeFailure,
+            Consumer<CompletableFuture<ZLinkStreamEncodedPayload>> onAccepted) {
+        Write operation = new Write(write, writeFailure);
+        CompletableFuture<ZLinkStreamEncodedPayload> pending =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return cancelWrite(
+                                operation,
+                                () -> {
+                                    boolean completed = super.cancel(mayInterruptIfRunning);
+                                    operation.publication.cancel(false);
+                                    return completed;
+                                });
+                    }
+
+                    @Override
+                    public boolean completeExceptionally(Throwable failure) {
+                        return cancelWrite(
+                                operation,
+                                () -> {
+                                    boolean completed = super.completeExceptionally(failure);
+                                    operation.publication.cancel(false);
+                                    return completed;
+                                });
+                    }
+                };
+        admit(operation, () -> onAccepted.accept(pending));
+        return pending;
+    }
+
+    private void admit(Write operation, Runnable onAccepted) {
         synchronized (lock) {
             queue.addLast(operation);
+            onAccepted.run();
         }
-        return operation.publication;
+    }
+
+    private boolean cancelWrite(Write operation, BooleanSupplier complete) {
+        synchronized (lock) {
+            if (queue.remove(operation)) {
+                operation.writeFailure = null;
+            }
+            operation.write = null;
+        }
+        return complete.getAsBoolean();
     }
 
     /**
@@ -46,6 +95,11 @@ final class ZLinkStreamSendChain {
             }
             queue.clear();
             active = null;
+            abandoned.forEach(
+                    write -> {
+                        write.write = null;
+                        write.writeFailure = null;
+                    });
         }
         ZLinkStreamException disconnected =
                 ZLinkStreamException.disconnected("connection ended before frame write completed");
@@ -61,6 +115,7 @@ final class ZLinkStreamSendChain {
         }
         while (true) {
             Write next;
+            Supplier<CompletionStage<Void>> write;
             synchronized (lock) {
                 if (active != null) {
                     pumping = false;
@@ -72,9 +127,11 @@ final class ZLinkStreamSendChain {
                     return;
                 }
                 active = next;
+                write = next.write;
+                next.write = null;
             }
             try {
-                CompletionStage<Void> publication = next.write.get();
+                CompletionStage<Void> publication = write.get();
                 publication.whenComplete((ignored, failure) -> finish(next, failure));
             } catch (Throwable failure) {
                 finish(next, failure);
@@ -90,28 +147,37 @@ final class ZLinkStreamSendChain {
 
     private void finish(Write operation, Throwable failure) {
         boolean startNext;
+        Consumer<Throwable> writeFailure;
         synchronized (lock) {
             if (active != operation) {
                 return;
             }
             active = null;
+            writeFailure = operation.writeFailure;
+            operation.writeFailure = null;
             startNext = !pumping;
         }
         if (failure == null) {
             operation.publication.complete(null);
         } else {
             operation.publication.completeExceptionally(failure);
-            operation.writeFailure.accept(failure);
+            writeFailure.accept(failure);
         }
         if (startNext) {
             pump();
         }
     }
 
-    private static final class Write {
-        private final Supplier<CompletionStage<Void>> write;
-        private final CompletableFuture<Void> publication = new CompletableFuture<>();
-        private final Consumer<Throwable> writeFailure;
+    private final class Write {
+        private Supplier<CompletionStage<Void>> write;
+        private final CompletableFuture<Void> publication =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return cancelWrite(Write.this, () -> super.cancel(mayInterruptIfRunning));
+                    }
+                };
+        private Consumer<Throwable> writeFailure;
 
         private Write(Supplier<CompletionStage<Void>> write, Consumer<Throwable> writeFailure) {
             this.write = write;

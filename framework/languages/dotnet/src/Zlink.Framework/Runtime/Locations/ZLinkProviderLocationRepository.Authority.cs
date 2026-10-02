@@ -143,9 +143,9 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"cas_conflict_reason missing={current is null} "
-                        + $"state={(current is null ? "n/a" : current.Snapshot.Allocation.State.ToString())} "
+                        + $"state={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Snapshot.Allocation.State)} "
                         + $"version_match={current is not null && current.Version.Value == expectedStoreVersion} "
-                        + $"fence={(current is null ? "n/a" : current.Meta.AggregateFence?.ToString() ?? "none")}"
+                        + $"fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
                 );
             return Conflict(current);
         }
@@ -4106,13 +4106,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         //  Nine guards below share one bare null. Name the values they compare
         //  so a rejection says which one disagreed.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"eligible_target_check rid={key.Rid} owner_live={ownerRead is not null} "
-                + $"lifecycle={descriptor.LifecycleGeneration}/{lifecycleGeneration} "
-                + $"owner={descriptor.OwnerId}/{owner.OwnerId} "
-                + $"lease={descriptor.LeaseGeneration}/{owner.LeaseGeneration} "
-                + $"role={descriptor.ObjectRole} state={descriptor.State} "
-                + $"weight={descriptor.PlacementWeight} kind={objectKind} "
-                + $"stable_type={stableType}"
+            $"eligible_target_check rid={key.Rid} owner_live={ownerRead is not null} lifecycle={descriptor.LifecycleGeneration}/{lifecycleGeneration} owner={descriptor.OwnerId}/{owner.OwnerId} lease={descriptor.LeaseGeneration}/{owner.LeaseGeneration} role={descriptor.ObjectRole} state={descriptor.State} weight={descriptor.PlacementWeight} kind={objectKind} stable_type={stableType}"
         );
         if (
             ownerRead is null

@@ -145,8 +145,17 @@ import {
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSubmitStatus } from '../../packages/framework/src/runtime/messaging/submission-result';
+import {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import { meshActorSessionNodeAdapter } from '../../packages/framework/src/runtime/backend/mesh-actor-session-node-adapter';
 import { ZLinkNativeFallbackBoundSession } from '../../packages/framework/src/runtime/streams/native-fallback-bound-session';
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 // Production raw ingress records carry the host Application Job Queue owner
 // that the raw MeshNode pump reserves per received frame (see
@@ -3987,6 +3996,7 @@ test('Instance application factory initializes before the first recovered handle
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]])
   });
@@ -4060,6 +4070,7 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({
@@ -4119,6 +4130,7 @@ test('Instance Close prevents a waiting materialization of the closed generation
   let finishRelease!: () => void;
   const releaseFinished = new Promise<void>((resolve) => (finishRelease = resolve));
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () =>
@@ -4171,6 +4183,7 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
     }
   }
   const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({
@@ -4315,20 +4328,20 @@ test('reply, timeout and shutdown races settle each Promise exactly once', async
 
   const replyWins = operations.register(10);
   assert.equal(operations.reply(replyWins.id, 7), true);
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   assert.equal(await replyWins.promise, 7);
   assert.equal(operations.reply(replyWins.id, 8), false);
 
   const timeoutWins = operations.register(10);
   const timeoutResult = assert.rejects(timeoutWins.promise, OperationTimeoutError);
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   await timeoutResult;
   assert.equal(operations.reply(timeoutWins.id, 9), false);
 
   const shutdownWins = operations.register(10);
   const shutdownResult = assert.rejects(shutdownWins.promise, OperationCancelledError);
   operations.close();
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   await shutdownResult;
 });
 
@@ -4338,7 +4351,7 @@ test('durable sender owns deadline settlement while the registry retains identit
   const operations = new ServiceTerminalOperationRegistry(registry);
   const pending = operations.register(10, 'sender');
   const concurrentlyRegistered = operations.register(10, 'sender');
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   assert.equal(operations.isPending(pending.id), true);
   // Registration has no capacity limit since dfef9dea7d: both sender-owned
   // operations stay registered until their sender settles them.
@@ -4357,14 +4370,14 @@ test('durable sender owns deadline settlement while the registry retains identit
   const cancelled = operations.register(10, 'sender');
   const cancellation = assert.rejects(cancelled.promise, OperationCancelledError);
   assert.equal(operations.cancel(cancelled.id), true);
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   await cancellation;
   assert.equal(registry.size, 0);
 
   const closed = operations.register(10, 'sender');
   const shutdown = assert.rejects(closed.promise, OperationCancelledError);
   operations.close();
-  clock.fireAll();
+  operations.expire(clock.advance(10), clock.now() + 1);
   await shutdown;
   assert.equal(registry.size, 0);
 });
@@ -7050,23 +7063,13 @@ function readyInstanceIngressHarness(
 }
 
 class ManualClock implements OperationClock {
-  private readonly callbacks = new Map<number, () => void>();
-  private nextHandle = 1;
-
-  setTimeout(callback: () => void, _delayMs: number): number {
-    const handle = this.nextHandle++;
-    this.callbacks.set(handle, callback);
-    return handle;
+  private timeMs = 0;
+  now(): number {
+    return this.timeMs;
   }
-
-  clearTimeout(handle: unknown): void {
-    this.callbacks.delete(handle as number);
-  }
-
-  fireAll(): void {
-    const callbacks = [...this.callbacks.values()];
-    this.callbacks.clear();
-    for (const callback of callbacks) callback();
+  advance(delayMs: number): number {
+    this.timeMs += delayMs;
+    return this.timeMs;
   }
 }
 

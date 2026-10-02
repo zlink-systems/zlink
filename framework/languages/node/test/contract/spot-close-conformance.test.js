@@ -5,6 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
@@ -16,6 +21,11 @@ const {
 const {
   ZLinkInMemoryAuthorityStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-authority-store');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
@@ -124,6 +134,7 @@ async function createOwner(given) {
 
   let coordinator;
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     closeErrorSink: {
       reportRuntimeTaskException: (name, error) => diagnostics.push({ name, error })
@@ -401,13 +412,14 @@ test('completed Close rejects lifecycle submission without retaining work', asyn
   const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   assert.equal(await owner.spots.close(owner.ref), true);
+  await activation.serial.whenIdle();
   let ran = false;
   await assert.rejects(
     () => activation.serial.executeLifecycleOperation(() => { ran = true; }),
     (error) => errorKindName(error) === 'Rejected'
   );
-  assert.equal(ran, false);
   assert.equal(activation.serial.hasPendingWork, false);
+  assert.equal(ran, false);
 });
 
 test('membership makes Close false without rejecting admission', async () => {

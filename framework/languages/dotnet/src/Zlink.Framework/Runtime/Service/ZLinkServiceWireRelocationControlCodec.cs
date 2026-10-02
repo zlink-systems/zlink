@@ -23,9 +23,9 @@ internal static partial class ZLinkServiceWireCodec
     //  Schema bounds relocationLogicalBytes / relocationChunkCount /
     //  relocationChunkBytes (service-wire-v1.schema.json) — the payload
     //  manifest and state-chunk fields must stay within these limits.
-    internal const ulong RelocationLogicalBytesBound = 274_877_906_944;
-    internal const uint RelocationChunkCountBound = 4_096;
-    internal const uint RelocationChunkBytesBound = 67_108_864;
+    internal const ulong RelocationLogicalBytesBound = ServiceWireConstants.RelocationLogicalBytes;
+    internal const uint RelocationChunkCountBound = (uint)ServiceWireConstants.RelocationChunkCount;
+    internal const uint RelocationChunkBytesBound = (uint)ServiceWireConstants.RelocationChunkBytes;
 
     internal sealed record RelocationPrepareRecord(
         RelocationWireId RelocationId,
@@ -549,23 +549,23 @@ internal static partial class ZLinkServiceWireCodec
         if (
             record.OperationId.High != 0
             || record.OperationId.Low != 0
-            || record.Phase > 9
+            || record.Phase > (byte)ServiceWireCodec.RelocationPhase.Aborted
             || !IsRole(record.Role)
             || !IsTerminalFailureValid(record.TerminalResult, record.FailureCode)
         )
             throw new ArgumentOutOfRangeException(nameof(record));
-        writer.U8(13);
+        writer.U8((byte)ServiceWireCodec.MeshRecordKind.RelocationControl);
         var source = new WireWriter();
         source.Rid(record.Source.NodeRid);
         source.U64(record.Source.NodeGeneration);
         source.Text8(record.Source.OwnerId);
         source.U64(record.Source.LeaseGeneration);
-        writer.U8(1);
+        writer.U8((byte)ServiceWireCodec.FrozenSourceKind.Node);
         writer.U16(checked((ushort)source.Count));
         writer.Bytes(source.ToArray());
         writer.U8(0);
         WriteOperationId(writer, record.OperationId);
-        writer.U32(0);
+        writer.U32((uint)ServiceWireCodec.MeshOperationKind.None);
         writer.U16(0);
         writer.U8(record.Phase);
         writer.U8(record.Role);
@@ -599,9 +599,9 @@ internal static partial class ZLinkServiceWireCodec
         record = null!;
         if (
             !reader.TryU8(out var recordKind)
-            || recordKind != 13
+            || recordKind != (byte)ServiceWireCodec.MeshRecordKind.RelocationControl
             || !reader.TryU8(out var sourceKind)
-            || sourceKind != 1
+            || sourceKind != (byte)ServiceWireCodec.FrozenSourceKind.Node
             || !reader.TryU16(out var sourceLength)
             || !reader.TrySlice(sourceLength, out var sourceBytes)
         )
@@ -624,11 +624,11 @@ internal static partial class ZLinkServiceWireCodec
             || operationHigh != 0
             || operationLow != 0
             || !reader.TryU32(out var operationKind)
-            || operationKind != 0
+            || operationKind != (uint)ServiceWireCodec.MeshOperationKind.None
             || !reader.TryU16(out var replyLength)
             || replyLength != 0
             || !reader.TryU8(out var phase)
-            || phase > 9
+            || phase > (byte)ServiceWireCodec.RelocationPhase.Aborted
             || !reader.TryU8(out var role)
             || !IsRole(role)
             || !TryRelocationId(ref reader, out var id)
@@ -694,5 +694,8 @@ internal static partial class ZLinkServiceWireCodec
             throw new ArgumentOutOfRangeException(nameof(target));
     }
 
-    private static bool IsRole(byte role) => role is >= 1 and <= 3;
+    private static bool IsRole(byte role) =>
+        role
+            is >= (byte)ServiceWireCodec.RelocationRole.Source
+                and <= (byte)ServiceWireCodec.RelocationRole.Coordinator;
 }

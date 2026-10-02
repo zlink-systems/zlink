@@ -20,9 +20,9 @@ class socket_public_handle_t
     explicit socket_public_handle_t (socket_base_t *socket_);
 
     bool check_tag () const;
-    bool acquire (socket_base_t **socket_out_);
+    bool acquire (socket_base_t **socket_out_, bool receive_ = false);
     void add_ref ();
-    void release ();
+    void release (bool receive_ = false);
 
     bool begin_close ();
     void cancel_close ();
@@ -42,7 +42,9 @@ class socket_public_handle_t
     static const uint32_t closing_bit = 0x80000000u;
     static const uint32_t destroy_pending_bit = 0x40000000u;
     static const uint32_t finalizing_bit = 0x20000000u;
-    static const uint32_t ref_mask = ~(closing_bit | destroy_pending_bit | finalizing_bit);
+    static const uint32_t receive_bit = 0x10000000u;
+    static const uint32_t ref_mask =
+      ~(closing_bit | destroy_pending_bit | finalizing_bit | receive_bit);
 
     const uint32_t _tag;
     std::atomic<uint32_t> _state;

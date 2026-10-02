@@ -229,7 +229,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
 
         @Override
         protected void decode(ChannelHandlerContext context, ByteBuf input, List<Object> output) {
-            if (input.readableBytes() < 6) {
+            if (input.readableBytes() < ZLinkStreamWireProtocol.FRAME_PREFIX_BYTES) {
                 return;
             }
             input.markReaderIndex();

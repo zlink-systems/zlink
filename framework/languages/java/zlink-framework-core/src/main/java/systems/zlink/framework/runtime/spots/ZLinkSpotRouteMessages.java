@@ -20,6 +20,7 @@ import java.util.Optional;
  * payload (non-framework publisher semantics, matching the C++ fan-out fallback).
  */
 final class ZLinkSpotRouteMessages {
+    private static final int MAX_PREVIEW_BYTES = 64;
     private final ZLinkMessageSerializer serializer;
 
     ZLinkSpotRouteMessages(ZLinkMessageSerializer serializer) {
@@ -155,7 +156,11 @@ final class ZLinkSpotRouteMessages {
         for (Message part : parts) {
             byte[] bytes = part.toByteArray();
             String text =
-                    new String(bytes, 0, Math.min(bytes.length, 64), StandardCharsets.UTF_8)
+                    new String(
+                                    bytes,
+                                    0,
+                                    Math.min(bytes.length, MAX_PREVIEW_BYTES),
+                                    StandardCharsets.UTF_8)
                             .replace("\n", "\\n")
                             .replace("\r", "\\r");
             descriptions.add(bytes.length + ":" + text);

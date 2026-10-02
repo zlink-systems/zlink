@@ -49,7 +49,9 @@ for (const withChannel of [true, false]) {
       assert.equal(wire.decodeHeader(sent.at(-1).parts[0]).command, wire.M6aServiceWireCommand.admit);
       assert(raw.topology.peer(admitted.nodeRoutingId));
       raw.expectPeerByRoutingId(newcomer.advertisedEndpoint, newcomer.nodeRoutingId);
-      assert.equal(await raw.announceExpectedPeers(), 1);
+      await raw.observeSelectedRoutes();
+      assert.equal(sent.filter(record => record.target === newcomer.nodeRoutingId &&
+        wire.decodeHeader(record.parts[0]).command === wire.M6aServiceWireCommand.hello).length, 1);
       sent.length = 0;
 
       claim = host.admission.claim(meshName, 'accepted work held during shutdown');

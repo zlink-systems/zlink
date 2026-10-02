@@ -217,8 +217,7 @@ internal sealed class ZLinkActorInboundPipeline(
                         "Actor replay frame is missing its handoff arrival identity."
                     );
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_replay_frame_begin actor={frame.Actor.ActorId} "
-                        + $"request_id={frame.RequestId} arrival={arrivalIndex}"
+                    $"actor_replay_frame_begin actor={frame.Actor.ActorId} request_id={frame.RequestId} arrival={arrivalIndex}"
                 );
                 await DispatchFrameAsync(
                         frame,
@@ -409,8 +408,7 @@ internal sealed class ZLinkActorInboundPipeline(
 
         var actor = endpoint.ResolveActor(state);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"inbound_resolve actor={frame.Actor.ActorId} resolved={actor is not null} "
-                + $"request_id={frame.RequestId}"
+            $"inbound_resolve actor={frame.Actor.ActorId} resolved={actor is not null} request_id={frame.RequestId}"
         );
         if (actor is null)
         {
@@ -799,22 +797,18 @@ internal sealed class ZLinkActorInboundPipeline(
                     )
                     .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_dispatch_reply actor={actor.Context.ActorId} "
-                        + $"request_id={frame.RequestId} reply={reply is not null} "
-                        + $"activation={state.LiveActivation?.SpotId ?? "<entry>"}"
+                    $"actor_dispatch_reply actor={actor.Context.ActorId} request_id={frame.RequestId} reply={reply is not null} activation={state.LiveActivation?.SpotId ?? ZLinkFrameworkDebugLog.EntryPlaceholder}"
                 );
                 if (completeCanonicalReplay is not null)
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"actor_canonical_replay_begin actor={actor.Context.ActorId} "
-                            + $"request_id={frame.RequestId} reply={reply is not null}"
+                        $"actor_canonical_replay_begin actor={actor.Context.ActorId} request_id={frame.RequestId} reply={reply is not null}"
                     );
                     await boundSession.DrainAsync(cancellationToken).ConfigureAwait(false);
                     await completeCanonicalReplay(frame, reply, cancellationToken)
                         .ConfigureAwait(false);
                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"actor_canonical_replay_completed actor={actor.Context.ActorId} "
-                            + $"request_id={frame.RequestId}"
+                        $"actor_canonical_replay_completed actor={actor.Context.ActorId} request_id={frame.RequestId}"
                     );
                     return;
                 }
@@ -824,16 +818,13 @@ internal sealed class ZLinkActorInboundPipeline(
                     {
                         acknowledgeHandledFrame.Invoke();
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"actor_replay_frame_acknowledged actor={actor.Context.ActorId} "
-                                + $"request_id={frame.RequestId}"
+                            $"actor_replay_frame_acknowledged actor={actor.Context.ActorId} request_id={frame.RequestId}"
                         );
                     }
                     catch (Exception exception)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"actor_replay_frame_ack_failed actor={actor.Context.ActorId} "
-                                + $"request_id={frame.RequestId} "
-                                + $"error={exception.GetType().Name}:{exception.Message}"
+                            $"actor_replay_frame_ack_failed actor={actor.Context.ActorId} request_id={frame.RequestId} error={exception.GetType().Name}:{exception.Message}"
                         );
                         throw;
                     }
@@ -841,9 +832,7 @@ internal sealed class ZLinkActorInboundPipeline(
                 if (reply is not null)
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"actor_handoff_reply_begin actor={actor.Context.ActorId} "
-                            + $"request_id={frame.RequestId} source_node={frame.SourceNodeRid} "
-                            + $"no_bind={boundSession.IsNoBind}"
+                        $"actor_handoff_reply_begin actor={actor.Context.ActorId} request_id={frame.RequestId} source_node={frame.SourceNodeRid} no_bind={boundSession.IsNoBind}"
                     );
                     if (acknowledgeHandledFrame is null)
                         await ZLinkActorBoundSessionRelay
@@ -1013,8 +1002,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_dispatch_entry_path actor={actor.Context.ActorId} "
-                + $"correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}"
+            $"actor_dispatch_entry_path actor={actor.Context.ActorId} correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}"
         );
         if (state.LiveActivation is not null)
             return await runtime
@@ -1042,9 +1030,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
             )
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_dispatch_entry_result actor={actor.Context.ActorId} "
-                + $"correlation_id={header.CorrelationId} handled={result.Handled} "
-                + $"reply={result.Reply is not null}"
+            $"actor_dispatch_entry_result actor={actor.Context.ActorId} correlation_id={header.CorrelationId} handled={result.Handled} reply={result.Reply is not null}"
         );
         return result.Handled
             ? result.Reply

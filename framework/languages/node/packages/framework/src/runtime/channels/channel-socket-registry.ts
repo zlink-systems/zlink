@@ -174,7 +174,7 @@ export class ZLinkChannelSocketRegistry {
   private nextClientServerProbeId = 1n;
   private readonly clientServerMonitorHandlers = new Map<
     string,
-    Set<(event: ZLinkBackendSocketMonitorEvent) => void>
+    Set<(event?: ZLinkBackendSocketMonitorEvent) => void>
   >();
   private readonly fanoutMonitorHandlers = new Map<
     string,
@@ -531,6 +531,7 @@ export class ZLinkChannelSocketRegistry {
         });
       }
     }
+    this.notifyClientServerTopology(current.channelName);
     if (current.aliases.size > 0) return;
     await this.disposeClientServerPhysical(connectionId, current);
   }
@@ -569,6 +570,7 @@ export class ZLinkChannelSocketRegistry {
         connection.readyConnectionId
       );
       if (admitted) connection.admittedDescriptor = descriptor;
+      this.notifyClientServerTopology(descriptor.channelName);
       return admitted;
     }
     const duplicateId = [...this.clientServerReadyIdentities].find(
@@ -606,6 +608,7 @@ export class ZLinkChannelSocketRegistry {
       connection.readyConnectionId = connectionId;
       connection.admittedDescriptor = descriptor;
     }
+    this.notifyClientServerTopology(descriptor.channelName);
     return admitted;
   }
 
@@ -629,6 +632,7 @@ export class ZLinkChannelSocketRegistry {
         connection.outstandingProbeId = undefined;
       }
     }
+    this.notifyClientServerTopology(channelName);
     return removed;
   }
 
@@ -748,26 +752,41 @@ export class ZLinkChannelSocketRegistry {
     }
   }
 
-  clientServerMonitoringSource(channelName: string): ZLinkBackendSocketMonitor {
-    if (this.registration.channels.get(channelName)?.client === undefined) {
-      throw new ZLinkConfigurationException(`Channel client '${channelName}' is not registered.`);
+  clientServerMonitoringSource(channelName: string): ZLinkBackendSocketMonitor & {
+    onChange(handler: () => void): void;
+  } {
+    const channel = this.registration.channels.get(channelName);
+    if (channel?.client === undefined && channel?.server === undefined) {
+      throw new ZLinkConfigurationException(
+        `ClientServer channel '${channelName}' is not registered.`
+      );
     }
     let disposed = false;
-    let handler: ((event: ZLinkBackendSocketMonitorEvent) => void) | undefined;
+    let handler: ((event?: ZLinkBackendSocketMonitorEvent) => void) | undefined;
+    const register = (next: (event?: ZLinkBackendSocketMonitorEvent) => void): void => {
+      if (disposed) return;
+      if (handler !== undefined) {
+        this.clientServerMonitorHandlers.get(channelName)?.delete(handler);
+      }
+      handler = next;
+      let handlers = this.clientServerMonitorHandlers.get(channelName);
+      if (handlers === undefined) {
+        handlers = new Set();
+        this.clientServerMonitorHandlers.set(channelName, handlers);
+      }
+      handlers.add(next);
+    };
     return {
       nativeInstance: {},
       onEvent: (next) => {
-        if (disposed) return;
-        if (handler !== undefined) {
-          this.clientServerMonitorHandlers.get(channelName)?.delete(handler);
-        }
-        handler = next;
-        let handlers = this.clientServerMonitorHandlers.get(channelName);
-        if (handlers === undefined) {
-          handlers = new Set();
-          this.clientServerMonitorHandlers.set(channelName, handlers);
-        }
-        handlers.add(next);
+        register((event) => {
+          if (event !== undefined) next(event);
+        });
+      },
+      onChange: (next) => {
+        register((event) => {
+          if (event === undefined) next();
+        });
       },
       drain: () => 0,
       dispose: async () => {
@@ -854,6 +873,11 @@ export class ZLinkChannelSocketRegistry {
       this.clientServerServerDescriptors.set(channelName, descriptor);
       this.pushClientServerDescriptorUpdate(channelName, descriptor);
     }
+    this.notifyClientServerTopology(channelName);
+  }
+
+  private notifyClientServerTopology(channelName: string): void {
+    for (const handler of this.clientServerMonitorHandlers.get(channelName) ?? []) handler();
   }
 
   tryHandleClientServerControl(
@@ -1188,7 +1212,7 @@ export class ZLinkChannelSocketRegistry {
     };
   }
 
-  private notifyFanoutTopology(channelName: string): void {
+  notifyFanoutTopology(channelName: string): void {
     for (const handler of this.fanoutTopologyHandlers.get(channelName) ?? []) {
       try {
         handler();
@@ -1478,6 +1502,7 @@ export class ZLinkChannelSocketRegistry {
       connection.nextProbeAt = undefined;
       connection.outstandingProbeId = undefined;
     }
+    this.notifyClientServerTopology(identity.channelName);
   }
 
   private requestClientServerLiveness(

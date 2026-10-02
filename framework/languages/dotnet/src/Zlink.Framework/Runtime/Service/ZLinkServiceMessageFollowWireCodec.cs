@@ -8,7 +8,8 @@ internal static partial class ZLinkServiceWireCodec
     internal const byte MessageFollowActorKind = 1;
     internal const byte MessageFollowSpotKind = 2;
     internal const byte MessageFollowVersion = 1;
-    internal const byte MessageFollowMaximumHopCount = 8;
+    internal const byte MessageFollowMaximumHopCount = (byte)
+        ServiceWireConstants.MessageFollowHopCount;
 
     //  Frame guard, not a queue bound: the Message Follow queue has no stored
     //  size cap, but a single encoded record still must not be unbounded.

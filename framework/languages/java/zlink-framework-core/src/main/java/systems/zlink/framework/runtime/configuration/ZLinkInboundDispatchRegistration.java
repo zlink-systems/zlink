@@ -22,8 +22,10 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
     private ZLinkApplicationJobQueueProfile applicationJobQueueProfile =
             ZLinkApplicationJobQueueProfile.BALANCED;
     private Long maxQueuedApplicationJobs;
-    private int applicationJobQueuePauseThresholdPercent = 80;
-    private int applicationJobQueueResumeThresholdPercent = 60;
+    private int applicationJobQueuePauseThresholdPercent =
+            ZLinkApplicationJobQueue.DEFAULT_PAUSE_THRESHOLD_PERCENT;
+    private int applicationJobQueueResumeThresholdPercent =
+            ZLinkApplicationJobQueue.DEFAULT_RESUME_THRESHOLD_PERCENT;
     private ZLinkApplicationJobQueue applicationJobQueue;
 
     private <T> T inStateLane(Supplier<T> work) {

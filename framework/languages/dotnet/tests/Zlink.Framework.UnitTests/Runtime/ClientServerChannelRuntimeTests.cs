@@ -933,6 +933,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var target = Assert.Single(status.Targets);
             Assert.Equal(weight, target.Weight);
             Assert.Equal(ZLinkPeerState.Ready, target.State);
+            Assert.Null(target.UnavailableReason);
         }
         finally
         {
@@ -968,6 +969,55 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         finally
         {
             await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObservePublishesCurrentStatusForEverySubscriber(bool existingSubscriber)
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        var lifecycle = provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var admitted = await provider
+                .GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("ready"))
+                .Async<EchoReply>();
+            Assert.Equal("local:ready", admitted.Value);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var existing = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator();
+            if (existingSubscriber)
+            {
+                var first = existing.MoveNextAsync().AsTask();
+                lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Relocating);
+                Assert.True(await first);
+            }
+            var expected = monitoring.GetStatus("work");
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator();
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(expected.ChannelName, observer.Current.Status.ChannelName);
+            Assert.Equal(expected.Sequence, observer.Current.Status.Sequence);
+            Assert.Equal(expected.Targets, observer.Current.Status.Targets);
+            Assert.Equal(0UL, observer.Current.Loss.CoalescedCount);
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Stopped);
+            while (await observer.MoveNextAsync())
+                if (observer.Current.Status.State == ZLinkTopologyState.Stopped)
+                    break;
+            Assert.Equal(ZLinkTopologyState.Stopped, observer.Current.Status.State);
+            Assert.True(observer.Current.Status.Sequence > expected.Sequence);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -1031,7 +1081,127 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 Assert.Single(secondEvents.Current.Status.Targets).State
             );
             Assert.False(events.Current.Status.IsReady);
+            Assert.Equal(
+                ZLinkTopologyReason.Draining,
+                Assert.Single(events.Current.Status.Targets).UnavailableReason
+            );
             Assert.False(monitoring.GetStatus("work").IsReady);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RetiringServerTargetProjectsDraining()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        provider
+            .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+            .TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            var started = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            await GetServerBundle(started, "work").ClientServerServer!.MarkRetiringAsync();
+            Assert.True(await WaitForTargetStateAsync(observer, ZLinkPeerState.Draining));
+            var target = Assert.Single(observer.Current.Status.Targets);
+            Assert.Equal(ZLinkTopologyReason.Draining, target.UnavailableReason);
+            var route = provider.GetRequiredService<IZLinkRouteClient>();
+            var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await route.SendToChannel("work", new EchoSend("retiring")).Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, sendError.Kind);
+            var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await route.RequestToChannel("work", new EchoRequest("retiring")).Async<EchoReply>()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, requestError.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ServerOnlyObserverPublishesLocalWeightChanges()
+    {
+        await using var provider = CreateServer(0);
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = provider
+                .GetRequiredService<IZLinkClientServerRuntime>()
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            var initial = observer.Current.Status;
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
+            Assert.True(await observer.MoveNextAsync());
+            var excluded = observer.Current.Status;
+            Assert.Equal(initial.Sequence + 1, excluded.Sequence);
+            Assert.Equal(0, Assert.Single(excluded.Targets).Weight);
+            Assert.Equal(0, excluded.ReadyTargetCount);
+            Assert.False(excluded.IsReady);
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight =
+                100;
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(excluded.Sequence + 1, observer.Current.Status.Sequence);
+            Assert.True(observer.Current.Status.IsReady);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ObserverStartsWithCurrentStatusAfterLocalWeightChanged()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        provider
+            .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+            .TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
+            var current = monitoring.GetStatus("work");
+            Assert.Equal(0, Assert.Single(current.Targets).Weight);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.True(observer.Current.Status.Sequence >= current.Sequence);
+            Assert.Equal(0, Assert.Single(observer.Current.Status.Targets).Weight);
+            Assert.Equal(new ZLinkObservationLoss(0, 0), observer.Current.Loss);
         }
         finally
         {
@@ -1095,15 +1265,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .Async<EchoReply>();
             Assert.Equal("local:ready", admitted.Value);
             provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>().Channel("work").Weight = 0;
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await using var states = provider
-                .GetRequiredService<IZLinkClientServerRuntime>()
-                .ObserveAsync("work", timeout.Token)
-                .GetAsyncEnumerator();
-            while (await states.MoveNextAsync())
-                if (states.Current.Status.Targets.All(target => target.Weight == 0))
-                    break;
-            Assert.Single(states.Current.Status.Targets);
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work");
+            var target = Assert.Single(status.Targets);
+            Assert.Equal(0, target.Weight);
+            Assert.Equal(0, status.ReadyTargetCount);
             var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             {
@@ -1174,6 +1339,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             });
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
             Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromMilliseconds(500));
+            var zeroWeightTarget = Assert.Single(
+                provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work").Targets
+            );
+            Assert.Equal(ZLinkPeerState.Ready, zeroWeightTarget.State);
+            Assert.Null(zeroWeightTarget.UnavailableReason);
         }
         finally
         {
@@ -2682,6 +2852,175 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         finally
         {
             await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteTransportClose_PreservesTargetUntilReadmitted(bool automatic)
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        var serverRid = RoutingId.From("manual-server");
+        router.SetRoutingId(serverRid);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        var store = new ZLinkInMemoryProviderLocationStore();
+        if (automatic)
+        {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = Assert
+                .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                    await repository.ClaimOwnerLeaseAsync(
+                        "r4-clientserver-close",
+                        TimeSpan.FromMinutes(2)
+                    )
+                )
+                .Token;
+            var written = await repository.UpdateClientServerAsync(
+                new ZLinkClientServerServerDescriptor(
+                    "work",
+                    serverRid,
+                    1,
+                    1,
+                    endpoint,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    owner.OwnerId,
+                    owner.LeaseGeneration,
+                    default
+                ),
+                ZLinkLocationWriteIntent.NewClaim
+            );
+            Assert.Equal(ZLinkLocationWriteStatus.Stored, written.Status);
+        }
+        await using var client = automatic ? CreateAutomaticClient(store) : CreateClient(endpoint);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = client.GetRequiredService<IZLinkClientServerRuntime>();
+        var hosted = client
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            ReplyAdmission(router, hello, endpoint);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                !observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            var target = Assert.Single(observer.Current.Status.Targets);
+            router.Dispose();
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            var disconnected = Assert.Single(observer.Current.Status.Targets);
+            Assert.Equal(target.NodeRid, disconnected.NodeRid);
+            Assert.Equal(ZLinkPeerState.NotConnected, disconnected.State);
+            Assert.Equal(ZLinkTopologyReason.NoReadyTarget, disconnected.UnavailableReason);
+            Assert.Equal(0, observer.Current.Status.ReadyTargetCount);
+            Assert.Equal(disconnected, Assert.Single(monitoring.GetStatus("work").Targets));
+
+            using var replacement = CreateClientServerRouter(context);
+            replacement.SetRoutingId(serverRid);
+            replacement.Bind(endpoint);
+            using var secondHello = await PollReceivedAsync(
+                storage => TryReceive(replacement, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            ReplyAdmission(replacement, secondHello, endpoint);
+            do
+            {
+                Assert.True(await observer.MoveNextAsync());
+            } while (
+                !observer.Current.Status.Targets.Any(static target =>
+                    target.State == ZLinkPeerState.Ready
+                )
+            );
+            Assert.Equal(target.NodeRid, Assert.Single(observer.Current.Status.Targets).NodeRid);
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                runtime.GetClientServerClientRuntime("work").AdmissionDiagnostics,
+                error
+            );
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task TopologyStatusQueriesPublishChangedStatusWithNextSequence()
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            await provider
+                .GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("ready"))
+                .Async<EchoReply>();
+            var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+            var initial = monitoring.GetStatus("work");
+            Assert.Equal(1UL, initial.Sequence);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(initial, observer.Current.Status);
+            provider
+                .GetRequiredService<ZLinkFrameworkHostLifecycleState>()
+                .TransitionTo(ZLinkFrameworkRuntimeState.Relocating);
+            var current = monitoring.GetStatus("work");
+            Assert.Equal(ZLinkTopologyState.Stopping, current.State);
+            Assert.Equal(initial.Sequence + 1, current.Sequence);
+            Assert.Equal(current.Sequence, monitoring.GetStatus("work").Sequence);
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(current, observer.Current.Status);
+            var lifecycle = provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Stopped);
+            var terminal = monitoring.GetStatus("work");
+            Assert.Equal(ZLinkTopologyState.Stopped, terminal.State);
+            Assert.Equal(current.Sequence + 1, terminal.Sequence);
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+            Assert.Equal(terminal, monitoring.GetStatus("work"));
+            await observer.DisposeAsync();
+            await hosted.StopAsync(CancellationToken.None);
+            Assert.Equal(terminal, monitoring.GetStatus("work"));
+            await using var lateObserver = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            Assert.True(await lateObserver.MoveNextAsync());
+            Assert.Equal(terminal, lateObserver.Current.Status);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
         }
     }
 

@@ -3,6 +3,7 @@ package systems.zlink.httpclient.internal;
 
 import systems.zlink.httpclient.ZLinkHttpMethod;
 
+import java.net.HttpURLConnection;
 import java.net.URI;
 
 /**
@@ -11,6 +12,9 @@ import java.net.URI;
  * location resolution, method rewrite) from the request flow.
  */
 final class RedirectPolicy {
+
+    private static final int HTTP_TEMPORARY_REDIRECT = 307;
+    private static final int HTTP_PERMANENT_REDIRECT = 308;
 
     /** Result of a redirect method/body rewrite. */
     record Rewrite(ZLinkHttpMethod method, String body) {}
@@ -28,7 +32,11 @@ final class RedirectPolicy {
     }
 
     static boolean isRedirect(int status) {
-        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+        return status == HttpURLConnection.HTTP_MOVED_PERM
+                || status == HttpURLConnection.HTTP_MOVED_TEMP
+                || status == HttpURLConnection.HTTP_SEE_OTHER
+                || status == HTTP_TEMPORARY_REDIRECT
+                || status == HTTP_PERMANENT_REDIRECT;
     }
 
     /**
@@ -37,7 +45,7 @@ final class RedirectPolicy {
     static String originOf(URI uri) {
         int port = uri.getPort();
         if (port == -1) {
-            port = "https".equals(uri.getScheme()) ? 443 : 80;
+            port = HttpClientText.defaultPort(uri.getScheme());
         }
         return uri.getScheme() + "://" + uri.getHost() + ":" + port;
     }
@@ -53,7 +61,10 @@ final class RedirectPolicy {
      * bodyless GET; all other redirects preserve the method and body.
      */
     static Rewrite rewriteMethodAndBody(int status, ZLinkHttpMethod method, String body) {
-        if (status == 303 || ((status == 301 || status == 302) && method == ZLinkHttpMethod.POST)) {
+        if (status == HttpURLConnection.HTTP_SEE_OTHER
+                || ((status == HttpURLConnection.HTTP_MOVED_PERM
+                                || status == HttpURLConnection.HTTP_MOVED_TEMP)
+                        && method == ZLinkHttpMethod.POST)) {
             return new Rewrite(ZLinkHttpMethod.GET, null);
         }
         return new Rewrite(method, body);
@@ -61,7 +72,7 @@ final class RedirectPolicy {
 
     static URI resolveLocation(URI current, String location) {
         try {
-            if (location.startsWith("http://") || location.startsWith("https://")) {
+            if (HttpClientText.hasSupportedSchemePrefix(location)) {
                 return URI.create(location);
             }
             if (location.startsWith("//")) {

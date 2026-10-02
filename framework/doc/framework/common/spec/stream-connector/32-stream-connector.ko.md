@@ -509,8 +509,8 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 **heartbeat:**
 
 - 켜져 있으면 지정 주기마다 control ping을 보낸다.
-- 지정 timeout 동안 inbound frame이 없으면 transport가 끊긴 것으로 처리하고 reconnect 정책을
-  적용한다.
+- 연결이 성립한 시각 또는 마지막 inbound frame 시각 가운데 늦은 쪽부터 지정 timeout 동안 inbound
+  frame이 없으면 transport가 끊긴 것으로 처리하고 reconnect 정책을 적용한다.
 - **heartbeat를 껐더라도 inbound ping에는 pong으로 응답한다.**
 
 ### 6.1 기본값

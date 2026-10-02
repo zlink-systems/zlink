@@ -4,6 +4,9 @@ namespace Zlink.Framework.Runtime.Diagnostics;
 
 internal static class ZLinkFrameworkDebugLog
 {
+    private const string AbsentValue = "<none>";
+    internal const string EntryPlaceholder = "<entry>";
+
     //  The environment is read once. A debug switch cannot change while the
     //  process runs, and re-reading it turned every call into a lookup that
     //  allocated a string just to be compared and thrown away.
@@ -12,6 +15,8 @@ internal static class ZLinkFrameworkDebugLog
     );
     private static readonly bool StartupEnabled = IsEnabled("ZLINK_DEBUG_FRAMEWORK_STARTUP");
     private static readonly bool TasksEnabled = IsEnabled("ZLINK_DEBUG_FRAMEWORK_TASKS");
+
+    internal static string OrAbsent(object? value) => value?.ToString() ?? AbsentValue;
 
     public static void Startup(Exception exception)
     {
@@ -28,13 +33,6 @@ internal static class ZLinkFrameworkDebugLog
     {
         if (SpotDiscoveryEnabled)
             Write("[zlink-framework-spot-discovery] " + message.ToStringAndClear());
-    }
-
-    //  Callers that already hold a built string use this overload directly.
-    public static void SpotDiscovery(string message)
-    {
-        if (SpotDiscoveryEnabled)
-            Write("[zlink-framework-spot-discovery] " + message);
     }
 
     public static void TaskFailure(string taskName, Exception exception)

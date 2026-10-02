@@ -21,7 +21,20 @@ internal static class ZLinkRawRequestSubmitter
         ArgumentNullException.ThrowIfNull(request);
         try
         {
-            return await request(parts, timeout, cancellationToken).ConfigureAwait(false);
+            Task<IReadOnlyList<Message>> completion;
+            try
+            {
+                completion = request(parts, timeout, cancellationToken);
+            }
+            catch (ZlinkSubmitException error)
+            {
+                throw ZLinkRequestFailureMapper.CreateSubmitException(
+                    error,
+                    string.Format(CultureInfo.InvariantCulture, failureMessage, error.Result),
+                    completionFailure: false
+                );
+            }
+            return await completion.ConfigureAwait(false);
         }
         catch (ZLinkRequestTerminalException terminal)
         {

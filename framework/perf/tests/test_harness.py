@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused coordinator contract tests: CLI consumers, identity and histogram aggregation."""
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -18,6 +19,7 @@ from results import BOUNDS, MAX_U64, _validate_null_reasons, aggregate, export_l
 from roles import plan_roles
 from runner import agreed_core_version, agreed_framework_version, build, comparison, options, role_executables, run_exit_code
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
+from store import RunStore
 
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
@@ -34,6 +36,49 @@ def histogram(samples, overflow=0):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_store_waits_for_published_endpoint_and_internal_ping(self):
+        def docker_result(*command, **_kwargs):
+            if command[0] == "run":
+                return "a" * 64
+            if command[0] == "port":
+                return "127.0.0.1:54321"
+            if command[0] == "image":
+                return json.dumps({"Id": "image-id", "RepoDigests": ["image-digest"]})
+            return "PONG" if command[-1] == "ping" else "Redis version"
+
+        with tempfile.TemporaryDirectory() as output, \
+                patch("store.docker", side_effect=docker_result), \
+                patch("store.time.sleep") as wait, \
+                patch("socket.socket") as socket_factory:
+            connection = socket_factory.return_value.__enter__.return_value
+            connection.connect_ex.side_effect = [errno.ECONNREFUSED, 0]
+            info = RunStore("store-readiness-contract", Path(output)).acquire()
+            self.assertEqual(info["endpoint"], "127.0.0.1:54321")
+            self.assertEqual(connection.connect_ex.call_count, 2)
+            connection.settimeout.assert_called_with(5)
+            wait.assert_called_once_with(0.5)
+
+        with tempfile.TemporaryDirectory() as output, \
+                patch("store.docker", side_effect=docker_result), \
+                patch("store.time.sleep") as wait, \
+                patch("socket.socket") as socket_factory:
+            connection = socket_factory.return_value.__enter__.return_value
+            connection.connect_ex.return_value = 0
+            info = RunStore("store-ready-contract", Path(output)).acquire()
+            self.assertEqual(info["endpoint"], "127.0.0.1:54321")
+            wait.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as output, \
+                patch("store.docker", side_effect=docker_result), \
+                patch("store.time.monotonic", side_effect=[0, 60]), \
+                patch("store.time.sleep") as wait, \
+                patch("socket.socket") as socket_factory:
+            connection = socket_factory.return_value.__enter__.return_value
+            connection.connect_ex.return_value = errno.ECONNREFUSED
+            with self.assertRaisesRegex(RuntimeError, "did not become ready within 60s"):
+                RunStore("store-unreachable-contract", Path(output)).acquire()
+            wait.assert_not_called()
+
     def test_cli_rejects_missing_consumer_and_nonfinite_values(self):
         bad = [
             ["single"],

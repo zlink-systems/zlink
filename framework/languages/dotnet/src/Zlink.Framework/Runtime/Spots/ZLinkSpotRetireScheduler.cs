@@ -1112,8 +1112,7 @@ internal sealed class ZLinkSpotRetireScheduler(
             catch (Exception exception)
             {
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"precommit_abort_route_unseal_failed attempt={attempt}"
-                        + $" error={exception.GetType().Name}: {exception.Message}"
+                    $"precommit_abort_route_unseal_failed attempt={attempt} error={exception.GetType().Name}: {exception.Message}"
                 );
                 if (attempt >= MaxSessionRouteUnsealAttempts)
                     return;

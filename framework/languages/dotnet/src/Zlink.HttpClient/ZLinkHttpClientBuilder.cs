@@ -18,11 +18,11 @@ public sealed class ZLinkHttpClientBuilder
     private bool _compression;
     private bool _cookies;
     private int _followRedirects;
-    private long _maxResponseBodySize = 16 * 1024 * 1024;
+    private long _maxResponseBodySize = HttpClientOptions.DefaultMaxResponseBodySize;
     private string? _proxy;
     private (string User, string Password)? _proxyCredentials;
     private int _retryAttempts;
-    private TimeSpan _timeout = TimeSpan.FromMilliseconds(3000);
+    private TimeSpan _timeout = HttpClientOptions.DefaultTimeout;
     private string? _trustCertificateFile;
 
     internal HttpClientCodecRegistry CodecRegistry { get; } = new();
@@ -58,14 +58,18 @@ public sealed class ZLinkHttpClientBuilder
     public ZLinkHttpClientBuilder BasicAuth(string user, string password)
     {
         HttpClientText.RequireNonBlank(user, "HTTP client basic auth user is required");
-        _headers["authorization"] = HttpClientText.BasicAuthorization(user, password);
+        _headers[HttpHeaderLookup.AuthorizationKey] = HttpClientText.BasicAuthorization(
+            user,
+            password
+        );
         return this;
     }
 
     public ZLinkHttpClientBuilder BearerToken(string token)
     {
         HttpClientText.RequireNonBlank(token, "HTTP client bearer token is required");
-        _headers["authorization"] = "Bearer " + token;
+        _headers[HttpHeaderLookup.AuthorizationKey] =
+            HttpClientText.BearerAuthenticationPrefix + token;
         return this;
     }
 
@@ -96,7 +100,9 @@ public sealed class ZLinkHttpClientBuilder
         return this;
     }
 
-    public ZLinkHttpClientBuilder FollowRedirects(int maxRedirects = 5)
+    public ZLinkHttpClientBuilder FollowRedirects(
+        int maxRedirects = HttpClientOptions.DefaultRedirectLimit
+    )
     {
         if (maxRedirects <= 0)
             throw new ZLinkFrameworkException(
@@ -129,7 +135,7 @@ public sealed class ZLinkHttpClientBuilder
     public ZLinkHttpClientBuilder Proxy(string url)
     {
         HttpClientText.RequireNonBlank(url, "HTTP client proxy url is required");
-        if (!url.StartsWith("http://", StringComparison.Ordinal))
+        if (!url.StartsWith(Uri.UriSchemeHttp + Uri.SchemeDelimiter, StringComparison.Ordinal))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 "HTTP client proxy url must start with http://"

@@ -51,7 +51,7 @@
   --select:#1E1C27; --select-line:#3B3650; --village:#1B2A1E; --village-line:#34503A; --dungeon:#1D1822; --dungeon-line:#3E3448; --dungeon-ink:#E4DCEB;
 }
 *{box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
+body{zoom:.9;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding-inline:16px;padding-block:22px 44px}
 .wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 20px}
 header h1{margin:0;font-size:clamp(21px,2.8vw,28px);letter-spacing:-.01em}
@@ -99,7 +99,10 @@ details{font-size:13.5px;color:var(--ink-2)}
 summary{cursor:pointer;color:var(--muted);font-size:13px}
 details ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
 details code{font:12.5px var(--mono);color:var(--accent-ink)}
-.foot{font-size:12.5px;color:var(--muted)}
+.foot,.src{font-size:12.5px;color:var(--muted)}
+.bar .src{margin:0}
+.foot a,.src a{color:var(--accent-ink);text-underline-offset:2px}
+.foot a:focus-visible,.src a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* svg */
 svg text{font-family:var(--sans)}
 .zone-sel{fill:var(--select);stroke:var(--select-line)}
@@ -271,6 +274,25 @@ svg.shake{animation:shake .5s ease}
 .link.relay{stroke:var(--hold);stroke-width:3;stroke-dasharray:9 5}
 .relay-t{font-family:var(--mono);font-size:11.5px;font-weight:700;fill:var(--hold)}
 .flylabel{font-family:var(--mono);font-size:11px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
+.band{fill:#7A4FC0;fill-opacity:.16}
+.zr.hot{stroke:var(--accent);stroke-width:3}
+.ch.gh{opacity:.5}
+.ch.gh>circle.body{stroke:var(--ink-2);stroke-dasharray:3 2}
+.spot.dim{opacity:.35;transition:opacity .3s}
+.link.wire{stroke:var(--look);stroke-width:3}
+.link.wire.on{stroke:var(--accent);stroke-width:4}
+.link.wire.broken,.link.mesh.broken{stroke:var(--hold);stroke-dasharray:3 5;stroke-width:3}
+.chan-frame.rank{stroke:#B5527F;fill:#B5527F;fill-opacity:.04}
+.chan-tag.rank>rect{fill:#B5527F}
+.chipc.hot>rect{fill:var(--accent)}
+.chipc.hot>text{fill:var(--on-accent)}
+.chipc.pub.hot>rect{fill:#2F6DB5}
+.chipc.pub.hot>text{fill:#fff}
+.spot .chipc.pub>rect{stroke:#2F6DB5}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .spot .chipc.pub>text{fill:#8DB9F2}:root:not([data-theme="light"]) .spot .chipc.pub>rect{stroke:#8DB9F2}}
+:root[data-theme="dark"] .spot .chipc.pub>text{fill:#8DB9F2}
+:root[data-theme="dark"] .spot .chipc.pub>rect{stroke:#8DB9F2}
+.spot .chipc.pub.hot>text{fill:#fff}
 </style>
 
 </head>
@@ -284,8 +306,8 @@ svg.shake{animation:shake .5s ease}
   <div class="main">
     <div class="side">
       <ol class="steps" id="steps" aria-label="단계"></ol>
-      <label class="speed" for="speedRange">메시지 속도 <b id="speedVal">1.0×</b></label>
-      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1" aria-label="메시지 속도">
+      <label class="speed" for="speedRange">메시지 속도 <b id="speedVal">1.5×</b></label>
+      <input type="range" id="speedRange" min="0.25" max="3" step="0.25" value="1.5" aria-label="메시지 속도">
     </div>
     <div class="col">
       <div class="bar">
@@ -293,6 +315,7 @@ svg.shake{animation:shake .5s ease}
         <p class="line" id="line"></p>
         <div class="acts" id="acts"></div>
         <p class="res" id="res" aria-live="polite"></p>
+        <p class="src" id="src"></p>
         <details><summary>자세히</summary><ul id="more"></ul></details>
       </div>
       <p class="vlabel">게임 화면</p>
@@ -308,7 +331,7 @@ svg.shake{animation:shake .5s ease}
 (function(){
 const $ = id => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
-let K = 3.5;                       /* message speed: larger is slower */
+let K = 3.5 / 1.5;                     /* message speed: larger is slower */
 let gen = 0;                       /* bumps when the group changes; stale loops stop */
 class Cancel extends Error {}
 const sleep = ms => { const g = gen; return new Promise((res, rej) => setTimeout(() => g === gen ? res() : rej(new Cancel()), ms)); };
@@ -343,6 +366,8 @@ function flyPath(d, {cls = 'pkt', dur = 420, r = 5, back = false, label} = {}){
 function chipc(x, y, label, cls = ''){ const g = mk(sB, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
 function chanTag(x, y, text, cls){ const g = mk(sB, 'g', {class: 'chan-tag ' + cls}); const w = 16 + [...text].reduce((t, ch) => t + (/[ㄱ-힝]/.test(ch) ? 11.5 : 7.2), 0); mk(g, 'rect', {x, y: y - 11, width: w, height: 22, rx: 6}); mk(g, 'text', {x: x + 8, y: y + 4, text}); return g; }
 function chipcIn(p, x, y, label, cls = ''){ const g = mk(p, 'g', {class: 'chipc ' + cls}); const w = 14 + [...label].reduce((s, ch) => s + (/[ㄱ-힝]/.test(ch) ? 11 : 6.6), 0); mk(g, 'rect', {x, y, width: w, height: 18, rx: 9}); mk(g, 'text', {x: x + 7, y: y + 13, text: label}); return w; }
+/* smooth weighted round-robin over the ready, weight > 0 entries (ClientServer and RouteMesh share the rule) */
+function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
 function storeBox(x, y, w){ const b = box(x, y, w, 48, 'store', 'Location Store'); const t1 = mk(sB, 'text', {x: x + 150, y: y + 20, class: 't-store'}), t2 = mk(sB, 'text', {x: x + 150, y: y + 38, class: 't-store'}); b.set = (a, c) => { if (a != null) t1.textContent = a; if (c != null) t2.textContent = c; pulse(b.g); }; b.pt = {x: x + w / 2, y: y + 48}; return b; }
 function actorDot(label, x, y, p = sB){ const g = mk(p, 'g', {class: 'actor'}); const c = mk(g, 'circle', {r: 13}); const t = mk(g, 'text', {text: label}); const o = {g, x, y, set(nx, ny){ this.x = nx; this.y = ny; c.setAttribute('cx', nx); c.setAttribute('cy', ny); t.setAttribute('x', nx); t.setAttribute('y', ny); }}; o.set(x, y); return o; }
 /* a Spot box with a visible queue and a single "running" slot (the gate) */
@@ -469,20 +494,19 @@ function gClientServer(){
     const b = box(296, y, 340, 60, ghost ? 'ghost faded' : '', title);
     Object.assign(b, {w: 100, cur: 0, n: 0, batch: 0, ready: !ghost, chan});
     b.wT = mk(sB, 'text', {x: 306, y: y + 46, class: 'w-badge', text: ghost ? '아직 없다' : 'weight 100'});
-    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L());
+    b.cells = mk(sB, 'g'); b.ln = ghost ? null : link({x: 266, y: y + 30}, b.L(), 'wire'); if (!ghost) chipc(580, y + 6, ':' + (chan === 'inventory' ? 7101 : 7201));
     return b;
   }
   function drawCells(b){ b.cells.replaceChildren(); for (let k = 0; k < Math.min(b.batch, 14); k++) mk(b.cells, 'rect', {x: 420 + k * 15, y: b.y + 36, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 420 + Math.min(b.batch, 14) * 15 + 4, y: b.y + 48, class: 't-count', text: `${b.batch}건`}); }
-  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); if (b.ln) b.ln.setAttribute('class', 'link wire' + (b.w === 0 ? ' broken' : '')); drawCells(b); }
   const I = [server('아이템 서버 1', 88, false, 'inventory'), server('아이템 서버 2', 154, false, 'inventory'), server('아이템 서버 3', 220, true, 'inventory')];
   const P = [server('결제 서버 1', 324, false, 'payment'), server('결제 서버 2', 390, false, 'payment')];
   I.slice(0, 2).concat(P).forEach(upd);
   /* what a ClientServer channel is */
   const lg = box(666, 62, 224, 392, 'legend', 'ClientServer 구성');
-  ['client → server 한 방향', 'server가 포트를 연다', 'client(API 서버)가 연결한다', 'request는 응답을 받는다', 'server가 여럿이면', '  client가 weight로 고른다', 'server는 client를', '  먼저 부르지 않는다', '', '■ = 이번에 받은 요청'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
+  ['client → server 한 방향', 'server가 포트를 연다', 'client(API 서버)가 연결한다', 'request는 응답을 받는다', 'server가 여럿이면', '  client가 weight로 고른다', 'server는 client를', '  먼저 부르지 않는다', '', '■ = 이번에 받은 요청', '실선 = 네트워크 연결', '점선 = 논리 구분(channel)'].forEach((t, k) => mk(sB, 'text', {x: 678, y: 104 + k * 24, class: 'legend-t', text: t}));
   store.set('ClientServer inventory → 아이템 서버 1, 2', 'ClientServer payment → 결제 서버 1, 2');
 
-  function pick(list){ const c = list.filter(b => b.ready && b.w > 0); if (!c.length) return null; let tot = 0, best = null; c.forEach(b => { b.cur += b.w; tot += b.w; if (!best || b.cur > best.cur) best = b; }); best.cur -= tot; return best; }
   async function call(i, list, label){
     await fly(CL[i], {x: 116, y: CL[i].y}, {dur: 280, bend: 0, label: 'HTTP'});
     const b = pick(list); if (!b) { note('대상 없음 오류', 'warn'); return; }
@@ -502,29 +526,29 @@ function gClientServer(){
   }
   I.forEach((b, k) => { b.name = `아이템 서버 ${k + 1}`; b.title = b.name; }); P.forEach((b, k) => { b.name = `결제 서버 ${k + 1}`; b.title = b.name; });
   const STEPS = [
-    {title: '이름으로 부르기', line: '플레이어가 앱에서 인벤토리를 연다. HTTP 요청은 API 서버로 가고, API 서버는 inventory라는 channel 이름으로 아이템 서버를 부른다.',
+    {title: '이름으로 부르기', ref: [['20장 §4.1 동작', '20-channel-messaging#41-동작']], line: '플레이어가 앱에서 인벤토리를 연다. HTTP 요청은 API 서버로 가고, API 서버는 inventory라는 channel 이름으로 아이템 서버를 부른다.',
      act: '아이템 서버로 4번 요청', repeat: true, more: ['ClientServer channel: 기능 서버가 포트를 열고, API 서버가 client로 연결한다. 호출은 client → server 한 방향이다.', 'API 서버는 아이템 서버의 주소를 모른다. inventory라는 이름만 안다.', 'server가 여럿이면 API 서버가 그중 하나를 고른다. weight가 같으면 돌아가며 하나씩(round-robin)이다.', '호출 코드에는 <code>request_to_channel("inventory", …)</code>만 남는다.'],
      async run(){ const r = await burst(4, I, 'inventory', '인벤토리'); res(`${r}. weight가 같으니 고르게 나뉜다.`); }},
-    {title: '서버 늘리기', line: '아이템 서버 3을 띄운다. Location Store에 등록되면 API 서버가 알아서 연결해 후보에 넣는다. 설정을 고치지 않는다.',
+    {title: '서버 늘리기', ref: [['20장 §4.2 받는 쪽', '20-channel-messaging#42-받는-쪽--포트를-여는-서버'], ['20장 §4.3 호출하는 쪽', '20-channel-messaging#43-호출하는-쪽--그-주소로-연결하는-client']], line: '아이템 서버 3을 띄운다. Location Store에 등록되면 API 서버가 알아서 연결해 후보에 넣는다. 설정을 고치지 않는다.',
      act: '아이템 서버 3 시작', extra: ['아이템 서버로 6번 요청', async () => { const r = await burst(6, I, 'inventory', '인벤토리'); res(`${r}. 새 서버도 똑같이 받는다.`); }],
      more: ['서버는 시작할 때 자기 주소와 맡은 channel 이름을 Store에 적는다.', 'API 서버는 Store 기록을 보고 연결한 뒤, 실제 연결에서 신원을 확인하고 나서 보낸다.', '서버를 몇 대 띄우든 호출 코드는 같다.'],
      async run(){ const s3 = I[2]; s3.g.classList.remove('ghost', 'faded');
        await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set('ClientServer inventory → 아이템 서버 1, 2, 3', null);
-       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L()); s3.ready = true; upd(s3); pulse(s3.g);
+       await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L(), 'wire'); chipc(580, s3.y + 6, ':7101'); s3.ready = true; upd(s3); pulse(s3.g);
        res('아이템 서버 3이 후보가 됐다. "아이템 서버로 6번 요청"로 확인해 보라.'); }},
-    {title: '가중치로 나누기', line: '아이템 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3의 칸이 다른 서버의 세 배로 쌓인다.',
+    {title: '가중치로 나누기', ref: [['30장 §4.2 후보 사이의 분배', '30-channel-patterns#42-후보-사이의-분배--기본값은-round-robin-값을-바꾸면-가중치-분배']], line: '아이템 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3의 칸이 다른 서버의 세 배로 쌓인다.',
      act: '서버 3 weight 300', extra: ['아이템 서버로 10번 요청', async () => { const r = await burst(10, I, 'inventory', '인벤토리'); res(`${r}. 서버 3이 다른 서버의 약 3배를 받았다.`); }],
      more: ['weight는 0~10000이고 기본은 100이다. 모두 100이면 돌아가며 하나씩이다.', '비율은 길게 보았을 때의 비율이다. 호출 하나하나의 순서를 정하지는 않는다.', '사양이 다른 장비를 섞거나, 한 대에 덜 보내야 할 때 쓴다.'],
      async run(){ I[2].w = 300; I.forEach(b => b.cur = 0); upd(I[2]); pulse(I[2].g); res('서버 3의 weight가 300이 됐다. "아이템 서버로 10번 요청"를 눌러 칸이 쌓이는 길이를 비교해 보라.'); }},
-    {title: '가중치 0', line: '아이템 서버 1의 weight를 0으로 바꾼다. 서버 1로는 새 요청이 가지 않는다.',
+    {title: '가중치 0', ref: [['30장 §4.3 실행 중에 새 요청만 멈추기', '30-channel-patterns#43-실행-중에-새-요청만-멈추기']], line: '아이템 서버 1의 weight를 0으로 바꾼다. 서버 1로는 새 요청이 가지 않는다.',
      act: '서버 1 weight 0', extra: ['아이템 서버로 10번 요청', async () => { const r = await burst(10, I, 'inventory', '인벤토리'); res(`${r}. 서버 1로는 하나도 가지 않았다.`); }],
      more: ['weight는 실행 중에 바꿀 수 있는 유일한 값이다. 0은 새 요청 후보에서만 뺀다.', '이미 받은 요청은 끝까지 처리한다. 연결과 Store 기록도 그대로 남는다.', '점검 전에 0으로 두고, 끝나면 100으로 돌린다.'],
      async run(){ I[0].w = 0; I.forEach(b => b.cur = 0); upd(I[0]); res('서버 1의 weight가 0이 됐다(주황 점선). "아이템 서버로 10번 요청"로 확인해 보라.'); }},
-    {title: '다른 channel 부르기', line: '상점에서 아이템을 사면 API 서버가 payment channel로 결제 서버를 부른다. 이름만 다를 뿐 부르는 방법은 같다.',
-     act: '결제 서버로 4번 요청', repeat: true, more: ['channel 이름마다 담당 server 묶음이 따로 있다. inventory와 payment는 서로 다른 channel이다.', 'API 서버 한 곳에 client 등록을 둘 둔다. 등록만 다르고 호출 코드는 같다.'],
+    {title: '다른 channel 부르기', ref: [['30장 §2.2 ClientServer', '30-channel-patterns#22-clientserver--channel마다-자기-listener를-연다'], ['30장 §4.4 같은 ChannelName을 여러 node로 늘리기', '30-channel-patterns#44-같은-channelname을-여러-node로-늘리기']], line: '상점에서 아이템을 사면 API 서버가 payment channel로 결제 서버를 부른다. 이름만 다를 뿐 부르는 방법은 같다.',
+     act: '결제 서버로 4번 요청', repeat: true, more: ['channel 이름마다 담당 server 묶음이 따로 있다. inventory와 payment는 서로 다른 channel이다.', 'API 서버 한 곳에 client 등록을 둘 둔다. 등록만 다르고 호출 코드는 같다.', 'channel마다 server가 포트를 열고 client가 따로 연결한다. channel이 늘면 연결도 는다.'],
      async run(){ const r = await burst(4, P, 'payment', '결제 승인'); res(`${r}. payment 묶음 안에서 나뉜다. inventory 묶음과는 섞이지 않는다.`); }},
   ];
-  return {title: 'ClientServer channel', steps: STEPS, foot: '가이드 01장(전체 topology)·20장 §4(ClientServer channel)·30장(Channel 동작 원리)'};
+  return {title: 'ClientServer channel', steps: STEPS, foot: [['01장(전체 topology)', '01-overview'], ['20장 §4(ClientServer channel)', '20-channel-messaging#4-clientserver-channel'], ['30장(Channel 동작 원리)', '30-channel-patterns']]};
 }
 
 /* =========================================================
@@ -554,6 +578,7 @@ function gFanout(){
   const pub = box(24, 170, 200, 150, '', '운영 툴', 'PUB · 발행하는 쪽');
   mk(sB, 'text', {x: 34, y: 236, class: 'legend-t', text: '받을 서버 목록을'}); mk(sB, 'text', {x: 34, y: 256, class: 'legend-t', text: '알지 않는다'});
   const topicT = mk(sB, 'text', {x: 34, y: 296, class: 'w-badge heavy', text: ''});
+  chipc(34, 262, ':7301'); mk(sB, 'text', {x: 34, y: 352, class: 'legend-t', text: '실선 = 네트워크 연결'}); mk(sB, 'text', {x: 34, y: 374, class: 'legend-t', text: '점선 = 논리 구분(topic)'});
   const SUBS = [];
   function sub(kind, label, k, ghost){
     const y = 76 + SUBS.length * 52;
@@ -562,7 +587,7 @@ function gFanout(){
     b.chips = mk(sB, 'g');
     if (!ghost) { let x = 560; ['SUB', ...b.topics].forEach(t => { x += chipcIn(b.chips, x, y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; }); }
     b.cT = mk(sB, 'text', {x: 840, y: y + 28, class: 't-count', 'text-anchor': 'end', text: ghost ? '아직 없다' : ''});
-    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, '', 0);
+    b.ln = ghost ? null : link({x: 224, y: 245}, {x: 400, y: y + 23}, 'wire', 0);
     SUBS.push(b); return b;
   }
   sub('field', '필드 서버 1'); sub('field', '필드 서버 2'); sub('dungeon', '던전 서버 1'); sub('dungeon', '던전 서버 2'); sub('item', '아이템 서버 1'); sub('item', '아이템 서버 2');
@@ -581,27 +606,27 @@ function gFanout(){
     return targets.map(b => b.label);
   }
   const STEPS = [
-    {title: '전체에 보내기', line: '운영 툴이 topic all로 공지를 발행한다. all을 구독한 서버 전부가 받는다. 응답은 없다.',
-     act: 'topic all 발행', repeat: true, more: ['Fanout channel: 발행하는 쪽(PUB)이 하나 보내면, 연결된 구독자(SUB)가 각자 받는다.', '발행하는 쪽은 구독자 목록을 모른다. 구독 서버가 늘거나 줄어도 발행 코드는 같다.', '응답이 없으므로 <code>publish</code>만 있다. 처리 결과가 필요하면 ClientServer나 RouteMesh의 <code>request</code>를 쓴다.'],
+    {title: '전체에 보내기', ref: [['20장 §5.1 동작', '20-channel-messaging#51-동작'], ['30장 §5.2 Classic fanout', '30-channel-patterns#52-classic-fanout--손실을-허용하는-전달']], line: '운영 툴이 topic all로 공지를 발행한다. all을 구독한 서버 전부가 받는다. 응답은 없다.',
+     act: 'topic all 발행', repeat: true, more: ['Fanout channel: 발행하는 쪽(PUB)이 하나 보내면, 연결된 구독자(SUB)가 각자 받는다.', 'fanout channel은 mesh와 별개로 PUB/SUB 소켓 쌍을 연다.', '발행하는 쪽은 구독자 목록을 모른다. 구독 서버가 늘거나 줄어도 발행 코드는 같다.', '응답이 없으므로 <code>publish</code>만 있다. 처리 결과가 필요하면 ClientServer나 RouteMesh의 <code>request</code>를 쓴다.'],
      async run(){ const r = await publish('all'); res(`${r.length}대가 모두 받았다: ${r.join(', ')}.`); }},
-    {title: '필드 서버에만', line: 'topic field로 발행하면 field를 구독한 필드 서버만 받는다. 다른 서버로는 가지 않는다.',
+    {title: '필드 서버에만', ref: [['30장 §5.3 Topic', '30-channel-patterns#53-topic--두-형태-모두-수신-대상을-고른다'], ['20장 §5.3 호출하는 쪽', '20-channel-messaging#53-호출하는-쪽--발행하는-node']], line: 'topic field로 발행하면 field를 구독한 필드 서버만 받는다. 다른 서버로는 가지 않는다.',
      act: 'topic field 발행', repeat: true, more: ['구독은 topic으로 등록한다. 발행한 topic과 맞는 구독자만 받는다.', '서버 하나가 topic 여럿을 구독할 수 있다. 여기서는 각자 자기 종류 + all을 구독한다.', 'topic을 생략하면 메시지의 packet 이름이 topic이 된다.'],
      async run(){ const r = await publish('field'); res(`받은 서버: ${r.join(', ')}. 나머지는 흐리게 표시했다.`); }},
-    {title: '던전 서버에만', line: 'topic dungeon으로 발행하면 던전 서버만 받는다.',
+    {title: '던전 서버에만', ref: [['30장 §5.3 Topic', '30-channel-patterns#53-topic--두-형태-모두-수신-대상을-고른다']], line: 'topic dungeon으로 발행하면 던전 서버만 받는다.',
      act: 'topic dungeon 발행', repeat: true, more: ['같은 channel 안에서 topic만 바꿔 받는 대상을 고른다.'],
      async run(){ const r = await publish('dungeon'); res(`받은 서버: ${r.join(', ')}.`); }},
-    {title: '아이템 서버에만', line: 'topic item으로 발행하면 아이템 서버만 받는다. 게임 밖 서버에도 같은 방법으로 알린다.',
+    {title: '아이템 서버에만', ref: [['30장 §5.3 Topic', '30-channel-patterns#53-topic--두-형태-모두-수신-대상을-고른다']], line: 'topic item으로 발행하면 아이템 서버만 받는다. 게임 밖 서버에도 같은 방법으로 알린다.',
      act: 'topic item 발행', repeat: true, more: ['게임 서버든 기능 서버든 notice channel을 구독하면 받을 수 있다.'],
      async run(){ const r = await publish('item'); res(`받은 서버: ${r.join(', ')}. 상점 가격표가 바뀌었다.`); }},
-    {title: '구독 서버 늘리기', line: '필드 서버 3을 띄운다. Location Store에서 운영 툴의 주소를 찾아 스스로 연결하고 구독한다. 운영 툴은 바꿀 것이 없다.',
+    {title: '구독 서버 늘리기', ref: [['20장 §5.2 받는 쪽', '20-channel-messaging#52-받는-쪽--구독하는-node'], ['30장 §2.3 Fanout', '30-channel-patterns#23-fanout--pubsub-소켓-쌍을-따로-연다']], line: '필드 서버 3을 띄운다. Location Store에서 운영 툴의 주소를 찾아 스스로 연결하고 구독한다. 운영 툴은 바꿀 것이 없다.',
      act: '필드 서버 3 시작', extra: ['topic field 발행', async () => { const r = await publish('field'); res(`받은 서버: ${r.join(', ')}. 새 서버도 받는다.`); }],
      more: ['구독하는 쪽이 Store에서 발행하는 쪽(PUB)의 주소를 찾아 연결한다.', '연결과 구독이 끝나기 전에 발행된 공지는 나중에 받지 못한다. 저장·재전송은 하지 않는다.', '느린 구독자의 몫은 버리고 발행은 성공한다. 버리면 안 되면 NoDrop을 켠다. 그러면 발행이 기다리다 오류로 끝날 수 있다.'],
      async run(){ F3.g.classList.remove('ghost', 'faded'); await fly(F3.T(), store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, F3.T(), {cls: 'pkt-look', dur: 400});
        let x = 560; ['SUB', 'field', 'all'].forEach(t => { x += chipcIn(F3.chips, x, F3.y + 14, t === 'SUB' ? 'SUB' : `topic ${t}`, t === 'SUB' ? 'pub' : '') + 6; });
-       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}); F3.ready = true; F3.cT.textContent = '받음 0'; pulse(F3.g);
+       F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}, 'wire'); F3.ready = true; F3.cT.textContent = '받음 0'; pulse(F3.g);
        res('필드 서버 3이 운영 툴에 연결하고 field, all을 구독했다. "topic field 발행"으로 확인해 보라.'); }},
   ];
-  return {title: 'Fanout channel', steps: STEPS, foot: '가이드 20장 §5(Fanout channel)·30장 §5(pub/sub의 형태)'};
+  return {title: 'Fanout channel', steps: STEPS, foot: [['20장 §5(Fanout channel)', '20-channel-messaging#5-fanout-channel'], ['30장 §5(pub/sub의 형태)', '30-channel-patterns#5-pubsub의-형태']]};
 }
 
 /* =========================================================
@@ -628,7 +653,7 @@ function gLobby(){
   serverGroups();
   box(320, 90, 200, 244, '', '필드 서버', 'node A'); box(535, 90, 200, 244, '', '던전 서버', 'node B'); box(750, 90, 140, 244, '', '던전 서버', 'node C');
   mk(sB, 'text', {x: 760, y: 150, class: 't-mono', text: '다른 던전들'});
-  const meshL = path('M420,334 L420,354 L820,354 L820,334 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 440, y: 368, class: 'mesh-t', text: 'RouteMesh · 서버끼리 연결 하나로 서로 부른다'});
+  const meshL = path('M226,332 L226,354 L820,354 L820,334 M420,334 L420,354 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 350, y: 368, class: 'mesh-t', text: 'RouteMesh · 세션·필드·던전 서버가 연결 하나로 서로 부른다'});
   const meshD = (a, b) => `M${a},334 L${a},354 L${b},354 L${b},334`;
   const entry = qspot(330, 132, 180, 58, 'Entry Spot · 캐릭터 선택');
   const town = qspot(330, 196, 180, 134, 'town-1', 'User Spot · 마을', {lane: 72, exec: 102});
@@ -661,33 +686,33 @@ function gLobby(){
         const l = mk(gF, 'line', {x1: 770, y1: 132, x2: ch[i].x, y2: ch[i].y, class: 'beam'}); sleep(240).then(() => l.remove(), () => l.remove()); popup(ch[i].x, ch[i].y - 20, '-' + d, 'dmg boss'); }});
       [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k]))); } }); }
   const STEPS = [
-    {title: '서버끼리 연결', line: '필드 서버와 던전 서버들은 RouteMesh 하나로 이어져 있다. 서로를 channel 이름, Spot id, Actor id로 부르고, 연결은 Location Store 기록으로 자동으로 맺는다.',
-     act: '서버 시작', more: ['RouteMesh: 같은 mesh에 참여한 서버끼리 연결 하나로 양쪽 모두 서로를 부른다.', 'Spot·Actor 앞 메시지, Actor의 서버 이동, 방끼리의 소식(Logical Multicast)이 모두 이 연결로 오간다.', '서버를 늘리면 Store에 등록되고, 다른 서버가 기록을 보고 연결한다. 설정을 고치지 않는다.', '같은 이름을 맡은 서버가 여럿이면 Framework가 하나를 고른다. 자기 자신은 후보가 아니다.'],
+    {title: '서버끼리 연결', ref: [['20장 §3.1 동작', '20-channel-messaging#31-동작'], ['30장 §2.1 RouteMesh', '30-channel-patterns#21-routemesh--연결-하나를-여러-channel이-공유한다']], line: '세션 서버, 필드 서버와 던전 서버들은 RouteMesh 하나로 이어져 있다. 서로를 channel 이름, Spot id, Actor id로 부르고, 연결은 Location Store 기록으로 자동으로 맺는다.',
+     act: '서버 시작', more: ['RouteMesh: 같은 mesh에 참여한 서버끼리 연결 하나로 양쪽 모두 서로를 부른다.', '세션 서버도 mesh에 참여한다. session이 받은 packet은 이 연결로 Actor에 전달된다.', 'Spot·Actor 앞 메시지, Actor의 서버 이동, 방끼리의 소식(Logical Multicast)이 모두 이 연결로 오간다.', '서버를 늘리면 Store에 등록되고, 다른 서버가 기록을 보고 연결한다. 설정을 고치지 않는다.', '같은 이름을 맡은 서버가 여럿이면 Framework가 하나를 고른다. 자기 자신은 후보가 아니다.'],
      async run(){ for (const x of [420, 635, 820]) { await fly({x, y: 90}, store.pt, {cls: 'pkt-look', dur: 300}); }
        store.set('mesh game → node A, B, C', '');
-       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5})]);
-       meshL.classList.add('on'); res('세 서버가 RouteMesh로 이어졌다. 아래 굵은 선이 서버끼리의 연결이다.'); }},
-    {title: '접속', line: '플레이어 4명이 접속한다. 연결마다 session이 생기고, 각자의 Actor가 Entry Spot에 만들어져 session에 묶인다.',
+       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5}), flyPath(meshD(226, 420), {dur: 400, r: 5})]);
+       meshL.classList.add('on'); res('세션·필드·던전 서버가 RouteMesh로 이어졌다. 아래 굵은 선이 서버끼리의 연결이다.'); }},
+    {title: '접속', ref: [['24장 §1 Actor와 session을 묶는 역할', '24-actor-session#1-actor와-session을-묶는-역할'], ['24장 §3.1 묶기', '24-actor-session#31-묶기']], line: '플레이어 4명이 접속한다. 연결마다 session이 생기고, 각자의 Actor가 Entry Spot에 만들어져 session에 묶인다.',
      act: '4명 접속', more: ['client 연결 하나에 session 하나가 생긴다(STREAM).', 'Actor 생성은 Entry Spot의 <code>on_create_actor</code>가 승인한다.', 'session을 Actor에 묶으면, session이 처리하지 않는 packet은 그 Actor로 간다.', 'Entry Spot은 아직 마을이나 방에 들어가지 않은 Actor가 있는 곳이다. Actor끼리 공유하는 상태를 두지 않는다.'],
      async run(){
        await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 300);
          ss.open(i); await fly(ss.CL[i].pt, ss.SE[i].L, {dur: 320, bend: 0});
          await flyPath(ss.routeTo(i, AC[i]), {dur: 460}); AC[i].g.classList.remove('hidden'); pulse(entry.g); redraw(); ch[i].g.classList.remove('off'); }));
        store.set('P1 ~ P4 → node A · Entry Spot', ''); res('session 4개, Actor 4개. 점선이 session과 Actor를 잇는 묶음이다.'); }},
-    {title: '각자 준비', line: '4명이 동시에 장비를 바꾼다. Entry Spot에서는 Actor마다 따로 실행되므로 네 요청이 동시에 처리된다.',
+    {title: '각자 준비', ref: [['22장 §2.2 Entry Spot 작성', '22-actor#22-entry-spot-작성']], line: '4명이 동시에 장비를 바꾼다. Entry Spot에서는 Actor마다 따로 실행되므로 네 요청이 동시에 처리된다.',
      act: '4명 동시에 장비 변경', repeat: true, more: ['Entry Spot은 Actor마다 따로 순서를 지킨다. 서로 다른 Actor는 동시에 실행된다.', '각자 자기 상태만 바꾸는 일이라 서로 기다릴 이유가 없다.'],
      async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await ss.up(i, AC[i]); AC[i].g.classList.add('run'); await sleep(200 * K); AC[i].g.classList.remove('run'); })); res('네 Actor가 <b>동시에</b> 실행됐다(초록 테두리가 한꺼번에 켜졌다).'); }},
-    {title: '마을 입장', line: '4명이 마을 town-1에 들어간다. 마을은 여럿이 함께 쓰는 자리라 User Spot이고, 들어가면 서로가 보인다.',
+    {title: '마을 입장', ref: [['21장 §1 Spot의 역할', '21-spot#1-spot의-역할']], line: '4명이 마을 town-1에 들어간다. 마을은 여럿이 함께 쓰는 자리라 User Spot이고, 들어가면 서로가 보인다.',
      act: '마을 입장', more: ['입장은 <code>join</code>으로 한다. 지금 handler가 끝난 뒤 실행되도록 예약한다(<code>defer</code>).', '마을의 <code>on_actor_join</code>이 승인하면 위치 기록과 소속이 한 번에 바뀐다.', '같은 node 안의 이동이라 Actor가 서버를 옮기지 않는다.'],
      async run(){ [0, 1, 2, 3].forEach(i => spawn(() => join(town, i))); await sleep(200 * K); await moveActors(SLOT_T, TOWN); store.set('P1 ~ P4 → node A · town-1', null); res('4명이 town-1에 들어갔다. 이제 마을에서 일어난 일은 마을의 모든 사람에게 전달된다.'); }},
-    {title: '마을에서 이동', line: '한 명이 움직이면 마을이 그 위치를 모든 사람에게 보낸다. 그래서 다른 유저가 화면에 보인다.',
+    {title: '마을에서 이동', ref: [['21장 §1 Spot의 역할', '21-spot#1-spot의-역할'], ['24장 §3.3 Actor가 그 연결로 보내기', '24-actor-session#33-actor가-그-연결로-보내기']], line: '한 명이 움직이면 마을이 그 위치를 모든 사람에게 보낸다. 그래서 다른 유저가 화면에 보인다.',
      act: '4명 이동', repeat: true, more: ['마을(SpotWide)은 gate 하나로 이동 요청을 차례로 처리한다.', '처리한 결과를 마을의 모든 사람에게 push한다. 각 client는 그 push로 다른 유저를 그린다.', '마을 사람이 수백 명이면 여러 마을(채널)로 나눈다. 마을마다 Spot 하나다.'],
      async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 150); await ss.up(i, AC[i]);
        await enqueue(town, {label: 'P' + (i + 1), what: `P${i + 1} 이동 실행 중`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}});
        ch[i].walk(165 + Math.random() * 215, 80 + Math.random() * 110, 700);
        await Promise.all([0, 1, 2, 3].map(k => ss.SE[k].conn ? ss.push(k, AC[k]).then(() => { if (k !== i) seen(ch[k]); }) : null)); }));
        res('이동 4건이 마을에서 차례로 처리되고, 매번 <b>모든 client</b>에 전달됐다(초록 고리 = 다른 사람의 화면에 보임).'); }},
-    {title: '던전 만들기', line: 'P1이 던전을 만든다. 어느 서버에 만들지는 Framework가 고르고, 돌려받은 id dungeon-7이 이후의 주소가 된다.',
+    {title: '던전 만들기', ref: [['20장 §3.7 Spot·Actor 호출하기', '20-channel-messaging#37-spotactor-호출하기'], ['21장 §4.1 만들기', '21-spot#41-만들기']], line: 'P1이 던전을 만든다. 어느 서버에 만들지는 Framework가 고르고, 돌려받은 id dungeon-7이 이후의 주소가 된다.',
      act: 'P1: 던전 만들기', more: ['같은 id가 두 곳에 생기지 않도록 Location Store가 생성 권한을 조정한다.', '던전의 <code>on_create</code>가 거절하면 호출은 실패하고 던전은 남지 않는다.'],
      async run(){ await ss.up(0, AC[0]); AC[0].g.classList.add('run');
        await fly({x: AC[0].x, y: AC[0].y - 13}, store.pt, {cls: 'pkt-look'}); store.set(null, 'dungeon-7 → 생성 예약');
@@ -696,19 +721,19 @@ function gLobby(){
        dsp.g.classList.remove('holding'); pulse(dsp.g); AC[0].g.classList.remove('run');
        store.set(null, 'dungeon-7 → node B'); dngG.classList.remove('locked'); dngSub.textContent = 'dungeon-7 · 파티원만 들어간다';
        res('dungeon-7이 node B에 생겼다. 만들 서버는 Framework가 골랐다.'); }},
-    {title: '파티 입장', line: '4명이 dungeon-7에 들어간다. 던전이 다른 서버에 있으므로, 각 Actor가 상태를 가진 채 그 서버로 옮겨 간다.',
+    {title: '파티 입장', ref: [['22장 §1 Actor는 언제나 어떤 Spot에 속한다', '22-actor#1-actor는-언제나-어떤-spot에-속한다'], ['20장 §3.7 Spot·Actor 호출하기', '20-channel-messaging#37-spotactor-호출하기']], line: '4명이 dungeon-7에 들어간다. 던전이 다른 서버에 있으므로, 각 Actor가 상태를 가진 채 그 서버로 옮겨 간다.',
      act: '파티 입장', more: ['받는 던전의 <code>on_actor_join</code>이 승인하면, Actor가 상태와 대기 중인 작업을 가지고 node B로 옮겨 간다.', '옮겨 가는 동안 온 message는 기다렸다가 순서대로 실행된다.', 'session 경로는 Framework가 새 위치로 바꾼다. client는 다시 접속하지 않는다.'],
      async run(){ await flyPath(meshD(420, 635), {dur: 500, r: 7, label: 'join 요청 · RouteMesh'}); pulse(dsp.g); await flyPath(meshD(635, 420), {cls: 'pkt-push', dur: 500, r: 6, label: '승인'});
        await flyPath(meshD(420, 635), {cls: 'pkt-state', dur: 600, r: 9, label: 'Actor 4명의 상태'});
        await moveActors(SLOT_D, DNG, 260); store.set('P1 ~ P4 → node B · dungeon-7', null); res('Actor 상태가 RouteMesh 연결로 node B에 갔다. client 연결은 그대로이고, 점선(묶음)만 새 위치를 가리킨다.'); }},
-    {title: '보스 동시 공격', line: '4명이 동시에 보스를 공격한다. 요청은 dungeon-7에서 한 줄로 처리되므로, lock 없이 보스 HP가 정확히 공격 합계만큼 준다.',
+    {title: '보스 동시 공격', ref: [['32장 §3 SpotWide', '32-execution-model#3-spotwide--gate-하나를-지나는-실행']], line: '4명이 동시에 보스를 공격한다. 요청은 dungeon-7에서 한 줄로 처리되므로, lock 없이 보스 HP가 정확히 공격 합계만큼 준다.',
      act: '4명 동시 공격', repeat: true, more: ['던전(SpotWide)은 gate 하나로 방 전체를 한 번에 하나씩 실행한다.', '그래서 보스 HP와 파티 상태를 lock 없이 평범한 코드로 고친다.', 'Actor 앞 message는 Actor마다 queue에 들어가지만, 실행 권한(gate)은 하나다.'],
      async run(){ const r = await attackAll(); res(`${r.n}건이 한 줄로 처리됐다. 공격 합계 ${r.sum} → 보스 HP ${r.before} → <b>${boss.hp}</b>. 사용한 lock 0.`); }},
-    {title: '보스 반격 (timer)', line: '보스가 주기적으로 반격한다. timer tick도 같은 줄에 들어가서, 플레이어 공격과 섞이지 않고 차례로 실행된다.',
+    {title: '보스 반격 (timer)', ref: [['32장 §3 SpotWide', '32-execution-model#3-spotwide--gate-하나를-지나는-실행']], line: '보스가 주기적으로 반격한다. timer tick도 같은 줄에 들어가서, 플레이어 공격과 섞이지 않고 차례로 실행된다.',
      act: '보스 timer 시작', more: ['timer는 던전(Spot)에 등록한다. tick은 그 Spot의 queue에서 실행된다(주황 T).', 'tick이 밀리면 버릴지·따라잡을지를 overrun 정책으로 고른다.', '무거운 계산은 worker로 넘겨 줄을 막지 않는다.'],
      extra: ['공격하며 지켜보기', async () => { const r = await attackAll(); res(`공격 ${r.n}건과 보스 tick이 한 줄에 섞여 차례로 실행된다. 보스 HP ${boss.hp}.`); }],
      async run(){ startTimer(); res('보스 timer가 돌기 시작했다. queue의 주황 T가 tick이다. "공격하며 지켜보기"를 눌러 보라.'); }},
-    {title: '연결 끊김·재접속', line: 'P3의 연결이 끊긴다. P3의 Actor는 던전에 남아 전투가 계속되고, 다시 접속하면 같은 P3에 묶인다.',
+    {title: '연결 끊김·재접속', ref: [['24장 §6 연결이 끊긴 뒤', '24-actor-session#6-연결이-끊긴-뒤--session은-끝나고-actor는-남는다']], line: 'P3의 연결이 끊긴다. P3의 Actor는 던전에 남아 전투가 계속되고, 다시 접속하면 같은 P3에 묶인다.',
      act: 'P3 연결 끊기', toggle: true, more: ['연결이 끊기면 묶여 있던 Actor에 끊김이 통지된다(<code>on_disconnect_actor</code>).', '끊김은 Actor를 지우거나 던전에서 빼지 않는다.', 'Actor는 session 하나에만 묶인다. 다른 기기로 접속하면 이전 묶음은 무효가 된다.'],
      async run(btn){ const i = 2;
        if (ss.SE[i].conn) { ss.close(i); redraw(); AC[i].g.classList.add('disc'); ch[i].g.classList.add('off');
@@ -717,14 +742,14 @@ function gLobby(){
        ss.open(i); await fly(ss.SE[i].R, store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, ss.SE[i].R, {cls: 'pkt-look', dur: 400});
        redraw(); AC[i].g.classList.remove('disc'); ch[i].g.classList.remove('off'); pulse(dsp.g); btn.textContent = 'P3 연결 끊기';
        res(`새 session #${ss.SE[i].id}이 node B의 P3에 묶였다. 체력과 위치가 그대로다.`); return true; }},
-    {title: '방끼리 소식 (Logical Multicast)', line: '보스를 쓰러뜨리면 dungeon-7이 raid-news로 소식을 보낸다. 서버마다 RouteMesh로 한 번만 보내고, 받은 서버가 그 topic을 구독한 Spot(town-1)에 나눠 준다.',
+    {title: '방끼리 소식 (Logical Multicast)', ref: [['30장 §5.1 Logical Multicast', '30-channel-patterns#51-logical-multicast--mesh-위의-spot-사이-이벤트']], line: '보스를 쓰러뜨리면 dungeon-7이 raid-news로 소식을 보낸다. 서버마다 RouteMesh로 한 번만 보내고, 받은 서버가 그 topic을 구독한 Spot(town-1)에 나눠 준다.',
      act: '마무리 공격 → 소식 발행', more: ['Logical Multicast: RouteMesh 연결을 그대로 쓰는 Spot 사이의 발행·구독이다. 별도 소켓을 열지 않는다.', '받는 쪽은 같은 topic을 구독한 Spot으로 한정된다. 마을(town-1)이 raid-news를 구독하고 있다.', '같은 서버에 구독 Spot이 여럿이면 메시지 하나를 함께 쓴다.'],
      async run(){ if (boss.hp > 0) { finish = true; left = ss.SE.filter(s => s.conn).length; await attackAll(); finish = false; }
        timer = false; res('보스를 쓰러뜨렸다. dungeon-7이 소식을 보낸다.'); pulse(dsp.g);
        await flyPath(meshD(635, 420), {cls: 'pkt-pub', dur: 600, r: 7, label: 'raid-news · RouteMesh'}); pulse(town.g);
        await Promise.all(others.map(o => { seen(o); return null; })); spawn(() => banner('소식: dungeon-7 보스 처치!'));
        res('node A가 한 번 받아 town-1에 넘겼다. 마을의 다른 플레이어들이 소식을 본다(회색 고리).'); }},
-    {title: '마을로 귀환', line: '파티는 마을로 돌아가고 던전을 닫는다. 마을이 다른 서버에 있으므로 Actor가 RouteMesh로 다시 옮겨 간다.',
+    {title: '마을로 귀환', ref: [['22장 §1 Actor는 언제나 어떤 Spot에 속한다', '22-actor#1-actor는-언제나-어떤-spot에-속한다'], ['20장 §3.7 Spot·Actor 호출하기', '20-channel-messaging#37-spotactor-호출하기']], line: '파티는 마을로 돌아가고 던전을 닫는다. 마을이 다른 서버에 있으므로 Actor가 RouteMesh로 다시 옮겨 간다.',
      act: '귀환', more: ['마을로 돌아가는 것도 <code>join</code>이다.', '던전을 닫으면 <code>on_closing</code> 뒤 Location Store 기록이 사라진다.'],
      async run(){ await flyPath(meshD(635, 420), {cls: 'pkt-state', dur: 600, r: 9, label: 'Actor 4명의 상태'});
        await moveActors(SLOT_T, TOWN, 220); store.set('P1 ~ P4 → node A · town-1', null);
@@ -732,7 +757,7 @@ function gLobby(){
        dsp.g.classList.add('gone'); store.set(null, 'dungeon-7 → 없음'); dngG.classList.add('locked'); dngSub.textContent = '닫힘';
        res('던전이 닫히고 Store 기록도 지워졌다. 파티는 마을에서 다시 서로를 본다.'); }},
   ];
-  return {title: '로비와 던전 · RouteMesh', steps: STEPS, foot: '가이드 21·22·24·32·34·35·36장'};
+  return {title: '로비와 던전 · RouteMesh', steps: STEPS, foot: [['21장', '21-spot'], ['22장', '22-actor'], ['24장', '24-actor-session'], ['32장', '32-execution-model'], ['34장', '34-activation-lifetime'], ['35장', '35-actor-membership'], ['36장', '36-timer-worker']]};
 }
 
 /* =========================================================
@@ -770,13 +795,13 @@ function gInstance(){
     return enqueue(guild, {label: 'D' + 'BCD'[k], what: opts.what || `던전 서버 ${'BCD'[k]} 기여 +${amount}`, from: from(k), dur: opts.dur, fn: () => { addXp(amount); glogAdd(`파티 ${k + 1} 기여 +${amount}`); if (opts.fn) opts.fn(); }});
   }
   const STEPS = [
-    {title: '첫 요청으로 깨우기', line: '파티 1이 보스를 잡고 길드에 기여한다. guild-7은 아직 없지만, 첫 요청이 오면 Framework가 만들고 그 요청을 바로 처리한다.',
+    {title: '첫 요청으로 깨우기', ref: [['21장 §6 Spot의 다른 종류', '21-spot#6-spot의-다른-종류']], line: '파티 1이 보스를 잡고 길드에 기여한다. guild-7은 아직 없지만, 첫 요청이 오면 Framework가 만들고 그 요청을 바로 처리한다.',
      act: '파티 1 기여', more: ['Instance Spot에는 만드는 호출이 따로 없다. 첫 메시지에 instance type을 적으면 된다.', '만들 서버는 Framework가 고르고, Store가 같은 id를 두 곳에 만들지 않게 막는다.', '호출하는 쪽은 "만들기"와 "보내기"를 나누지 않는다.'],
      async run(){ await contribute(0, 120); res('guild-7이 만들어지고 <b>그 같은 요청</b>을 처리했다. 길드 경험치 +120.'); }},
-    {title: '여러 서버가 동시에', line: '세 던전 서버가 동시에 같은 길드에 기여한다. guild-7이 한 줄로 처리하므로 분산 락 없이 합계가 정확하다.',
+    {title: '여러 서버가 동시에', ref: [['32장 §3 SpotWide', '32-execution-model#3-spotwide--gate-하나를-지나는-실행']], line: '세 던전 서버가 동시에 같은 길드에 기여한다. guild-7이 한 줄로 처리하므로 분산 락 없이 합계가 정확하다.',
      act: '3개 서버가 동시에 기여', repeat: true, more: ['같은 길드 id로 온 요청은 언제나 그 길드 하나로 간다.', '처음 한 번만 Store에서 위치를 찾고, 그 뒤에는 기억해 둔 위치로 바로 보낸다.', '기존 방식이라면 서버마다 Redis 락을 잡고, 읽고, 쓰고, 풀어야 한다.'],
      async run(){ const before = xp; const am = [0, 1, 2].map(() => 80 + Math.floor(Math.random() * 80)); await Promise.all(am.map((a, k) => contribute(k, a))); res(`3건이 한 줄로 처리됐다. ${am.join(' + ')} = ${am.reduce((s, v) => s + v, 0)} → 경험치 ${before} → <b>${xp}</b>. 락 0.`); }},
-    {title: '기다리는 동안 양보', line: '길드가 랭킹을 외부 DB에 저장한다. Yield로 기다리면 그동안 다른 기여가 먼저 실행되고, 저장이 끝나면 새 차례로 이어서 실행된다.',
+    {title: '기다리는 동안 양보', ref: [['32장 §2 직렬화 범위를 정하는 것', '32-execution-model#2-직렬화-범위를-정하는-것']], line: '길드가 랭킹을 외부 DB에 저장한다. Yield로 기다리면 그동안 다른 기여가 먼저 실행되고, 저장이 끝나면 새 차례로 이어서 실행된다.',
      act: '랭킹 저장 + 동시 기여', more: ['<code>Yield</code>는 기다리는 동안 실행 권한을 반납한다. 결과가 오면 queue 끝에 새 차례로 들어간다.', '<code>Async</code>로 기다리면 실행 권한을 쥔 채 기다려서 다른 요청이 모두 멈춘다.', '재개한 뒤에는 그사이 바뀐 상태를 다시 확인한다.'],
      async run(){
        let resumed; const resumeDone = new Promise(r => { resumed = r; });
@@ -784,12 +809,12 @@ function gInstance(){
          await fly(guild.abs(guild.w, 130), DB.L(), {cls: 'pkt-look', dur: 500}); pulse(DB.g); await sleep(400 * K); await fly(DB.L(), guild.abs(guild.w, 130), {cls: 'pkt-push', dur: 500});
          await enqueue(guild, {label: 'R', what: '저장 결과로 재개 · 새 차례', fn: () => glogAdd('랭킹 저장 완료 (재개한 차례)')}); res('저장 결과가 와서 <b>queue 끝의 새 차례(R)</b>로 이어서 실행됐다. 그사이 다른 기여가 먼저 끝났다.'); resumed(); }); }});
        await sleep(500 * K); await Promise.all([contribute(1, 90), contribute(2, 110)]); await p; await resumeDone; }},
-    {title: '쉬면 닫고 다시 깨우기', line: '한동안 요청이 없으면 길드가 스스로 닫는다. 다음 요청이 오면 새로 깨어나고, 이번에는 다른 서버에서 깨어날 수도 있다.',
+    {title: '쉬면 닫고 다시 깨우기', ref: [['21장 §6 Spot의 다른 종류', '21-spot#6-spot의-다른-종류']], line: '한동안 요청이 없으면 길드가 스스로 닫는다. 다음 요청이 오면 새로 깨어나고, 이번에는 다른 서버에서 깨어날 수도 있다.',
      act: '길드 닫기', extra: ['파티 2 기여', async () => { await contribute(1, 150); res(`guild-7이 다시 깨어나 요청을 처리했다(gen ${gen7}). 호출하는 쪽은 아무것도 바꾸지 않았다.`); }],
      more: ['Instance Spot은 자기 handler나 timer에서 닫는다(<code>on_closing</code>).', '닫히면 Store 기록이 사라진다. 다음 요청이 같은 id로 오면 새 incarnation으로 만들어진다.', '실제 상태 보존은 저장소에 맡기고, Spot은 메모리 상태와 처리 순서만 갖는다.'],
      async run(){ guild.g.classList.add('holding'); res('guild-7: <code>on_closing</code>'); await sleep(260 * K); guild.g.remove(); guild = null; cache.fill(false); store.set('guild-7 → 없음', null); gSub.textContent = '닫힘 · 다음 요청에 다시 깨어난다'; res('guild-7이 닫혔다. "파티 2 기여"를 눌러 다시 깨워 보라.'); }},
   ];
-  return {title: 'Instance Spot', steps: STEPS, foot: '가이드 21장(Spot)·32장(실행 모델)·34장(활성화와 수명)'};
+  return {title: 'Instance Spot', steps: STEPS, foot: [['21장(Spot)', '21-spot'], ['32장(실행 모델)', '32-execution-model'], ['34장(활성화와 수명)', '34-activation-lifetime']]};
 }
 
 /* =========================================================
@@ -800,7 +825,7 @@ function gRelocate(){
   zone(14, 14, 160, 208, 'village', '마을', 'town-1');
   mk(gG, 'rect', {x: 186, y: 14, width: 700, height: 208, rx: 14, class: 'dungeon'});
   mk(gG, 'text', {x: 202, y: 38, class: 'g-title d', text: '던전 dungeon-7'}); const where = mk(gG, 'text', {x: 202, y: 55, class: 'g-sub d', text: '던전 서버 B에서 실행 중'});
-  const boss = makeBoss(760, 132, 44, 676, 62, 190, 3000);
+  const boss = makeBoss(760, 132, 44, 676, 62, 190, 1200);
   const DNG = [[320, 92], [320, 172], [420, 80], [420, 180]];
   const ch = DNG.map(([x, y], i) => gchar(i, x, y));
   const bannerG = mk(gF, 'g');
@@ -809,6 +834,7 @@ function gRelocate(){
   const store = storeBox(320, 4, 570);
   mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,362 L142,362 Z', class: 'chan-frame mesh'}); chanTag(150, 362, 'RouteMesh channel · game', 'mesh');
   const ss = sessionKit(4);
+  path('M226,332 L226,345 L795,345 L795,334 M402,334 L402,345 M595,334 L595,345', 'mesh on');
   mk(sB, 'rect', {x: 316, y: 86, width: 173, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 496, y: 86, width: 398, height: 252, rx: 12, class: 'grp-dng'});
   const A = box(320, 90, 165, 244, '', '필드 서버', 'node A'); const B = box(500, 90, 190, 244, '', '던전 서버', 'node B'); const C = box(700, 90, 190, 244, '', '던전 서버', 'node C');
   mk(sB, 'text', {x: 330, y: 150, class: 't-mono', text: 'town-1'}); const cFree = mk(sB, 'text', {x: 710, y: 150, class: 't-mono', text: '여유 있음'});
@@ -833,24 +859,24 @@ function gRelocate(){
   function fight(){ if (fighting) return; fighting = true; spawn(async () => { let i = 0; while (fighting) { spawn(() => attack(i % 4)); i++; await sleep(620 * K); } }); }
   let target = 'C';
   const STEPS = [
-    {title: '전투 중', line: '던전 서버 B에서 파티가 보스와 싸우고 있다. 공격 요청이 계속 dungeon-7로 들어온다.',
+    {title: '전투 중', ref: [['37장 §1 옮겨도 그대로 남는 것', '37-relocation#1-옮겨도-그대로-남는-것']], line: '던전 서버 B에서 파티가 보스와 싸우고 있다. 공격 요청이 계속 dungeon-7로 들어온다.',
      act: '전투 시작', more: ['파티 4명의 Actor와 dungeon-7은 모두 node B에 있다.', 'Location Store가 "dungeon-7은 node B"를 기록하고 있다.'],
      async run(){ fight(); res('공격이 계속 들어온다. 아래 숫자에서 보낸 공격과 처리한 공격을 볼 수 있다.'); }},
-    {title: '점검 시작', line: '운영자가 node B를 점검하려고 Host Relocate를 실행한다. Framework가 옮길 곳으로 node C를 확인한다.',
+    {title: '점검 시작', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점']], line: '운영자가 node B를 점검하려고 Host Relocate를 실행한다. Framework가 옮길 곳으로 node C를 확인한다.',
      act: 'node B 점검 시작', more: ['옮길 서버가 준비되지 않았으면 시작하지 않는다. 그 경우 B는 그대로 계속 실행한다.', 'SpotWide 던전은 던전과 그 안의 Actor 전체가 한 번에 옮겨 간다.', '계획된 이전(graceful)이다. 서버가 갑자기 죽은 경우를 자동으로 이어받는 기능이 아니다.'],
      async run(){ C.g.classList.add('hot'); cFree.textContent = '받을 준비'; banner('점검: dungeon-7을 옮기는 중 · 전투는 계속'); res('옮길 곳: node C.'); }},
-    {title: '멈추고 보류', line: 'B는 지금 실행 중인 것만 끝내고 새 실행을 멈춘다. 메시지는 계속 받아 queue에 보류한다(주황).',
+    {title: '멈추고 보류', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점']], line: 'B는 지금 실행 중인 것만 끝내고 새 실행을 멈춘다. 메시지는 계속 받아 queue에 보류한다(주황).',
      act: '실행 멈추기', more: ['받기는 멈추지 않는다. 그래서 그동안 보낸 공격도 버려지지 않는다.', '보류한 메시지는 도착한 순서를 그대로 지킨다.'],
      async run(){ dsp.setHold(true); while (dsp.running) await sleep(30); res('dungeon-7이 실행을 멈췄다. 새로 들어온 공격이 주황 칸으로 쌓인다.'); }},
-    {title: '직접 옮기기', line: '던전 상태, 파티원 4명, 보류한 메시지, timer를 C로 직접 보낸다. Location Store를 거치지 않는다.',
+    {title: '직접 옮기기', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점'], ['37장 §1 옮겨도 그대로 남는 것', '37-relocation#1-옮겨도-그대로-남는-것']], line: '던전 상태, 파티원 4명, 보류한 메시지, timer를 C로 직접 보낸다. Location Store를 거치지 않는다.',
      act: '상태 보내기', more: ['상태는 B의 메모리에서 C로 mesh 연결을 통해 직접 간다.', 'Store에는 "지금 누가 맡고 있는가"만 적는다.'],
      async run(){ await fly(dsp.abs(dsp.w, 60), {x: 760, y: 200}, {cls: 'pkt-state', r: 12, dur: 600, bend: -.25, label: `상태 + 보류 ${dsp.q.length}건 + timer`}); pulse(C.g); res('C가 상태를 받아 같은 던전을 준비했다. 보류한 메시지도 순서 그대로 C가 이어받는다.'); }},
-    {title: '위치 바꾸고 이어서', line: 'C가 Store의 위치를 B에서 C로 바꾸고, 보류했던 메시지부터 이어서 처리한다. client 연결은 그대로다.',
+    {title: '위치 바꾸고 이어서', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점']], line: 'C가 Store의 위치를 B에서 C로 바꾸고, 보류했던 메시지부터 이어서 처리한다. client 연결은 그대로다.',
      act: '전환', more: ['위치 변경은 예상한 값이 그대로일 때만 바뀐다(CAS).', 'session 경로는 Framework가 C로 바꾼다. 플레이어는 다시 접속하지 않는다.', '호출하는 쪽은 계속 같은 id dungeon-7을 쓴다.'],
      async run(){ await fly({x: 820, y: 90}, store.pt, {cls: 'pkt-look', dur: 400}); store.set('dungeon-7 → node C', 'P1 ~ P4 → node C · dungeon-7');
        await dsp.moveTo(705, 132, 900 * K / 3.5 + 500, sync); dsp.setHold(false); C.g.classList.remove('hot'); cFree.textContent = ''; where.textContent = '던전 서버 C에서 실행 중'; banner('');
        res('C에서 보류했던 공격부터 이어서 처리한다. 화면의 전투는 멈추지 않았다.'); }},
-    {title: '늦게 온 메시지 relay', line: '필드 서버가 옛 위치(B)를 기억한 채 P2에게 귓속말을 보낸다. B는 이미 비었지만, 받은 메시지를 새 위치 C로 넘겨준다(relay).',
+    {title: '늦게 온 메시지 relay', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점']], line: '필드 서버가 옛 위치(B)를 기억한 채 P2에게 귓속말을 보낸다. B는 이미 비었지만, 받은 메시지를 새 위치 C로 넘겨준다(relay).',
      act: '필드 서버 → P2 귓속말', repeat: true, more: ['Message Follow: 옛 owner가 받은 message를 새 owner에게 대신 전달한다. 보낸 쪽에 다시 보내라고 하지 않는다.', 'relay는 정해진 시간 동안만 유지된다. 그 뒤에는 보내는 쪽이 Store에서 새 위치를 다시 찾는다.', '그래서 보내는 쪽이 옛 위치를 잠시 기억하고 있어도 메시지를 잃지 않는다.'],
      async run(){
        relayLine.setAttribute('d', relayD()); relayLine.setAttribute('opacity', 1); oldT.setAttribute('opacity', 1);
@@ -858,11 +884,11 @@ function gRelocate(){
        res('옛 위치 B가 귓속말을 받았다. B는 다시 보내라고 하지 않고 C로 넘긴다.'); await sleep(150 * K);
        await flyPath(relayD(), {cls: 'pkt-state', dur: 600, r: 7, label: 'relay → C'}); pulse(AC[1].g); popup(ch[1].x, ch[1].y - 22, '귓속말', 'dmg');
        relayN++; relayT.textContent = `relay ${relayN}건`; res(`P2가 귓속말을 받았다. B → C relay ${relayN}건, 잃어버린 메시지 0.`); }},
-    {title: 'B 비우기', line: 'node B가 비었다. 이제 종료하고 점검할 수 있다. 그동안 잃어버린 공격은 0이다.',
+    {title: 'B 비우기', ref: [['37장 §5 절차와 되돌릴 수 있는 지점', '37-relocation#5-절차와-되돌릴-수-있는-지점']], line: 'node B가 비었다. 이제 종료하고 점검할 수 있다. 그동안 잃어버린 공격은 0이다.',
      act: 'node B 종료', more: ['점검이 끝나면 B를 다시 띄우고, 다음 Relocate로 되돌릴 수 있다.', '무중단 배포도 같은 절차다. 서버를 하나씩 비우고 새 버전으로 교체한다.'],
      async run(){ B.g.classList.add('faded'); fighting = false; res('남은 공격을 마저 처리하는 중…'); while (inflight > 0 || dsp.q.length || dsp.running) await sleep(100); upd(); res(`node B를 종료했다. ${cnt.textContent}.`); }},
   ];
-  return {title: 'Host Relocation', steps: STEPS, foot: '가이드 37장(Relocation)·12장(운영)'};
+  return {title: 'Host Relocation', steps: STEPS, foot: [['37장(Relocation)', '37-relocation'], ['12장(운영)', '12-operations']]};
 }
 
 /* =========================================================
@@ -876,9 +902,15 @@ function gBack(){
     mk(gG, 'text', {x: x + 16, y: 38, class: 'g-title d', text: title});
     const st = mk(gG, 'text', {x: x + 16, y: 58, class: 'bp-world', text: '대기 중'});
     const cx = x + 214, cy = 136; const g = mk(gG, 'g', {class: 'boss'}); mk(g, 'circle', {cx, cy, r: 34}); mk(g, 'text', {x: cx, y: cy + 5, class: 'hp-t', 'text-anchor': 'middle', text: '월드 보스'});
-    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2; mk(gG, 'circle', {cx: cx + Math.cos(a) * 150, cy: cy + Math.sin(a) * 60, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); }
-    return {x, cx, cy, st};
+    const pg = mk(gG, 'g'), P = [];
+    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2, px = cx + Math.cos(a) * 150, py = cy + Math.sin(a) * 60; mk(pg, 'circle', {cx: px, cy: py, r: 6, fill: COLORS[k % 4], class: 'player-dot'}); P.push([px, py]); }
+    return {x, cx, cy, st, g, P, pg};
   }
+  /* a player around the boss fires one attack per message sent; the boss takes the hit when the message is processed */
+  function shot(W){ const [px, py] = W.P[Math.floor(Math.random() * W.P.length)], b = mk(gF, 'circle', {r: 5, class: 'spark'});
+    tween(90 * K, e => { b.setAttribute('cx', px + (W.cx - px) * e); b.setAttribute('cy', py + (W.cy - py) * e); }).catch(() => {}).finally(() => b.remove()); }
+  function hitBoss(W){ W.g.classList.remove('hit'); void W.g.getBBox(); W.g.classList.add('hit'); popup(W.cx + Math.random() * 60 - 30, W.cy - 40, '-' + (40 + Math.floor(Math.random() * 30))); }
+  const holdPlayers = (W, on) => { W.pg.style.transition = 'opacity .3s'; W.pg.style.opacity = on ? .4 : 1; };
   const W1 = world(14, '백프레셔 없음'), W2 = world(458, 'ZLink 백프레셔');
 
   /* server view: two lanes */
@@ -928,10 +960,10 @@ function gBack(){
       if (L.dead) return;
       if (L.bounded && L.paused) continue;
       if (L.bounded && L.q + L.inflight >= L.cap) {
-        L.paused = true; L.stops++; L.setPill('stop', '⏸ 전송 멈춤'); pulse(L.snd.g, 'bad');
+        L.paused = true; L.stops++; L.setPill('stop', '⏸ 전송 멈춤'); pulse(L.snd.g, 'bad'); holdPlayers(W, true);
         W.st.textContent = `queue가 가득 찼다 → 보내는 쪽이 멈췄다 (멈춤 ${L.stops}회)`; W.st.setAttribute('class', 'bp-world warn'); continue;
       }
-      L.sent++; L.inflight++; L.render();
+      L.sent++; L.inflight++; L.render(); shot(W);
       const k = Math.min(L.cap - 1, L.q + L.inflight - 1);
       spawn(async () => { await fly({x: 166, y: L.y0 + 93}, {x: L.qx + k * L.cw + L.cw / 2, y: L.qy + L.qh / 2}, {r: 5, dur: 140, bend: 0});
         L.inflight--; if (L.dead) { L.lost++; L.render(); return; } L.q++; L.render();
@@ -942,12 +974,12 @@ function gBack(){
     spawn(async () => { for (;;) {
       await sleep(PROC * K);
       if (L.dead) return;
-      if (L.q > 0) { L.q--; L.done++; L.render(); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
-        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ 전송 재개'); W.st.textContent = 'queue가 절반 아래로 비었다 → 다시 보낸다'; W.st.setAttribute('class', 'bp-world'); } }
+      if (L.q > 0) { L.q--; L.done++; L.render(); hitBoss(W); spawn(() => fly({x: L.qx + L.cw / 2, y: L.qy + L.qh / 2}, {x: L.rcv.x + 4, y: L.qy + L.qh / 2}, {r: 4, cls: 'pkt-push', dur: 80, bend: 0}));
+        if (L.bounded && L.paused && L.q <= L.cap / 2) { L.paused = false; L.setPill('go', '▶ 전송 재개'); holdPlayers(W, false); W.st.textContent = 'queue가 절반 아래로 비었다 → 다시 보낸다'; W.st.setAttribute('class', 'bp-world'); } }
     } });
   }
   const STEPS = [
-    {title: '같은 버스트 보내기', line: '위아래에 똑같은 공격 버스트를 보낸다. 보내는 속도가 처리 속도의 두 배가 넘는다. 위는 받는 대로 쌓고, 아래는 queue가 가득 차면 보내는 쪽을 멈추게 한다.',
+    {title: '같은 버스트 보내기', ref: [['33장 §2 Core HWM과 Application job queue', '33-backpressure#2-core-hwm과-application-job-queue'], ['33장 §3.1 송신 잠금 판단 기준', '33-backpressure#31-송신-잠금-판단-기준']], line: '위아래에 똑같은 공격 버스트를 보낸다. 보내는 속도가 처리 속도의 두 배가 넘는다. 위는 받는 대로 쌓고, 아래는 queue가 가득 차면 보내는 쪽을 멈추게 한다.',
      act: '버스트 시작', more: [
        '받는 쪽 queue에는 상한(HWM)이 있다. 가득 차면 Core가 그 상대로 보내기를 멈춘다. 그동안 <code>send</code>는 자리가 날 때까지 기다린다.',
        'queue가 절반 아래로 비면 다시 보낸다. 하나 빌 때마다 다시 보내면 멈춤과 재개가 쉴 새 없이 반복되기 때문이다(Core의 low watermark = HWM의 절반).',
@@ -956,20 +988,198 @@ function gBack(){
        '백프레셔가 없으면 받는 쪽 메모리가 끝없이 늘어나다 서버가 죽고, 쌓아 둔 message를 모두 잃는다.'],
      async run(){ run(L1, W1); run(L2, W2); W1.st.textContent = '받는 대로 쌓는 중'; W2.st.textContent = '전송 중'; res('위는 쌓이다가 터지고, 아래는 "멈춤 ↔ 재개"를 반복한다. 아래 queue는 상한을 넘지 않는다.'); }},
   ];
-  return {title: 'Backpressure', steps: STEPS, foot: '가이드 33장(Backpressure) · Core pipe의 HWM/low watermark'};
+  return {title: 'Backpressure', steps: STEPS, foot: [['33장(Backpressure)', '33-backpressure'], ['Core pipe의 HWM/low watermark', null]]};
+}
+
+/* =========================================================
+   Group 2b. RouteMesh channel: request by channel name over the mesh
+   ========================================================= */
+function gMeshChannel(){
+  resetViews('0 0 900 236', '0 0 900 400');
+  const DID = [7, 8, 9, 12, 10, 13, 14, 15, 16, 17], DSIDE = [0, 0, 1, 1, 0, 1, 0, 1, 0, 1], rowN = [0, 0];
+  const DG = DID.map((n, i) => ({id: 'dungeon-' + n, d: DSIDE[i], row: rowN[DSIDE[i]]++}));
+  const CW = 168;
+  const cards = DG.map((dg, i) => {
+    const x = 14 + (i % 5) * 176, y = 14 + Math.floor(i / 5) * 110;
+    const cg = mk(gG, 'g', {class: 'dng' + (i > 3 ? ' locked' : '')}); const keep = gG; gG = cg; const sub = zone(x, y, CW, 98, 'dungeon', dg.id, '파티 진행 중', true); gG = keep;
+    const dots = [0, 1, 2, 3].map(k => { const cx = x + 26 + k * 28; const c = mk(cg, 'circle', {cx, cy: y + 64, r: 10, fill: COLORS[k], stroke: '#fff', 'stroke-width': 2}); mk(cg, 'text', {x: cx, y: y + 67.5, fill: '#fff', 'font-size': 9.5, 'font-weight': 700, 'text-anchor': 'middle', text: 'P' + (k + 1)}); return c; });
+    return {sub, dots, x, y, rew: mk(cg, 'text', {x: x + 14, y: y + 90, class: 'hp-t', text: ''})};
+  });
+  const resetCard = i => { const c = cards[i]; c.sub.textContent = '파티 진행 중'; c.dots.forEach(d => { d.setAttribute('stroke', '#fff'); d.setAttribute('stroke-width', 2); }); c.rew.textContent = ''; };
+  const unlock = n => { for (let i = 0; i < n; i++) { cards[i].sub.parentNode.classList.remove('locked'); DG[i].g.classList.remove('dim'); } };
+
+  const store = storeBox(280, 4, 610);
+  store.set('mesh game → 던전 B, C · API 1, 2', 'channel reward → API 서버 1, 2');
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 332, rx: 14, class: 'chan-frame mesh'}); chanTag(16, 60, 'RouteMesh · game', 'mesh');
+  mk(sB, 'rect', {x: 316, y: 70, width: 228, height: 294, rx: 12, class: 'chan-frame cs'}); chanTag(324, 70, 'channel · reward', 'cs');
+  const D = [box(24, 84, 200, 138, '', '던전 서버 B', 'node B · 호출하는 쪽'), box(24, 236, 200, 138, '', '던전 서버 C', 'node C · 호출하는 쪽')];
+  DG.forEach((dg, i) => { const y = D[dg.d].y + 40 + dg.row * 19; dg.g = mk(sB, 'g', {class: 'spot' + (i > 3 ? ' dim' : '')}); mk(dg.g, 'rect', {x: 36, y, width: 176, height: 17, rx: 5, class: 'bg'}); mk(dg.g, 'text', {x: 44, y: y + 12.5, class: 't-spot', text: dg.id}); dg.cy = y + 8.5; });
+  const A = [[84, 'API 서버 1', 'node D'], [176, 'API 서버 2', 'node E'], [268, 'API 서버 3', 'node F']].map(([y, t, s], k) => {
+    const ghost = k === 2; const b = box(330, y, 200, 80, ghost ? 'ghost faded' : '', t, ghost ? '아직 없다' : s);
+    Object.assign(b, {idx: k, ready: !ghost, w: 100, cur: 0, n: 0, batch: 0, rn: 0}); b.cells = mk(sB, 'g'); b.wT = mk(sB, 'text', {x: 340, y: y + 75, class: 'w-badge', text: ghost ? '' : 'weight 100'}); if (!ghost) chipc(456, y + 6, 'reward'); return b; });
+  box(560, 84, 330, 264, 'legend', 'RouteMesh channel');
+  ['서버끼리 하나의 망(mesh)이다', '던전 서버는 이름(reward)으로 호출한다', 'reward를 맡은 node가 여럿이면', '  Framework가 하나를 고른다', '실선 = 네트워크 연결', '점선 = 논리 구분(channel · topic)', '■ = 이번에 받은 요청'].forEach((t, k) => mk(sB, 'text', {x: 572, y: 126 + k * 24, class: 'legend-t', text: t}));
+  const connT = mk(sB, 'text', {x: 572, y: 322, class: 't-count', text: ''});
+  let nChan = 1; const setConnT = () => { connT.textContent = `그림의 실선(연결) ${Object.keys(conns).length}개 · channel ${nChan}개`; };
+  /* mesh connections: right ports of the dungeon servers, left ports of the API servers */
+  const PD = [[110, 150, 190], [262, 302, 342]], PA = [[104, 140], [196, 232], [288, 324]];
+  const connD = (d, a) => `M224,${PD[d][a]} L330,${PA[a][d]}`;
+  const route = (i, a) => `M212,${DG[i].cy} L224,${PD[DG[i].d][a]} L330,${PA[a][DG[i].d]}`;
+  const conns = {}; const drawConn = (d, a) => { conns[d + '-' + a] = path(connD(d, a), 'wire'); };
+  [0, 1].forEach(a => [0, 1].forEach(d => drawConn(d, a))); setConnT();
+  function drawCells(b){ b.cells.replaceChildren(); const m = Math.min(b.batch, 8); for (let k = 0; k < m; k++) mk(b.cells, 'rect', {x: 340 + k * 15, y: b.y + 48, width: 12, height: 14, rx: 2, class: 'got ' + (b.w >= 300 ? 'heavy' : '')}); if (b.batch) mk(b.cells, 'text', {x: 340 + m * 15 + 4, y: b.y + 60, class: 't-count', text: `${b.batch}건`}); }
+  function upd(b){ b.wT.textContent = `weight ${b.w}`; b.wT.setAttribute('class', 'w-badge' + (b.w === 0 ? ' zero' : b.w >= 300 ? ' heavy' : '')); b.g.classList.toggle('drained', b.w === 0); [0, 1].forEach(d => { const l = conns[d + '-' + b.idx]; if (l) l.classList.toggle('broken', b.w === 0); }); drawCells(b); }
+
+  /* one request per dungeon: the dungeon's result (the whole party's reward) */
+  async function clearDungeon(i, out){
+    const dg = DG[i], c = cards[i]; c.sub.textContent = '클리어 · reward 요청 중'; pulse(dg.g);
+    const b = pick(A); if (!b) return; const p = route(i, b.idx); conns[dg.d + '-' + b.idx].classList.add('on');
+    await flyPath(p, {dur: 360, label: i === 0 ? 'reward' : undefined}); pulse(b.g); b.n++; b.batch++; drawCells(b); out[i] = b.idx + 1; await sleep(220 * K);
+    await flyPath(p, {cls: 'pkt-push', dur: 300, back: true});
+    c.sub.textContent = '보상 지급 완료'; c.dots.forEach(d => { d.setAttribute('stroke', '#F7D774'); d.setAttribute('stroke-width', 3.5); }); c.rew.textContent = `보상 ← API 서버 ${b.idx + 1}`; popup(c.x + 84, c.y + 50, '+보상');
+  }
+  async function burst(n){
+    unlock(n); A.forEach(b => { b.batch = 0; drawCells(b); }); for (let i = 0; i < n; i++) resetCard(i);
+    const out = []; await Promise.all(Array.from({length: n}, async (_, i) => { await sleep(i * 260 * K / 3.5); await clearDungeon(i, out); }));
+    return A.filter(b => b.ready).map(b => `API 서버 ${b.idx + 1}: ${b.batch}건`).join(' · ') + '. ' + out.map((a, i) => `${DG[i].id} → ${a}`).join(' · ');
+  }
+  /* ranking channel: API 서버 2, 3 serve it; requests use the same mesh lines as reward */
+  const R = [];
+  async function callRank(k){
+    const i = [0, 2, 1, 3][k % 4], c = cards[i]; c.sub.textContent = '랭킹 갱신 중'; pulse(DG[i].g);
+    const r = pick(R), b = r.n, p = route(i, b.idx); conns[DG[i].d + '-' + b.idx].classList.add('on');
+    await flyPath(p, {cls: 'pkt-pub', dur: 360, label: 'ranking'}); pulse(b.g); b.rn++; b.rt.textContent = `ranking ${b.rn}건`; await sleep(220 * K);
+    await flyPath(p, {cls: 'pkt-push', dur: 300, back: true}); c.sub.textContent = '랭킹 갱신 완료';
+  }
+  const MORE_W = ['weight는 0~10000이고 기본은 100이다. 모두 100이면 균등하게 돌아가며(round-robin) 고른다.', '비율은 길게 보았을 때의 비율이다. 호출 하나하나의 순서는 보장하지 않는다.', 'weight 규칙은 RouteMesh와 ClientServer가 같다.'];
+  const STEPS = [
+    {title: '던전 결과 요청', ref: [['20장 §3.1 동작', '20-channel-messaging#31-동작'], ['20장 §3.4 호출', '20-channel-messaging#34-호출']], line: '던전이 끝나면 그 던전의 결과 한 건(파티 4명의 보상)을 reward channel에 요청한다. Framework가 reward를 맡은 API 서버 중 하나를 골라 보내고, 응답이 오면 그 던전 파티 전원에게 보상이 표시된다.',
+     act: '던전 4곳 클리어', repeat: true, more: ['요청은 던전마다 한 건이다. 파티원마다 요청하지 않는다.', 'RouteMesh channel: 같은 mesh에 참여한 서버끼리 channel 이름으로 부른다. 호출에는 channel 이름 <code>reward</code>만 쓴다(<code>RequestToChannel</code>). RouteMesh는 runtime 옵션에서 ChannelName으로 지정한다.', '던전 서버는 API 서버의 주소를 모른다. reward라는 이름만 안다.', 'ClientServer와 달리 별도 포트를 열고 접속하지 않는다. 이미 연결된 mesh로 보낸다.', '담당 node가 여럿이고 weight가 같으면 Framework가 돌아가며(round-robin) 고른다. 응답은 요청이 간 연결을 따라 돌아온다.'],
+     async run(){ const r = await burst(4); res(`${r}. 던전마다 한 건만 요청했다.`); }},
+    {title: '담당 node 늘리기', ref: [['20장 §3.2 받는 쪽', '20-channel-messaging#32-받는-쪽--channel을-담당하는-node'], ['30장 §4.4 같은 ChannelName을 여러 node로 늘리기', '30-channel-patterns#44-같은-channelname을-여러-node로-늘리기']], line: 'API 서버 3이 mesh에 참여한다. Location Store에 reward 담당으로 기록되고, 호출하는 쪽의 설정은 바꾸지 않는다.',
+     act: 'API 서버 3 시작', extra: ['던전 6곳 클리어', async () => { const r = await burst(6); res(`${r}. 새 서버도 reward를 받는다.`); }],
+     more: ['서버는 시작할 때 자기 주소와 맡은 channel 이름을 Store에 적는다.', 'mesh에 있는 node가 Store 기록을 보고 새 node와 연결한다. 연결은 node 쌍마다 하나다.', '호출하는 쪽의 코드와 설정은 그대로다.'],
+     async run(){ const s3 = A[2]; s3.g.classList.remove('ghost', 'faded'); s3.st.textContent = 'node F';
+       await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set(null, 'channel reward → API 서버 1, 2, 3');
+       await Promise.all(D.map(d => fly(store.pt, d.T(), {cls: 'pkt-look', dur: 500})));
+       drawConn(0, 2); drawConn(1, 2); setConnT(); chipc(456, s3.y + 6, 'reward'); s3.ready = true; upd(s3); pulse(s3.g);
+       res('API 서버 3이 reward 담당이 되었다. "던전 6곳 클리어"로 확인해 보라.'); }},
+    {title: '가중치로 나누기', ref: [['30장 §4.2 후보 사이의 분배', '30-channel-patterns#42-후보-사이의-분배--기본값은-round-robin-값을-바꾸면-가중치-분배']], line: 'API 서버 3에 weight 300을 준다. 새 요청은 100 : 100 : 300 비율로 나뉘어, 서버 3이 다른 서버의 세 배쯤 받는다.',
+     act: 'API 서버 3 weight 300', extra: ['던전 10곳 클리어', async () => { const r = await burst(10); res(`${r}. 서버 3이 다른 서버의 약 3배를 받았다.`); }],
+     more: [...MORE_W, '사양이 다른 장비를 섞거나, 한 대에 덜 보내야 할 때 쓴다.'],
+     async run(){ A[2].w = 300; A.forEach(b => b.cur = 0); upd(A[2]); pulse(A[2].g); res('API 서버 3의 weight가 300이 되었다. "던전 10곳 클리어"로 칸이 쌓이는 길이를 비교해 보라.'); }},
+    {title: '가중치 0', ref: [['30장 §4.3 실행 중에 새 요청만 멈추기', '30-channel-patterns#43-실행-중에-새-요청만-멈추기']], line: 'API 서버 1의 weight를 0으로 바꾼다. 서버 1로는 새 요청이 가지 않는다. 연결과 Store 기록은 그대로 남는다.',
+     act: 'API 서버 1 weight 0', extra: ['던전 10곳 클리어', async () => { const r = await burst(10); res(`${r}. 서버 1로는 하나도 가지 않았다.`); }],
+     more: ['weight 0은 연결과 Store 등록을 유지한 채 새 요청 후보에서만 뺀다. 이미 받은 요청은 끝까지 처리한다.', '실행 중에 바꿀 수 있는 값은 weight 하나다.', '점검 전에 0으로 두고, 끝나면 100으로 돌린다.'],
+     async run(){ A[0].w = 0; A.forEach(b => b.cur = 0); upd(A[0]); res('API 서버 1의 weight가 0이 되었다(주황 점선). "던전 10곳 클리어"로 확인해 보라.'); }},
+    {title: 'channel 하나 더', ref: [['30장 §2.1 RouteMesh', '30-channel-patterns#21-routemesh--연결-하나를-여러-channel이-공유한다']], line: 'API 서버 2와 3이 ranking channel도 맡는다. Store에 기록만 추가되고 새 연결은 생기지 않는다. ranking 요청은 reward와 같은 mesh 연결 위로 지난다.',
+     act: 'ranking 담당 추가', extra: ['랭킹 갱신 4번', async () => { A.forEach(b => { b.rn = 0; if (b.rt) b.rt.textContent = ''; }); R.forEach(r => r.cur = 0); await Promise.all(Array.from({length: 4}, async (_, k) => { await sleep(k * 260 * K / 3.5); await callRank(k); }));
+       res(`API 서버 2: ${A[1].rn}건 · API 서버 3: ${A[2].rn}건. channel이 하나 늘었지만 실선(연결)은 하나도 늘지 않았다.`); }],
+     more: ['channel은 mesh 위의 논리 구분이다. channel이 늘어도 새 소켓이나 연결은 생기지 않고, 이미 있는 peer 연결을 쓴다.', 'MeshNode는 node 쌍마다 연결 하나를 둔다. reward와 ranking 요청이 같은 연결을 지난다.', 'ClientServer와 Fanout은 channel마다 별도의 포트와 연결을 둔다. 그 점이 RouteMesh와 다르다.'],
+     async run(){ unlock(10); mk(sB, 'rect', {x: 322, y: 168, width: 216, height: 192, rx: 10, class: 'chan-frame rank'}); chanTag(330, 360, 'channel · ranking', 'rank');
+       await Promise.all([A[1], A[2]].map(b => fly(b.T(), store.pt, {cls: 'pkt-look', dur: 500}))); store.set(null, 'reward → API 1, 2, 3 · ranking → API 2, 3');
+       [A[1], A[2]].forEach(b => { b.rt = mk(sB, 'text', {x: 442, y: b.y + 75, class: 't-count', text: ''}); R.push({n: b, ready: true, w: 100, cur: 0}); pulse(b.g); });
+       nChan = 2; setConnT(); res('API 서버 2와 3이 ranking도 맡는다. 연결선은 그대로이고 channel만 늘었다. "랭킹 갱신 4번"으로 확인해 보라.'); }},
+  ];
+  return {title: 'RouteMesh channel', steps: STEPS, foot: [['20장 §3(RouteMesh)', '20-channel-messaging#3-routemesh'], ['30장(Channel 동작 원리)', '30-channel-patterns']]};
+}
+
+/* =========================================================
+   Group 3b. RouteMesh pub/sub: Logical Multicast (ZoneWorld border)
+   ========================================================= */
+function gMeshPubSub(){
+  resetViews('0 0 900 236', '0 0 900 404');
+  const ZN = ['nw', 'ne', 'sw', 'se'], ZR = {nw: [14, 14], ne: [254, 14], sw: [14, 118], se: [254, 118]};
+  const zr = {}; ZN.forEach(k => { zr[k] = mk(gG, 'rect', {x: ZR[k][0], y: ZR[k][1], width: 240, height: 104, rx: 12, class: 'zone-sel zr'}); });
+  mk(gG, 'rect', {x: 236, y: 14, width: 36, height: 208, class: 'band'}); mk(gG, 'rect', {x: 14, y: 100, width: 480, height: 36, class: 'band'});
+  [['nw', 24, 32, 'start'], ['ne', 484, 32, 'end'], ['sw', 24, 214, 'start'], ['se', 484, 214, 'end']].forEach(([k, x, y, a]) => mk(gG, 'text', {x, y, class: 'g-sub', 'text-anchor': a, text: 'zone-' + k}));
+  const note = notes(508, 14, 378, 208, 'zone 화면에서 본 일');
+  mk(gG, 'text', {x: 522, y: 208, class: 'g-sub', text: 'ghost = 이웃 zone이 받은 P1 위치 · 보라 띠 = 경계 band'});
+  function dot(name, i, x, y, cls = '', p = gG){ const g = mk(p, 'g', {class: 'ch ' + cls, transform: `translate(${x},${y})`}); mk(g, 'circle', {r: 16, class: 'seen'}); mk(g, 'circle', {r: 12, fill: COLORS[i % 4], class: 'body'}); mk(g, 'text', {text: name}); return g; }
+  [['P2', 1, 380, 64], ['P5', 1, 440, 92], ['P3', 2, 100, 176], ['P4', 3, 370, 176]].forEach(([n, i, x, y]) => dot(n, i, x, y));
+  const p1 = {x: 110, y: 66, g: dot('P1', 0, 110, 66), set(x, y){ this.x = x; this.y = y; this.g.setAttribute('transform', `translate(${x},${y})`); }, async walk(nx, ny, d){ const ox = this.x, oy = this.y; await tween(d, e => this.set(ox + (nx - ox) * e, oy + (ny - oy) * e)); }};
+  const ghosts = {};
+  function ghostPos(to){ return to === 'ne' ? [p1.x + 28, p1.y] : to === 'sw' ? [p1.x, p1.y + 28] : [p1.x + 28, p1.y + 28]; }
+  function setGhost(to){ const [x, y] = ghostPos(to); let o = ghosts[to]; if (!o) { o = ghosts[to] = {g: dot('P1', 0, x, y, 'gh', gF)}; seen(o); } o.g.setAttribute('transform', `translate(${x},${y})`); }
+  async function dropGhost(to){ const o = ghosts[to]; if (!o) return; delete ghosts[to]; await tween(300 * K, e => { o.g.style.opacity = .5 * (1 - e); }).finally(() => o.g.remove()); }
+
+  const store = storeBox(280, 4, 610);
+  store.set('mesh game → Zone 서버 1, 2', 'zone-nw, zone-sw → 서버 1 · zone-ne, zone-se → 서버 2');
+  mk(sB, 'rect', {x: 8, y: 60, width: 886, height: 336, rx: 14, class: 'chan-frame mesh'}); chanTag(16, 60, 'RouteMesh · game', 'mesh');
+  box(24, 84, 380, 300, '', 'Zone 서버 1', 'node A'); box(496, 84, 380, 300, '', 'Zone 서버 2', 'node B');
+  const SIDE = z => (z === 'nw' || z === 'sw') ? 1 : 2, ROWY = {nw: 182, ne: 182, sw: 318, se: 318};
+  function route(a, b){
+    const ya = ROWY[a], yb = ROWY[b];
+    if (SIDE(a) === SIDE(b)) { const cx = SIDE(a) === 1 ? 214 : 686; return ya < yb ? `M${cx},236 L${cx},264` : `M${cx},264 L${cx},236`; }
+    return SIDE(a) === 1 ? `M388,${ya} L420,${ya} L420,250 L480,250 L480,${yb} L512,${yb}` : `M512,${ya} L480,${ya} L480,250 L420,250 L420,${yb} L388,${yb}`;
+  }
+  path(route('nw', 'ne')); path(route('sw', 'se')); path(route('nw', 'sw')); path(route('ne', 'se')); path(route('nw', 'se')); path(route('sw', 'ne')); path('M420,250 L480,250', 'wire on');
+  mk(sB, 'text', {x: 450, y: 242, class: 'mesh-t', 'text-anchor': 'middle', text: 'mesh'}); mk(sB, 'text', {x: 450, y: 270, class: 'mesh-t', 'text-anchor': 'middle', text: '연결 하나'});
+  mk(sB, 'text', {x: 16, y: 18, class: 'legend-t', text: '실선 = 네트워크 연결'}); mk(sB, 'text', {x: 16, y: 38, class: 'legend-t', text: '점선 = 논리 구분(topic)'});
+  [222, 694].forEach(x => mk(sB, 'text', {x, y: 255, class: 't-mono', text: 'node 안'}));
+  const SPXY = {nw: [40, 128], sw: [40, 264], ne: [512, 128], se: [512, 264]};
+  const SP = {};
+  ZN.forEach(z => {
+    const sp = qspot(SPXY[z][0], SPXY[z][1], 348, 108, 'zone-' + z, 'User Spot'); mk(sp.g, 'text', {x: 10, y: 47, class: 'lbl', text: '구독 topic'});
+    sp.chip = {}; let x = 10; ZN.filter(f => f !== z).forEach(f => { x += chipcIn(sp.g, x, 52, `border.${f}→${z}`, 'pub') + 8; sp.chip[f] = sp.g.lastChild; });
+    sp.st = mk(sp.g, 'text', {x: 10, y: 88, class: 't-mono', text: z === 'nw' ? 'publish 없음' : ''}); sp.rc = mk(sp.g, 'text', {x: 10, y: 102, class: 't-mono', text: ''}); sp.recv = 0; SP[z] = sp;
+  });
+  const clearHot = () => ZN.forEach(z => Object.values(SP[z].chip).forEach(c => c.classList.remove('hot')));
+  /* zone-nw publishes P1's position (pos) or the leave event to the zones in tos; each receiver acts on arrival */
+  async function publish(tos, kind){
+    const f = SP.nw, leave = kind === 'leave'; f.st.textContent = (leave ? 'leave → ' : 'publish → ') + tos.join(', '); pulse(f.g);
+    const others = ZN.filter(z => z !== 'nw' && !tos.includes(z)); others.forEach(z => { SP[z].g.classList.add('dim'); SP[z].st.textContent = '받지 않음'; });
+    await Promise.all(tos.map(async to => {
+      await flyPath(route('nw', to), {cls: 'pkt-pub', dur: SIDE(to) === 1 ? 200 : 420, r: 6, label: leave ? `leave → ${to}` : `border.nw→${to}`});
+      const sp = SP[to]; sp.chip.nw.classList.add('hot'); pulse(sp.g);
+      if (leave) { sp.rc.textContent = 'P1 leave 받음 · ghost 지움'; spawn(() => dropGhost(to)); } else { sp.recv++; sp.rc.textContent = `P1 위치 받음 ${sp.recv}회`; setGhost(to); }
+    }));
+    await sleep(300 * K); others.forEach(z => { SP[z].g.classList.remove('dim'); SP[z].st.textContent = ''; }); clearHot();
+  }
+  async function to(x, y){ if (Math.abs(p1.x - x) > 1 || Math.abs(p1.y - y) > 1) await p1.walk(x, y, 500 * K); await sleep(150 * K); }
+  const STEPS = [
+    {title: 'zone마다 Spot', ref: [['30장 §5.1 Logical Multicast', '30-channel-patterns#51-logical-multicast--mesh-위의-spot-사이-이벤트']], line: '월드는 zone 네 개이고, zone마다 User Spot이 하나다. 각 zone Spot은 시작할 때 나머지 세 zone에서 오는 topic을 구독한다.',
+     act: '구독 보기', more: ['zone은 2×2이고 각 zone은 id를 가진 User Spot이다(zone-nw, zone-ne, zone-sw, zone-se). Zone 서버 두 대가 둘씩 맡는다.', 'Spot이 시작할 때 구독을 등록한다. 칩의 <code>border.ne→nw</code>는 topic <code>zone.border.zone-ne.zone-nw</code>를 줄여 쓴 것이다.', '발행하는 쪽은 구독자 목록을 모른다. 같은 topic을 구독한 Spot이 받는다.', 'topic은 mesh 위의 논리 구분이다. border topic 패킷은 Zone 서버 사이의 mesh 연결 하나 위로 지나가고, topic이 늘어도 연결은 늘지 않는다.'],
+     async run(){ for (const z of ZN) { zr[z].classList.add('hot'); pulse(SP[z].g); Object.values(SP[z].chip).forEach(c => c.classList.add('hot')); await sleep(450 * K); zr[z].classList.remove('hot'); clearHot(); }
+       note('zone마다 나머지 세 zone의 topic을 구독'); res('각 zone이 구독한 topic은 3개이고, 모두 다른 zone에서 온다. 구독은 새 연결을 만들지 않는다.'); }},
+    {title: '경계 가까이', ref: [['30장 §5.3 Topic', '30-channel-patterns#53-topic--두-형태-모두-수신-대상을-고른다'], ['56장 §7 zone tick', '56-zoneworld#7-zone-tick--push와-경계-snapshot']], line: 'P1이 zone-nw 안에서 동쪽 경계 band로 들어서면 zone-nw가 위치를 topic으로 발행한다. 동쪽 경계에서는 zone-ne만 받는다.',
+     act: 'P1 동쪽 경계로 이동', repeat: true, more: ['발행하는 쪽은 받을 Spot이나 node를 지정하지 않는다. topic <code>zone.border.zone-nw.zone-ne</code>로 발행할 뿐이다.', 'Logical Multicast는 별도 PUB/SUB 소켓 없이 이미 연결된 mesh를 쓴다. Fanout(classic)과 달리 받는 대상이 그 topic을 구독한 Spot이다.', 'band는 경계에서 10칸 폭이다. band 안에서 player가 움직이면 zone Spot이 그 위치를 발행한다.'],
+     async run(){ await to(240, 64); await publish(['ne']); note('zone-ne 화면에 P1 ghost가 나타남'); res('zone-nw가 한 topic으로 발행했고 zone-ne만 받았다. zone-sw와 zone-se는 받지 않았다. zone-ne 유저 화면에 P1 ghost가 나타났다.'); }},
+    {title: '모서리', ref: [['30장 §5.3 Topic', '30-channel-patterns#53-topic--두-형태-모두-수신-대상을-고른다']], line: 'P1이 네 zone이 만나는 중앙 모서리로 간다. ne, sw, se 세 topic으로 위치를 발행하고, 세 zone이 모두 받는다.',
+     act: 'P1 모서리로 이동', extra: ['모서리에서 움직이기', async () => { for (const [x, y] of [[238, 104], [254, 114], [246, 106]]) { await p1.walk(x, y, 250 * K); await publish(['ne', 'sw', 'se']); } note('P1이 움직일 때마다 세 zone의 ghost가 따라감'); res('P1이 band 안에서 움직일 때마다 세 topic으로 위치를 발행했다. 세 zone의 ghost가 따라 움직였다.'); }],
+     more: ['모서리는 네 zone의 band가 겹친 곳이라 나머지 세 zone이 모두 이 위치를 받는다.', 'zone-sw는 같은 Zone 서버 안이라 node 안에서 전달되고, zone-ne와 zone-se는 서버 사이의 mesh를 건너간다. 발행하는 코드는 같다.'],
+     async run(){ await to(246, 110); await publish(['ne', 'sw', 'se']); note('zone-ne, zone-sw, zone-se 화면에 P1 ghost'); res('zone-sw는 같은 서버 안에서, zone-ne와 zone-se는 mesh를 건너 받았다. "모서리에서 움직이기"로 위치가 따라가는 것을 확인해 보라.'); }},
+    {title: '경계에서 멀어지기', ref: [['56장 §7 zone tick', '56-zoneworld#7-zone-tick--push와-경계-snapshot']], line: 'P1이 zone 가운데로 돌아가며 band를 벗어나면 같은 topic으로 leave 이벤트를 발행한다. 받은 쪽은 즉시 ghost를 지운다.',
+     act: 'P1 가운데로 이동', more: ['위치는 band 안에서 움직일 때 발행한다. band를 벗어나면 위치 대신 leave 이벤트를 같은 topic으로 발행한다.', '받은 쪽은 leave를 받는 즉시 그 player의 ghost를 지운다. 만료를 기다리지 않는다.'],
+     async run(){ const w = p1.walk(110, 66, 900 * K); while (p1.x >= 236 || p1.y >= 100) await sleep(30);
+       await Promise.all([w, publish(Object.keys(ghosts), 'leave')]); SP.nw.st.textContent = 'publish 없음 · 경계 밖'; note('leave를 받아 ghost가 모두 사라짐'); res('P1이 band를 벗어나는 순간 leave를 발행했고, 받은 zone의 ghost가 즉시 사라졌다.'); }},
+  ];
+  return {title: 'RouteMesh pub/sub · Logical Multicast', steps: STEPS, foot: [['30장 §5.1(Logical Multicast)', '30-channel-patterns#51-logical-multicast--mesh-위의-spot-사이-이벤트'], ['56장(ZoneWorld 따라 읽기)', '56-zoneworld']]};
 }
 
 /* ---------- groups and steps ---------- */
-const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['lobby', '로비와 던전 · RouteMesh', gLobby], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
+const GROUPS = [['clientserver', 'ClientServer', gClientServer], ['fanout', 'Fanout', gFanout], ['meshchannel', 'RouteMesh channel', gMeshChannel], ['lobby', '로비와 던전 · RouteMesh', gLobby], ['meshpubsub', 'RouteMesh pub/sub', gMeshPubSub], ['instance', 'Instance Spot', gInstance], ['relocate', 'Host Relocation', gRelocate], ['backpressure', 'Backpressure', gBack]];
 let STEPS = [], cur = 0, done = new Set(), curKey = 'clientserver';
 function renderSteps(){
   $('steps').replaceChildren();
   STEPS.forEach((s, k) => { const li = document.createElement('li'); li.className = (k === cur ? 'cur' : '') + (done.has(k) && k !== cur ? ' done' : ''); if (k === cur) li.setAttribute('aria-current', 'step');
     const n = document.createElement('span'); n.className = 'n'; n.textContent = done.has(k) && k !== cur ? '✓' : k + 1; li.append(n, document.createTextNode(s.title)); $('steps').append(li); });
 }
+/* guide links: the base follows the guide page that embeds the tour, else the site's language selector, else dotnet */
+const GUIDE_LOCALE = '/ko', SRC_LABEL = '근거';
+function guideBase(){
+  try { const m = window.parent.location.pathname.match(/^((?:\/ko)?\/(?:cpp|dotnet|java|kotlin|node)\/guide\/server\/)/); if (m) return m[1]; } catch (_) {}
+  let lang = 'dotnet'; try { const v = localStorage.getItem('zlink-lang'); if (['cpp', 'dotnet', 'java', 'kotlin', 'node'].includes(v)) lang = v; } catch (_) {}
+  return `${GUIDE_LOCALE}/${lang}/guide/server/`;
+}
+function guideLinks(refs){
+  const base = guideBase();
+  return refs.map(([text, ref]) => { if (!ref) return text; const [slug, anchor] = ref.split('#'); return `<a href="${base}${slug}/${anchor ? '#' + anchor : ''}" target="_top">${text}</a>`; }).join(' · ');
+}
 function show(k){
   cur = k; const s = STEPS[k]; renderSteps();
   $('stepNo').textContent = `단계 ${k + 1} / ${STEPS.length}`; $('line').textContent = s.line; res('');
+  $('src').innerHTML = s.ref ? `${SRC_LABEL}: ${guideLinks(s.ref)}` : '';
   $('more').innerHTML = s.more.map(m => `<li>${m}</li>`).join('');
   const acts = $('acts'); acts.replaceChildren();
   const b = document.createElement('button'); b.type = 'button'; b.className = 'act primary'; b.textContent = s.act; acts.append(b);
@@ -985,7 +1195,7 @@ function show(k){
 function openGroup(key){
   gen++; curKey = key; const g = GROUPS.find(x => x[0] === key) || GROUPS[1];
   const r = g[2](); STEPS = r.steps; done = new Set();
-  $('gtitle').textContent = r.title; $('foot').textContent = `브라우저 안의 시뮬레이션이다. 시간과 수치는 시연용이다. 동작 설명은 zlink.systems C++ 서버 가이드(${r.foot})를 따른다.`;
+  $('gtitle').textContent = r.title; $('foot').innerHTML = `브라우저 안의 시뮬레이션이다. 시간과 수치는 시연용이다. 동작 설명은 zlink.systems 서버 가이드(${guideLinks(r.foot)})를 따른다.`;
   document.querySelectorAll('#groups button').forEach(b => b.setAttribute('aria-current', String(b.dataset.key === key)));
   try { history.replaceState(null, '', '#' + key); } catch (_) {}
   show(0);

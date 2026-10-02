@@ -10,6 +10,9 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 final class ZLinkHttpRequestBodyEncoder {
+    private static final String FORM_CONTENT_TYPE = "application/x-www-form-urlencoded";
+    private static final String MULTIPART_CONTENT_TYPE_PREFIX = "multipart/form-data; boundary=";
+
     private ZLinkHttpRequestBodyEncoder() {}
 
     record MultipartPart(String name, String filename, String content, String contentType) {}
@@ -43,13 +46,15 @@ final class ZLinkHttpRequestBodyEncoder {
         }
 
         if (!form.isEmpty()) {
-            resolvedHeaders.put("content-type", "application/x-www-form-urlencoded");
+            resolvedHeaders.put(HttpClientText.Header.CONTENT_TYPE.wire(), FORM_CONTENT_TYPE);
             return new BodyAndHeaders(encodeFormBody(form), resolvedHeaders);
         }
 
         if (!multipart.isEmpty()) {
             String boundary = HttpClientText.makeMultipartBoundary();
-            resolvedHeaders.put("content-type", "multipart/form-data; boundary=" + boundary);
+            resolvedHeaders.put(
+                    HttpClientText.Header.CONTENT_TYPE.wire(),
+                    MULTIPART_CONTENT_TYPE_PREFIX + boundary);
             return new BodyAndHeaders(encodeMultipartBody(multipart, boundary), resolvedHeaders);
         }
 

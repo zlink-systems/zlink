@@ -35,7 +35,10 @@ internal sealed class ZLinkActorDrainCoordinator(
                 var sourceNode = registration.SpotNodes.Values.Single(node =>
                     node.ActorFactories.ContainsKey(actorType!)
                 );
-                if (sourceNode.ActorRelocations[actorType!].PolicyKind == 0)
+                if (
+                    sourceNode.ActorRelocations[actorType!].PolicyKind
+                    == ZLinkObjectRelocationRegistration.DisabledPolicy
+                )
                     return ZLinkFrameworkRelocationReason.RelocationDisabled;
                 var targets = await ResolveTargetCandidatesAsync(
                         actorType!,
@@ -208,10 +211,7 @@ internal sealed class ZLinkActorDrainCoordinator(
                     if (result == ZLinkStandaloneActorRelocationResult.Deferred)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            "relocation_actor_deferred actor="
-                                + actorState.ActorId
-                                + " target="
-                                + candidate.Descriptor.Rid
+                            $"relocation_actor_deferred actor={actorState.ActorId} target={candidate.Descriptor.Rid}"
                         );
                         return new ZLinkActorDrainResult(
                             false,
@@ -315,7 +315,7 @@ internal sealed class ZLinkActorDrainCoordinator(
             //  target이 없다"이므로 그 이름을 싣는다. 다시 불러도 같은 후보를
             //  같은 이유로 거부하므로 재시도가 상태를 바꾸지 못한다.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "relocation_actor_no_target_accepted actor=" + actorState.ActorId
+                $"relocation_actor_no_target_accepted actor={actorState.ActorId}"
             );
             return new ZLinkActorDrainResult(
                 false,
@@ -392,9 +392,12 @@ internal sealed class ZLinkActorDrainCoordinator(
         var sourcePolicy = sourceNode.ActorRelocations[actorType];
         var requiredPolicy = sourcePolicy.PolicyKind switch
         {
-            0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-            1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-            2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
+            ZLinkObjectRelocationRegistration.DisabledPolicy =>
+                ZLinkObjectMaintenancePolicyKind.Disabled,
+            ZLinkObjectRelocationRegistration.RecreatePolicy =>
+                ZLinkObjectMaintenancePolicyKind.Recreate,
+            ZLinkObjectRelocationRegistration.SnapshotPolicy =>
+                ZLinkObjectMaintenancePolicyKind.Snapshot,
             _ => throw new ZLinkConfigurationException(
                 $"Unknown relocation policy kind '{sourcePolicy.PolicyKind}'."
             ),

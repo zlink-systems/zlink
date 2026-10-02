@@ -104,7 +104,8 @@ class provider_location_repository_t final : public location_repository_t
             co_return owner_lease_read_result_t{owner_lease_missing_t{}};
         auto lease = decode_owner_lease (*found);
         if (lease.token.owner_id != owner_id)
-            throw std::invalid_argument ("Location Store owner lease record is invalid");
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "Location Store owner lease record is invalid");
         co_return owner_lease_read_result_t{std::move (lease)};
     }
 
@@ -500,8 +501,8 @@ class provider_location_repository_t final : public location_repository_t
                             std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<std::optional<creation_terminal_record_t>> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<std::optional<creation_terminal_record_t>> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         auto result = co_await _store->read (key_creation_terminal (operation));
         const auto *found = std::get_if<store_found_t> (&result);
         if (!found)
@@ -573,8 +574,8 @@ class provider_location_repository_t final : public location_repository_t
                                                   object_reservation_fence_t &fence)
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_reserve_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_reserve_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         if (request.creating_payload.size () > location_record_payload_limit
             || request.intent.request_encoded_size > location_record_payload_limit)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
@@ -720,7 +721,8 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&owner)) {
             const auto lease = decode_owner_lease (*found);
             if (lease.token.owner_id != current.owner.owner_id)
-                throw std::invalid_argument ("Location Store owner lease record is invalid");
+                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                             "Location Store owner lease record is invalid");
             if (lease.token.lease_generation == current.owner.lease_generation
                 && lease.lease_expires_at > lease.store_now)
                 co_return stale_authority_reclaim_result_t::owner_live;
@@ -760,8 +762,8 @@ class provider_location_repository_t final : public location_repository_t
                        std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            co_return detail::boundary_failure<object_complete_creation_result_t> (
-              detail::boundary_error_t::cancelled, "location store operation was cancelled");
+            co_return detail::result_access_t::failure<object_complete_creation_result_t> (
+              detail::make_cancellation_exception ("location store operation was cancelled"));
         const auto publication =
           std::visit ([] (const auto &value) { return value.terminal; }, request.completion);
         if (publication.terminal_envelope.size () > location_record_payload_limit)
@@ -846,8 +848,8 @@ class provider_location_repository_t final : public location_repository_t
     {
         for (;;) {
             if (cancellation.stop_requested ())
-                co_return detail::boundary_failure<object_commit_result_t> (
-                  detail::boundary_error_t::cancelled, "location store operation was cancelled");
+                co_return detail::result_access_t::failure<object_commit_result_t> (
+                  detail::make_cancellation_exception ("location store operation was cancelled"));
             if (request.ready_payload.size () > location_record_payload_limit)
                 throw std::invalid_argument ("object commit payload exceeds 1 MiB");
             const auto authority_key = key_authority (object_key (request.key));
@@ -880,7 +882,7 @@ class provider_location_repository_t final : public location_repository_t
             auto target = co_await read_target_descriptor_async (request.fence.target);
             if (!target)
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
-            auto capacity = co_await read_capacity_async (request.fence.target);
+            auto capacity = co_await read_capacity_async (request.fence.target, &*target);
             if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 1))
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
             snapshot.payload = std::move (request.ready_payload);
@@ -919,8 +921,8 @@ class provider_location_repository_t final : public location_repository_t
     {
         for (;;) {
             if (cancellation.stop_requested ())
-                co_return detail::boundary_failure<object_abort_result_t> (
-                  detail::boundary_error_t::cancelled, "location store operation was cancelled");
+                co_return detail::result_access_t::failure<object_abort_result_t> (
+                  detail::make_cancellation_exception ("location store operation was cancelled"));
             const auto authority_key = key_authority (object_key (request.key));
             auto authority = co_await _store->read (authority_key);
             if (co_await authority_mutation_locked_async (object_key (request.key))) {
@@ -945,7 +947,7 @@ class provider_location_repository_t final : public location_repository_t
             auto target = co_await read_target_descriptor_async (request.fence.target, false);
             if (!target)
                 co_return object_abort_result_t{object_abort_conflict_t{snapshot}};
-            auto capacity = co_await read_capacity_async (request.fence.target);
+            auto capacity = co_await read_capacity_async (request.fence.target, &*target);
             if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 0))
                 co_return object_abort_result_t{object_abort_conflict_t{snapshot}};
             store_write_request_t write_request{
@@ -1230,10 +1232,10 @@ class provider_location_repository_t final : public location_repository_t
     task_t<aggregate_commit_result_t> commit_aggregate (aggregate_fence_t fence,
                                                         std::stop_token cancellation = {}) override
     {
+        const auto row_key = key_aggregate (fence.aggregate_id);
         for (;;) {
             if (cancellation.stop_requested ())
                 return cancelled<aggregate_commit_result_t> ();
-            const auto row_key = key_aggregate (fence.aggregate_id);
             auto current = read (row_key);
             const auto *stored = std::get_if<store_found_t> (&current);
             if (!stored)
@@ -1249,13 +1251,16 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::stale);
             const auto target_owner =
               decode_owner (record.at (location_record_fields::targetOwner));
+            const bool resuming_commit = status == aggregate_status::committing;
             const object_creation_target_t target{
               record.at (location_record_fields::targetMeshName).get<std::string> (),
               node_rid_t::from_string (
                 record.at (location_record_fields::targetNodeRid).get<std::string> ()),
               record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
               target_owner};
-            auto target_descriptor = read_target_descriptor (target);
+            // A staged aggregate retains its rollback path, but an unconfirmed
+            // target commit still requires the original live target owner lease.
+            auto target_descriptor = read_target_descriptor (target, !resuming_commit);
             if (!target_descriptor)
                 return completed (aggregate_commit_result_t::stale);
             if (!owner_is_live (target_owner))
@@ -1328,11 +1333,9 @@ class provider_location_repository_t final : public location_repository_t
             const auto participant_count = participants.size ();
             if (participant_count > max_generation)
                 return completed (aggregate_commit_result_t::generation_exhausted);
-            auto owner_generations = status == aggregate_status::prepared
-                                       ? read (authority_owner_counter_key)
-                                       : store_read_result_t{store_missing_t{}};
             std::uint64_t owner_generation_start = 0;
             if (status == aggregate_status::prepared) {
+                auto owner_generations = read (authority_owner_counter_key);
                 const auto next_owner_generation = counter_next_value (owner_generations);
                 if (next_owner_generation > max_generation - participant_count)
                     return completed (aggregate_commit_result_t::generation_exhausted);
@@ -1348,8 +1351,10 @@ class provider_location_repository_t final : public location_repository_t
 
             std::vector<aggregate_commit_entry_t> entries;
             entries.reserve (participants.size ());
+            std::map<std::string, stored_target_t> descriptors;
+            descriptors.emplace (target_descriptor->key.value, *target_descriptor);
             std::map<std::string, stored_capacity_t> capacities;
-            auto target_capacity = read_capacity (target);
+            auto target_capacity = read_capacity (target, &*target_descriptor);
             const auto target_capacity_key = target_capacity.key.value;
             capacities.emplace (target_capacity_key, std::move (target_capacity));
 
@@ -1413,7 +1418,17 @@ class provider_location_repository_t final : public location_repository_t
 
                 const auto before =
                   decode_authority (entry.before, found->value.version, found->value.store_now);
-                auto source_capacity = read_capacity (before.allocation.target);
+                const auto source =
+                  read_target_descriptor (before.allocation.target, false, false);
+                if (source) {
+                    auto [source_state, inserted] =
+                      descriptors.emplace (source->key.value, *source);
+                    if (!inserted
+                        && source_state->second.provider_version != source->provider_version)
+                        return completed (aggregate_commit_result_t::stale);
+                }
+                auto source_capacity = read_capacity (before.allocation.target,
+                                                      source ? &*source : nullptr);
                 auto [capacity_state, capacity_inserted] =
                   capacities.emplace (source_capacity.key.value, std::move (source_capacity));
                 (void) capacity_inserted;
@@ -1423,19 +1438,21 @@ class provider_location_repository_t final : public location_repository_t
                 entries.push_back (std::move (entry));
             }
 
-            // The final CAS contains the aggregate row, source/target capacity,
+            // The final CAS contains the aggregate row, every distinct source or
             // target descriptor, and the target owner lease condition. Bound that
             // set before any committing page is installed; a provider must never
             // reject the terminal CAS after authority pages have been staged.
-            if (aggregate_commit_fixed_key_count + capacities.size ()
-                > aggregate_commit_final_key_limit)
+            if (descriptors.size () + capacities.size () + 2 > aggregate_commit_final_key_limit)
                 return completed (aggregate_commit_result_t::stale);
 
             const auto commit_pages = split_aggregate_commit_entries (entries);
             if (!commit_pages)
                 return completed (aggregate_commit_result_t::stale);
             if (status == aggregate_status::prepared) {
-                const auto current_owner_generation = owner_generation_start;
+                auto owner_generations = read (authority_owner_counter_key);
+                const auto current_owner_generation = counter_next_value (owner_generations);
+                if (current_owner_generation != owner_generation_start)
+                    continue;
                 record[location_record_fields::status] = aggregate_status::committing;
                 record[location_record_fields::ownerGenerationStart] = owner_generation_start;
                 record[location_record_fields::ownerGenerationEnd] =
@@ -1449,17 +1466,12 @@ class provider_location_repository_t final : public location_repository_t
                                        to_bytes (std::to_string (current_owner_generation
                                                                  + participant_count)),
                                        std::nullopt}}});
-                if (!std::holds_alternative<store_write_applied_t> (transition)) {
-                    if (conflict_qualification_unchanged (row_key, stored->value.version,
-                                                          target_owner, std::nullopt)
-                          .result ()
-                          .value ())
-                        continue;
-                    return completed (aggregate_commit_result_t::stale);
-                }
+                if (!std::holds_alternative<store_write_applied_t> (transition))
+                    continue;
             }
 
-            for (std::size_t page_index = 0; page_index < commit_pages->size (); ++page_index) {
+            std::size_t page_index = 0;
+            for (; page_index < commit_pages->size (); ++page_index) {
                 const auto page_key = key_aggregate_commit_page (fence.aggregate_id, page_index);
                 const auto encoded_page = to_bytes (
                   encode_aggregate_commit_page (page_index, (*commit_pages)[page_index]).dump ());
@@ -1512,8 +1524,10 @@ class provider_location_repository_t final : public location_repository_t
                   store_put_t{page_key, encoded_page, std::nullopt});
                 if (!std::holds_alternative<store_write_applied_t> (
                       write (std::move (page_request))))
-                    return completed (aggregate_commit_result_t::stale);
+                    break;
             }
+            if (page_index != commit_pages->size ())
+                continue;
 
             // current_record must outlive its use through `stored` at the version
             // condition below; a block-local copy here would leave `stored`
@@ -1537,8 +1551,11 @@ class provider_location_repository_t final : public location_repository_t
             final_request.conditions.push_back (version_condition (row_key, stored->value.version));
             if (target_descriptor->owner_present)
                 final_request.conditions.push_back (owner_condition (target_owner));
-            final_request.conditions.push_back (
-              version_condition (target_descriptor->key, target_descriptor->provider_version));
+            for (auto &[descriptor_key, descriptor] : descriptors) {
+                (void) descriptor_key;
+                final_request.conditions.push_back (
+                  version_condition (descriptor.key, descriptor.provider_version));
+            }
             for (auto &[capacity_key_value, capacity] : capacities) {
                 (void) capacity_key_value;
                 final_request.conditions.push_back (capacity.condition);
@@ -1551,11 +1568,6 @@ class provider_location_repository_t final : public location_repository_t
             auto written = write (std::move (final_request));
             if (std::holds_alternative<store_write_applied_t> (written))
                 return completed (aggregate_commit_result_t::committed);
-            if (!conflict_qualification_unchanged (row_key, stored->value.version, target_owner,
-                                                   std::nullopt)
-                   .result ()
-                   .value ())
-                return completed (aggregate_commit_result_t::stale);
         }
     }
 
@@ -1932,36 +1944,27 @@ class provider_location_repository_t final : public location_repository_t
         if (entries.empty ())
             return std::nullopt;
         std::vector<std::vector<aggregate_commit_entry_t>> pages;
-        std::vector<aggregate_commit_entry_t> current;
-        current.reserve (aggregate_commit_page_item_limit);
-        const auto finish = [&] {
-            if (current.empty ())
-                return true;
-            const auto encoded = encode_aggregate_commit_page (pages.size (), current).dump ();
-            if (encoded.size () > aggregate_commit_page_byte_limit)
-                return false;
+        for (std::size_t offset = 0; offset < entries.size ();) {
+            const auto first = entries.begin () + static_cast<std::ptrdiff_t> (offset);
+            std::vector<aggregate_commit_entry_t> current;
+            const auto count = bounded_page_prefix (
+              std::span<const aggregate_commit_entry_t> (entries).subspan (offset),
+              aggregate_commit_page_item_limit, aggregate_commit_page_byte_limit,
+              [] (const aggregate_commit_entry_t &entry) {
+                  return std::array{entry.authority_key.size (), entry.before.size (),
+                                    entry.after.size ()};
+              },
+              [&] (std::size_t candidate_count) {
+                  current.assign (first, first + static_cast<std::ptrdiff_t> (candidate_count));
+                  return encode_aggregate_commit_page (pages.size (), current).dump ().size ()
+                         <= aggregate_commit_page_byte_limit;
+              });
+            if (!count)
+                return std::nullopt;
+            current.resize (*count);
+            offset += *count;
             pages.push_back (std::move (current));
-            current.clear ();
-            current.reserve (aggregate_commit_page_item_limit);
-            return true;
-        };
-        for (const auto &entry : entries) {
-            if (current.size () == aggregate_commit_page_item_limit && !finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                <= aggregate_commit_page_byte_limit)
-                continue;
-            current.pop_back ();
-            if (!finish ())
-                return std::nullopt;
-            current.push_back (entry);
-            if (encode_aggregate_commit_page (pages.size (), current).dump ().size ()
-                > aggregate_commit_page_byte_limit)
-                return std::nullopt;
         }
-        if (!finish ())
-            return std::nullopt;
         return pages;
     }
 
@@ -2253,8 +2256,9 @@ class provider_location_repository_t final : public location_repository_t
         if (!record.contains (location_record_fields::recordVersion)
             || !record.at (location_record_fields::recordVersion).is_number_integer ()
             || record.at (location_record_fields::recordVersion).get<std::int64_t> () != 1) {
-            throw std::invalid_argument (std::string ("unrecognized ") + record_name
-                                         + " recordVersion");
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         std::string ("unrecognized ") + record_name
+                                           + " recordVersion");
         }
     }
 
@@ -2298,7 +2302,8 @@ class provider_location_repository_t final : public location_repository_t
     static owner_lease_found_t decode_owner_lease (const store_found_t &found)
     {
         if (!found.value.expires_at)
-            throw std::invalid_argument ("Location Store owner lease record is invalid");
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "Location Store owner lease record is invalid");
         const auto record = parse_canonical_record (found.value.bytes, "owner lease");
         return {{record.at (location_record_fields::ownerId).get<std::string> (),
                  parse_i64_field (record.at (location_record_fields::leaseGeneration))},
@@ -2780,7 +2785,8 @@ class provider_location_repository_t final : public location_repository_t
             co_return std::nullopt;
         const auto lease = decode_owner_lease (*found);
         if (lease.token.owner_id != owner.owner_id)
-            throw std::invalid_argument ("Location Store owner lease record is invalid");
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "Location Store owner lease record is invalid");
         if (lease.token.lease_generation != owner.lease_generation
             || lease.lease_expires_at <= lease.store_now)
             co_return std::nullopt;
@@ -3418,15 +3424,19 @@ class provider_location_repository_t final : public location_repository_t
         return to_bytes (value.dump ());
     }
 
-    stored_capacity_t read_capacity (const object_creation_target_t &target)
+    stored_capacity_t read_capacity (const object_creation_target_t &target,
+                                     const stored_target_t *descriptor = nullptr)
     {
-        return read_capacity_async (target).result ().value ();
+        return read_capacity_async (target, descriptor).result ().value ();
     }
 
-    task_t<stored_capacity_t> read_capacity_async (object_creation_target_t target)
+    task_t<stored_capacity_t> read_capacity_async (object_creation_target_t target,
+                                                   const stored_target_t *descriptor = nullptr)
     {
         const auto canonical_key = key_capacity (
-          target.mesh_name, zlink::routing_id_t::from (std::string (target.node_rid.value ())),
+          descriptor ? descriptor->descriptor.mesh_name : target.mesh_name,
+          descriptor ? descriptor->descriptor.rid
+                     : zlink::routing_id_t::from (std::string (target.node_rid.value ())),
           target.node_lifecycle_generation);
         auto current = co_await _store->read (canonical_key);
         if (const auto *found = std::get_if<store_found_t> (&current))
@@ -3802,8 +3812,8 @@ class provider_location_repository_t final : public location_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "location store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
     location_store_t *_store;

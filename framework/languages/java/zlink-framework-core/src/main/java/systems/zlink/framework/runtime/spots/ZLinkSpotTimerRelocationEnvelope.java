@@ -30,6 +30,9 @@ final class ZLinkSpotTimerRelocationEnvelope {
     private static final int VERSION = 1;
     private static final int MAX_TIMERS = 100_000;
     private static final int MAX_STRING_BYTES = 1024 * 1024;
+    private static final int CANONICAL_OVERRUN_POLICY_OFFSET = 1;
+    private static final int ACTION_NEXT_SCHEDULED = 1;
+    private static final int ACTION_PENDING_TICK = 2;
 
     private ZLinkSpotTimerRelocationEnvelope() {}
 
@@ -65,7 +68,8 @@ final class ZLinkSpotTimerRelocationEnvelope {
                                     timer.name(),
                                     timer.handlerType().getName(),
                                     timer.schedule().period().toMillis(),
-                                    timer.schedule().options().overrunPolicy().value() + 1,
+                                    timer.schedule().options().overrunPolicy().value()
+                                            + CANONICAL_OVERRUN_POLICY_OFFSET,
                                     timer.schedule().options().maxCatchUpTicks(),
                                     timer.schedule().options().stopOnUnhandledException(),
                                     timer.schedule().deliveryIndex(),
@@ -86,12 +90,9 @@ final class ZLinkSpotTimerRelocationEnvelope {
                         .map(
                                 value -> {
                                     ZLinkTimerOverrunPolicy policy =
-                                            switch (value.overrunPolicy()) {
-                                                case 1 -> ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS;
-                                                case 2 -> ZLinkTimerOverrunPolicy.CATCH_UP_BOUNDED;
-                                                case 3 -> ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK;
-                                                default -> throw invalid(null);
-                                            };
+                                            decodeOverrunPolicy(
+                                                    value.overrunPolicy()
+                                                            - CANONICAL_OVERRUN_POLICY_OFFSET);
                                     Duration period = Duration.ofMillis(value.periodMilliseconds());
                                     Instant next =
                                             Instant.ofEpochMilli(
@@ -201,10 +202,10 @@ final class ZLinkSpotTimerRelocationEnvelope {
                 writeString(output, timer.handlerType().getName());
                 writeSchedule(output, timer.schedule());
                 if (timer.pendingTick().isPresent()) {
-                    output.writeByte(2);
+                    output.writeByte(ACTION_PENDING_TICK);
                     writePendingTick(output, timer.pendingTick().orElseThrow());
                 } else {
-                    output.writeByte(1);
+                    output.writeByte(ACTION_NEXT_SCHEDULED);
                     writeInstant(output, timer.nextScheduledAt().orElseThrow());
                 }
             }
@@ -247,9 +248,9 @@ final class ZLinkSpotTimerRelocationEnvelope {
                 int action = input.readUnsignedByte();
                 Optional<Instant> next = Optional.empty();
                 Optional<ZLinkSpotTimerSchedule.PendingTick> pending = Optional.empty();
-                if (action == 1) {
+                if (action == ACTION_NEXT_SCHEDULED) {
                     next = Optional.of(readInstant(input));
-                } else if (action == 2) {
+                } else if (action == ACTION_PENDING_TICK) {
                     pending = Optional.of(readPendingTick(input, name));
                 } else {
                     throw invalid(null);
@@ -283,16 +284,23 @@ final class ZLinkSpotTimerRelocationEnvelope {
         output.writeLong(schedule.lastScheduledIndex());
     }
 
+    private static ZLinkTimerOverrunPolicy decodeOverrunPolicy(int wireValue) {
+        if (wireValue == ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS.value()) {
+            return ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS;
+        }
+        if (wireValue == ZLinkTimerOverrunPolicy.CATCH_UP_BOUNDED.value()) {
+            return ZLinkTimerOverrunPolicy.CATCH_UP_BOUNDED;
+        }
+        if (wireValue == ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK.value()) {
+            return ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK;
+        }
+        throw invalid(null);
+    }
+
     private static ZLinkSpotTimerSchedule.State readSchedule(DataInputStream input, String name)
             throws IOException {
         Duration period = readDuration(input);
-        ZLinkTimerOverrunPolicy policy =
-                switch (input.readInt()) {
-                    case 0 -> ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS;
-                    case 1 -> ZLinkTimerOverrunPolicy.CATCH_UP_BOUNDED;
-                    case 2 -> ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK;
-                    default -> throw invalid(null);
-                };
+        ZLinkTimerOverrunPolicy policy = decodeOverrunPolicy(input.readInt());
         ZLinkTimerOptions options =
                 new ZLinkTimerOptions(policy, input.readInt(), input.readBoolean());
         Instant startedAt = readInstant(input);
