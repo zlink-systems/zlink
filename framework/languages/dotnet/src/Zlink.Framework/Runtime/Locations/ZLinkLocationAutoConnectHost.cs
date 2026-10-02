@@ -597,7 +597,8 @@ internal sealed class ZLinkLocationAutoConnectHost
             _time,
             retainRemovedMembers,
             initiallyPublished: startupState is not null,
-            initialStoreGeneration: startupState?.StoreGeneration ?? 0
+            initialStoreGeneration: startupState?.StoreGeneration ?? 0,
+            errorSink: errorSink
         );
         _reconcilers.Add(reconciler);
         _localReconcilers[(type, meshName, role)] = reconciler;
