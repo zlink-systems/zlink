@@ -395,7 +395,7 @@ generation isn't created for a nonexistent record.
 ### 3.4 How Different Languages Read and Write the Same Redis Record
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
-descriptor, authority record (§4, §3.2, §3.3), and creation terminal (§7) must be written to
+descriptor, authority record (§4, §3.2, §3.3), creation request, and creation terminal (§7) must be written to
 Redis through the same storage scheme regardless of language, so a runtime in one language can read a
 record another language wrote. This storage scheme is defined by the
 [Location Store provider's official Redis implementation](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance),
@@ -414,6 +414,7 @@ descriptor's and fanout publisher descriptor's key, is called a
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
+| Creation request | `creation-request\0{actor \| spot}\0{Id}\0{hex(ReservationId)}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 | Aggregate ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
 | Aggregate inventory page ([§3.5](#35-progress-records-of-a-spotwide-relocation)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
@@ -422,7 +423,7 @@ descriptor's and fanout publisher descriptor's key, is called a
 `{hex(RoutingId)}` and `{hex(SourceNodeRid)}` are the lowercase hex representation of each
 identifier's raw bytes. `{SourceHostGeneration}` is a decimal with no sign and no leading
 zero, and `{hex(OperationId)}` is the 32-digit representation, in the same form, of the
-128-bit `OperationId` laid out as 16 big-endian bytes. `{AggregateId}` is the 128-bit aggregate
+128-bit `OperationId` laid out as 16 big-endian bytes; `{hex(ReservationId)}` writes the 128-bit Reservation ID the same way. `{AggregateId}` is the 128-bit aggregate
 ID written as a lowercase `8-4-4-4-12` UUID string, and `{AggregateGeneration}`, `{Level}`,
 `{PageIndex}`, and `{Index}` are decimals with no sign and no leading zero. `{MeshName}`, `{ChannelName}`, `{OwnerId}`, and the authority's `{Id}` (the global ActorId
 or SpotId, §3.3) are UTF-8 bytes concatenated as-is, without a length prefix — only the
@@ -438,7 +439,8 @@ pins the key-derivation vectors for this preimage shape.
 
 The provider stores and compares each record's value only as bytes, without interpreting
 its meaning. A creation terminal's value is the `creation-operation-terminal-v1` bytes as
-they are (§7). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
+they are (§7). A creation request's value is the encoded creation request bytes as they are
+(`pendingCreation` below). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
 values from that section. Every other record's value is a canonical JSON value that includes at
 least the following fields.
 
@@ -544,20 +546,26 @@ number precision).
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
 | `allocation` | Placement information (§3.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §4), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§3.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
-| `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
+| `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). The request bytes live in this reservation's creation request record (below). |
 | `aggregate` | The participant marker of the SpotWide relocation this object takes part in ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when the object takes part in none. |
 | `visibleStoreVersion` | Preserves the public `StoreVersion` when it differs from this row's physical version ([§3.5](#35-progress-records-of-a-spotwide-relocation)). The field is absent when they are equal. |
 
-The node that runs the creation decodes `requestContentReference` and verifies that the
-decoded bytes have the length `requestEncodedSize` and the SHA-256 `requestSha256`. If
-either differs, it doesn't run the factory and records the creation as failed. Those two
-values decide the request content's integrity, so the reference string carries no separate
-checksum segment.
+The creation request's content reference is the key of the creation request record derived from the
+authority identity and `pendingCreation.reservationId`; it isn't stored as a separate field. The record's
+value carries no JSON, base64, or separate header. The requester prepares the encoded bytes and their
+SHA-256 before reservation, and the write below stores them. The record is written once, never changed, and holds no
+reservation state. The Store write that writes `pendingCreation` also writes this record, only when
+it is missing; the write that removes `pendingCreation` (completion, failure, abort, reclaim) and the
+write that deletes that authority also delete this record. It isn't deleted otherwise.
 
-The reservation isn't a separate record; it's a state of this one. A reservation is the
+The node that runs the creation reads the creation request record and verifies that its bytes have
+the length `requestEncodedSize` and the SHA-256 `requestSha256`. If the record is missing or either
+differs, it doesn't run the factory and records the creation as failed.
+
+The reservation isn't a separate record; it's a state of the authority record. A reservation is the
 interval during which `allocation.state` is `reserved` and `pendingCreation` is present,
-and `pendingCreation.reservationId` identifies it. No logical key is reserved for it, and
-completing or aborting a reservation another node created is decided from this record and
+and `pendingCreation.reservationId` identifies it. No separate logical key holds reservation state, and
+completing or aborting a reservation another node created is decided from the authority record and
 §7's final-result record alone. Reservation state isn't held outside the fields in the
 table above — reservation information placed in a field only one language reads doesn't
 survive another language's update of that record.
@@ -1029,8 +1037,9 @@ A Create call can only be submitted once. Submission uses one deadline spanning 
 location lookup through `Ready` confirmation. Specifying the same option twice, or
 resubmitting the same call, is `InvalidOperation`.
 
-The creation request's stored size is at most 1 MiB. Actor and User Spot requests are
-stored in the Location Store's in-progress creation record. They aren't stored in the
+The creation request's encoded size is at most 1 MiB (1,048,576 bytes). Actor and User Spot request
+bytes go as they are into the value of [§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)'s creation request record, and this limit equals the Store
+value limit ([02 §3](02-location-store-redis.en.md#3-key-value-version-and-clock)). They aren't stored in the
 Relocation Store.
 
 ```mermaid
@@ -1735,10 +1744,10 @@ store record golden fixture. Each item maps to one test.
 - The same request can re-read the stored final result for 5 minutes from the original
   deadline.
 - A target in one language can complete or abort a reservation secured in another, and no
-  reservation record other than the authority record and the final-result record appears in
+  record holding reservation state other than the authority record and the final-result record appears in
   the Store meanwhile.
-- A `requestContentReference` outside the specified form, or decoded bytes whose length or
-  SHA-256 differs from the record's values, doesn't run the factory and records the creation
+- A missing creation request record, or one whose bytes' length or SHA-256 differs from
+  `pendingCreation`'s values, doesn't run the factory and records the creation
   as failed; matching values run it.
 - Commands 47/48 verify source and target run generation, `OperationId`, the creation
   record, `StoreVersion`, and object generation, and command 20's result is returned

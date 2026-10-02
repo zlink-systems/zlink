@@ -363,7 +363,7 @@ Key와 배치 정보는 Framework 내부 데이터에 다시 넣지 않는다. P
 ### 3.4 여러 언어가 같은 Redis record를 읽고 쓰는 방법
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
-descriptor, authority record(§4, §3.2, §3.3)와 creation terminal(§7)은 언어가 달라도 같은
+descriptor, authority record(§4, §3.2, §3.3), creation request와 creation terminal(§7)은 언어가 달라도 같은
 저장 방식을 통해 Redis에 기록해야 다른 언어의 runtime이 그 record를 읽을 수 있다. 이 저장 방식을
 [Location Store provider의 공식 Redis 구현](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)이
 정의하며, Framework는 이를 "opaque record"라고 부른다. 각 record마다 byte 그대로 고정한
@@ -379,6 +379,7 @@ publisher descriptor의 key가 참조하는, message를 보낼 Channel 범위를
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
+| Creation request | `creation-request\0{actor \| spot}\0{Id}\0{hex(ReservationId)}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 | Aggregate([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate\0{AggregateId}\0{AggregateGeneration}` |
 | Aggregate inventory page([§3.5](#35-spotwide-이동의-진행-record)) | `aggregate-inventory\0{AggregateId}\0{AggregateGeneration}\0{Level}\0{PageIndex}` |
@@ -386,7 +387,8 @@ publisher descriptor의 key가 참조하는, message를 보낼 Channel 범위를
 
 `{hex(RoutingId)}`와 `{hex(SourceNodeRid)}`는 각 식별자의 raw bytes를 소문자 16진수로 표기한
 값이다. `{SourceHostGeneration}`은 부호와 선행 0이 없는 10진수이고, `{hex(OperationId)}`는
-128-bit `OperationId`를 big-endian 16 bytes로 두고 같은 방식으로 표기한 32자리다.
+128-bit `OperationId`를 big-endian 16 bytes로 두고 같은 방식으로 표기한 32자리다. `{hex(ReservationId)}`도
+128-bit Reservation ID를 같은 방식으로 표기한 32자리다.
 `{AggregateId}`는 128-bit aggregate ID를 소문자 `8-4-4-4-12` UUID 문자열로 표기한 값이고,
 `{AggregateGeneration}`·`{Level}`·`{PageIndex}`·`{Index}`는 부호와 선행 0이 없는 10진수다. `{MeshName}`,
 `{ChannelName}`, `{OwnerId}`와 authority의 `{Id}`(전역 ActorId 또는 SpotId, §3.3)는 UTF-8
@@ -400,7 +402,8 @@ bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 — 
 이 preimage 구조의 key 파생 벡터를 고정한다.
 
 각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교한다. Creation
-terminal의 value는 `creation-operation-terminal-v1` bytes 그대로다(§7). [§3.5](#35-spotwide-이동의-진행-record)의
+terminal의 value는 `creation-operation-terminal-v1` bytes 그대로다(§7). Creation request의 value는
+encoded 생성 요청 bytes 그대로다(아래 `pendingCreation`). [§3.5](#35-spotwide-이동의-진행-record)의
 record는 그 절이 value를 정한다. 나머지 record의 value는 canonical JSON 값이며 최소한 다음
 field를 포함한다.
 
@@ -499,19 +502,25 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§3.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
 | `allocation` | 배치 정보(§3.3)다. dotnet `ZLinkPlacementAllocation`(내부 구현)에서 파생한다. `state`(`reserved \| active`), `objectKind`(`actor \| userSpot \| instanceSpot` — Entry Spot은 없다. Entry Spot의 Actor는 `actor`로 집계한다, §4), `stableType`, `descriptor`(`{meshName, routingIdHex}` — MeshNode descriptor key와 같은 모양), `descriptorLifecycleGeneration`(target MeshNode의 `lifecycleGeneration`과 CAS로 맞춰야 하는 값)과 `capacity`를 포함한다. `capacity`는 `{actors, spots, spotType}`이며 `actors`·`spots`는 이번 allocation이 확보한 정수 slot 수, `spotType`은 Spot이 아니면 `null`이고 Spot이면 `{objectKind, stableType, count}`다(§3.3의 "Spot slot 1과 해당 Spot 종류·stable type slot 1" — flat counter 하나로는 어떤 `(spotKind, stableType)` 조합을 확보했는지 표현할 수 없다). |
-| `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. `requestContentReference`의 형식은 `inline-v1:{base64url}`이며, `{base64url}`은 생성 요청 bytes를 `A-Z a-z 0-9 - _` 알파벳으로 인코딩한 값으로 padding `=`을 붙이지 않는다. 다른 형식은 인식하지 않는다. |
+| `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. 요청 bytes는 이 예약의 creation request record에 둔다(아래). |
 | `aggregate` | 이 object가 참여한 SpotWide 이동의 participant marker다([§3.5](#35-spotwide-이동의-진행-record)). 참여 중이 아니면 field를 두지 않는다. |
 | `visibleStoreVersion` | 공개 `StoreVersion`이 이 row의 물리 version과 다를 때 공개 값을 보존한다([§3.5](#35-spotwide-이동의-진행-record)). 같으면 field를 두지 않는다. |
 
-생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
-`requestEncodedSize`와 같고 SHA-256이 `requestSha256`과 같은지 확인한다. 어느 하나라도
-다르면 factory를 실행하지 않고 그 생성을 실패로 기록한다. 이 두 값이 요청 내용의 무결성을
-판정하므로 reference 문자열에는 별도의 checksum 구간을 두지 않는다.
+생성 요청의 content reference는 authority identity와 `pendingCreation.reservationId`로 유도하는 creation
+request record의 key이며, 별도 field로 저장하지 않는다. 이 record의 value에는 JSON·base64·별도
+header를 붙이지 않는다. 생성을 요청하는 쪽은 reservation 전에 encoded bytes와 SHA-256을 준비하고,
+저장은 아래 write가 한다. 이 record는 한 번 쓰고 바꾸지 않으며 예약 상태를 담지 않는다. `pendingCreation`을 쓰는 Store
+write가 이 record를 없을 때만 함께 쓰고, `pendingCreation`을 지우는 write(완료·실패·취소·회수)와 그
+authority를 지우는 write가 이 record를 함께 지운다. 그 밖의 경우에는 지우지 않는다.
 
-예약은 별도의 record가 아니라 이 record의 상태다. `allocation.state`가 `reserved`이고
+생성을 실행하는 node는 creation request record를 읽어 그 bytes의 길이가 `requestEncodedSize`와 같고
+SHA-256이 `requestSha256`과 같은지 확인한다. Record가 없거나 어느 하나라도 다르면 factory를 실행하지
+않고 그 생성을 실패로 기록한다.
+
+예약은 별도의 record가 아니라 authority record의 상태다. `allocation.state`가 `reserved`이고
 `pendingCreation`이 있는 구간이 하나의 예약이며, `pendingCreation.reservationId`가 그
-예약의 식별자다. 예약 전용 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
-취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
+예약의 식별자다. 예약 상태를 담는 별도 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
+취소도 authority record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
 그 정보가 남지 않는다.
 
@@ -926,8 +935,8 @@ Create call은 한 번만 제출할 수 있다. 제출할 때 위치 조회부�
 deadline을 사용한다. 같은 option을 중복 지정하거나 같은 call을 다시 제출하면
 `InvalidOperation`이다.
 
-생성 요청의 저장 크기는 최대 1 MiB다. Actor와 User Spot 요청은 Location Store의 생성 중인
-record에 저장한다. Relocation Store에는 저장하지 않는다.
+생성 요청의 encoded 크기는 최대 1 MiB(1,048,576 bytes)다. Actor와 User Spot 요청 bytes는 [§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)의
+creation request record value에 그대로 들어가며, 이 한도는 Store value 한도([02 §3](02-location-store-redis.ko.md#3-key-value-version과-clock))와 같다. Relocation Store에는 저장하지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -1564,8 +1573,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   반환과 실패 결과를 한 번에 기록한다.
 - 같은 요청은 최초 deadline에서 5분 동안 저장한 최종 결과를 다시 읽을 수 있다.
 - 한 언어가 확보한 예약을 다른 언어의 target이 완료하거나 취소할 수 있으며, 그 사이 Store에는
-  authority record와 최종 결과 record 외의 예약 record가 생기지 않는다.
-- `requestContentReference`가 정한 형식을 벗어나거나 decode한 bytes의 길이·SHA-256이 record의
+  authority record와 최종 결과 record 외에 예약 상태를 담는 record가 생기지 않는다.
+- Creation request record가 없거나 그 bytes의 길이·SHA-256이 `pendingCreation`의
   값과 다르면 factory를 실행하지 않고 생성을 실패로 기록하며, 값이 모두 맞으면 실행한다.
 - Command 47·48은 source와 target 실행 세대, `OperationId`, 생성 record, `StoreVersion`과
   object generation을 확인하고, command 20 결과는 한 번만 반환된다.
