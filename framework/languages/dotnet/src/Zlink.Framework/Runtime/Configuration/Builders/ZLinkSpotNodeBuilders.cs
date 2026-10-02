@@ -29,9 +29,9 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
 
     public IZLinkMeshNodeBuilder Listen(int port = 0)
     {
-        if (port is < 0 or > 65535)
+        if (port is < System.Net.IPEndPoint.MinPort or > System.Net.IPEndPoint.MaxPort)
             throw new ZLinkConfigurationException(
-                "MeshNode listen port must be between 0 and 65535."
+                $"MeshNode listen port must be between {System.Net.IPEndPoint.MinPort} and {System.Net.IPEndPoint.MaxPort}."
             );
         var router = EnsureRouter();
         router.ListenPort = port;
@@ -76,20 +76,9 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
             throw new ZLinkConfigurationException(
                 "MeshNode routing mode can be configured only once."
             );
-        if (
-            string.IsNullOrEmpty(prefix)
-            || prefix.Length > 64
-            || prefix.Any(static character =>
-                !(
-                    (character >= 'A' && character <= 'Z')
-                    || (character >= 'a' && character <= 'z')
-                    || (character >= '0' && character <= '9')
-                    || character is '.' or '_' or '-'
-                )
-            )
-        )
+        if (!ZLinkFanoutRoutingIdPolicy.IsValidPrefix(prefix))
             throw new ZLinkConfigurationException(
-                "MeshNode routing-id prefix must contain 1 to 64 ASCII "
+                $"MeshNode routing-id prefix must be non-empty and contain at most {ZLinkFanoutRoutingIdPolicy.MaximumPrefixLength} ASCII "
                     + "letters, digits, '.', '_' or '-'."
             );
         registration.RoutingIdPrefix = prefix;
@@ -223,7 +212,7 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         ValidateUserSpotFactoryOptions(effectiveOptions);
         if (
             effectiveOptions.ExecutionMode == ZLinkUserSpotExecutionMode.PerActor
-            && factory.Relocation.PolicyKind != 1
+            && factory.Relocation.PolicyKind != ZLinkObjectRelocationRegistration.RecreatePolicy
         )
             throw new ZLinkConfigurationException(
                 "PerActor User Spots must use RecreateOnRelocation."
@@ -330,9 +319,12 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (string.IsNullOrWhiteSpace(channelName))
             throw new ZLinkConfigurationException("Channel membership name must not be empty.");
-        if (System.Text.Encoding.UTF8.GetByteCount(channelName) > 255 || channelName.Contains('\0'))
+        if (
+            System.Text.Encoding.UTF8.GetByteCount(channelName) > byte.MaxValue
+            || channelName.Contains('\0')
+        )
             throw new ZLinkConfigurationException(
-                "Channel membership name must be 1 to 255 UTF-8 bytes without NUL."
+                $"Channel membership name must be non-empty and contain at most {byte.MaxValue} UTF-8 bytes without NUL."
             );
     }
 
@@ -402,9 +394,12 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (string.IsNullOrWhiteSpace(stableType))
             throw new ZLinkConfigurationException($"{kind} type must not be empty.");
-        if (System.Text.Encoding.UTF8.GetByteCount(stableType) > 255 || stableType.Contains('\0'))
+        if (
+            System.Text.Encoding.UTF8.GetByteCount(stableType) > byte.MaxValue
+            || stableType.Contains('\0')
+        )
             throw new ZLinkConfigurationException(
-                $"{kind} type must be 1 to 255 UTF-8 bytes without NUL."
+                $"{kind} type must be non-empty and contain at most {byte.MaxValue} UTF-8 bytes without NUL."
             );
     }
 
@@ -515,13 +510,13 @@ internal sealed class ZLinkActorFactoryBuilder<TActor>
 {
     public IZLinkActorFactoryBuilder<TActor> DisableRelocation()
     {
-        SelectRelocation(0);
+        SelectRelocation(ZLinkObjectRelocationRegistration.DisabledPolicy);
         return this;
     }
 
     public IZLinkActorFactoryBuilder<TActor> RecreateOnRelocation()
     {
-        SelectRelocation(1);
+        SelectRelocation(ZLinkObjectRelocationRegistration.RecreatePolicy);
         return this;
     }
 
@@ -531,7 +526,11 @@ internal sealed class ZLinkActorFactoryBuilder<TActor>
         IZLinkRelocationAdapterInvoker invoker = new ZLinkActorRelocationAdapterInvoker<TActor>(
             typeof(TAdapter)
         );
-        SelectRelocation(2, typeof(TAdapter), invoker);
+        SelectRelocation(
+            ZLinkObjectRelocationRegistration.SnapshotPolicy,
+            typeof(TAdapter),
+            invoker
+        );
         return this;
     }
 }
@@ -578,13 +577,13 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
 
     public IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation()
     {
-        SelectRelocation(0);
+        SelectRelocation(ZLinkObjectRelocationRegistration.DisabledPolicy);
         return this;
     }
 
     public IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation()
     {
-        SelectRelocation(1);
+        SelectRelocation(ZLinkObjectRelocationRegistration.RecreatePolicy);
         return this;
     }
 
@@ -594,7 +593,11 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
         IZLinkRelocationAdapterInvoker invoker = new ZLinkSpotRelocationAdapterInvoker<TSpot>(
             typeof(TAdapter)
         );
-        SelectRelocation(2, typeof(TAdapter), invoker);
+        SelectRelocation(
+            ZLinkObjectRelocationRegistration.SnapshotPolicy,
+            typeof(TAdapter),
+            invoker
+        );
         return this;
     }
 }
@@ -621,13 +624,13 @@ internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
 
     public IZLinkInstanceSpotFactoryBuilder<TSpot> DisableRelocation()
     {
-        SelectRelocation(0);
+        SelectRelocation(ZLinkObjectRelocationRegistration.DisabledPolicy);
         return this;
     }
 
     public IZLinkInstanceSpotFactoryBuilder<TSpot> RecreateOnRelocation()
     {
-        SelectRelocation(1);
+        SelectRelocation(ZLinkObjectRelocationRegistration.RecreatePolicy);
         return this;
     }
 
@@ -637,7 +640,11 @@ internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
         IZLinkRelocationAdapterInvoker invoker = new ZLinkSpotRelocationAdapterInvoker<TSpot>(
             typeof(TAdapter)
         );
-        SelectRelocation(2, typeof(TAdapter), invoker);
+        SelectRelocation(
+            ZLinkObjectRelocationRegistration.SnapshotPolicy,
+            typeof(TAdapter),
+            invoker
+        );
         return this;
     }
 }

@@ -316,7 +316,7 @@ internal sealed class ZLinkUserSpotActivation
 
     internal override ZLinkPlacementObjectKind PlacementKind => ZLinkPlacementObjectKind.UserSpot;
 
-    internal override string KindName => "user";
+    internal override string KindName => ZLinkRuntimeMetrics.UserSpotKind;
 
     internal override bool SupportsIdleEviction => false;
 
@@ -399,7 +399,7 @@ internal sealed class ZLinkInstanceSpotActivation : ZLinkSpotActivation, IZLinkI
     internal override ZLinkPlacementObjectKind PlacementKind =>
         ZLinkPlacementObjectKind.InstanceSpot;
 
-    internal override string KindName => "instance";
+    internal override string KindName => ZLinkRuntimeMetrics.InstanceSpotKind;
 
     internal override bool SupportsIdleEviction => true;
 

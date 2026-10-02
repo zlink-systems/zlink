@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -24,10 +25,6 @@ internal sealed record ZLinkUserSpotAuthorityPayload(
 
 internal static class ZLinkUserSpotAuthorityPayloadCodec
 {
-    private static ReadOnlySpan<byte> Magic => "ZLAU"u8;
-    private const byte Version = 1;
-    private const int MaximumBytes = 1024 * 1024;
-
     internal static byte[] Encode(ZLinkUserSpotAuthorityPayload value)
     {
         var spot = new Writer();
@@ -35,7 +32,7 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
         spot.Text8(value.StableType);
         spot.U8((byte)value.State);
         var identity = new Writer();
-        identity.U8(2);
+        identity.U8((byte)ServiceWireCodec.SpotKind.User);
         identity.U16(checked((ushort)spot.Count));
         identity.Bytes(spot.ToArray());
 
@@ -43,13 +40,16 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
         body.U8(
             value.State switch
             {
-                ZLinkUserSpotAuthorityState.Creating => 1,
-                ZLinkUserSpotAuthorityState.Ready => 0,
-                ZLinkUserSpotAuthorityState.Closing => 3,
+                ZLinkUserSpotAuthorityState.Creating => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.ColdActivation,
+                ZLinkUserSpotAuthorityState.Ready => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.Steady,
+                ZLinkUserSpotAuthorityState.Closing => (byte)
+                    ServiceWireCodec.AuthorityOperationKind.Close,
                 _ => throw new ArgumentOutOfRangeException(nameof(value)),
             }
         );
-        body.U8(2);
+        body.U8((byte)ServiceWireCodec.AuthorityObjectKind.Spot);
         body.U16(checked((ushort)identity.Count));
         body.Bytes(identity.ToArray());
         body.Text8(value.OwnerId);
@@ -63,14 +63,14 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
         body.U32(0);
 
         var result = new Writer();
-        result.Bytes(Magic);
-        result.U8(Version);
+        result.Bytes(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic);
+        result.U8(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion);
         result.U16(0);
         result.U32(checked((uint)body.Count));
         result.Bytes(body.ToArray());
         result.U32(Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(result.WrittenSpan));
         var encoded = result.ToArray();
-        if (encoded.Length > MaximumBytes)
+        if (encoded.Length > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes)
             throw new ArgumentOutOfRangeException(nameof(value));
         return encoded;
     }
@@ -84,14 +84,18 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
         try
         {
             if (
-                encoded.Length > MaximumBytes
-                || encoded.Length < 15
-                || !encoded[..4].SequenceEqual(Magic)
+                encoded.Length > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes
+                || encoded.Length < ZLinkCanonicalRelocationAuthorityStateCodec.MinimumEnvelopeBytes
+                || !encoded[..ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes]
+                    .SequenceEqual(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic)
             )
                 return false;
             var reader = new Reader(encoded);
-            reader.Skip(4);
-            if (reader.U8() != Version || reader.U16() != 0)
+            reader.Skip(ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes);
+            if (
+                reader.U8() != ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion
+                || reader.U16() != 0
+            )
                 return false;
             var body = reader.Slice(checked((int)reader.U32()));
             var checksumOffset = reader.Offset;
@@ -104,10 +108,10 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
             )
                 return false;
             var operation = body.U8();
-            if (body.U8() != 2)
+            if (body.U8() != (byte)ServiceWireCodec.AuthorityObjectKind.Spot)
                 return false;
             var identity = body.Slice(body.U16());
-            if (identity.U8() != 2)
+            if (identity.U8() != (byte)ServiceWireCodec.SpotKind.User)
                 return false;
             var spot = identity.Slice(identity.U16());
             var spotId = spot.Text8();
@@ -118,9 +122,12 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
                 || !identity.End
                 || state switch
                 {
-                    ZLinkUserSpotAuthorityState.Creating => operation != 1,
-                    ZLinkUserSpotAuthorityState.Ready => operation != 0,
-                    ZLinkUserSpotAuthorityState.Closing => operation != 3,
+                    ZLinkUserSpotAuthorityState.Creating => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.ColdActivation,
+                    ZLinkUserSpotAuthorityState.Ready => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.Steady,
+                    ZLinkUserSpotAuthorityState.Closing => operation
+                        != (byte)ServiceWireCodec.AuthorityOperationKind.Close,
                     _ => true,
                 }
             )

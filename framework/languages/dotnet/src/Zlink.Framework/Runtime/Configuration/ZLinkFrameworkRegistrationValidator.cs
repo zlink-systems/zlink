@@ -130,8 +130,12 @@ internal static partial class ZLinkFrameworkRegistrationValidator
     {
         var requiresRelocationStore = registration.SpotNodes.Values.Any(static node =>
             node.InstanceSpotFactories.Count > 0
-            || node.SpotRelocations.Values.Any(static relocation => relocation.PolicyKind != 0)
-            || node.ActorRelocations.Values.Any(static relocation => relocation.PolicyKind != 0)
+            || node.SpotRelocations.Values.Any(static relocation =>
+                relocation.PolicyKind != ZLinkObjectRelocationRegistration.DisabledPolicy
+            )
+            || node.ActorRelocations.Values.Any(static relocation =>
+                relocation.PolicyKind != ZLinkObjectRelocationRegistration.DisabledPolicy
+            )
         );
         if (!requiresRelocationStore)
             return;

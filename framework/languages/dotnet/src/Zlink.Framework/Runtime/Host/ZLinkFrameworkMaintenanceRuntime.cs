@@ -549,9 +549,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             TransitionUnderLock(ZLinkFrameworkRuntimeState.Stopped);
             LogTerminationChanged(result);
             metricStarted.Complete(
-                result.Outcome == ZLinkFrameworkTerminationOutcome.Stopped
-                    ? "stopped"
-                    : "force_stopped",
+                result.Outcome,
                 result.Reason == ZLinkFrameworkTerminationReason.None ? "none"
                     : result.Reason == ZLinkFrameworkTerminationReason.DeadlineExceeded
                         ? "deadline_exceeded"
@@ -763,11 +761,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private static void RecordRelocationCompletion(
         ZLinkRuntimeMetrics.ZLinkHostMetricOperation started,
         ZLinkFrameworkRelocationResult result
-    ) =>
-        started.Complete(
-            result.Outcome == ZLinkFrameworkRelocationOutcome.Relocated ? "relocated" : "blocked",
-            RelocationReasonMetricValue(result.Reason)
-        );
+    ) => started.Complete(result.Outcome, RelocationReasonMetricValue(result.Reason));
 
     private static string HostStateMetricValue(ZLinkFrameworkRuntimeState state) =>
         state switch

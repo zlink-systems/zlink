@@ -88,14 +88,17 @@ internal static class ZlinkStreamTransportFactory
         }
     }
 
+    private const string TcpScheme = "tcp";
+    private const string TlsScheme = "tls";
+
     private static ZlinkStreamTransport ResolveTransport(ZlinkStreamConnectorOptions options)
     {
         var inferred = options.Endpoint.Scheme.ToLowerInvariant() switch
         {
-            "tcp" => ZlinkStreamTransport.Tcp,
-            "tls" => ZlinkStreamTransport.Tls,
-            "ws" => ZlinkStreamTransport.WebSocket,
-            "wss" => ZlinkStreamTransport.WebSocketSecure,
+            TcpScheme => ZlinkStreamTransport.Tcp,
+            TlsScheme => ZlinkStreamTransport.Tls,
+            var scheme when scheme == Uri.UriSchemeWs => ZlinkStreamTransport.WebSocket,
+            var scheme when scheme == Uri.UriSchemeWss => ZlinkStreamTransport.WebSocketSecure,
             _ => throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
                 "Endpoint scheme is not supported."

@@ -227,10 +227,6 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
 
 internal static class ZLinkActorAuthorityPayloadCodec
 {
-    private static ReadOnlySpan<byte> Magic => "ZLAU"u8;
-    private const byte Version = 1;
-    private const int MaximumBytes = 1024 * 1024;
-
     internal static byte[] Encode(ZLinkActorAuthorityPayload value)
     {
         ArgumentNullException.ThrowIfNull(value);
@@ -268,14 +264,14 @@ internal static class ZLinkActorAuthorityPayloadCodec
         body.U32(0);
 
         var result = new Writer();
-        result.Bytes(Magic);
-        result.U8(Version);
+        result.Bytes(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic);
+        result.U8(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion);
         result.U16(0);
         result.U32(checked((uint)body.Count));
         result.Bytes(body.ToArray());
         result.U32(ZLinkCrc32C.Compute(result.WrittenSpan));
         var encoded = result.ToArray();
-        if (encoded.Length > MaximumBytes)
+        if (encoded.Length > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes)
             throw new ArgumentOutOfRangeException(nameof(value));
         return encoded;
     }
@@ -317,14 +313,18 @@ internal static class ZLinkActorAuthorityPayloadCodec
         try
         {
             if (
-                encoded.Length > MaximumBytes
-                || encoded.Length < 15
-                || !encoded[..4].SequenceEqual(Magic)
+                encoded.Length > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes
+                || encoded.Length < ZLinkCanonicalRelocationAuthorityStateCodec.MinimumEnvelopeBytes
+                || !encoded[..ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes]
+                    .SequenceEqual(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic)
             )
                 return false;
             var reader = new Reader(encoded);
-            reader.Skip(4);
-            if (reader.U8() != Version || reader.U16() != 0)
+            reader.Skip(ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes);
+            if (
+                reader.U8() != ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion
+                || reader.U16() != 0
+            )
                 return false;
             var body = reader.Slice(checked((int)reader.U32()));
             var checksumOffset = reader.Offset;

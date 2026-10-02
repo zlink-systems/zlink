@@ -14,6 +14,10 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal sealed class CookieJar
 {
+    private const string PathAttribute = "path";
+    private const string SecureAttribute = "secure";
+    private const string MaxAgeAttribute = "max-age";
+    private const string RootCookiePath = "/";
     private const int MaxCookiesPerHost = 128;
     private readonly List<Cookie> _cookies = new();
 
@@ -36,7 +40,7 @@ internal sealed class CookieJar
         if (name.Length == 0)
             return;
 
-        var path = "/";
+        var path = RootCookiePath;
         var secure = false;
         var expired = false;
         while (TakeSegment(ref remaining) is { } attribute)
@@ -44,12 +48,15 @@ internal sealed class CookieJar
             var attrEquals = attribute.IndexOf('=');
             var attrName = attrEquals < 0 ? attribute : attribute[..attrEquals].Trim();
             var attrValue = attrEquals < 0 ? string.Empty : attribute[(attrEquals + 1)..].Trim();
-            if (attrName.Equals("path", StringComparison.OrdinalIgnoreCase) && attrValue.Length > 0)
+            if (
+                attrName.Equals(PathAttribute, StringComparison.OrdinalIgnoreCase)
+                && attrValue.Length > 0
+            )
                 path = attrValue;
-            else if (attrName.Equals("secure", StringComparison.OrdinalIgnoreCase))
+            else if (attrName.Equals(SecureAttribute, StringComparison.OrdinalIgnoreCase))
                 secure = true;
             else if (
-                attrName.Equals("max-age", StringComparison.OrdinalIgnoreCase)
+                attrName.Equals(MaxAgeAttribute, StringComparison.OrdinalIgnoreCase)
                 && long.TryParse(attrValue, out var maxAge)
             )
                 expired = maxAge <= 0;
@@ -104,7 +111,7 @@ internal sealed class CookieJar
 
     private static bool PathMatches(string requestPath, string cookiePath)
     {
-        if (cookiePath.Length == 0 || cookiePath == "/")
+        if (cookiePath.Length == 0 || cookiePath == RootCookiePath)
             return true;
 
         if (requestPath == cookiePath)

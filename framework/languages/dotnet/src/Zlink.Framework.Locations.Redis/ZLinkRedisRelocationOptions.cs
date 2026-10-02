@@ -14,7 +14,8 @@ public sealed class ZLinkRedisRelocationOptions
 
     public string KeyPrefix { get; set; } = string.Empty;
 
-    public TimeSpan OperationTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan OperationTimeout { get; set; } =
+        ZLinkRedisLocationOptions.DefaultOperationTimeout;
 
     internal ConfigurationOptions BuildConfiguration()
     {

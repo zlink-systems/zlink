@@ -28,6 +28,8 @@ namespace Zlink.Framework.Runtime.Configuration;
 /// </remarks>
 internal static class ZLinkEndpointNotation
 {
+    private const string PercentEscapeDigits = "25";
+
     // Schemes with a real dialable network authority (host[:port]). Every
     // other scheme's remainder is opaque (most commonly a filesystem path,
     // e.g. ipc:///var/run/x.sock, or a process-local identity, e.g.
@@ -150,8 +152,8 @@ internal static class ZLinkEndpointNotation
         if (percent < 0)
             return null;
         var raw = bracketContent[(percent + 1)..];
-        if (raw.StartsWith("25", StringComparison.Ordinal))
-            raw = raw[2..];
+        if (raw.StartsWith(PercentEscapeDigits, StringComparison.Ordinal))
+            raw = raw[PercentEscapeDigits.Length..];
         return raw.Length == 0 ? null : raw;
     }
 }

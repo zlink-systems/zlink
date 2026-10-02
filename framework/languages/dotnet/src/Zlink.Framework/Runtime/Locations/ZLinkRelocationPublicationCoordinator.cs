@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -425,10 +426,13 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                 nameof(request),
                 "The target owner lease generation must be positive."
             );
-        if (request.ApplicationAuthorityPayload.Length > 1024 * 1024)
+        if (
+            request.ApplicationAuthorityPayload.Length
+            > (int)ServiceWireConstants.AuthorityEnvelopeBytes
+        )
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                "The application authority payload cannot exceed 1 MiB."
+                $"The application authority payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
     }
 
@@ -569,9 +573,9 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
         writer.Write(payload.TargetOwnerLeaseGeneration);
         WriteBytes(writer, payload.ApplicationPayload.Span);
         writer.Flush();
-        if (stream.Length > 1024 * 1024)
+        if (stream.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new InvalidOperationException(
-                "The authority relocation payload cannot exceed 1 MiB."
+                $"The authority relocation payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
         return stream.ToArray();
     }
@@ -672,7 +676,7 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
     private static byte[] ReadBytes(BinaryReader reader)
     {
         var size = reader.ReadInt32();
-        if (size < 0 || size > 1024 * 1024)
+        if (size < 0 || size > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new InvalidDataException();
         return ReadExact(reader, size);
     }

@@ -74,9 +74,10 @@ internal static class ZLinkActorRelocationRegistry
     {
         return relocation.PolicyKind switch
         {
-            0 => throw Disabled(relocation),
-            1 => [],
-            2 when relocation.AdapterInvoker is { } invoker => await InvokeCaptureAsync(
+            ZLinkObjectRelocationRegistration.DisabledPolicy => throw Disabled(relocation),
+            ZLinkObjectRelocationRegistration.RecreatePolicy => [],
+            ZLinkObjectRelocationRegistration.SnapshotPolicy
+                when relocation.AdapterInvoker is { } invoker => await InvokeCaptureAsync(
                     services,
                     invoker,
                     actor,
@@ -97,15 +98,16 @@ internal static class ZLinkActorRelocationRegistry
     {
         switch (relocation.PolicyKind)
         {
-            case 0:
+            case ZLinkObjectRelocationRegistration.DisabledPolicy:
                 throw Disabled(relocation);
-            case 1 when payload.IsEmpty:
+            case ZLinkObjectRelocationRegistration.RecreatePolicy when payload.IsEmpty:
                 return;
-            case 1:
+            case ZLinkObjectRelocationRegistration.RecreatePolicy:
                 throw new InvalidDataException(
                     $"Recreate relocation state for Actor type '{relocation.InstanceType}' must be empty."
                 );
-            case 2 when relocation.AdapterInvoker is { } invoker:
+            case ZLinkObjectRelocationRegistration.SnapshotPolicy
+                when relocation.AdapterInvoker is { } invoker:
                 await invoker
                     .RestoreAsync(services, actor, payload, cancellationToken)
                     .ConfigureAwait(false);
@@ -124,16 +126,21 @@ internal static class ZLinkActorRelocationRegistry
     {
         var expectedContentType = relocation.PolicyKind switch
         {
-            1 => ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
-            2 => ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
-            0 => throw Disabled(relocation),
+            ZLinkObjectRelocationRegistration.RecreatePolicy =>
+                ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
+            ZLinkObjectRelocationRegistration.SnapshotPolicy =>
+                ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
+            ZLinkObjectRelocationRegistration.DisabledPolicy => throw Disabled(relocation),
             _ => throw MissingAdapter(relocation),
         };
         if (!string.Equals(contentType, expectedContentType, StringComparison.Ordinal))
             throw new InvalidDataException(
                 $"Actor type '{actorType}' relocation policy does not match the captured payload."
             );
-        if (relocation.PolicyKind == 1 && !applicationState.IsEmpty)
+        if (
+            relocation.PolicyKind == ZLinkObjectRelocationRegistration.RecreatePolicy
+            && !applicationState.IsEmpty
+        )
             throw new InvalidDataException(
                 $"Recreate relocation state for Actor type '{actorType}' must be empty."
             );

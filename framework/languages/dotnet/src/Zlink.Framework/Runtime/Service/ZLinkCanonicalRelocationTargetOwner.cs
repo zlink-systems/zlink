@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Spots;
 
@@ -16,6 +17,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     Func<CancellationToken, ValueTask>? awaitTargetReady = null
 ) : ICanonicalRelocationTarget
 {
+    private static readonly TimeSpan DefaultPrepareDeadline = TimeSpan.FromSeconds(30);
     private readonly Func<CancellationToken, ValueTask> _awaitTargetReady =
         awaitTargetReady ?? (static _ => ValueTask.CompletedTask);
 
@@ -59,7 +61,9 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                     .ConfigureAwait(false);
                 break;
             default:
-                throw new InvalidDataException("Command 40 object kind is invalid.");
+                throw new InvalidDataException(
+                    $"Command {(byte)ServiceWireConstants.Command.RelocationPrepare} object kind is invalid."
+                );
         }
 
         lease.MarkPrepared();
@@ -192,7 +196,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(
-            prepareDeadline > TimeSpan.Zero ? prepareDeadline : TimeSpan.FromSeconds(30)
+            prepareDeadline > TimeSpan.Zero ? prepareDeadline : DefaultPrepareDeadline
         );
         try
         {
@@ -218,7 +222,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
             || prepare.Target.NodeGeneration != localNodeGeneration
         )
             throw new InvalidDataException(
-                "Command 40 does not match its authenticated physical route."
+                $"Command {(byte)ServiceWireConstants.Command.RelocationPrepare} does not match its authenticated physical route."
             );
     }
 
@@ -228,7 +232,9 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     )
     {
         if (data.SenderRole != 1 || data.Coordinator.NodeRid != authenticatedSourceNodeRid)
-            throw new InvalidDataException("Command 31 does not match its authenticated source.");
+            throw new InvalidDataException(
+                $"Command {(byte)ServiceWireConstants.Command.RelocationData} does not match its authenticated source."
+            );
     }
 
     private static void ValidateAttempt(
@@ -237,7 +243,9 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     )
     {
         if (cutover.SenderRole != 1 || cutover.Coordinator.NodeRid != authenticatedSourceNodeRid)
-            throw new InvalidDataException("Command 34 does not match its authenticated source.");
+            throw new InvalidDataException(
+                $"Command {(byte)ServiceWireConstants.Command.RelocationCutover} does not match its authenticated source."
+            );
     }
 
     private static ZLinkPlacementObjectKind ObjectKind(byte kind) =>
