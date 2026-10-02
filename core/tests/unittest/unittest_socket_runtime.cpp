@@ -303,15 +303,8 @@ void test_socket_lifecycle_coordinator_tracks_destroy_state ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
 
-    TEST_ASSERT_FALSE (coordinator.is_destroy_pending ());
     TEST_ASSERT_FALSE (coordinator.is_destroyed ());
     TEST_ASSERT_NULL (coordinator.reaper_poller ());
-
-    coordinator.mark_destroy_pending ();
-    TEST_ASSERT_TRUE (coordinator.is_destroy_pending ());
-
-    coordinator.clear_destroy_pending ();
-    TEST_ASSERT_FALSE (coordinator.is_destroy_pending ());
 
     coordinator.mark_destroyed ();
     TEST_ASSERT_TRUE (coordinator.is_destroyed ());
@@ -319,16 +312,28 @@ void test_socket_lifecycle_coordinator_tracks_destroy_state ()
 
 void test_socket_lifecycle_coordinator_seals_mailbox_refs_at_zero ()
 {
+    zlink::socket_lifecycle_coordinator_t idle;
+    TEST_ASSERT_TRUE (idle.request_destroy ());
+    TEST_ASSERT_TRUE (idle.mailbox_refs_sealed ());
+    TEST_ASSERT_FALSE (idle.request_destroy ());
+    TEST_ASSERT_FALSE (idle.try_inc_mailbox_ref ());
+
     zlink::socket_lifecycle_coordinator_t coordinator;
 
     TEST_ASSERT_TRUE (coordinator.try_inc_mailbox_ref ());
-    TEST_ASSERT_EQUAL_INT (1, coordinator.mailbox_refcount ());
-    TEST_ASSERT_FALSE (coordinator.seal_mailbox_refs_if_zero ());
+    TEST_ASSERT_FALSE (coordinator.release_mailbox_ref ());
     TEST_ASSERT_FALSE (coordinator.mailbox_refs_sealed ());
 
-    TEST_ASSERT_FALSE (coordinator.dec_mailbox_ref ());
-    TEST_ASSERT_TRUE (coordinator.seal_mailbox_refs_if_zero ());
+    TEST_ASSERT_TRUE (coordinator.try_inc_mailbox_ref ());
+    TEST_ASSERT_EQUAL_INT (1, coordinator.mailbox_refcount ());
+    TEST_ASSERT_FALSE (coordinator.request_destroy ());
+    TEST_ASSERT_FALSE (coordinator.mailbox_refs_sealed ());
+
+    //  The release that drops the last pin after the request is the step
+    //  that seals the pins, so that caller alone finishes destruction.
+    TEST_ASSERT_TRUE (coordinator.release_mailbox_ref ());
     TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
+    TEST_ASSERT_FALSE (coordinator.request_destroy ());
     TEST_ASSERT_FALSE (coordinator.try_inc_mailbox_ref ());
     TEST_ASSERT_EQUAL_INT (0, coordinator.mailbox_refcount ());
 }
@@ -349,7 +354,7 @@ void test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref 
         std::thread seal_thread ([&] {
             while (!start.load (std::memory_order_acquire))
                 std::this_thread::yield ();
-            sealed = coordinator.seal_mailbox_refs_if_zero ();
+            sealed = coordinator.request_destroy ();
         });
 
         start.store (true, std::memory_order_release);
@@ -357,12 +362,42 @@ void test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref 
         seal_thread.join ();
 
         TEST_ASSERT_TRUE (acquired != sealed);
-        if (acquired) {
-            TEST_ASSERT_FALSE (coordinator.dec_mailbox_ref ());
-            TEST_ASSERT_TRUE (coordinator.seal_mailbox_refs_if_zero ());
-        }
+        if (acquired)
+            TEST_ASSERT_TRUE (coordinator.release_mailbox_ref ());
         TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
         TEST_ASSERT_FALSE (coordinator.try_inc_mailbox_ref ());
+    }
+}
+
+void test_socket_lifecycle_coordinator_one_caller_claims_destroy ()
+{
+    //  The last pin release and the destroy request race. Exactly one of them
+    //  seals the pins; the other must not reach the socket afterwards.
+    for (size_t attempt = 0; attempt < 200; ++attempt) {
+        zlink::socket_lifecycle_coordinator_t coordinator;
+        TEST_ASSERT_TRUE (coordinator.try_inc_mailbox_ref ());
+        std::atomic<bool> start (false);
+        bool released_claim = false;
+        bool requested_claim = false;
+
+        std::thread release_thread ([&] {
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+            released_claim = coordinator.release_mailbox_ref ();
+        });
+        std::thread request_thread ([&] {
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+            requested_claim = coordinator.request_destroy ();
+        });
+
+        start.store (true, std::memory_order_release);
+        release_thread.join ();
+        request_thread.join ();
+
+        TEST_ASSERT_TRUE (released_claim != requested_claim);
+        TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
+        TEST_ASSERT_EQUAL_INT (0, coordinator.mailbox_refcount ());
     }
 }
 
@@ -634,6 +669,7 @@ int main (int argc, char **argv)
     RUN_TEST (test_socket_lifecycle_coordinator_seals_mailbox_refs_at_zero);
     RUN_TEST (
       test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref);
+    RUN_TEST (test_socket_lifecycle_coordinator_one_caller_claims_destroy);
     RUN_TEST (test_socket_lifecycle_coordinator_completes_close_handoff_without_async_mailbox);
     RUN_TEST (test_mailbox_pending_hint_distinguishes_commands_from_plain_signals);
     RUN_TEST (test_mailbox_command_survives_primary_signaler_drain);

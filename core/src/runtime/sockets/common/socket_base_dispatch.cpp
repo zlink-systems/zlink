@@ -319,9 +319,7 @@ bool zlink::socket_base_t::acquire_poller_registration ()
 
 void zlink::socket_base_t::release_poller_registration ()
 {
-    const bool has_remaining_refs = lifecycle_coordinator ().release_poller_registration ();
-    if (!has_remaining_refs && lifecycle_coordinator ().is_destroy_pending ())
-        check_destroy ();
+    dec_mailbox_ref ();
 }
 
 void zlink::socket_base_t::notify_request_completion ()

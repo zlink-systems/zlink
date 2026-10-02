@@ -1637,8 +1637,8 @@ class public_memory_authority_store_t final
                   ? zlink::framework::authority_read_result_t{*snapshot}
                   : zlink::framework::authority_read_result_t{
                       zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}}});
-        if (remaining_auxiliary_conflicts != 0) {
-            --remaining_auxiliary_conflicts;
+        if (remaining_authority_conflicts != 0) {
+            --remaining_authority_conflicts;
             snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
             snapshot->store_now = std::chrono::system_clock::now ();
             return completed (zlink::framework::authority_compare_exchange_result_t{
@@ -1674,7 +1674,7 @@ class public_memory_authority_store_t final
     std::optional<zlink::framework::location_owner_token_t> observed_target_owner;
     std::optional<zlink::framework::object_creation_target_t> observed_target_placement;
     std::vector<std::string> observed_keys;
-    int remaining_auxiliary_conflicts = 0;
+    int remaining_authority_conflicts = 0;
     std::uint64_t retarget_authority_generation_advance = 1;
 
   private:
@@ -1811,7 +1811,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -2976,11 +2978,109 @@ void test_public_authority_store_adapter (test_context_t &test)
          .mesh_name = "mesh-b",
          .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
          .node_generation = 17});
-    /* A foreign source can preserve its relocating envelope between the
-     * target's read and owner-changing CAS.  That advances only storeVersion,
-     * not either logical fence, so the target must refresh through the same
-     * bounded retry window used by the other runtime implementations. */
-    store.remaining_auxiliary_conflicts = 7;
+    public_memory_authority_store_t conflicting_store;
+    conflicting_store.snapshot = store.snapshot;
+    conflicting_store.remaining_authority_conflicts = 1;
+    public_authority_store_adapter_t conflicting_adapter (conflicting_store);
+    const auto conflicted =
+      conflicting_adapter.publish (source, target, target_owner, target_placement, "root-public",
+                                   42, digest_with (9), relocated_application_payload);
+    test.require (
+      conflicted.status == authority_publish_status_t::conflict && conflicted.current
+        && conflicting_store.remaining_authority_conflicts == 0
+        && conflicting_store.snapshot->store_version != store.snapshot->store_version
+        && conflicting_store.snapshot->authority_owner_generation
+             == source.authority_owner_generation
+        && conflicting_store.snapshot->payload == source_application_payload,
+      "public authority adapter must preserve a changed initial authority version as conflict");
+    namespace actor_wire = zlink::framework::runtime::actor_authority_detail;
+    const auto source_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (source_application_payload);
+    constexpr std::uint64_t relocation_id_high = 1;
+    constexpr std::uint64_t relocation_id_low = 2;
+    constexpr std::uint8_t absent_wire_field = 0;
+    constexpr std::uint8_t present_wire_slot = 1;
+    constexpr std::size_t optional_authority_slot_count = 2;
+    std::vector<std::byte> captured_slot;
+    actor_wire::append_u64be (captured_slot, relocation_id_high);
+    actor_wire::append_u64be (captured_slot, relocation_id_low);
+    actor_wire::append_u64be (captured_slot, source.object_generation);
+    actor_wire::append_u64be (captured_slot,
+                              absent_wire_field); // Source capture has no target attempt.
+    actor_wire::append_text16be (captured_slot, "root-public");
+    actor_wire::append_u32be (captured_slot, 42);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target node is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target owner is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->store_version);
+    constexpr std::uint8_t captured_phase = 2;
+    actor_wire::append_u8 (captured_slot, captured_phase);
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field);
+    auto captured_payload =
+      zlink::framework::runtime::decode_canonical_authority_payload (source_application_payload);
+    constexpr auto absent_slot_size = sizeof (std::uint8_t) + sizeof (std::uint32_t);
+    captured_payload->body.resize (captured_payload->body.size ()
+                                   - optional_authority_slot_count * absent_slot_size);
+    actor_wire::append_u8 (captured_payload->body, present_wire_slot);
+    actor_wire::append_u32be (captured_payload->body,
+                              static_cast<std::uint32_t> (captured_slot.size ()));
+    actor_wire::append_bytes (captured_payload->body, captured_slot);
+    actor_wire::append_u8 (captured_payload->body, absent_wire_field); // Activation slot is absent.
+    actor_wire::append_u32be (captured_payload->body, absent_wire_field);
+    public_memory_authority_store_t captured_store;
+    captured_store.snapshot = store.snapshot;
+    captured_store.snapshot->store_version = "2";
+    captured_store.snapshot->payload =
+      zlink::framework::runtime::encode_canonical_authority_payload (*captured_payload);
+    const auto captured_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (
+        captured_store.snapshot->payload);
+    test.require (captured_projection && captured_projection->relocation_phase == captured_phase
+                    && captured_projection->relocation_expected_store_version
+                         == store.snapshot->store_version,
+                  "captured authority fixture must retain the original coordinator version");
+    public_authority_store_adapter_t captured_adapter (captured_store);
+    const auto captured_conflict = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version);
+    test.require (captured_conflict.status == authority_publish_status_t::conflict
+                    && captured_store.snapshot->authority_owner_generation
+                         == source.authority_owner_generation
+                    && !captured_store.observed_target_owner,
+                  "captured source metadata must not replace the initial authority version fence");
+    const relocation_authority_fence_t captured_fence{
+      source.kind,           source.key,   store.snapshot->store_version,
+      store.snapshot->owner, target_owner, {relocation_id_high, relocation_id_low}};
+    test.require (captured_adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::unsettled,
+                  "matching Captured source must keep target staging eligible");
+    auto other_relocation = captured_fence;
+    ++other_relocation.relocation.low;
+    test.require (captured_adapter.observe_relocation (other_relocation)
+                    == relocation_authority_t::source_preserved,
+                  "another relocation must not inherit the captured source fence");
+    auto other_owner = captured_fence;
+    other_owner.source_owner.lease_generation++;
+    test.require (captured_adapter.observe_relocation (other_owner)
+                    == relocation_authority_t::source_preserved,
+                  "another source lease must not inherit the captured source fence");
+    const auto captured_published = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version,
+      {relocation_id_high, relocation_id_low}, store.snapshot->owner);
+    test.require (captured_published.status == authority_publish_status_t::published
+                    && captured_store.observed_target_owner,
+                  "matching Captured source must use its current provider version for target CAS");
     store.retarget_authority_generation_advance = 9;
     const auto published =
       adapter.publish (source, target, target_owner, target_placement, "root-public", 42,
@@ -2992,8 +3092,8 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->target.node_id == "node-b"
         && published.current->target.authority_owner_generation == 20
         && published.current->application_payload == relocated_application_payload
-        && store.remaining_auxiliary_conflicts == 0,
-      "public authority adapter must refresh through bounded auxiliary store-version conflicts");
+        && store.remaining_authority_conflicts == 0,
+      "public authority adapter must publish with an unchanged initial authority fence");
     const auto stored_projection = store.snapshot
                                      ? zlink::framework::runtime::decode_actor_authority_payload (
                                          store.snapshot->payload, store.snapshot->object_generation)
@@ -3395,7 +3495,9 @@ class settlement_authority_t final : public authority_relocation_port_t
                                         std::uint32_t,
                                         inventory_digest_t,
                                         std::vector<std::byte> = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         return {};
     }

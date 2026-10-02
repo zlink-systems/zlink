@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
@@ -18,6 +19,7 @@
 #include <limits>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -352,6 +354,9 @@ class creation_terminal_failure_store_t final : public location_store_t
     {
         none,
         before_commit,
+        capacity_conflict_once,
+        reserve_counter_conflict,
+        concurrent_terminal,
         after_commit,
         between_writes
     };
@@ -372,13 +377,75 @@ class creation_terminal_failure_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        if (fault == fault_t::none)
-            co_return co_await inner.write (std::move (request));
-        ++writes;
-        attempted = request;
-        if (fault == fault_t::before_commit)
+        for (const auto &mutation : request.mutations) {
+            const auto *put = std::get_if<store_put_t> (&mutation);
+            if (!put || !put->key.value.starts_with (std::string ("authority") + '\0'))
+                continue;
+            const auto authority = nlohmann::json::parse (put->bytes.begin (), put->bytes.end ());
+            const auto &pending = authority.at (location_record_fields::pendingCreation);
+            if (!pending.is_null ())
+                reservation_attempts.push_back (
+                  pending.at (location_record_fields::reservationId).get<std::string> ());
+        }
+        if (fault == fault_t::reserve_counter_conflict) {
+            fault = fault_t::none;
+            const auto counter = std::get<store_put_t> (request.mutations.at (1));
+            store_write_request_t advance{{request.conditions.at (1)}, {counter}};
+            (void) co_await inner.write (std::move (advance));
             co_return store_write_result_t{
               store_write_conflict_t{std::chrono::system_clock::now ()}};
+        }
+        if (fault == fault_t::none) {
+            const auto applied = co_await inner.write (request);
+            if (attempted) {
+                attempted = std::move (request);
+                if (const auto *written = std::get_if<store_write_applied_t> (&applied))
+                    terminal_write_store_now = written->store_now;
+            }
+            co_return applied;
+        }
+        ++writes;
+        attempted = request;
+        if (fault == fault_t::concurrent_terminal) {
+            auto terminal = std::get<store_put_t> (request.mutations.back ());
+            terminal.bytes = bytes ("winning-terminal");
+            store_write_request_t publish{{store_missing_condition_t{terminal.key}}, {terminal}};
+            (void) co_await inner.write (std::move (publish));
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
+        }
+        if (fault == fault_t::before_commit) {
+            const auto authority_key = std::visit (
+              [] (const auto &mutation) { return mutation.key; }, request.mutations.front ());
+            const auto row = co_await inner.read (authority_key);
+            const auto &found = std::get<store_found_t> (row);
+            store_write_request_t change{
+              {store_version_condition_t{authority_key, found.value.version}},
+              {store_put_t{authority_key, found.value.bytes, std::nullopt}}};
+            (void) co_await inner.write (std::move (change));
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
+        }
+        if (fault == fault_t::capacity_conflict_once) {
+            if (std::none_of (request.conditions.begin (), request.conditions.end (),
+                              [this] (const auto &condition) {
+                                  return std::visit (
+                                    [this] (const auto &value) {
+                                        return value.key.value == conflicting_capacity_key.value;
+                                    },
+                                    condition);
+                              }))
+                co_return co_await inner.write (std::move (request));
+            fault = fault_t::none;
+            const auto row = co_await inner.read (conflicting_capacity_key);
+            const auto &found = std::get<store_found_t> (row);
+            store_write_request_t change{
+              {store_version_condition_t{conflicting_capacity_key, found.value.version}},
+              {store_put_t{conflicting_capacity_key, found.value.bytes, std::nullopt}}};
+            (void) co_await inner.write (std::move (change));
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
+        }
         if (fault == fault_t::between_writes && writes > 1)
             co_return result_t<store_write_result_t>::failure (
               framework_error_kind_t::internal_failure, "provider failed between writes");
@@ -395,6 +462,8 @@ class creation_terminal_failure_store_t final : public location_store_t
     in_memory_location_store_t inner;
     fault_t fault = fault_t::none;
     unsigned writes = 0;
+    std::vector<std::string> reservation_attempts;
+    store_key_t conflicting_capacity_key;
     std::optional<store_write_request_t> attempted;
     std::optional<std::chrono::system_clock::time_point> terminal_read_store_now;
     std::optional<std::chrono::system_clock::time_point> terminal_write_store_now;
@@ -420,6 +489,7 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
                                                    maintenance_policy_kind_t::recreate, false, 0});
         descriptor.capacity.actors.limit = 1;
+        provider.conflicting_capacity_key = capacity_key (descriptor);
         ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
                      .value ()
@@ -578,7 +648,7 @@ TEST_P (CreationTerminalTest, LostAtomicWriteReplyReplaysStoredTerminal)
     expect_published_terminal_and_replay ();
 }
 
-TEST_P (CreationTerminalTest, ConditionalConflictLeavesReservationAndCapacityUnchanged)
+TEST_P (CreationTerminalTest, ConditionalAuthorityConflictLeavesReservationAndCapacityUnchanged)
 {
     provider.fault = creation_terminal_failure_store_t::fault_t::before_commit;
     const auto result = repository.complete_creation (request ()).result ().value ();
@@ -593,7 +663,48 @@ TEST_P (CreationTerminalTest, ConditionalConflictLeavesReservationAndCapacityUnc
     ASSERT_NE (creating, nullptr);
     EXPECT_EQ (creating->allocation.state, placement_allocation_state_t::reserved);
     EXPECT_EQ (creating->payload, bytes ("creating"));
-    EXPECT_EQ (creating->store_version, fence.expected_store_version);
+    EXPECT_NE (creating->store_version, fence.expected_store_version);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 1);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsActive"), 0);
+}
+
+TEST_P (CreationTerminalTest, SharedCapacityConflictReconstructsWithoutChangingReservation)
+{
+    provider.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_creation_completed_result_t> (result));
+    expect_published_terminal_and_replay ();
+}
+
+TEST_P (CreationTerminalTest, ReserveCounterConflictKeepsOperationReservationIdentity)
+{
+    ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+      repository.abort ({reserve_request.key, fence}).result ().value ()));
+    provider.reservation_attempts.clear ();
+    provider.fault = creation_terminal_failure_store_t::fault_t::reserve_counter_conflict;
+    reserve_request.operation_deadline = publication.operation_deadline;
+    const auto result = repository.reserve (reserve_request).result ().value ();
+    const auto *reserved = std::get_if<object_reserved_t> (&result);
+    ASSERT_NE (reserved, nullptr);
+    ASSERT_EQ (provider.reservation_attempts.size (), 2u);
+    EXPECT_EQ (provider.reservation_attempts.front (), provider.reservation_attempts.back ());
+    EXPECT_EQ (reserved->fence.reservation_id, provider.reservation_attempts.front ());
+}
+TEST_P (CreationTerminalTest, ConcurrentTerminalEndsConflictReconstruction)
+{
+    provider.fault = creation_terminal_failure_store_t::fault_t::concurrent_terminal;
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    const auto *completed = std::get_if<object_creation_already_completed_result_t> (&result);
+    ASSERT_NE (completed, nullptr);
+    EXPECT_EQ (completed->terminal.terminal_envelope, bytes ("winning-terminal"));
+    EXPECT_EQ (provider.writes, 1u);
+    const auto authority =
+      repository.read_authority (actor_authority_key (reserve_request.key.global_id))
+        .result ()
+        .value ();
+    const auto *reserved = std::get_if<authority_snapshot_t> (&authority);
+    ASSERT_NE (reserved, nullptr);
+    EXPECT_EQ (reserved->store_version, fence.expected_store_version);
     EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 1);
     EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsActive"), 0);
 }
@@ -683,6 +794,15 @@ class reject_next_authority_capacity_write_store_t final : public location_store
                 reject_next = false;
                 rejected_atomic_batch = true;
                 rejected_capacity_mutations = capacity_mutations;
+                const auto authority_key = std::visit (
+                  [] (const auto &mutation) { return mutation.key; }, request.mutations.front ());
+                const auto row =
+                  std::get<store_found_t> (inner.read (authority_key).result ().value ());
+                (void) inner
+                  .write ({{store_version_condition_t{authority_key, row.value.version}},
+                           {store_put_t{authority_key, row.value.bytes, std::nullopt}}})
+                  .result ()
+                  .value ();
                 return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
                   store_write_result_t{store_write_conflict_t{std::chrono::system_clock::now ()}}));
             }
@@ -701,6 +821,154 @@ class reject_next_authority_capacity_write_store_t final : public location_store
     std::size_t rejected_capacity_mutations = 0;
 };
 
+class NewOwnerRecoveryTest : public ::testing::TestWithParam<std::tuple<bool, bool, bool>>
+{
+};
+
+TEST_P (NewOwnerRecoveryTest, SourceDescriptorAndLeaseDoNotOwnTargetCommit)
+{
+    creation_terminal_failure_store_t store;
+    provider_location_repository_t provider (store);
+    in_memory_location_repository_t memory;
+    location_repository_t &repository = std::get<0> (GetParam ())
+                                          ? static_cast<location_repository_t &> (provider)
+                                          : static_cast<location_repository_t &> (memory);
+    const bool aggregate = std::get<1> (GetParam ());
+    const bool target_live = std::get<2> (GetParam ());
+    const auto source_claim = repository.claim_owner_lease ("source", 30s).result ().value ();
+    const auto target_claim = repository.claim_owner_lease ("target", 30s).result ().value ();
+    const auto source = std::get<owner_lease_claimed_t> (source_claim).token;
+    const auto target = std::get<owner_lease_claimed_t> (target_claim).token;
+    const auto publish = [&] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "new-owner-recovery";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.activation_concurrency.limit = 2;
+        descriptor.security_identity = "new-owner-recovery";
+        descriptor.object_capabilities = {
+          {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0},
+          {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::snapshot, true,
+           8}};
+        descriptor.capacity.actors.limit = 1;
+        descriptor.capacity.spots.limit = 1;
+        descriptor.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "room", {0, 0, 1}});
+        EXPECT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        return descriptor;
+    };
+    const auto source_descriptor = publish ("source-node", source);
+    publish ("target-node", target);
+    const object_creation_target_t source_placement{
+      "new-owner-recovery", node_rid_t::from_string ("source-node"), 1, source};
+    const object_creation_target_t target_placement{
+      "new-owner-recovery", node_rid_t::from_string ("target-node"), 1, target};
+    const auto create = [&] (placement_object_kind_t kind, std::string id) {
+        object_reserve_request_t request;
+        request.key = {kind, std::move (id)};
+        request.intent.stable_type = kind == placement_object_kind_t::actor ? "player" : "room";
+        request.target = source_placement;
+        if (kind == placement_object_kind_t::actor)
+            request.capacity_bundle.actor_slots = 1;
+        else {
+            request.capacity_bundle.spot_slots = 1;
+            request.capacity_bundle.spot_type =
+              spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
+        }
+        const auto reserved = repository.reserve (request).result ().value ();
+        const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+        EXPECT_NE (reservation, nullptr);
+        if (!reservation)
+            return authority_snapshot_t{};
+        const auto committed =
+          repository.commit ({request.key, reservation->fence, bytes ("ready")}).result ().value ();
+        const auto *ready = std::get_if<object_committed_t> (&committed);
+        EXPECT_NE (ready, nullptr);
+        return ready ? ready->ready : authority_snapshot_t{};
+    };
+    const auto actor = create (placement_object_kind_t::actor, "actor");
+    const auto spot =
+      aggregate ? create (placement_object_kind_t::user_spot, "spot") : authority_snapshot_t{};
+    ASSERT_EQ (
+      repository
+        .remove_mesh_node (
+          {"new-owner-recovery", zlink::routing_id_t::from (std::string ("source-node"))}, source)
+        .result ()
+        .value (),
+      location_write_status_t::stored);
+    ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+      repository.release_owner_lease (source).result ().value ()));
+    if (std::get<0> (GetParam ()) && target_live) {
+        store.conflicting_capacity_key = capacity_key (source_descriptor);
+        store.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
+    }
+    if (aggregate) {
+        aggregate_prepare_request_t request;
+        request.aggregate_id.value[0] = std::byte{1};
+        request.aggregate_generation = 1;
+        request.participants = {
+          {actor_authority_key ("actor"), actor.store_version,
+           authority_generation_transition_t::new_owner, bytes ("moved-actor")},
+          {spot_authority_key ("spot"), spot.store_version,
+           authority_generation_transition_t::new_owner, bytes ("moved-spot")}};
+        request.target_owner = target;
+        request.target_descriptor = {"new-owner-recovery",
+                                     zlink::routing_id_t::from (std::string ("target-node"))};
+        request.target_descriptor_lifecycle_generation = 1;
+        request.capacity_bundle.actor_slots = 1;
+        request.capacity_bundle.spot_slots = 1;
+        request.capacity_bundle.spot_type =
+          spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
+        const auto prepared = repository.prepare_aggregate (request).result ().value ();
+        const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
+        ASSERT_NE (fence, nullptr);
+        if (!target_live)
+            ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+              repository.release_owner_lease (target).result ().value ()));
+        EXPECT_EQ (repository.commit_aggregate (fence->fence).result ().value (),
+                   target_live ? aggregate_commit_result_t::committed
+                               : aggregate_commit_result_t::stale);
+    } else {
+        if (!target_live)
+            ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+              repository.release_owner_lease (target).result ().value ()));
+        const auto moved =
+          repository
+            .compare_exchange_authority (actor_authority_key ("actor"), actor.store_version,
+                                         authority_retarget_t{bytes ("moved"), target_placement})
+            .result ()
+            .value ();
+        EXPECT_EQ (std::holds_alternative<authority_stored_t> (moved), target_live);
+    }
+    const auto observed =
+      repository.read_authority (actor_authority_key ("actor")).result ().value ();
+    const auto *current = std::get_if<authority_snapshot_t> (&observed);
+    ASSERT_NE (current, nullptr);
+    EXPECT_EQ (current->object_generation, actor.object_generation);
+    EXPECT_EQ (current->owner.owner_id, target_live ? target.owner_id : source.owner_id);
+    EXPECT_EQ (current->allocation.target.node_rid.value (),
+               target_live ? "target-node" : "source-node");
+    if (target_live)
+        EXPECT_NE (current->store_version, actor.store_version);
+    else
+        EXPECT_EQ (current->store_version, actor.store_version);
+}
+
+INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
+                          NewOwnerRecoveryTest,
+                          ::testing::Combine (::testing::Bool (),
+                                              ::testing::Bool (),
+                                              ::testing::Bool ()));
 class aggregate_commit_contention_store_t final : public location_store_t
 {
   public:
@@ -1702,7 +1970,7 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransien
 
 TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecycleThroughProvider)
 {
-    in_memory_location_store_t provider;
+    creation_terminal_failure_store_t provider;
     provider_location_repository_t repository (provider);
     const auto claim = repository.claim_owner_lease ("owner-a", 30s).result ().value ();
     const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
@@ -1849,6 +2117,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     const auto prepared = reopened.prepare_aggregate (aggregate).result ().value ();
     const auto *aggregate_fence = std::get_if<aggregate_prepared_t> (&prepared);
     ASSERT_NE (aggregate_fence, nullptr);
+    provider.conflicting_capacity_key = capacity_key (descriptor);
+    provider.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
     EXPECT_EQ (reopened.commit_aggregate (aggregate_fence->fence).result ().value (),
                aggregate_commit_result_t::committed);
     // The two-participant aggregate issues 4 and 5 after reserve/retarget/
@@ -2164,7 +2434,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
     EXPECT_EQ (provider.rejected_capacity_mutations, 2u);
     const auto after_rejected = std::get<authority_snapshot_t> (
       repository.read_authority (actor_authority_key ("actor-atomic")).result ().value ());
-    EXPECT_EQ (after_rejected.store_version, atomic_actor.store_version);
+    EXPECT_NE (after_rejected.store_version, atomic_actor.store_version);
     EXPECT_EQ (after_rejected.allocation.target.node_rid.value (), "source-node");
     auto node_source_row =
       std::get<store_found_t> (provider.inner.read (node_source_capacity_key).result ().value ());
@@ -2176,6 +2446,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
     EXPECT_EQ (node_source.at ("active").at ("actors"), 1);
     EXPECT_EQ (target_capacity.at ("actorsActive"), 1);
 
+    atomic_actor = after_rejected;
     node_source["active"]["actors"] = 0;
     ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
       provider.inner

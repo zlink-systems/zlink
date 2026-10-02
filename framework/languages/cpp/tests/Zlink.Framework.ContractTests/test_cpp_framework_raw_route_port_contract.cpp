@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <optional>
 #include <iostream>
 #include <memory>
@@ -111,11 +112,14 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     assert (initial == backend::raw_request_result_t::failed);
     const auto refused = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::transport_failed, "tokenless capacity");
-    const auto *refused_error = zlink::framework::detail::framework_error (refused);
-    assert (refused_error != nullptr);
-    assert (refused_error->kind () == framework_error_kind_t::unavailable);
-    assert (zlink::framework::detail::boundary_state (*refused_error)
-            != zlink::framework::detail::boundary_error_t::timed_out);
+    try {
+        std::rethrow_exception (refused);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == framework_error_kind_t::unavailable);
+        assert (zlink::framework::detail::boundary_state (error)
+                != zlink::framework::detail::boundary_error_t::timed_out);
+    }
     const auto completion = backend::map_binding_request_submit_result (
       zlink::submit_result_t::backpressured,
       backend::raw_request_failure_phase_t::completion_terminal,
@@ -123,9 +127,12 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     assert (completion == backend::raw_request_result_t::timed_out);
     const auto expired = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::timed_out, "expired WRITABLE token");
-    const auto *expired_error = zlink::framework::detail::framework_error (expired);
-    assert (expired_error != nullptr);
-    assert (expired_error->kind () == framework_error_kind_t::deadline_exceeded);
+    try {
+        std::rethrow_exception (expired);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        assert (error.kind () == framework_error_kind_t::deadline_exceeded);
+    }
     std::cout << "f20 tokenless=Unavailable writable_timeout=DeadlineExceeded" << std::endl;
 }
 
