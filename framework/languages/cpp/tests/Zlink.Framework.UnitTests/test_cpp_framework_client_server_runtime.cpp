@@ -809,8 +809,17 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
     const auto cancelled =
       client_server_operation_exception (operation_terminal_t::cancelled, "request");
-    assert (cancelled.kind () == framework_error_kind_t::invalid_operation);
     assert (zlink::framework::detail::boundary_state (cancelled) == boundary_error_t::cancelled);
+    const auto cancelled_result =
+      zlink::framework::detail::result_access_t::failure<void> (cancelled);
+    assert (!cancelled_result && cancelled_result.error () == nullptr);
+    try {
+        cancelled_result.value ();
+        assert (false);
+    }
+    catch (const std::system_error &error) {
+        assert (error.code () == std::errc::operation_canceled);
+    }
 
     const auto disconnected =
       client_server_operation_exception (operation_terminal_t::transport_failed, "request");

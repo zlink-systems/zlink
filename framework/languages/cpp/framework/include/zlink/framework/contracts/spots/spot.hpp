@@ -565,7 +565,7 @@ task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t
         }
     }
     catch (...) {
-        co_return current_exception_result<zlink::message_t> ("spot handler threw an exception");
+        co_return current_exception_result<zlink::message_t> ();
     }
 }
 

@@ -134,8 +134,7 @@ inline framework_exception_t detail_make_boundary_exception (detail::boundary_er
       : state == detail::boundary_error_t::disconnected || state == detail::boundary_error_t::closed
           || state == detail::boundary_error_t::stale_generation
         ? framework_error_kind_t::unavailable
-      : state == detail::boundary_error_t::cancelled ? framework_error_kind_t::invalid_operation
-                                                     : framework_error_kind_t::internal_failure;
+        : framework_error_kind_t::internal_failure;
     framework_exception_t error (kind, std::move (message));
     error._boundary = state;
     return error;
