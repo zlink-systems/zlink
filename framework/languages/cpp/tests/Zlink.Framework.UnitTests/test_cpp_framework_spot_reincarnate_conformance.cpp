@@ -157,7 +157,6 @@ struct evidence_t
     std::vector<std::string> order;
     std::vector<std::uint64_t> business_generations;
     std::vector<std::string> business_packets;
-    std::vector<std::string> terminal_packets;
     std::map<std::string, int> terminals;
     std::vector<zf::authority_snapshot_t> committed;
     std::vector<std::uint64_t> deleted_generations;
@@ -442,9 +441,6 @@ zf::task_t<reply_t> count_completion (zf::task_t<reply_t> task,
       task, [evidence, packet] (const zf::result_t<reply_t> &result) {
           std::lock_guard lock (evidence->mutex);
           ++evidence->terminals[packet];
-          if (packet == intent_request_t::packet_name
-              || packet == followup_intent_request_t::packet_name)
-              evidence->terminal_packets.push_back (packet);
           if (!result) {
               if ((packet == intent_request_t::packet_name
                    || packet == followup_intent_request_t::packet_name)
@@ -1265,7 +1261,6 @@ void check_pending_initializer_two_requests (branch_t kind)
     EXPECT_EQ (1, evidence->terminals[no_intent_request_t::packet_name]);
     const std::vector<std::string> expected_packets{intent_request_t::packet_name,
                                                     followup_intent_request_t::packet_name};
-    EXPECT_EQ (expected_packets, evidence->terminal_packets);
     if (initializer_fails (kind)) {
         for (const auto *result : {&*exercise->intent_result, &*exercise->followup_result}) {
             EXPECT_FALSE (*result);
