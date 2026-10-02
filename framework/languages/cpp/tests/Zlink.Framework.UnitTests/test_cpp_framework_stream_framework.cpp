@@ -1961,6 +1961,8 @@ int main ()
         [&transport_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return transport_session; }}},
       std::chrono::milliseconds{30'000}, nullptr, {}, transport_listeners);
+    auto transport_drain = std::make_shared<std::atomic_bool> (false);
+    transport_host.bind_drain_flag (transport_drain);
     transport_host.start (transport_provider);
     const auto transport_endpoint = listener_endpoint (
       *transport_listeners, zlink::framework::listener_kind_t::stream, "transport-stream");
@@ -2213,6 +2215,24 @@ int main ()
     if (!submission_returned || !transport_session.wait_disconnected (8)) {
         transport_host.stop ();
         return 331;
+    }
+
+    transport_drain->store (true, std::memory_order_release);
+    auto draining_client = connect_loopback (transport_port);
+    const auto draining_bytes = read_until_peer_close (draining_client, std::chrono::seconds (5));
+    const zlink::framework::detail::stream_header_t draining_header (
+      stream_message_kind_t::control, stream_codec_t::raw, stream_header_flags_t::none,
+      std::nullopt, "session-closing", {});
+    const auto draining_payload =
+      zlink::framework::detail::stream_runtime_t::encode_session_closing_payload (
+        zlink::framework::stream_close_reason_t::server_drain, "node is draining");
+    const auto expected_draining_bytes =
+      transport_runtime.encode_frame (draining_header, zlink::message_t::from (draining_payload));
+    close_native_client (draining_client);
+    if (!draining_bytes || !expected_draining_bytes
+        || *draining_bytes != expected_draining_bytes.value ()) {
+        transport_host.stop ();
+        return 332;
     }
 
     transport_host.stop ();
