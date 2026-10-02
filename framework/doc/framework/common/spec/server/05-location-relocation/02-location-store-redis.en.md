@@ -271,7 +271,7 @@ sends or receives messages — publishes a
 [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor)
 for automatic discovery so other nodes can find its identity and connection
 information. That descriptor, an owner lease, a ClientServer server descriptor,
-a fanout publisher descriptor, an authority record, a creation terminal, and the
+a fanout publisher descriptor, an authority record, a creation request, a creation terminal, and the
 [progress records of a SpotWide relocation](01-location-runtime.en.md#35-progress-records-of-a-spotwide-relocation)
 must use the same opaque record representation regardless of language —
 otherwise a record one language writes can't be read by another. These

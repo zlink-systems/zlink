@@ -243,7 +243,9 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   }
 
   private prepareConnectCore(key: string): ZLinkSpotNodeConnectionIntent | undefined {
-    if (this.connectionIntents.has(key)) return undefined;
+    const current = this.connectionIntents.get(key);
+    if (current !== undefined)
+      return current.connectionIntentId === undefined ? current : undefined;
     const intent: ZLinkSpotNodeConnectionIntent = {};
     this.connectionIntents.set(key, intent);
     return intent;
@@ -254,29 +256,19 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     key: string,
     intent: ZLinkSpotNodeConnectionIntent
   ): Promise<boolean> {
-    try {
-      const connectionIntentId = await this.node.connectPeer({
-        endpoint: target.endpoint,
-        expectedRid: target.nodeRid === undefined ? undefined : toBackendRoutingId(target.nodeRid),
-        expectedSecurityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
-        expectedLifecycleGeneration: target.lifecycleGeneration
-      });
-      const accepted = await this.lane.run(() => {
-        if (this.connectionIntents.get(key) !== intent) return false;
-        intent.connectionIntentId = connectionIntentId;
-        return true;
-      });
-      if (!accepted) this.node.removePeerConnection(connectionIntentId);
-      return accepted;
-    } catch {
-      // A discovered endpoint can become unavailable between the store read and
-      // the socket connect. Leave the target inactive so the next reconciliation
-      // can retry without terminating the host's background runtime.
-      await this.lane.run(() => {
-        if (this.connectionIntents.get(key) === intent) this.connectionIntents.delete(key);
-      });
-      return false;
-    }
+    const connectionIntentId = await this.node.connectPeer({
+      endpoint: target.endpoint,
+      expectedRid: target.nodeRid === undefined ? undefined : toBackendRoutingId(target.nodeRid),
+      expectedSecurityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
+      expectedLifecycleGeneration: target.lifecycleGeneration
+    });
+    const accepted = await this.lane.run(() => {
+      if (this.connectionIntents.get(key) !== intent) return false;
+      intent.connectionIntentId = connectionIntentId;
+      return true;
+    });
+    if (!accepted) this.node.removePeerConnection(connectionIntentId);
+    return accepted;
   }
 
   private disconnectPeer(target: ZLinkAutoConnectTarget): void {

@@ -51,7 +51,8 @@ async function main() {
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
-    context: {}
+    context: {},
+    errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
   });
   runtime.publishers.set('play', publisher);
 

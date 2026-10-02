@@ -274,7 +274,10 @@ test('Logical Multicast preserves source refusal and zero-recipient statuses', (
   const {
     ZLinkSpotNodeRuntimeManager
   } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
-  const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
+  const manager = new ZLinkSpotNodeRuntimeManager({
+    detachedTaskRunner: {},
+    errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
+  });
   for (const [result, expected] of [
     [SubmitResult.NotAdmitted, ZLinkSubmitStatus.Backpressured],
     [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured],
