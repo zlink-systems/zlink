@@ -12,6 +12,7 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
     private int _version;
 
     public int Count { get; private set; }
+    internal ZLinkSerialWorkItem? Head => _head;
 
     public void Enqueue(ZLinkSerialWorkItem item)
     {
@@ -69,7 +70,13 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         return true;
     }
 
-    public bool TryDequeueContinuation(out ZLinkSerialWorkItem item)
+    public bool TryDequeueContinuation(out ZLinkSerialWorkItem item) =>
+        TryDequeueMatching(static candidate => !candidate.ReservationHeld, out item);
+
+    internal bool TryDequeueMatching(
+        Func<ZLinkSerialWorkItem, bool> predicate,
+        out ZLinkSerialWorkItem item
+    )
     {
         EnsureConsistentState();
         ZLinkSerialWorkItem? previous = null;
@@ -77,7 +84,7 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         while (current is not null)
         {
             var next = ReferenceEquals(current.Next, current) ? null : current.Next;
-            if (!current.ReservationHeld)
+            if (predicate(current))
             {
                 if (previous is null)
                     _head = next;

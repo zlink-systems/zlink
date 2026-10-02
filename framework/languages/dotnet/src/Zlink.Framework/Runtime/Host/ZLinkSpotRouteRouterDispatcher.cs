@@ -15,7 +15,9 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(Func<ZLinkFrameworkComponen
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         return ResolveMeshNode(routerChannelId)
@@ -28,7 +30,8 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(Func<ZLinkFrameworkComponen
                 ownerLeaseGeneration,
                 parts,
                 cancellationToken,
-                metadata
+                metadata,
+                readyRoute
             );
     }
 
@@ -70,7 +73,9 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(Func<ZLinkFrameworkComponen
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         return await ResolveMeshNode(routerChannelId)
@@ -84,7 +89,8 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(Func<ZLinkFrameworkComponen
                 parts,
                 timeout,
                 cancellationToken,
-                metadata
+                metadata,
+                readyRoute
             )
             .ConfigureAwait(false);
     }

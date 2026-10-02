@@ -145,13 +145,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         var cached = await TryGetCachedAsync(_spotRoutes, key).ConfigureAwait(false);
         if (cached.Found)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"resolve_spot_row spot={key.SpotId} source=cache hit={cached.Row is not null}"
-            );
+            if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"resolve_spot_row spot={key.SpotId} source=cache hit={cached.Row is not null}"
+                );
             return (cached.Row, true, ZLinkLocationResolutionKind.Ready);
         }
 
-        ZLinkFrameworkDebugLog.SpotDiscovery($"resolve_spot_row spot={key.SpotId} source=store");
+        if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"resolve_spot_row spot={key.SpotId} source=store"
+            );
         var authority = await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,
@@ -175,9 +179,23 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 null,
                 liveRowPresent,
                 raw is not null ? ZLinkLocationResolutionKind.KnownUnavailable
-                : IsClosingUserSpot(authority) ? ZLinkLocationResolutionKind.Closing
+                : IsClosingSpot(authority) ? ZLinkLocationResolutionKind.Closing
                 : ZLinkLocationResolutionKind.Missing
             );
+        }
+
+        if (IsClosingSpot(authority))
+        {
+            InvalidateSpotRoute(key);
+            var remaining = await _leaseTracker
+                .GetOwnerTokenRemainingAdmissionLifetimeAsync(
+                    new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return remaining is null
+                ? (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable)
+                : (row, liveRowPresent, ZLinkLocationResolutionKind.Closing);
         }
 
         if (
@@ -394,12 +412,19 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    // A User Spot whose authority is Closing is not Missing: the row stays
-    // until Close releases it (spec 08-routing §resolver results).
-    private static bool IsClosingUserSpot(ZLinkAuthorityReadResult authority) =>
+    // Closing 상태의 User 또는 Instance Spot은 기존 owner route를 유지한다.
+    // owner가 원 message intent에 따라 Close 결과를 결정한다(08-routing resolver 계약).
+    private static bool IsClosingSpot(ZLinkAuthorityReadResult authority) =>
         authority is ZLinkAuthorityReadResult.Found found
-        && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(found.Snapshot.Payload.Span, out var user)
-        && user.State == ZLinkUserSpotAuthorityState.Closing;
+        && (
+            ZLinkUserSpotAuthorityPayloadCodec.TryDecode(found.Snapshot.Payload.Span, out var user)
+                && user.State == ZLinkUserSpotAuthorityState.Closing
+            || ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                found.Snapshot.Payload.Span,
+                out var instance
+            )
+                && instance.State == ZLinkInstanceSpotAuthorityState.Closing
+        );
 
     private static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)
     {
@@ -426,7 +451,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             );
         if (
             userDecoded
-            && user.State == ZLinkUserSpotAuthorityState.Ready
+            && user.State
+                is ZLinkUserSpotAuthorityState.Ready
+                    or ZLinkUserSpotAuthorityState.Closing
             && user.OwnerId == snapshot.OwnerId
             && snapshot.OwnerLeaseGeneration > 0
         )
@@ -441,14 +468,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
                 snapshot.Payload.Span,
                 out var instance
             )
-            && instance.State == ZLinkInstanceSpotAuthorityState.Ready
+            && instance.State
+                is ZLinkInstanceSpotAuthorityState.Ready
+                    or ZLinkInstanceSpotAuthorityState.Closing
             && instance.OwnerId == snapshot.OwnerId
             && snapshot.OwnerLeaseGeneration > 0
         )
@@ -463,7 +493,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (!TryReadCommittedCanonicalTarget(snapshot, out var canonical, out var targetNodeRid))
             return null;
@@ -486,7 +517,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
@@ -507,7 +539,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         return null;
     }

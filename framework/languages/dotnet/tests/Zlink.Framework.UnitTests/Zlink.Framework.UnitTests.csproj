@@ -165,6 +165,7 @@
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorJoinReplyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorDestroyCodecTests.cs"/>
+        <Compile Include="Runtime/ServiceWireInstanceReadyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>

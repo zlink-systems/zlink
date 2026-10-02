@@ -1407,6 +1407,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         ZLinkFrameworkErrorKind.Unavailable,
                         $"Instance Spot '{prepared.Activation.SpotId}' became visible before publication."
                     );
+                prepared.Activation.AttachNativeDispatch();
                 _preparedSpotTypes.Remove(prepared.Activation.SpotId);
                 _spots.Add(prepared.Activation.SpotId, prepared.Activation);
                 _instanceSpotTypes.Add(
@@ -1429,8 +1430,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         _lane.RunAsync(() =>
         {
             if (
-                !IsClosingLocked(spotId)
-                && _spots.TryGetValue(spotId, out var existing)
+                _spots.TryGetValue(spotId, out var existing)
                 && _instanceSpotTypes.TryGetValue(spotId, out var existingStableType)
                 && string.Equals(existingStableType, stableType, StringComparison.Ordinal)
                 && existing.NativeSpot.LifecycleGeneration == objectGeneration
@@ -1873,7 +1873,12 @@ internal sealed class ZLinkSpotNodeCatalog(
     // names the incarnation: manager SpotRef, command 48 fence or context
     // generation. The attempt is one item on the Spot lifecycle lane. Null means
     // the lane no longer admits work, so the attempt did not run.
-    private Task<bool>? PostExplicitClose(
+    private Task<(
+        bool Closed,
+        ZLinkSpotActivation? Successor,
+        ZLinkAuthoritySnapshot? Authority,
+        ZLinkFrameworkException? IntentFailure
+    )>? PostExplicitClose(
         string spotId,
         ZLinkSpotActivation activation,
         TaskCompletionSource<bool> transaction,
@@ -1885,7 +1890,12 @@ internal sealed class ZLinkSpotNodeCatalog(
                 CloseOnLifecycleLaneAsync(spotId, current, transaction, fence, deadline, ct)
         );
 
-    private async ValueTask<bool> CloseOnLifecycleLaneAsync(
+    private async ValueTask<(
+        bool Closed,
+        ZLinkSpotActivation? Successor,
+        ZLinkAuthoritySnapshot? Authority,
+        ZLinkFrameworkException? IntentFailure
+    )> CloseOnLifecycleLaneAsync(
         string spotId,
         ZLinkSpotActivation activation,
         TaskCompletionSource<bool> transaction,
@@ -1903,6 +1913,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         // Closing is committed, every outcome leaves authority and admission as
         // they were and drops this Close registration.
         CloseAuthority authority;
+        await activation.BeginCloseBoundaryAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             authority =
@@ -1916,6 +1927,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         catch
         {
+            activation.AbortCloseBoundary();
             await _lane
                 .RunAsync(() => ForgetCloseLocked(spotId, transaction))
                 .ConfigureAwait(false);
@@ -1923,64 +1935,174 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         if (authority.State == CloseAuthorityState.Kept)
         {
+            activation.AbortCloseBoundary();
             await _lane
                 .RunAsync(() => ForgetCloseLocked(spotId, transaction))
                 .ConfigureAwait(false);
-            return false;
+            return (false, null, null, null);
         }
 
-        // Steps 2–4. Closing is committed and never returns to Ready. The seal
-        // is set in this step, before anything else runs on this turn.
-        await activation.AwaitCloseDrainAsync(cancellationToken).ConfigureAwait(false);
-        await activation
-            .InvokeExplicitClosingAsync(
-                ZLinkSpotCloseReason.ExplicitClose,
-                deadline ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
-            )
-            .ConfigureAwait(false);
-        var releaseFailure = await turn.YieldFrameworkCallAsync(
-                _ => new ValueTask<AggregateException?>(activation.ReleaseLocalResourcesAsync()),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (releaseFailure is not null)
-            throw releaseFailure;
-        await turn.YieldFrameworkCallAsync(
-                ct => ReleaseCloseAuthorityAsync(activation, authority, ct),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        return true;
+        // Closing CAS 이후에는 원 incarnation을 Ready로 되돌리지 않는다.
+        // CAS 전에 설정한 gate boundary를 유지하며 이미 시작한 호출만 완료한다.
+        activation.BeginCommittedClose();
+        try
+        {
+            await activation.AwaitStartedCloseCallsAsync(cancellationToken).ConfigureAwait(false);
+            await activation
+                .InvokeExplicitClosingAsync(
+                    ZLinkSpotCloseReason.ExplicitClose,
+                    deadline ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
+                )
+                .ConfigureAwait(false);
+            var releaseFailure = await turn.YieldFrameworkCallAsync(
+                    _ => new ValueTask<AggregateException?>(
+                        activation.ReleaseLocalResourcesAsync()
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (releaseFailure is not null)
+            {
+                throw releaseFailure;
+            }
+            var released = await turn.YieldFrameworkCallAsync(
+                    ct => ReleaseCloseAuthorityAsync(activation, authority, ct),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return (true, released.Successor, released.Authority, released.IntentFailure);
+        }
+        catch (Exception error)
+        {
+            activation.SetSuccessorFailure(error);
+            throw;
+        }
     }
 
     private async ValueTask<bool> CompleteExplicitCloseAsync(
         string spotId,
         ZLinkSpotActivation activation,
         TaskCompletionSource<bool> transaction,
-        Task<bool> attempt
+        Task<(
+            bool Closed,
+            ZLinkSpotActivation? Successor,
+            ZLinkAuthoritySnapshot? Authority,
+            ZLinkFrameworkException? IntentFailure
+        )> attempt
     )
     {
-        bool closed;
+        (
+            bool Closed,
+            ZLinkSpotActivation? Successor,
+            ZLinkAuthoritySnapshot? Authority,
+            ZLinkFrameworkException? IntentFailure
+        ) outcome = default;
         try
         {
-            closed = await attempt.ConfigureAwait(false);
+            outcome = await attempt.ConfigureAwait(false);
+            if (outcome.Closed)
+            {
+                await _lane
+                    .RunAsync(() =>
+                        activation.SetSuccessor(
+                            outcome.Successor,
+                            outcome.Authority,
+                            outcome.IntentFailure,
+                            () =>
+                            {
+                                if (outcome.Successor is { } successor)
+                                {
+                                    ForgetCloseLocked(spotId, transaction);
+                                    _spots[activation.RuntimeSpotId] = successor;
+                                    successor.AttachNativeDispatch();
+                                }
+                            }
+                        )
+                    )
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception exception)
         {
-            transaction.TrySetException(exception);
+            var failures = new ZLinkFailureCollector(exception);
+            if (activation.HasCommittedClose)
+            {
+                activation.SetSuccessorFailure(exception);
+                if (outcome.Successor is { } successor && outcome.Authority is { } authority)
+                {
+                    await failures.CaptureAsync(successor.DisposeAsync).ConfigureAwait(false);
+                    await failures
+                        .CaptureAsync(async () =>
+                        {
+                            var store =
+                                runtime.Registration.Locations.ResolveStore()
+                                ?? throw new InvalidOperationException(
+                                    "Reincarnate authority store is unavailable."
+                                );
+                            var deleted = await store
+                                .CompareExchangeAuthorityAsync(
+                                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
+                                        activation.SpotId
+                                    ),
+                                    authority.StoreVersion,
+                                    new ZLinkAuthorityMutation.Delete(),
+                                    CancellationToken.None
+                                )
+                                .ConfigureAwait(false);
+                            if (deleted is not ZLinkAuthorityCompareExchangeResult.Deleted)
+                                throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    "Failed publication could not delete its exact new generation."
+                                );
+                            if (runtime.LocationLifecycle is { } lifecycle)
+                                await lifecycle
+                                    .SpotLocations.ForgetTrackedAsync(
+                                        successor.RuntimeSpotId,
+                                        successor.ObjectGeneration
+                                    )
+                                    .ConfigureAwait(false);
+                        })
+                        .ConfigureAwait(false);
+                }
+                await failures.CaptureAsync(async () =>
+                    await activation.PendingApplicationCompletion.ConfigureAwait(false)
+                );
+                await failures.CaptureAsync(activation.DisposeAsync);
+                await failures
+                    .CaptureAsync(() =>
+                        _lane.RunAsync(() =>
+                        {
+                            if (
+                                _spots.TryGetValue(spotId, out var current)
+                                && (
+                                    ReferenceEquals(current, activation)
+                                    || ReferenceEquals(current, outcome.Successor)
+                                )
+                            )
+                            {
+                                _spots.Remove(spotId);
+                                _instanceSpotTypes.Remove(spotId);
+                            }
+                            ForgetCloseLocked(spotId, transaction);
+                        })
+                    )
+                    .ConfigureAwait(false);
+            }
+            transaction.TrySetException(failures.BuildException()!);
             _ = transaction.Task.Exception;
+            failures.ThrowIfAny();
             throw;
         }
-        if (!closed)
+        if (!outcome.Closed)
         {
             transaction.TrySetResult(false);
             return false;
         }
 
-        // Authority is released, so the Close result is decided. Stopping the
-        // Spot queue after its last lifecycle item is a runtime task.
+        // Close lifecycle 완료 뒤 record ownership과 native publication을 넘긴다.
         try
         {
+            await activation.PendingApplicationCompletion.ConfigureAwait(false);
             await activation.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -1990,8 +2112,14 @@ internal sealed class ZLinkSpotNodeCatalog(
         await _lane
             .RunAsync(() =>
             {
-                _spots.Remove(spotId);
-                _instanceSpotTypes.Remove(spotId);
+                if (
+                    _spots.TryGetValue(spotId, out var current)
+                    && ReferenceEquals(current, activation)
+                )
+                {
+                    _spots.Remove(spotId);
+                    _instanceSpotTypes.Remove(spotId);
+                }
                 ForgetCloseLocked(spotId, transaction);
             })
             .ConfigureAwait(false);
@@ -2051,8 +2179,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         CancellationToken cancellationToken
     )
     {
-        if (activation.SpotKind != ZLinkSpotKind.User)
-            return new CloseAuthority(CloseAuthorityState.Local);
         var store = frameworkRegistration.Locations.ResolveStore();
         if (store is null)
             return new CloseAuthority(CloseAuthorityState.Local);
@@ -2063,15 +2189,41 @@ internal sealed class ZLinkSpotNodeCatalog(
             return new CloseAuthority(CloseAuthorityState.Kept);
         var snapshot = found.Snapshot;
         ThrowIfOtherIncarnation(spotId, activation.ObjectGeneration, snapshot.ObjectGeneration);
+        var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+            snapshot.Payload.Span,
+            out var authority
+        );
+        var instanceDecoded = ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+            snapshot.Payload.Span,
+            out var instance
+        );
+        var nodeRid =
+            userDecoded ? authority.NodeRid
+            : instanceDecoded ? instance.NodeRid
+            : default;
+        var nodeGeneration =
+            userDecoded ? authority.NodeGeneration
+            : instanceDecoded ? instance.NodeGeneration
+            : 0;
+        var ownerId =
+            userDecoded ? authority.OwnerId
+            : instanceDecoded ? instance.OwnerId
+            : null;
+        var ownerLeaseGeneration =
+            userDecoded ? authority.OwnerLeaseGeneration
+            : instanceDecoded ? instance.OwnerLeaseGeneration
+            : 0;
         if (
-            !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
-            || authority.SpotId != spotId
-            || authority.NodeRid != node.RoutingId
-            || authority.NodeGeneration != node.MeshStatus().LifecycleGeneration
+            !(
+                userDecoded && authority.SpotId == spotId
+                || instanceDecoded && instance.SpotId == spotId
+            )
+            || nodeRid != node.RoutingId
+            || nodeGeneration != node.MeshStatus().LifecycleGeneration
             || snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
-            || snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
-            || !string.Equals(authority.OwnerId, snapshot.OwnerId, StringComparison.Ordinal)
-            || authority.OwnerLeaseGeneration != checked((ulong)snapshot.OwnerLeaseGeneration)
+            || snapshot.Allocation.ObjectKind != activation.PlacementKind
+            || !string.Equals(ownerId, snapshot.OwnerId, StringComparison.Ordinal)
+            || ownerLeaseGeneration != checked((ulong)snapshot.OwnerLeaseGeneration)
             || lifecycle is not null
                 && (
                     snapshot.OwnerId != lifecycle.OwnerToken.OwnerId
@@ -2080,7 +2232,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"User Spot '{spotId}' authority no longer belongs to this activation."
+                $"Spot '{spotId}' authority no longer belongs to this activation."
             );
         if (
             fence is { } exact
@@ -2097,19 +2249,32 @@ internal sealed class ZLinkSpotNodeCatalog(
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"User Spot '{spotId}' close fence is stale."
+                $"Spot '{spotId}' close fence is stale."
             );
-        if (authority.State != ZLinkUserSpotAuthorityState.Ready)
+        if (
+            !(
+                userDecoded && authority.State == ZLinkUserSpotAuthorityState.Ready
+                || instanceDecoded && instance.State == ZLinkInstanceSpotAuthorityState.Ready
+            )
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"User Spot '{spotId}' authority is {authority.State}, not Ready."
+                $"Spot '{spotId}' authority is not Ready."
             );
-        var payload = ZLinkUserSpotAuthorityPayloadCodec.Encode(
-            authority with
-            {
-                State = ZLinkUserSpotAuthorityState.Closing,
-            }
-        );
+        var payload = userDecoded
+            ? ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                authority with
+                {
+                    State = ZLinkUserSpotAuthorityState.Closing,
+                }
+            )
+            : ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
+                instance with
+                {
+                    State = ZLinkInstanceSpotAuthorityState.Closing,
+                    ActivationRecovery = null,
+                }
+            );
         var exchanged = await store
             .CompareExchangeAuthorityAsync(
                 key,
@@ -2126,14 +2291,18 @@ internal sealed class ZLinkSpotNodeCatalog(
         if (exchanged is not ZLinkAuthorityCompareExchangeResult.Stored stored)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"User Spot '{spotId}' Ready-to-Closing authority exchange failed."
+                $"Spot '{spotId}' Ready-to-Closing authority exchange failed."
             );
         return new CloseAuthority(CloseAuthorityState.Closing, key, stored.Snapshot.StoreVersion);
     }
 
     // Close step 4 releases authority with the owner·generation fence that step 1
     // committed.
-    private async ValueTask ReleaseCloseAuthorityAsync(
+    private async ValueTask<(
+        ZLinkSpotActivation? Successor,
+        ZLinkAuthoritySnapshot? Authority,
+        ZLinkFrameworkException? IntentFailure
+    )> ReleaseCloseAuthorityAsync(
         ZLinkSpotActivation activation,
         CloseAuthority authority,
         CancellationToken cancellationToken
@@ -2142,11 +2311,170 @@ internal sealed class ZLinkSpotNodeCatalog(
         if (authority.State == CloseAuthorityState.Local)
         {
             await ReleaseSpotLocationAsync(activation.RuntimeSpotId).ConfigureAwait(false);
-            return;
+            return (null, null, null);
         }
         var store =
             frameworkRegistration.Locations.ResolveStore()
-            ?? throw new InvalidOperationException("User Spot authority store is unavailable.");
+            ?? throw new InvalidOperationException("Spot authority store is unavailable.");
+        var pendingIntent = activation.HasPendingCreationIntent;
+        var drainOwner = runtime.DrainAdmission.DrainOwner;
+        if (pendingIntent && drainOwner == ZLinkDrainOwner.None)
+        {
+            var descriptors = await store
+                .ListAllMeshNodesAsync(_spotChannelName.Value, cancellationToken)
+                .ConfigureAwait(false);
+            var serving = descriptors.Any(descriptor =>
+                descriptor.Rid == node.RoutingId
+                && descriptor.LifecycleGeneration == node.MeshStatus().LifecycleGeneration
+                && descriptor.State == ZLinkFrameworkRuntimeState.Serving
+            );
+            if (serving)
+            {
+                var read = await store
+                    .ReadAuthorityAsync(authority.Key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (
+                    read is not ZLinkAuthorityReadResult.Found found
+                    || found.Snapshot.StoreVersion != authority.StoreVersion
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "Close authority changed before Reincarnate."
+                    );
+                byte[] payload;
+                string stableType;
+                if (
+                    ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                        found.Snapshot.Payload.Span,
+                        out var instance
+                    )
+                )
+                {
+                    stableType = instance.StableType;
+                    payload = ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
+                        instance with
+                        {
+                            State = ZLinkInstanceSpotAuthorityState.Ready,
+                        }
+                    );
+                }
+                else
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        "Close authority payload is invalid."
+                    );
+                var exchanged = await store
+                    .CompareExchangeAuthorityAsync(
+                        authority.Key,
+                        authority.StoreVersion!,
+                        new ZLinkAuthorityMutation.Put(
+                            payload,
+                            ZLinkAuthorityGenerationTransition.Reincarnate,
+                            null,
+                            null
+                        ),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (exchanged is not ZLinkAuthorityCompareExchangeResult.Stored stored)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "Reincarnate authority exchange failed."
+                    );
+                ZLinkSpotActivation? successor = null;
+                try
+                {
+                    var nativeSpot = node.GetOrCreateReservedSpot(
+                        activation.SpotId,
+                        stored.Snapshot.ObjectGeneration,
+                        stored.Snapshot.AuthorityOwnerGeneration,
+                        out var created
+                    );
+                    if (!created)
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "Reincarnate backend incarnation already exists."
+                        );
+                    successor = await _activationFactory
+                        .CreateInstanceAsync(
+                            activation.Spot.GetType(),
+                            nativeSpot,
+                            activation.SpotId,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (lifecycle is not null)
+                    {
+                        await lifecycle
+                            .SpotLocations.ForgetTrackedAsync(
+                                activation.RuntimeSpotId,
+                                activation.ObjectGeneration
+                            )
+                            .ConfigureAwait(false);
+                        var tracking = await lifecycle
+                            .SpotLocations.TrackRelocatedAsync(
+                                ZLinkMeshName.FromBoundary(
+                                    _spotChannelName.Value,
+                                    nameof(_spotChannelName)
+                                ),
+                                successor.RuntimeSpotId,
+                                stored.Snapshot.ObjectGeneration,
+                                stored.Snapshot.AuthorityOwnerGeneration,
+                                stableType,
+                                node.RoutingId,
+                                node.MeshStatus().LifecycleGeneration,
+                                successor.SpotKind,
+                                deactivate: async ct =>
+                                    _ = await CloseAsync(successor.SpotId, ct)
+                                        .ConfigureAwait(false),
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                        if (tracking != ZLinkLocationWriteStatus.Stored)
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.Unavailable,
+                                "Reincarnate authority tracking failed."
+                            );
+                    }
+                    return (successor, stored.Snapshot, null);
+                }
+                catch (Exception initializationFailure)
+                {
+                    var failures = new ZLinkFailureCollector(initializationFailure);
+                    if (successor is not null)
+                        await failures.CaptureAsync(successor.DisposeAsync).ConfigureAwait(false);
+                    await failures
+                        .CaptureAsync(async () =>
+                        {
+                            var deletedNew = await store
+                                .CompareExchangeAuthorityAsync(
+                                    authority.Key,
+                                    stored.Snapshot.StoreVersion,
+                                    new ZLinkAuthorityMutation.Delete(),
+                                    CancellationToken.None
+                                )
+                                .ConfigureAwait(false);
+                            if (deletedNew is not ZLinkAuthorityCompareExchangeResult.Deleted)
+                                throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    "Failed Reincarnate incarnation could not be deleted."
+                                );
+                        })
+                        .ConfigureAwait(false);
+                    if (lifecycle is not null)
+                        await failures
+                            .CaptureAsync(() =>
+                                lifecycle.SpotLocations.ForgetTrackedAsync(
+                                    activation.RuntimeSpotId,
+                                    stored.Snapshot.ObjectGeneration
+                                )
+                            )
+                            .ConfigureAwait(false);
+                    failures.ThrowIfAny();
+                    throw;
+                }
+            }
+        }
         var deleted = await store
             .CompareExchangeAuthorityAsync(
                 authority.Key,
@@ -2158,7 +2486,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         if (deleted is not ZLinkAuthorityCompareExchangeResult.Deleted)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"User Spot '{activation.SpotId}' Closing-to-deleted authority exchange failed."
+                $"Spot '{activation.SpotId}' Closing-to-deleted authority exchange failed."
             );
         if (lifecycle is not null)
             await lifecycle
@@ -2167,6 +2495,18 @@ internal sealed class ZLinkSpotNodeCatalog(
                     activation.ObjectGeneration
                 )
                 .ConfigureAwait(false);
+        return (
+            null,
+            null,
+            pendingIntent
+                ? new ZLinkFrameworkException(
+                    drainOwner == ZLinkDrainOwner.Shutdown
+                        ? ZLinkFrameworkErrorKind.ShuttingDown
+                        : ZLinkFrameworkErrorKind.Unavailable,
+                    "The Instance Spot Close released authority without Reincarnate."
+                )
+                : null
+        );
     }
 
     internal static async ValueTask CloseBeforeReleaseAsync(
