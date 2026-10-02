@@ -422,8 +422,8 @@ listener's default `maxMessageSize` is
 `16_777_216` bytes.
 
 The NestJS builder also only registers the Entry Spot implementation
-type. The Entry Spot's `SpotId` is issued by the framework (its format is
-defined by [common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id)), and there's no
+type. The Entry Spot's `SpotId` is issued by the framework in the
+format `<prefix>-entry-<lowercase-canonical-uuid-v4>`, and there's no
 caller-specified identity option.
 
 An Object Server with even one `RecreateOnRelocation` or

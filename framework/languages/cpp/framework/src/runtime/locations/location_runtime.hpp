@@ -368,7 +368,7 @@ class location_runtime_t
                 completion->complete (result_t<std::optional<result_t<T>>>::success (std::nullopt));
             };
         }
-        detail::observe_task_completion (
+        detail::observe_task_terminal (
           pending, [weak_attempt, completion] (const result_t<T> &result) {
               if (auto active = weak_attempt.lock ()) {
                   completion->complete (result_t<std::optional<result_t<T>>>::success (
@@ -785,14 +785,14 @@ class location_runtime_t
             heartbeat->current = attempt;
             lock.unlock ();
             attempt->task.emplace (heartbeat_renew_once_async (attempt));
-            detail::observe_task_completion (*attempt->task,
-                                             [weak_heartbeat = std::weak_ptr{heartbeat}] (
-                                               const result_t<lease_renew_outcome_t> &) {
-                                                 if (auto owner = weak_heartbeat.lock ()) {
-                                                     std::lock_guard lock (owner->gate);
-                                                     owner->wake.notify_all ();
-                                                 }
-                                             });
+            detail::observe_task_terminal (*attempt->task,
+                                           [weak_heartbeat = std::weak_ptr{heartbeat}] (
+                                             const result_t<lease_renew_outcome_t> &) {
+                                               if (auto owner = weak_heartbeat.lock ()) {
+                                                   std::lock_guard lock (owner->gate);
+                                                   owner->wake.notify_all ();
+                                               }
+                                           });
         }
     }
 

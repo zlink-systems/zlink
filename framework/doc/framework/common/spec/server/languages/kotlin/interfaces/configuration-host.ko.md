@@ -230,8 +230,12 @@ MeshNode와 Store-backed fanout publisher의 automatic RID는
 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8 255 bytes 이하다.
 Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로 실패한다. Fixed RID의 사용 범위와 재시작 충돌은 [공통 MeshNode §3.3](../../../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. Slot count, allocation group과 public allocation provider는 없다.
 
-Java `ZLinkMeshNodeDescriptor.entrySpotId()`가 같은 lifecycle의 Entry Spot ID mapping을 제공한다. Entry Spot ID의
-발급·형식과 예약 형식의 거부는 [공통 Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
+Object Server의 Entry Spot ID는 같은 prefix의
+`<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식이며 MeshNode와 별도로 생성한 UUID v4를 사용한다.
+Java `ZLinkMeshNodeDescriptor.entrySpotId()`가 같은 lifecycle의 mapping을 제공한다. Global Spot
+ID가 active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `SpotIdConflict`로 startup을
+실패시킨다. Caller가 지정한 User·Instance Spot ID가 예약 형식과 일치하면 Store와 factory 전에
+startup configuration error로 거부한다.
 
 모든 factory는 Java builder를 Kotlin receiver callback으로 구성한다. Callback은
 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를 호출한다. 누락하거나

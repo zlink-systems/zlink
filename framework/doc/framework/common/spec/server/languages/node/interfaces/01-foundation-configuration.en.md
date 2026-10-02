@@ -303,8 +303,8 @@ the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and 
 with `ZLinkFrameworkErrorKind.ProtocolError`.
 
 Entry Spot registration only takes the implementation type. The Entry
-Spot's `SpotId` is issued by the framework, and
-[common Transport RID and Spot ID policy §6.3](../../../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines its format. An option for the
+Spot's `SpotId` is issued by the framework in the format
+`<prefix>-entry-<lowercase-canonical-uuid-v4>`. An option for the
 caller to specify a fixed `RoutingId` or `SpotId` isn't provided.
 
 After `channel(channelName)`, exactly one of `client()` or `server()`

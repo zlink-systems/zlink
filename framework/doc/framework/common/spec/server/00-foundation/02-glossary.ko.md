@@ -120,9 +120,19 @@ public readonly record struct SpotRef(
 | User Spot | `IZLinkSpot` | Application이 `IZLinkSpotManager.Create` 또는 `GetOrCreate`로 명시적으로 만든다. |
 | Instance Spot | `IZLinkInstanceSpot` | `IZLinkSpotSendCall`·`IZLinkSpotRequestCall`의 `InstanceSpot(...)` intent가 있을 때 최초 message로 준비한다. |
 
-Entry Spot ID의 발급·형식·lifecycle은 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
+Entry Spot ID는 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 Object Server MeshNode
+lifecycle마다 발급한다. MeshNode와 Entry Spot은 같은 prefix를 사용하되 각각 별도의 UUID v4를 생성한다.
 Descriptor가 MeshNode와 해당 Entry Spot ID의 관계를 기록하며 application은 Spot ID 문자열을 parsing해 node
 관계를 추론하지 않는다.
+
+같은 lifecycle에서는 Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를
+발급한다.
+
+Global Spot ID authority가 충돌하면 새 UUID나 reservation을 만들지 않고 startup을 즉시
+configuration error로 끝낸다.
+
+이 형식은 Framework 발급용으로 예약하므로 caller가 같은 형식의
+User·Instance Spot ID를 지정하면 Store와 factory를 실행하기 전에 `InvalidOperation`으로 거부한다.
 
 세 종류의 기능, Actor membership, close와 relocation 차이는
 [Spot 모델](../03-spot-actor/01-spot-model.ko.md)이 정의한다.
@@ -459,8 +469,8 @@ Source가 target을 선택할 때 확인한 target 등록 정보의 version이�
 |---|---|
 | 형태 | Target descriptor identity와 lifecycle을 고정한 복합 fence |
 | .NET 표기 | `ZLinkMeshNodeDescriptorKey`, `ulong` lifecycle generation과 `ZLinkLocationOwnerToken`의 조합 |
-| 공개 구성 | MeshName·RID descriptor key, target lifecycle generation과 그 target의 owner lease token을 포함한다. Target capacity를 새로 점유하는 Store write(생성 reservation, 단독 owner 변경 CAS, `SpotWide` Prepare)에서는 capacity와 descriptor 조건도 함께 검증한다. `SpotWide`의 나머지 write 조건은 [Location runtime §3.5](../05-location-relocation/01-location-runtime.ko.md#35-spotwide-이동의-진행-record)가 정한다. |
-| 생성·관리 | Source가 target을 선택할 때 고정하고 target과 Store가 그 write 전에 다시 확인한다. |
+| 공개 구성 | MeshName·RID descriptor key, target lifecycle generation과 그 target의 owner lease token을 포함한다. Reservation에서는 capacity delta와 descriptor 조건도 함께 검증한다. |
+| 생성·관리 | Source가 target을 선택할 때 고정하고 target과 Store가 reservation 전에 다시 확인한다. |
 | 수명 | Descriptor lifecycle이나 owner lease가 바뀌면 stale이 된다. |
 
 <a id="positive-route-cache"></a>
@@ -497,11 +507,14 @@ Store reservation이 factory와 callback 실행을 하나씩 직렬화한다. �
 <a id="reservation-id"></a>
 ### Reservation ID
 
-Location Store에서 생성을 위해 확보한 수용 공간과 진행 record를 구분하는 식별자다.
+Location Store에서 생성 또는 relocation을 위해 확보한 수용 공간과 진행 record를
+구분하는 식별자다. 생성용 ID와 relocation용 ID는 서로 다른 namespace를 사용한다.
 같은 ID와 같은 요청을 다시 보내면 앞서 발급한 결과를 반환한다. 같은 ID로 내용이
 다른 요청을 보내면 `Conflict`다.
 
-Process 재시작 뒤 같은 작업을 계속하거나 정확히 그 작업만 취소할 때 사용할 수 있다. 서로
+Creation에서는 process 재시작 뒤 같은 작업을 계속하거나 정확히 그 작업만 취소할 때
+사용할 수 있다. relocation에서는 실행 중인 source와 target process 안에서
+중복 요청을 구분하는 데만 사용하며 process 종료 뒤 작업을 이어받지 않는다. 서로
 다른 operation을 같은 application 결과에 합류시키는 식별자가 아니다.
 
 ```csharp
@@ -2246,15 +2259,15 @@ Framework가 자동 발급한 RID를 claim할 때 이미 active identity가 사�
 <a id="spot-id-conflict"></a>
 ### SpotIdConflict
 
-Global Spot ID namespace에서 User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다.
-Framework는 기존 claim을 덮어쓰지 않는다.
+Global Spot ID namespace에서 Entry·User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다.
+Framework는 기존 claim을 덮어쓰거나 새 UUID를 만들어 같은 operation을 다시 시도하지 않는다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Create failure |
-| .NET 표기 | Exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
+| 형태 | Startup 또는 create failure |
+| .NET 표기 | Startup은 `ZLinkConfigurationException`, exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
 | 공개 구성 | Global Spot ID claim이 충돌했음을 설명한다. 충돌한 owner token은 포함하지 않는다. |
-| 수명 | 해당 create operation을 terminal failure로 끝낸다. |
+| 수명 | 해당 startup 또는 create operation을 terminal failure로 끝낸다. |
 
 ## 10. STREAM session과 Actor binding
 

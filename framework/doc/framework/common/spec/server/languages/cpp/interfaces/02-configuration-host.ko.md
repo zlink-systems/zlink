@@ -130,8 +130,8 @@ source의 Core peer table에서 descriptor와 같은 RID·lifecycle generation�
 `blocked/deadline_exceeded`는 모든 target의 `Prepared` 완료와 host `Relocating` descriptor publication 전에
 deadline이 끝난 결과다. Connection-bound work가 pre-`Captured` [deadline](../../../00-foundation/02-glossary.ko.md#deadline) 안에 terminal
 drain되지 않은 경우도 `relocation_disabled`가 아니라 이 결과를 사용한다. Bound-session request는 drain 대상이
-아니며 다른 Actor request와 같이 frozen journal과 ingress hold 규칙을 따른다. Framework는 relocation staging을
-정리하고 reversible seal을 해제한 뒤 host state와 admission을 복원한다. 모든 target이
+아니며 다른 Actor request와 같이 frozen journal과 ingress hold 규칙을 따른다. Framework는 relocation staging과
+reservation을 정리하고 reversible seal을 해제한 뒤 host state와 admission을 복원한다. 모든 target이
 `Prepared`이고 `Relocating` publication이 성공하면 모든 relocation unit을 완료하고 `relocated`로 전환한다.
 
 `relocating` 중 `shutdown()`이 시작되면 현재 atomic relocation unit을 terminal 상태로 확정한 뒤 나머지
@@ -438,7 +438,7 @@ options.add_stream_node(sample_names_t::stream_name)
  .register_session<client_session_t>()
 ```
 
-Entry Spot의 SpotId는 Framework가 발급하며 형식은 [공통 Transport RID와 Spot ID 정책 §6.3](../../../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
+Entry Spot의 SpotId는 Framework가 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급한다.
 Application이 Entry Spot의 RoutingId나 고정 SpotId를 설정하는 public option은 제공하지 않는다.
 
 `enable_actor_dispatch()`는 session Actor dispatch에 global ActorId lookup과 ActorRef bind를 사용하도록

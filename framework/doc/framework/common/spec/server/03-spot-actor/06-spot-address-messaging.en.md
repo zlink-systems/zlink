@@ -78,17 +78,39 @@ Server is a startup error.
 
 ### 2.1 Entry Spot ID
 
-[Transport RID and Spot ID policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines how the Entry Spot ID is issued, its
-format and lifecycle, and the rejection of the reserved format. The framework doesn't compute a
-MeshNode relationship from the Spot ID string — it uses the Entry Spot ID mapping the MeshNode
-descriptor published.
+The Entry Spot ID is issued by the framework, and the caller doesn't
+specify it as a create target. The format
+`<diagnostic-prefix>-entry-<lowercase-canonical-uuid-v4>` is reserved for a
+Framework-issued Entry Spot ID. The UUID part is an RFC 4122 UUID v4 value
+generated separately from the MeshNode RID.
 
-[Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove — a descriptor being the
-registration record a remote runtime publishes so its endpoint, identity, and status can be
-discovered — deletes the descriptor only if the stored descriptor's owner lease and lifecycle
-match the request. A stale remove from a previous lifecycle can't delete a replacement
-lifecycle's descriptor. [Location runtime §11](../05-location-relocation/01-location-runtime.en.md#11-cleaning-up-store-records-when-a-host-shuts-down)
-defines what owner cleanup reclaims. `EntrySpotId` is
+**If a caller-specified User/Instance Spot ID matches this reserved format,
+it's rejected with `InvalidOperation` before starting a Location Store
+reservation or factory.** A User/Instance Spot's generic `Reserve` also
+checks the same global namespace, so an active Entry Spot ID can't be used
+as caller-created Spot authority. The framework doesn't compute a MeshNode
+relationship from the Spot ID string — it uses the Entry Spot ID
+mapping the MeshNode descriptor published.
+
+The Entry Spot ID is kept for the same Object Server lifecycle. Even on a
+replacement lifecycle at the same endpoint, a new Entry Spot ID is issued, and with an automatic
+RID a new MeshNode RID is issued as well. The framework doesn't build the Entry Spot
+ID by concatenating the full MeshNode RID.
+
+The Object Server descriptor's `NewClaim` creates, in one Location Store
+transaction, the `(MeshName, NodeRid)` descriptor identity and the
+`EntrySpotId`'s global Spot identity claim, linked to the owner lease
+and lifecycle. If either conflicts with an active claim, it changes neither
+descriptor, Entry claim, nor index at all, and returns a startup
+configuration error at the first claim. It doesn't create a second Entry
+UUID or claim.
+
+[Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove and owner cleanup — a
+descriptor being the registration record a remote runtime publishes so its endpoint, identity,
+and status can be discovered — release the linked Entry claim in the
+same transaction only if the stored descriptor's owner lease and
+lifecycle match the request. Stale cleanup from a previous lifecycle can't
+delete a replacement lifecycle's descriptor or Entry claim. `EntrySpotId` is
 included in the descriptor's immutable fields and immutable digest, and
 can't be changed by `Renew` or a mutable descriptor update.
 
@@ -185,8 +207,10 @@ specified Mesh doesn't exist, `NotFound`. The framework checks role,
 stable-type capability, and active/pending capacity first, then selects
 among the remaining candidates by node-wide placement weight.
 
-The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines the request's content reference,
-hash, when it is stored, and its lifetime. Only
+An encoded creation request is at most 1 MiB. The framework records an
+unchangeable content reference and hash into the creation intent before
+reservation, and keeps it until the Spot becomes
+[Ready](../00-foundation/02-glossary.en.md#ready) or a failed creation is cleaned up. Only
 the target that obtained creation authority delivers the request to the
 [factory](../00-foundation/02-glossary.en.md#factory). **Since the factory can run more
 than once per `(SpotId, ObjectGeneration, creation attempt)` — where
@@ -625,7 +649,7 @@ ObjectGeneration, but isn't exposed to resolver and application handlers
 before the Location Store authority changes to the target. It doesn't
 create a temporary public SpotId or change SpotId after creation.
 
-The source seal, durable capture, target factory/restore,
+The source seal, durable capture, target reservation/factory/restore,
 authority commit, and admission order are set by
 [Spot And Actor Membership](05-spot-actor-membership.en.md).
 
@@ -678,8 +702,9 @@ item maps to one contract test.
 
 - Spot ID is a global key across the whole Store namespace and doesn't
   allow duplication per MeshName.
-- Rejecting a User/Instance Spot ID in the reserved format behaves as
-  [Transport RID and Spot ID policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id) defines.
+- If a caller specifies a User/Instance Spot ID in the reserved
+  `<prefix>-entry-<lowercase-canonical-uuid-v4>` format, it's rejected
+  with `InvalidOperation` before Store reservation and factory execution.
 - User Spot `Create` issues a lowercase canonical UUID v4 string and does
   not generate a second UUID on an active conflict.
 - Entry Spot join and placement use the descriptor's lifecycle

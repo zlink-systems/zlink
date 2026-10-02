@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <zlink/Contracts/Sockets/results.hpp>
+#include <service_wire_constants.hpp>
 
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
@@ -236,6 +237,12 @@ dispatch_reason_from_submit_result (zlink::submit_result_t result) noexcept
 inline dispatch_error_reason_t
 dispatch_reason_from_error (const framework_exception_t *error) noexcept
 {
+    if (error != nullptr
+        && detail::failure_code (*error)
+             == static_cast<std::uint32_t> (
+               runtime::protocol::framework_error_code::routeNotConnected)) {
+        return dispatch_error_reason_t::stale_target;
+    }
     if (error != nullptr
         && detail::failure_origin (*error) == detail::failure_origin_t::payload_decode) {
         return dispatch_error_reason_t::payload_decode_failed;

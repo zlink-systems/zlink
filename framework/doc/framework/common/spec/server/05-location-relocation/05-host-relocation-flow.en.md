@@ -841,7 +841,7 @@ twice isn't a valid bounded teardown.
 
 | Operation confirmed first | Handling |
 |---|---|
-| `Shutdown`'s admission seal | Cleans up target staging (a `SpotWide` unit releases its reserved count through the Abort of [Location runtime §3.5](01-location-runtime.en.md#35-progress-records-of-a-spotwide-relocation)), and ends a pending Relocate call with `Blocked/ShutdownRequested`. |
+| `Shutdown`'s admission seal | Returns capacity secured on the target, and ends a pending Relocate call with `Blocked/ShutdownRequested`. |
 | `Relocating` publication | Only confirms the current unit to a terminal state and doesn't start the rest. Preserves published authority; the waiter gets `Blocked/ShutdownRequested`. |
 
 `Shutdown` in `Relocated` only cleans up accepted work and infrastructure. Calling it

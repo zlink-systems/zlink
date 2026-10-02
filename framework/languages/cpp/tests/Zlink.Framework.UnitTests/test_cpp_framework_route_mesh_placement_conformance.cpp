@@ -33,6 +33,7 @@
 namespace
 {
 namespace fw = zlink::framework;
+constexpr auto operation_timeout = std::chrono::seconds (5);
 
 // Keeps a fixture operation in flight (`hold`) until the scenario's expectations are checked.
 class hold_t
@@ -407,7 +408,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
     host_t host;
     configure_host (host, lease, scenario.at ("meshNodes"), "placement-" + std::to_string (index));
     start_host (host);
-    bool ok = wait_for_host_ready (host, std::chrono::seconds (5));
+    bool ok = wait_for_host_ready (host, operation_timeout);
     if (!ok)
         std::cerr << "[placement] " << name
                   << ": host never reached Serving, exit=" << host.exit_code << '\n';
@@ -424,7 +425,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
           ok
           && wait_for_route_status (
             routes, mesh_name, [&] { return routes.snapshot (mesh_name).placement.is_available; },
-            std::chrono::seconds (5));
+            operation_timeout);
     }
 
     int object_index = 0;
@@ -434,7 +435,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
     const auto create_actor = [&] (const std::string &mesh_name, fw::actor_id_t actor_id) {
         auto created = actors.create (actor_id, "placement-actor")
                          .in_mesh (mesh_name)
-                         .timeout (std::chrono::seconds (5))
+                         .timeout (operation_timeout)
                          .async ()
                          .result ();
         if (!created && created.error ())
@@ -445,7 +446,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
     const auto create_spot = [&] (const std::string &mesh_name) -> std::optional<std::string> {
         auto created = spots.create (spot_type (mesh_name))
                          .in_mesh (mesh_name)
-                         .timeout (std::chrono::seconds (5))
+                         .timeout (operation_timeout)
                          .async ()
                          .result ();
         if (!created && created.error ())
@@ -522,16 +523,45 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
             ok = false;
         }
     }
-    if (ok && held_count > 0 && !hold.wait_entered (held_count, std::chrono::seconds (5))) {
+    if (ok && held_count > 0 && !hold.wait_entered (held_count, operation_timeout)) {
         std::cerr << "[placement] " << name << ": held operation never started " << last_error
                   << join_failure << '\n';
         ok = false;
     }
 
     auto &runtime_options = services.get_required<fw::route_mesh_runtime_options_t> ();
-    for (const auto &node : scenario.at ("meshNodes"))
-        runtime_options.mesh (node.at ("meshName").get<std::string> ())
-          .placement_weight (node.at ("placementWeightAfterStartup").get<int> ());
+    if (ok && held_kinds.contains ("instanceSpot")) {
+        ok = [&] {
+            const fw::store_key_t key{"placement-continuation-probe"};
+            const auto before = host.store->read (key).result_for (operation_timeout);
+            if (!before || !*before
+                || !std::holds_alternative<fw::store_missing_t> (before->value ()))
+                return false;
+            fw::store_write_request_t write;
+            write.conditions.emplace_back (fw::store_missing_condition_t{key});
+            write.mutations.emplace_back (fw::store_put_t{key, {std::byte{1}}, std::nullopt});
+            const auto applied = host.store->write (write).result_for (operation_timeout);
+            if (!applied || !*applied
+                || !std::holds_alternative<fw::store_write_applied_t> (applied->value ()))
+                return false;
+            const auto after = host.store->read (key).result_for (operation_timeout);
+            if (!after || !*after || !std::holds_alternative<fw::store_found_t> (after->value ())
+                || std::get<fw::store_found_t> (after->value ()).value.bytes
+                     != std::vector<std::byte>{std::byte{1}})
+                return false;
+            const auto rejected = host.store->write (write).result_for (operation_timeout);
+            return rejected && *rejected
+                   && std::holds_alternative<fw::store_write_conflict_t> (rejected->value ());
+        }();
+        if (!ok) {
+            std::cerr << "[placement] " << name << ": Store did not progress while factory held\n";
+            hold.release ();
+        }
+    }
+    if (ok)
+        for (const auto &node : scenario.at ("meshNodes"))
+            runtime_options.mesh (node.at ("meshName").get<std::string> ())
+              .placement_weight (node.at ("placementWeightAfterStartup").get<int> ());
     for (const auto &expected : scenario.at ("expected")) {
         if (!ok)
             break;
@@ -555,7 +585,7 @@ bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, 
               status = routes.snapshot (mesh_name);
               return matches (status);
           },
-          std::chrono::seconds (5));
+          operation_timeout);
         if (!matches (status)) {
             std::fprintf (stderr,
                           "[placement] %s:%s actors=%u spots=%u available=%d reason=%s "
@@ -594,7 +624,7 @@ bool zero_weight_at_startup (const nlohmann::json &lease)
     host_t host;
     configure_host (host, lease, mesh_nodes, "placement-zero-weight", 0);
     start_host (host);
-    bool ok = wait_for_host_ready (host, std::chrono::seconds (5));
+    bool ok = wait_for_host_ready (host, operation_timeout);
     if (!ok) {
         std::cerr << "[placement] zero-weight-at-startup: host never reached Serving, exit="
                   << host.exit_code << '\n';
@@ -609,7 +639,7 @@ bool zero_weight_at_startup (const nlohmann::json &lease)
           const auto status = routes.snapshot ("zero");
           return status.state == fw::topology_state_t::ready && !status.placement.is_available;
       },
-      std::chrono::seconds (5));
+      operation_timeout);
     auto created = services.get_required<fw::spot_manager_t> ()
                      .create (spot_type ("zero"))
                      .in_mesh ("zero")
@@ -640,7 +670,7 @@ bool concurrent_actor_creation (const nlohmann::json &lease)
     host.store = store;
     configure_host (host, lease, nodes, "1304-conflict-recheck");
     start_host (host);
-    if (!wait_for_host_ready (host, std::chrono::seconds (5))) {
+    if (!wait_for_host_ready (host, operation_timeout)) {
         stop_host (host);
         return false;
     }
@@ -650,7 +680,7 @@ bool concurrent_actor_creation (const nlohmann::json &lease)
     if (!wait_for_route_status (
           routes, "conflict-recheck",
           [&] { return routes.snapshot ("conflict-recheck").placement.is_available; },
-          std::chrono::seconds (5))) {
+          operation_timeout)) {
         stop_host (host);
         return false;
     }
@@ -664,7 +694,7 @@ bool concurrent_actor_creation (const nlohmann::json &lease)
               actors
                 .create (fw::actor_id_t ("1304-actor-" + std::to_string (index)), "placement-actor")
                 .in_mesh ("conflict-recheck")
-                .timeout (std::chrono::seconds (5))
+                .timeout (operation_timeout)
                 .async ()
                 .result ();
             if (created && std::holds_alternative<fw::actor_create_created_t> (created.value ()))
