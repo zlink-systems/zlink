@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -1229,22 +1230,47 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(fence, "fence");
         Objects.requireNonNull(cancellation, "cancellation");
-        return commitAggregate(
-                fence, cancellation, 0, Instant.now().plus(AGGREGATE_COUNTER_RETRY_WINDOW));
+        var completion = new CompletableFuture<ZLinkAggregateCommitResult>();
+        completeAggregateCommit(fence, cancellation, completion);
+        return completion;
     }
 
-    private CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+    private void completeAggregateCommit(
             ZLinkAggregateFence fence,
             ZLinkStoreCancellation cancellation,
-            int retryAttempt,
-            Instant retryDeadline) {
+            CompletableFuture<ZLinkAggregateCommitResult> completion) {
+        CompletionStage<Optional<ZLinkAggregateCommitResult>> attempt;
+        try {
+            attempt = readAggregateCommitAttempt(fence, cancellation);
+        } catch (RuntimeException failure) {
+            completion.completeExceptionally(failure);
+            return;
+        }
+        attempt.whenComplete(
+                (terminal, failure) -> {
+                    if (failure != null) {
+                        completion.completeExceptionally(failure);
+                    } else if (terminal.isPresent()) {
+                        completion.complete(terminal.orElseThrow());
+                    } else {
+                        ForkJoinPool.commonPool()
+                                .execute(
+                                        () ->
+                                                completeAggregateCommit(
+                                                        fence, cancellation, completion));
+                    }
+                });
+    }
+
+    private CompletionStage<Optional<ZLinkAggregateCommitResult>> readAggregateCommitAttempt(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         ZLinkStoreKey marker = aggregateKey(fence);
         var opaqueCancellation = adapt(cancellation);
         return provider.read(marker, opaqueCancellation)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkStoreReadFound found)) {
-                                return completed(ZLinkAggregateCommitResult.STALE);
+                                return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
                             PreparedAggregate prepared = decodeAggregate(found.value().bytes());
                             if (prepared.state() == AGGREGATE_COMMITTED) {
@@ -1262,11 +1288,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                 opaqueCancellation))
                                         .thenApply(
                                                 ignored ->
-                                                        ZLinkAggregateCommitResult
-                                                                .ALREADY_COMMITTED);
+                                                        Optional.of(
+                                                                ZLinkAggregateCommitResult
+                                                                        .ALREADY_COMMITTED));
                             }
                             if (prepared.state() != AGGREGATE_PREPARED) {
-                                return completed(ZLinkAggregateCommitResult.STALE);
+                                return completed(Optional.of(ZLinkAggregateCommitResult.STALE));
                             }
                             return aggregateInventory
                                     .load(
@@ -1290,8 +1317,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                                     request, fence,
                                                                                     rows)) {
                                                                         return completed(
-                                                                                ZLinkAggregateCommitResult
-                                                                                        .STALE);
+                                                                                Optional.of(
+                                                                                        ZLinkAggregateCommitResult
+                                                                                                .STALE));
                                                                     }
                                                                     List<ZLinkStoreCondition>
                                                                             conditions =
@@ -1310,8 +1338,10 @@ final class ZLinkProviderAuthorityRepository {
                                                                                     live -> {
                                                                                         if (!live) {
                                                                                             return completed(
-                                                                                                    ZLinkAggregateCommitResult
-                                                                                                            .STALE);
+                                                                                                    Optional
+                                                                                                            .of(
+                                                                                                                    ZLinkAggregateCommitResult
+                                                                                                                            .STALE));
                                                                                         }
                                                                                         return provider.write(
                                                                                                         new ZLinkStoreWriteRequest(
@@ -1330,11 +1360,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             if (!(result
                                                                                                                     instanceof
                                                                                                                     ZLinkStoreWriteApplied)) {
-                                                                                                                return retryAggregateCommit(
-                                                                                                                        fence,
-                                                                                                                        cancellation,
-                                                                                                                        retryAttempt,
-                                                                                                                        retryDeadline);
+                                                                                                                return completed(
+                                                                                                                        Optional
+                                                                                                                                .empty());
                                                                                                             }
                                                                                                             return normalizeAggregateParticipants(
                                                                                                                             fence,
@@ -1342,62 +1370,14 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                             opaqueCancellation)
                                                                                                                     .thenApply(
                                                                                                                             ignored ->
-                                                                                                                                    ZLinkAggregateCommitResult
-                                                                                                                                            .COMMITTED);
+                                                                                                                                    Optional
+                                                                                                                                            .of(
+                                                                                                                                                    ZLinkAggregateCommitResult
+                                                                                                                                                            .COMMITTED));
                                                                                                         });
                                                                                     });
                                                                 });
                                             });
-                        });
-    }
-
-    private CompletionStage<ZLinkAggregateCommitResult> retryAggregateCommit(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation,
-            int retryAttempt,
-            Instant retryDeadline) {
-        ZLinkStoreKey marker = aggregateKey(fence);
-        var opaqueCancellation = adapt(cancellation);
-        return provider.read(marker, opaqueCancellation)
-                .thenCompose(
-                        read -> {
-                            if (!(read instanceof ZLinkStoreReadFound found)) {
-                                return completed(ZLinkAggregateCommitResult.STALE);
-                            }
-                            PreparedAggregate current = decodeAggregate(found.value().bytes());
-                            if (current.state() == AGGREGATE_COMMITTED) {
-                                return aggregateInventory
-                                        .load(
-                                                fence,
-                                                current.participantCount(),
-                                                current.inventoryDigest(),
-                                                opaqueCancellation)
-                                        .thenCompose(
-                                                participants ->
-                                                        normalizeAggregateParticipants(
-                                                                fence,
-                                                                current.request(participants),
-                                                                opaqueCancellation))
-                                        .thenApply(
-                                                ignored ->
-                                                        ZLinkAggregateCommitResult
-                                                                .ALREADY_COMMITTED);
-                            }
-                            if (current.state() != AGGREGATE_PREPARED
-                                    || retryAttempt >= AGGREGATE_COUNTER_RETRY_LIMIT
-                                    || !Instant.now().isBefore(retryDeadline)
-                                    || cancellation.isCancellationRequested()) {
-                                return completed(ZLinkAggregateCommitResult.STALE);
-                            }
-                            return delayAggregateCounterRetry(
-                                            retryAttempt, retryDeadline, cancellation)
-                                    .thenCompose(
-                                            ignored ->
-                                                    commitAggregate(
-                                                            fence,
-                                                            cancellation,
-                                                            retryAttempt + 1,
-                                                            retryDeadline));
                         });
     }
 

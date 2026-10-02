@@ -376,7 +376,7 @@ function startCommand(name, command, args, options = {}) {
   try {
     child = spawn(invocation.executable, invocation.args, {
       cwd: options.cwd ?? sampleRoot,
-      env: options.env ?? process.env,
+      env: { ...(options.env ?? process.env), TMPDIR: workDir, TEMP: workDir, TMP: workDir },
       detached: process.platform !== 'win32',
       windowsHide: true,
       // Descendants inherit these pipes. 'close' waits for their output handles too.

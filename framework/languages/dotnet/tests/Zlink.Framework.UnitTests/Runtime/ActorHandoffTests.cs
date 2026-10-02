@@ -1523,10 +1523,18 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task MessageFollowOperationalMarkers_DoNotExposeObjectIdentityOrGeneration()
     {
+        const string registeredMarker = "message_follow_registered";
+        const string routeRemovedMarker = "message_follow_route_removed entries=0";
         var markers = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var state = new ZLinkActorRuntimeState(
             "actor-private-42",
-            handoffDiagnostic: markers.Enqueue
+            handoffDiagnostic: marker =>
+            {
+                markers.Enqueue(marker);
+                if (marker == routeRemovedMarker)
+                    removed.TrySetResult();
+            }
         );
         var source = ActorRef("node-a", 41);
         var target = ActorRef("node-b", 42);
@@ -1536,18 +1544,20 @@ public sealed class ActorHandoffTests
         _ = Cutover(state, 0, source, target);
         state.Handoff.CommitMessageFollow(TimeSpan.FromMilliseconds(10));
 
-        var registered = Assert.Single(markers);
-        Assert.Contains("message_follow_registered", registered);
+        var registered = Assert.Single(
+            markers,
+            marker => marker.StartsWith(registeredMarker, StringComparison.Ordinal)
+        );
+        Assert.Contains(registeredMarker, registered);
         Assert.Contains("source_rid=node-a", registered);
         Assert.Contains("target_rid=node-b", registered);
         Assert.DoesNotContain("actor=", registered);
         Assert.DoesNotContain("generation=", registered);
         Assert.DoesNotContain("actor-private-42", registered);
 
-        for (var attempt = 0; attempt < 20 && markers.Count == 1; attempt++)
-            await Task.Delay(5);
+        await removed.Task.WaitAsync(TimeSpan.FromMilliseconds(100));
 
-        Assert.Contains("message_follow_route_removed entries=0", markers);
+        Assert.Contains(routeRemovedMarker, markers);
         Assert.All(
             markers,
             marker =>

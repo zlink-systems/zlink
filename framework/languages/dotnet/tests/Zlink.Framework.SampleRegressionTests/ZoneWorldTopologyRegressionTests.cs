@@ -45,19 +45,17 @@ public sealed partial class RegressionTests
         var source = ReadSource(
             Path.Combine(ResolveSampleRoot("ZoneWorld"), "Client", "Scenarios.cs")
         );
-        var methodStart = source.IndexOf(
-            "private static async ValueTask F4BotReversesOnRejection(",
-            StringComparison.Ordinal
-        );
-        Assert.True(methodStart >= 0);
-        var methodEnd = source.IndexOf(
-            "private static int? BotX(",
-            methodStart,
-            StringComparison.Ordinal
-        );
-        var method = source[methodStart..methodEnd];
+        var method = ZoneWorldMethodBody(source, "F4BotReversesOnRejection");
         var maintenanceApplied = method.IndexOf("await enabledObserved;", StringComparison.Ordinal);
-        var boundaryObserved = method.IndexOf("var boundary = (", StringComparison.Ordinal);
+        var boundaryObserved = method.IndexOf(
+            ".Connector.WaitFor<ZoneStateNotify>()",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "position + ZoneWorldSpec.BotStep >= ZoneWorldSpec.ZoneSplit",
+            method,
+            StringComparison.Ordinal
+        );
 
         Assert.True(
             maintenanceApplied >= 0 && boundaryObserved > maintenanceApplied,

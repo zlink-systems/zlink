@@ -113,6 +113,35 @@ final class ZLinkActorRelocationStagingTest {
     }
 
     @Test
+    void relocationSourceHandlerFailureStillClearsContextAndRestoresFreshInstance() {
+        AtomicInteger closes = new AtomicInteger();
+        ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes, true);
+        var prepared = publishedActor(runtime, "actor-failed-retirement");
+        runtime.markJoinedEntrySpot(
+                prepared.actor(), prepared.actorRef(), RoutingId.from("node-a"));
+        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
+                prepared.actor(), CloseableProbeHandler.class);
+
+        assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () ->
+                        runtime.completeRelocationSource(prepared.actorId())
+                                .toCompletableFuture()
+                                .join());
+
+        assertTrue(runtime.localActor(prepared.actorId()).isEmpty());
+        assertTrue(
+                prepared.actor().context().spotId().isEmpty(),
+                "retirement must clear context after handler failure");
+        runtime.completeRelocationSource(prepared.actorId()).toCompletableFuture().join();
+        assertEquals(1, closes.get(), "failed source cleanup must not run again");
+        var restored = publishedActor(runtime, prepared.actorId());
+        assertNotSame(prepared.actor(), restored.actor());
+        assertEquals(
+                prepared.actorRef().generation(), restored.actor().context().objectGeneration());
+    }
+
+    @Test
     void idleActorWithoutMessageFollowDoesNotBlockShutdownClose() {
         AtomicInteger closes = new AtomicInteger();
         ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes);
@@ -238,6 +267,11 @@ final class ZLinkActorRelocationStagingTest {
     }
 
     private static ZLinkActorRuntime runtime(AtomicInteger destroys, AtomicInteger closes) {
+        return runtime(destroys, closes, false);
+    }
+
+    private static ZLinkActorRuntime runtime(
+            AtomicInteger destroys, AtomicInteger closes, boolean failClose) {
         ZLinkInternalSpotNode node =
                 (ZLinkInternalSpotNode)
                         Proxy.newProxyInstance(
@@ -267,7 +301,7 @@ final class ZLinkActorRelocationStagingTest {
                 new ZLinkJsonMessageSerializer(),
                 handlerType -> {
                     if (handlerType == CloseableProbeHandler.class) {
-                        return new CloseableProbeHandler(closes);
+                        return new CloseableProbeHandler(closes, failClose);
                     }
                     return ZLinkHandlerActivator.reflection().create(handlerType);
                 });
@@ -297,14 +331,19 @@ final class ZLinkActorRelocationStagingTest {
 
     public static final class CloseableProbeHandler implements AutoCloseable {
         private final AtomicInteger closes;
+        private final boolean failClose;
 
-        private CloseableProbeHandler(AtomicInteger closes) {
+        private CloseableProbeHandler(AtomicInteger closes, boolean failClose) {
             this.closes = closes;
+            this.failClose = failClose;
         }
 
         @Override
         public void close() {
             closes.incrementAndGet();
+            if (failClose) {
+                throw new IllegalStateException("injected source handler close failure");
+            }
         }
     }
 }

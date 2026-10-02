@@ -29,7 +29,9 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
   let frameworkJoined = false;
   const node = {
     status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }),
-    entrySpot: () => ({ routingId: 'node-a', status: () => ({ lifecycleGeneration: 1n }) }),
+    entrySpot() {
+      return { routingId: this.status().routingId, status: this.status };
+    },
     actorLookup: () => location,
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
