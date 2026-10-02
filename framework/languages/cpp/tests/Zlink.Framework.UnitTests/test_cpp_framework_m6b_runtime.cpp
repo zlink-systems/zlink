@@ -5767,11 +5767,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
 
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
-    std::vector<message_dispatch_error_event_t> instance_send_diagnostics;
-    std::mutex instance_send_diagnostics_mutex;
-    const auto send_diagnostic_snapshot = [&] {
-        const std::lock_guard lock (instance_send_diagnostics_mutex);
-        return instance_send_diagnostics;
+    std::vector<message_dispatch_error_event_t> instance_dispatch_diagnostics;
+    std::mutex instance_dispatch_diagnostics_mutex;
+    const auto dispatch_diagnostic_snapshot = [&] {
+        const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+        return instance_dispatch_diagnostics;
     };
     auto target_options =
       host::host_options_t{.mesh = mesh::raw_mesh_node_options_t{descriptor ("user-target")},
@@ -5779,11 +5779,14 @@ void verify_remote_user_spot_create_close_terminal_once ()
     target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
-          if (event.message_kind == dispatch_message_kind_t::send) {
-              assert (event.action == dispatch_error_action_t::drop);
+          if (event.surface == dispatch_error_surface_t::instance_spot) {
+              assert (event.action
+                      == (event.message_kind == dispatch_message_kind_t::request
+                            ? dispatch_error_action_t::reply_error
+                            : dispatch_error_action_t::drop));
               assert (event.error_message);
-              const std::lock_guard lock (instance_send_diagnostics_mutex);
-              instance_send_diagnostics.push_back (event);
+              const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+              instance_dispatch_diagnostics.push_back (event);
           }
       });
     auto target = std::make_shared<host::public_host_runtime_t> (std::move (target_options));
@@ -5801,6 +5804,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
     std::size_t instance_activation_count = 0;
     std::size_t instance_prepare_count = 0;
     bool fail_recovery_dispatch_once = false;
+    std::optional<framework_error_kind_t> injected_activation_failure;
+    dispatch_error_reason_t injected_failure_reason = dispatch_error_reason_t::handler_exception;
     bool close_during_instance_turn = false;
     std::size_t recovery_barrier_finishes = 0;
     std::size_t recovery_accepted_finishes = 0;
@@ -5835,12 +5840,22 @@ void verify_remote_user_spot_create_close_terminal_once ()
         },
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
          &close_during_instance_turn, &recovery_barrier_finishes, &recovery_accepted_finishes,
+         &injected_activation_failure,
          weak_target] (std::shared_ptr<const protocol::instance_activation_recovery_t> command,
                        std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
                        std::shared_ptr<detail::deferred_barrier_t> *activation_terminal) {
             const auto &activation = command->activation;
             const auto &metadata = command->metadata;
             const auto &application = command->application_payload;
+            if (injected_activation_failure) {
+                const auto failure =
+                  runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                    *injected_activation_failure);
+                assert (failure);
+                return task_t<host::instance_spot_activation_result_t> (
+                  result_t<host::instance_spot_activation_result_t>::success (
+                    {failure->terminal_result, failure->failure_code, std::nullopt}));
+            }
             ++instance_activation_count;
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
@@ -5974,8 +5989,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
                 auto request = replay_instance_request;
                 request.operation = {123, ready_case_operation++};
                 request.has_metadata = false;
+                if (injected_activation_failure)
+                    request.target.spot_id = "instance-recover";
                 request.target.object_generation = ready.object_generation;
-                request.target.authority_owner_generation = ready.authority_owner_generation + 1;
+                request.target.authority_owner_generation =
+                  ready.authority_owner_generation + (injected_activation_failure ? 0 : 1);
                 request.target.owner_id = ready.owner.owner_id;
                 request.target.owner_lease_generation =
                   static_cast<std::uint64_t> (ready.owner.lease_generation);
@@ -5989,8 +6007,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
                 instance_reply_header.reset ();
                 instance_reply_payload.reset ();
                 {
-                    const std::lock_guard lock (instance_send_diagnostics_mutex);
-                    instance_send_diagnostics.clear ();
+                    const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+                    instance_dispatch_diagnostics.clear ();
                 }
                 std::size_t terminal_count = 0;
                 if (request.request) {
@@ -6018,14 +6036,41 @@ void verify_remote_user_spot_create_close_terminal_once ()
                               .value ());
                 }
                 deadline = std::chrono::steady_clock::now () + 5s;
-                while (
-                  (request.request ? !instance_reply_header : send_diagnostic_snapshot ().empty ())
-                  && std::chrono::steady_clock::now () < deadline) {
+                while ((request.request ? !instance_reply_header
+                                        : dispatch_diagnostic_snapshot ().empty ())
+                       && std::chrono::steady_clock::now () < deadline) {
                     (void) target->dispatch_ready (dispatch);
                     (void) source->dispatch_ready (dispatch);
                     std::this_thread::sleep_for (1ms);
                 }
                 assert (store->authority_reads.load () > reads_before);
+                if (injected_activation_failure) {
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == 1);
+                    const auto &event = diagnostics.front ();
+                    assert (event.message_kind
+                            == (request.request ? dispatch_message_kind_t::request
+                                                : dispatch_message_kind_t::send));
+                    const auto expected_failure =
+                      runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                        *injected_activation_failure);
+                    const auto expected_error =
+                      runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+                        expected_failure->terminal_result, expected_failure->failure_code,
+                        "Instance Spot activation");
+                    assert (event.reason == injected_failure_reason);
+                    assert (event.error_message == expected_error.what ());
+                    if (request.request) {
+                        assert (terminal_count == 1 && instance_reply_header);
+                        assert (instance_reply_header->terminal_result
+                                == expected_failure->terminal_result);
+                        assert (instance_reply_header->failure_code
+                                == expected_failure->failure_code);
+                    } else {
+                        assert (!instance_reply_header);
+                    }
+                    continue;
+                }
                 if (request.request) {
                     assert (instance_reply_header);
                     const auto kind = runtime::messaging::request_failure_mapper_t{}
@@ -6038,6 +6083,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     assert (expected.at ("messageTerminal") == terminal_name);
                     assert (expected.at ("messageTerminalCount") == terminal_count);
                     assert (!instance_reply_payload);
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == 1);
+                    assert (diagnostics.front ().message_kind == dispatch_message_kind_t::request);
+                    assert (diagnostics.front ().action == dispatch_error_action_t::reply_error);
+                    assert (diagnostics.front ().reason == dispatch_error_reason_t::stale_target);
                 } else {
                     assert (!instance_reply_header);
                     std::vector<std::string> expected_diagnostics;
@@ -6053,7 +6103,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
                                                      "Instance Spot activation")
                             .what ());
                     }
-                    const auto diagnostics = send_diagnostic_snapshot ();
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
                     assert (diagnostics.size () == expected_diagnostics.size ());
                     for (std::size_t index = 0; index < diagnostics.size (); ++index) {
                         const auto &event = diagnostics[index];
@@ -6306,6 +6356,20 @@ void verify_remote_user_spot_create_close_terminal_once ()
       store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
         .result ()
         .value ()));
+
+    // Inject the materializer results from missing activation, sealed admission,
+    // and handler failure at the terminal owner's existing request/send route.
+    for (const auto &[kind, reason] :
+         {std::pair{framework_error_kind_t::not_found, dispatch_error_reason_t::handler_missing},
+          std::pair{framework_error_kind_t::rejected, dispatch_error_reason_t::handler_exception},
+          std::pair{framework_error_kind_t::shutting_down, dispatch_error_reason_t::shutdown},
+          std::pair{framework_error_kind_t::internal_failure,
+                    dispatch_error_reason_t::handler_exception}}) {
+        injected_activation_failure = kind;
+        injected_failure_reason = reason;
+        verify_ready_route_cases ("Ready", *after_recovery_snapshot);
+    }
+    injected_activation_failure.reset ();
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
