@@ -846,16 +846,22 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
 test('relocation failure codes use the shared error model fixture', () => {
   const fixture = require(
     require('node:path').resolve(
-      process.cwd(),
-      '../../runtime/conformance/framework-error-mapping-v1.json'
+      __dirname,
+      '../../../../../../../../runtime/conformance/framework-error-mapping-v1.json'
     )
-  ) as { send: { kind: keyof typeof ZLinkFrameworkErrorKind; failureCode: number }[] };
+  ) as {
+    send: {
+      kind: keyof typeof ZLinkFrameworkErrorKind;
+      failureCode: number;
+      codeOnlyFailureCode?: number;
+    }[];
+  };
   for (const row of fixture.send)
     assert.equal(
       relocationFailedFailureCode(
         new ZLinkFrameworkException(ZLinkFrameworkErrorKind[row.kind], 'fixture')
       ),
-      row.failureCode,
+      row.codeOnlyFailureCode ?? row.failureCode,
       row.kind
     );
   assert.equal(relocationFailedFailureCode(new ServiceRelocationDataLostError('checksum')), 35);
