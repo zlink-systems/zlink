@@ -166,7 +166,7 @@ export class ZLinkStreamSessionRuntime {
   private metricsClosed = false;
   private readonly livenessClock: ZLinkStreamLivenessClock;
   private lastApplicationActivityAt = 0;
-  private awaitingPongSince: number | undefined;
+  private lastInboundFrameAt = 0;
   private livenessTimer: unknown;
 
   constructor(
@@ -247,6 +247,7 @@ export class ZLinkStreamSessionRuntime {
     terminalOwner?: ZLinkRetainedStreamOwner,
     applicationJobPermit?: ApplicationJobPermitPort
   ): void {
+    this.lastInboundFrameAt = Math.max(this.lastInboundFrameAt, this.livenessClock.now());
     let terminalReleased = false;
     const releaseTerminal = (): void => {
       if (terminalReleased) return;
@@ -457,7 +458,9 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     this.connected = true;
-    this.lastApplicationActivityAt = this.livenessClock.now();
+    const connectedAt = this.livenessClock.now();
+    this.lastApplicationActivityAt = connectedAt;
+    this.lastInboundFrameAt = Math.max(this.lastInboundFrameAt, connectedAt);
     this.scheduleLivenessCheck();
     this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, 1, { transport: 'tcp' });
     this.options.metrics?.count(METRIC_NAMES.StreamConnectionsOpened, 1, { transport: 'tcp' });
@@ -654,7 +657,6 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
-      this.awaitingPongSince = undefined;
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
@@ -695,10 +697,7 @@ export class ZLinkStreamSessionRuntime {
       );
       return;
     }
-    if (
-      this.awaitingPongSince !== undefined &&
-      now - this.awaitingPongSince >= ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS
-    ) {
+    if (now - this.lastInboundFrameAt >= ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.HeartbeatTimeout,
         'heartbeat_timeout',
@@ -707,7 +706,6 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PING);
-    this.awaitingPongSince ??= now;
     this.scheduleLivenessCheck();
   }
 
