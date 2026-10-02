@@ -911,7 +911,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             }
                             return CompletableFuture.completedFuture(
                                     ZLinkFrameworkErrorOrigin.framework(
-                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            authorityOwnerGeneration != 0
+                                                    ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
                                             "Spot is not available: " + spotId));
                         });
     }
@@ -5440,19 +5442,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     ? ZLinkFrameworkErrorKind.NOT_FOUND
                                     : releaseFailure,
                             "Spot incarnation was closed");
-            if (releaseFailure != null && !received.isRequest()) {
-                reportDispatchError(
-                        DispatchFailureReport.of(
-                                        ZLinkDispatchErrorSurface.SPOT_ROUTE,
-                                        ZLinkDispatchMessageKind.SEND,
-                                        releaseFailure == ZLinkFrameworkErrorKind.SHUTTING_DOWN
-                                                ? ZLinkDispatchErrorReason.SHUTDOWN
-                                                : ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE,
-                                        ZLinkDispatchErrorAction.DROP)
-                                .spotId(previous.context.spotId())
-                                .sourceRid(received.routingId().orElse(null))
-                                .error(failure));
-            }
             received.close();
             return CompletableFuture.failedFuture(failure);
         }

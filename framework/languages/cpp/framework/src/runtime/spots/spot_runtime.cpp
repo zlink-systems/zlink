@@ -2616,9 +2616,13 @@ void spot_context_state_t::run_local_close_steps (
         // the release. Accepted messages are never placed again.
         const auto boundary = owner->lane
                                 .run ([&] {
+                                    const auto phase = owner->host_phase
+                                                         ? std::optional{owner->host_phase ()}
+                                                         : std::nullopt;
                                     return owner->host_draining ()
                                              ? std::optional{framework_error_kind_t::shutting_down}
-                                           : self->relocation_boundary_active
+                                           : phase == framework_runtime_state_t::relocating
+                                               || phase == framework_runtime_state_t::relocated
                                              ? std::optional{framework_error_kind_t::unavailable}
                                              : std::optional<framework_error_kind_t>{};
                                 })
@@ -2724,11 +2728,8 @@ void spot_context_state_t::run_local_close_steps (
               [self = shared_from_this (), owner, instance,
                finish] (result_t<void> result) mutable {
                   if (!result)
-                      report_spot_close_diagnostic (
-                        owner, std::string (self->spot_id), "on_closing_failed",
-                        std::make_exception_ptr (framework_exception_t (
-                          result.error_kind (),
-                          result.error () ? result.error ()->what () : "Spot OnClosing failed")));
+                      report_spot_close_diagnostic (owner, std::string (self->spot_id),
+                                                    "on_closing_failed", result.exception ());
                   finish ();
               });
             return;
@@ -14070,6 +14071,10 @@ spot_node_runtime_t::serialize_actor_snapshot (const actor_ref_t &actor_ref) con
 void spot_node_runtime_t::bind_drain_flag (std::shared_ptr<std::atomic_bool> flag)
 {
     _state->lane.run ([&] { _state->drain_flag = std::move (flag); }).get ();
+}
+void spot_node_runtime_t::bind_host_phase (std::function<framework_runtime_state_t ()> read_phase)
+{
+    _state->lane.run ([&] { _state->host_phase = std::move (read_phase); }).get ();
 }
 
 void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)

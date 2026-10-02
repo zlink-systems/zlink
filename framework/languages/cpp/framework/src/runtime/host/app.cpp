@@ -1377,6 +1377,11 @@ void app_t::_apply_zlink_framework ()
             spot_runtime.bind_location_lifecycle (location_lifecycle);
             spot_runtime.bind_spot_location_resolver (spot_resolver);
             spot_runtime.bind_drain_flag (_state->draining);
+            spot_runtime.bind_host_phase ([access = _state->status_access] {
+                std::shared_lock lock (access->mutex);
+                return access->state ? access->state->runtime_state.load (std::memory_order_acquire)
+                                     : framework_runtime_state_t::stopped;
+            });
             spot_runtime.set_route_client (route_client);
             spot_runtime.bind_service_provider (provider);
         }

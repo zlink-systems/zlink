@@ -2146,6 +2146,22 @@ export class ServiceStatefulRuntime {
             kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
             kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
           ) {
+            const reporter = this.dispatchErrors;
+            if (decoded.kind === 'instanceSpot' && reporter?.captureEnabled() === true) {
+              reporter.report({
+                surface: ZLinkDispatchErrorSurface.InstanceSpot,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                reason: ZLinkDispatchErrorReason.StaleTarget,
+                action: ZLinkDispatchErrorAction.Drop,
+                meshName: this.dispatchErrorMeshName,
+                sourceRid: decoded.sourceNodeRid,
+                spotId:
+                  decoded.activation === 'ready'
+                    ? decoded.route.targetSpotId
+                    : decoded.target.targetSpotId,
+                error
+              });
+            }
             return 'protocolError';
           }
         }
@@ -2867,8 +2883,8 @@ export class ServiceStatefulRuntime {
       // activation continuation can publish its in-memory intent. If the
       // local ready projection already carries the exact object and owner
       // fence from the received route, publish that validated projection
-      // instead of exposing a transient NotFound result to a following
-      // request. A mismatched or absent local projection remains NotFound.
+      // instead of rejecting a following request while publication finishes.
+      // An absent Ready projection cannot validate the received owner fence.
       const local = this.registry.spot(record.route.targetSpotId);
       if (
         local?.kind === 'instance' &&
@@ -2881,7 +2897,7 @@ export class ServiceStatefulRuntime {
     }
     if (intent === undefined) {
       throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
         `Instance Spot '${record.route.targetSpotId}' has no current Ready authority.`
       );
     }

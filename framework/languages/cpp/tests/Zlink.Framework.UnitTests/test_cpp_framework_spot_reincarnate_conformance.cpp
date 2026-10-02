@@ -6,6 +6,8 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <zlink/framework.hpp>
@@ -43,6 +45,7 @@ enum class branch_t
     replay,
     initialization_failure,
     draining,
+    relocating,
     cold_activation_close,
     asynchronous_initialization,
     asynchronous_initialization_failure
@@ -72,6 +75,10 @@ struct intent_request_t
 {
     static constexpr const char *packet_name = "reincarnate-intent";
 };
+struct intent_send_t
+{
+    static constexpr const char *packet_name = "reincarnate-intent-send";
+};
 struct followup_intent_request_t
 {
     static constexpr const char *packet_name = "reincarnate-followup-intent";
@@ -99,6 +106,7 @@ struct reply_t
 EMPTY_REQUEST_JSON (warm_request_t)
 EMPTY_REQUEST_JSON (close_request_t)
 EMPTY_REQUEST_JSON (intent_request_t)
+EMPTY_REQUEST_JSON (intent_send_t)
 EMPTY_REQUEST_JSON (followup_intent_request_t)
 EMPTY_REQUEST_JSON (no_intent_request_t)
 #undef EMPTY_REQUEST_JSON
@@ -119,6 +127,14 @@ struct evidence_t
 {
     explicit evidence_t (branch_t branch) : branch (branch) {}
     branch_t branch;
+    bool relocation_sealed = false;
+    bool complete_relocation = false;
+    std::shared_ptr<zf::detail::spot_context_state_t> activation;
+    std::optional<std::promise<void>> send_arrived{std::in_place};
+    std::promise<void> send_terminated;
+    std::promise<void> relocation_readiness_held;
+    std::vector<std::string> send_diagnostics;
+    std::vector<std::string> send_error_types;
     std::mutex mutex;
     std::promise<void> closing_entered;
     zf::task_completion_source_t<void> closing_release;
@@ -144,6 +160,7 @@ struct evidence_t
     int factory_calls = 0;
     int factory_calls_at_close = 0;
     int closing_calls = 0;
+    int missing_placement_calls = 0;
     // Source-of-record differs from the old in-memory projection after Close.
     int durable_value = 7;
 };
@@ -168,29 +185,31 @@ class observed_store_t final : public zf::location_store_t
             const auto json =
               nlohmann::json::parse (begin, begin + found->value.bytes.size (), nullptr, false);
             if (!json.is_discarded ()
-                && json.contains (zf::runtime::location_record_fields::objectGeneration)) {
-                std::lock_guard lock (_evidence->mutex);
-                _evidence->authority_provider_key = key.value;
+                && json.contains (zf::runtime::location_record_fields::objectGeneration)
+                && json.contains (zf::runtime::location_record_fields::payload)) {
+                const auto payload =
+                  zf::runtime::decode_instance_spot_authority_payload (zf::runtime::base64_decode (
+                    json.at (zf::runtime::location_record_fields::payload).get<std::string> ()));
+                if (payload && payload->stable_type == stable_type && payload->spot_id == spot_id) {
+                    std::lock_guard lock (_evidence->mutex);
+                    _evidence->authority_provider_key = key.value;
+                }
             }
-        } else {
-            std::lock_guard lock (_evidence->mutex);
-            const auto &flow = zf::runtime::flow_context_t::current ();
-            if (_evidence->branch == branch_t::draining && flow
-                && flow->flow_id == _evidence->intent_flow
-                && key.value == _evidence->authority_provider_key && !_evidence->last_authority
-                && std::find (_evidence->order.begin (), _evidence->order.end (),
-                              "authorityReleased")
-                     != _evidence->order.end ()
-                && std::find (_evidence->order.begin (), _evidence->order.end (),
-                              "missingPlacement")
-                     == _evidence->order.end ())
-                _evidence->order.push_back ("missingPlacement");
         }
         co_return result;
     }
 
     zf::task_t<zf::store_write_result_t> write (zf::store_write_request_t request) override
     {
+        {
+            std::lock_guard lock (_evidence->mutex);
+            if (_evidence->closing_calls > 0)
+                for (const auto &condition : request.conditions)
+                    if (const auto *missing =
+                          std::get_if<zf::store_missing_condition_t> (&condition);
+                        missing && missing->key.value == _evidence->authority_provider_key)
+                        ++_evidence->missing_placement_calls;
+        }
         bool clears_terminal_journal = false;
         if (_evidence->branch == branch_t::cold_activation_close) {
             std::optional<zf::runtime::instance_spot_authority_payload_t> previous;
@@ -308,6 +327,7 @@ class reincarnating_spot_t final : public zf::instance_spot_t
                           std::shared_ptr<evidence_t> evidence) :
         _context (std::move (context)), _evidence (std::move (evidence))
     {
+        _evidence->activation = zf::detail::spot_context_access_t::state (_context);
     }
     zf::instance_spot_context_t &context () noexcept override { return _context; }
     const zf::instance_spot_context_t &context () const noexcept override { return _context; }
@@ -317,6 +337,7 @@ class reincarnating_spot_t final : public zf::instance_spot_t
           .add_handler<&reincarnating_spot_t::warm> ()
           .add_handler<&reincarnating_spot_t::close> ()
           .add_handler<&reincarnating_spot_t::intent> ()
+          .add_handler<&reincarnating_spot_t::send_intent> ()
           .add_handler<&reincarnating_spot_t::followup> ()
           .add_handler<&reincarnating_spot_t::without_intent> ();
     }
@@ -375,6 +396,7 @@ class reincarnating_spot_t final : public zf::instance_spot_t
     {
         return business_reply (intent_request_t::packet_name);
     }
+    void send_intent (const intent_send_t &) { (void) business_reply (intent_send_t::packet_name); }
     reply_t followup (const followup_intent_request_t &)
     {
         return business_reply (followup_intent_request_t::packet_name);
@@ -432,7 +454,9 @@ zf::task_t<reply_t> count_completion (zf::task_t<reply_t> task,
                  || packet == followup_intent_request_t::packet_name)
                 && initializer_fails (evidence->branch))
                 evidence->order.push_back ("pendingMessagesTypedFailure");
-            if (packet == intent_request_t::packet_name && evidence->branch == branch_t::draining)
+            if (packet == intent_request_t::packet_name
+                && (evidence->branch == branch_t::draining
+                    || evidence->branch == branch_t::relocating))
                 evidence->order.push_back ("pendingMessagesTerminated");
         }
         co_return zf::result_t<reply_t>::failure (error.kind (), error.what ());
@@ -446,6 +470,52 @@ void require_ready (std::future<void> &future, const char *what)
     future.get ();
 }
 
+// Holds the public host relocation operation at its existing readiness boundary.
+class relocation_hold_spot_t final : public zf::spot_t<zf::actor_t>
+{
+  public:
+    explicit relocation_hold_spot_t (zf::spot_context_t context) : _context (std::move (context)) {}
+    zf::spot_context_t &context () noexcept override { return _context; }
+    const zf::spot_context_t &context () const noexcept override { return _context; }
+    void configure () override
+    {
+        _context.handlers ().add_handler<&relocation_hold_spot_t::hold> ();
+    }
+    reply_t hold (const warm_request_t &)
+    {
+        _context.relocation_ready ().defer ();
+        return {};
+    }
+    zf::task_t<zf::spot_create_response_t> on_create (const zf::message_t &) override
+    {
+        co_return zf::spot_create_response_t::accept ();
+    }
+    zf::task_t<void> on_initialize () override { co_return; }
+    zf::task_t<zf::spot_actor_join_result_t> on_actor_join (std::string_view,
+                                                            const zf::message_t &) override
+    {
+        co_return zf::spot_actor_join_result_t::reject ();
+    }
+    zf::task_t<void> on_actor_joined (zf::actor_t &) override { co_return; }
+    zf::task_t<void> on_leave_actor (zf::actor_t &) override { co_return; }
+
+  private:
+    zf::spot_context_t _context;
+};
+class relocation_hold_adapter_t final : public zf::spot_relocation_adapter_t<relocation_hold_spot_t>
+{
+  public:
+    zf::task_t<std::vector<std::byte>> capture (relocation_hold_spot_t &, std::stop_token) override
+    {
+        co_return std::vector<std::byte>{};
+    }
+    zf::task_t<void>
+    restore (relocation_hold_spot_t &, std::vector<std::byte>, std::stop_token) override
+    {
+        co_return;
+    }
+};
+
 class exercise_t final : public zf::hosted_service_t
 {
   public:
@@ -457,21 +527,32 @@ class exercise_t final : public zf::hosted_service_t
     }
     zf::task_t<void> start (zf::service_provider_t &services) override
     {
-        try {
-            run (services);
-        }
-        catch (const std::exception &error) {
-            failure = error.what ();
-            _evidence->journal_clear_release.complete (zf::result_t<void>::success ());
-            _evidence->closing_release.complete (zf::result_t<void>::success ());
-            _evidence->initializer_release.complete (zf::result_t<void>::failure (
-              zf::framework_error_kind_t::internal_failure, "conformance initializer aborted"));
-        }
-        if (_app->runtime_state () != zf::framework_runtime_state_t::draining)
-            _app->stop ();
+        _worker = std::thread ([this, services] () mutable {
+            try {
+                const auto until = std::chrono::steady_clock::now () + request_timeout;
+                while (!_app->is_ready () && std::chrono::steady_clock::now () < until)
+                    std::this_thread::yield ();
+                if (!_app->is_ready ())
+                    throw std::runtime_error ("source host did not reach Serving");
+                run (services);
+            }
+            catch (const std::exception &error) {
+                failure = error.what ();
+                _evidence->journal_clear_release.complete (zf::result_t<void>::success ());
+                _evidence->closing_release.complete (zf::result_t<void>::success ());
+                _evidence->initializer_release.complete (zf::result_t<void>::failure (
+                  zf::framework_error_kind_t::internal_failure, "conformance initializer aborted"));
+            }
+            if (_app->runtime_state () != zf::framework_runtime_state_t::draining)
+                _app->stop ();
+        });
         co_return;
     }
-    void stop () noexcept override {}
+    void stop () noexcept override
+    {
+        if (_worker.joinable ())
+            _worker.join ();
+    }
     std::string failure;
     std::optional<reply_t> original_reply;
     std::optional<zf::result_t<reply_t>> intent_result;
@@ -564,6 +645,39 @@ class exercise_t final : public zf::hosted_service_t
         }
         auto route = _app->advanced ().zlink ().route_client (
           services.get_required<zf::serializer_registry_t> ());
+        if (_evidence->branch == branch_t::relocating) {
+            if (!_evidence->complete_relocation) {
+                auto &manager = services.get_required<zf::spot_manager_t> ();
+                auto created = manager
+                                 .get_or_create (zf::spot_id_t ("reincarnate-relocation-hold"),
+                                                 "reincarnate-relocation-hold")
+                                 .timeout (request_timeout)
+                                 .async ()
+                                 .result ();
+                if (!created)
+                    throw std::runtime_error (created.error ()
+                                                ? created.error ()->what ()
+                                                : "relocation readiness Spot was not created");
+                if (created.value ().spot.node_rid ().value () != node)
+                    throw std::runtime_error ("relocation readiness Spot was not owned by source");
+                auto held = route
+                              .request_to_spot (zf::spot_id_t ("reincarnate-relocation-hold"),
+                                                warm_request_t{})
+                              .timeout (request_timeout)
+                              .async<reply_t> ()
+                              .result ();
+                if (!held)
+                    throw std::runtime_error ("public relocation readiness did not defer");
+            }
+            _evidence->relocation_readiness_held.set_value ();
+            auto &meshes = services.get_required<zf::route_mesh_runtime_t> ();
+            const auto until = std::chrono::steady_clock::now () + request_timeout;
+            while (meshes.snapshot (mesh).ready_peer_count == 0
+                   && std::chrono::steady_clock::now () < until)
+                std::this_thread::yield ();
+            if (meshes.snapshot (mesh).ready_peer_count == 0)
+                throw std::runtime_error ("target host peer did not become Ready");
+        }
         const auto warmed = route.request_to_spot (zf::spot_id_t (spot_id), warm_request_t{})
                               .instance_spot (stable_type)
                               .timeout (request_timeout)
@@ -633,6 +747,17 @@ class exercise_t final : public zf::hosted_service_t
                 throw std::runtime_error (
                   "intent admission did not preserve the Closing owner fence");
             no_intent_result.emplace (no_intent.get ());
+            if (_evidence->branch == branch_t::draining
+                || _evidence->branch == branch_t::relocating) {
+                auto arrived = _evidence->send_arrived->get_future ();
+                auto sent = route.send_to_spot (zf::spot_id_t (spot_id), intent_send_t{})
+                              .instance_spot (stable_type)
+                              .async ()
+                              .result ();
+                if (!sent)
+                    throw std::runtime_error ("public intent send was not accepted");
+                require_ready (arrived, "intent send did not reach the Closing owner");
+            }
             if (_evidence->branch == branch_t::draining) {
                 auto &runtime = services.get_required<zf::framework_runtime_t> ();
                 auto drained = _evidence->draining_observed->get_future ();
@@ -651,6 +776,35 @@ class exercise_t final : public zf::hosted_service_t
                 (void) _app->shutdown (request_timeout);
                 require_ready (drained, "public runtime observer did not report Draining");
                 observation->close ();
+            }
+            std::optional<zf::task_t<zf::relocation_result_t>> relocation;
+            if (_evidence->branch == branch_t::relocating) {
+                relocation.emplace (
+                  _app->relocate ({.mode = zf::relocation_mode_t::planned_maintenance,
+                                   .deadline = request_timeout}));
+                if (!_evidence->complete_relocation
+                    && _app->runtime_state () != zf::framework_runtime_state_t::relocating)
+                    throw std::runtime_error ("public host did not enter Relocating");
+                if (_evidence->complete_relocation) {
+                    if (relocation->result ().value ().outcome
+                          != zf::relocation_outcome_t::relocated
+                        || _app->runtime_state () != zf::framework_runtime_state_t::relocated)
+                        throw std::runtime_error (
+                          "public host relocation did not complete before Close release");
+                }
+            }
+            if (_evidence->branch == branch_t::draining
+                || _evidence->branch == branch_t::relocating) {
+                const auto state = _evidence->activation;
+                const auto owner = state->lane_owner.lock ();
+                if (_evidence->relocation_sealed)
+                    state->detach_application_instance (false,
+                                                        zf::spot_close_reason_t::relocation_out);
+                const auto sealed =
+                  owner->lane.run ([&] { return state->admission_sealed; }).get ();
+                if (sealed != _evidence->relocation_sealed)
+                    throw std::runtime_error (
+                      "operational admission seal did not match fixture phase");
             }
             _evidence->closing_release.complete (zf::result_t<void>::success ());
             if (initializer_is_held (_evidence->branch)) {
@@ -706,6 +860,15 @@ class exercise_t final : public zf::hosted_service_t
             throw;
         }
         intent_result.emplace (intent.get ());
+        if (_evidence->branch == branch_t::relocating
+            && _app->runtime_state ()
+                 != (_evidence->complete_relocation ? zf::framework_runtime_state_t::relocated
+                                                    : zf::framework_runtime_state_t::relocating))
+            throw std::runtime_error ("host left Relocating before pending request terminal");
+        if (_evidence->branch == branch_t::draining || _evidence->branch == branch_t::relocating) {
+            auto terminated = _evidence->send_terminated.get_future ();
+            require_ready (terminated, "pending intent send diagnostic did not complete");
+        }
         if (followup.valid ())
             followup_result.emplace (followup.get ());
         const auto closed = _evidence->close_completion->result ();
@@ -723,6 +886,7 @@ class exercise_t final : public zf::hosted_service_t
         }
     }
     zf::app_t *_app;
+    std::thread _worker;
     std::shared_ptr<evidence_t> _evidence;
     std::shared_ptr<observed_store_t> _store;
 };
@@ -744,13 +908,37 @@ const nlohmann::json &branch_fixture (const char *name)
 void configure_app (zf::app_t &app,
                     const std::shared_ptr<evidence_t> &evidence,
                     const std::shared_ptr<observed_store_t> &store,
-                    const std::shared_ptr<zf::runtime::in_memory_relocation_store_t> &relocations)
+                    const std::shared_ptr<zf::runtime::in_memory_relocation_store_t> &relocations,
+                    std::string routing_id = node)
 {
     app.logging ().use_file ("spot-reincarnate.flow").set_min_level (zf::log_level_t::debug);
     app.add_zlink_framework ([&] (zf::zlink_framework_options_t &options) {
         options.configure_dispatch ().message_flow (zf::message_flow_log_mode_t::detailed);
+        zf::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options.configure_dispatch (),
+          [evidence] (const zf::message_dispatch_error_event_t &event) {
+              if (event.packet_name != intent_send_t::packet_name || !event.error_message
+                  || event.surface != zf::dispatch_error_surface_t::instance_spot
+                  || event.message_kind != zf::dispatch_message_kind_t::send)
+                  return;
+              std::lock_guard lock (evidence->mutex);
+              evidence->send_diagnostics.push_back (*event.error_message);
+              evidence->send_error_types.push_back (event.error_type.value_or (""));
+              if (evidence->send_diagnostics.size () == 1)
+                  evidence->send_terminated.set_value ();
+          });
         zf::detail::dispatch_options_access_t::set_observer_for_tests (
           options.configure_dispatch (), [evidence] (const zf::message_flow_event_t &event) {
+              if (event.packet_name == intent_send_t::packet_name
+                  && event.outcome == zf::message_flow_outcome_t::admitted
+                  && event.detail_stage
+                       == std::optional<std::string> ("invoke_erased.post_serial")) {
+                  std::lock_guard lock (evidence->mutex);
+                  if (evidence->send_arrived) {
+                      evidence->send_arrived->set_value ();
+                      evidence->send_arrived.reset ();
+                  }
+              }
               // This observer belongs to the only node that registers this packet.
               // post_serial/admitted is emitted only after its owner FIFO takes the work.
               if ((event.packet_name != std::optional<std::string> (intent_request_t::packet_name)
@@ -776,7 +964,7 @@ void configure_app (zf::app_t &app,
         options.add_relocation_store (relocations);
         options.add_route_mesh (mesh)
           .set_object_role (zf::object_role_t::server)
-          .set_routing_id (zlink::routing_id_t::from (std::string (node)))
+          .set_routing_id (zlink::routing_id_t::from (routing_id))
           .listen ("tcp://127.0.0.1:0")
           .add_instance_spot_factory<reincarnating_spot_t> (
             stable_type,
@@ -787,11 +975,25 @@ void configure_app (zf::app_t &app,
                 }
                 return std::make_shared<reincarnating_spot_t> (std::move (context), evidence);
             },
-            [] (auto &factory) { factory.disable_relocation (); });
+            [] (auto &factory) { factory.disable_relocation (); })
+          .add_spot_factory<relocation_hold_spot_t> (
+            "reincarnate-relocation-hold",
+            [] (zf::spot_context_t context) {
+                return std::make_shared<relocation_hold_spot_t> (std::move (context));
+            },
+            [] (auto &factory) {
+                factory.set_execution_mode (zf::user_spot_execution_mode_t::spot_wide);
+                factory.set_relocation_coordination_mode (
+                  zf::spot_relocation_coordination_mode_t::application_signaled);
+                factory.template preserve_state_with<relocation_hold_adapter_t> ();
+            });
     });
 }
 
-void check_branch (branch_t kind, const char *name)
+void check_branch (branch_t kind,
+                   const char *name,
+                   bool sealed = false,
+                   bool complete_relocation = false)
 {
     const auto &branch = branch_fixture (name);
     const auto &given = branch.at ("given");
@@ -799,20 +1001,38 @@ void check_branch (branch_t kind, const char *name)
     ASSERT_TRUE (given.at ("pendingIntent").get<bool> ());
     if (initializer_fails (kind))
         ASSERT_EQ ("fails", given.at ("initialization"));
-    if (kind == branch_t::draining)
+    if (kind == branch_t::draining || kind == branch_t::relocating)
         ASSERT_NE (given.at ("host").end (),
-                   std::find (given.at ("host").begin (), given.at ("host").end (), "Draining"));
+                   std::find (given.at ("host").begin (), given.at ("host").end (),
+                              kind == branch_t::draining ? "Draining" : "Relocating"));
     else
         ASSERT_EQ ("Serving", given.at ("host"));
     auto evidence = std::make_shared<evidence_t> (kind);
+    evidence->relocation_sealed = sealed;
+    evidence->complete_relocation = complete_relocation;
     auto store = std::make_shared<observed_store_t> (evidence);
     auto relocations = std::make_shared<zf::runtime::in_memory_relocation_store_t> ();
     auto app = zf::app_t::create ();
     configure_app (app, evidence, store, relocations);
+    std::unique_ptr<zf::app_t> target;
+    std::thread target_thread;
+    if (kind == branch_t::relocating) {
+        target = std::make_unique<zf::app_t> (zf::app_t::create ());
+        configure_app (*target, evidence, store, relocations, "reincarnate-relocation-target");
+        auto held = evidence->relocation_readiness_held.get_future ();
+        target_thread = std::thread ([&, held = std::move (held)] () mutable {
+            if (held.wait_for (request_timeout) == std::future_status::ready)
+                (void) target->run (0, nullptr);
+        });
+    }
     auto runner = std::make_unique<exercise_t> (app, evidence, store);
     auto *exercise = runner.get ();
     app.add_hosted_service (std::move (runner));
     (void) app.run (0, nullptr);
+    if (target) {
+        target->stop ();
+        target_thread.join ();
+    }
     ASSERT_TRUE (exercise->failure.empty ())
       << exercise->failure
       << (exercise->intent_result && !*exercise->intent_result && exercise->intent_result->error ()
@@ -852,16 +1072,29 @@ void check_branch (branch_t kind, const char *name)
             != expect.at ("order").end ())
             seen.push_back (event);
     EXPECT_EQ (expect.at ("order").get<std::vector<std::string>> (), seen);
-    if (kind == branch_t::draining) {
+    if (kind == branch_t::draining || kind == branch_t::relocating) {
         EXPECT_FALSE (*exercise->intent_result);
-        EXPECT_EQ (zf::framework_error_kind_t::shutting_down,
+        const auto host = kind == branch_t::draining ? "Draining" : "Relocating";
+        const std::map<std::string, zf::framework_error_kind_t> kinds{
+          {"ShuttingDown", zf::framework_error_kind_t::shutting_down},
+          {"Unavailable", zf::framework_error_kind_t::unavailable}};
+        EXPECT_EQ (kinds.at (expect.at ("messageTerminalByHost").at (host).get<std::string> ()),
                    exercise->intent_result->error_kind ());
-        EXPECT_EQ ("ShuttingDown", expect.at ("messageTerminalByHost").at ("Draining"));
-        EXPECT_EQ (
-          expect.at ("missingPlacementCalls").get<long> (),
-          std::count (evidence->order.begin (), evidence->order.end (), "missingPlacement"));
+        const auto wire = zf::runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+          kinds.at (expect.at ("sendDiagnosticsByHost").at (host).get<std::string> ()));
+        ASSERT_TRUE (wire);
+        EXPECT_EQ ((std::vector<std::string>{zf::runtime::messaging::request_failure_mapper_t{}
+                                               .reply_header_exception (wire->terminal_result,
+                                                                        wire->failure_code,
+                                                                        "Instance Spot activation")
+                                               .what ()}),
+                   evidence->send_diagnostics);
+        EXPECT_EQ ((std::vector<std::string>{typeid (zf::framework_exception_t).name ()}),
+                   evidence->send_error_types);
+        EXPECT_EQ (expect.at ("missingPlacementCalls").get<int> (),
+                   evidence->missing_placement_calls);
     }
-    if (kind == branch_t::draining) {
+    if (kind == branch_t::draining || kind == branch_t::relocating) {
         EXPECT_FALSE (exercise->final_authority);
         EXPECT_EQ ("Missing", expect.at ("authority"));
         EXPECT_EQ (expect.at ("thisHostFactoryCalls").get<int> (),
@@ -1044,7 +1277,20 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, FailedInitializationDeletesNewGe
 }
 TEST (ZLinkFrameworkSpotReincarnateConformance, DrainReleasesInsteadOfReincarnatingHere)
 {
-    check_branch (branch_t::draining, "release-during-host-drain-or-relocation");
+    const auto &given = branch_fixture ("release-during-host-drain-or-relocation").at ("given");
+    const std::map<std::string, branch_t> hosts{{"Draining", branch_t::draining},
+                                                {"Relocating", branch_t::relocating}};
+    for (const auto &host : given.at ("host"))
+        for (const auto &seal : given.at ("relocationSeal")) {
+            SCOPED_TRACE (host.get<std::string> () + "/" + seal.get<std::string> ());
+            ASSERT_TRUE (seal == "before" || seal == "after");
+            check_branch (hosts.at (host.get<std::string> ()),
+                          "release-during-host-drain-or-relocation", seal == "after");
+        }
+}
+TEST (ZLinkFrameworkSpotReincarnateConformance, RelocatedHostDoesNotReincarnateOldOwner)
+{
+    check_branch (branch_t::relocating, "release-during-host-drain-or-relocation", false, true);
 }
 TEST (ZLinkFrameworkSpotReincarnateConformance, PendingInitializerCompletesBeforeIntentHandler)
 {

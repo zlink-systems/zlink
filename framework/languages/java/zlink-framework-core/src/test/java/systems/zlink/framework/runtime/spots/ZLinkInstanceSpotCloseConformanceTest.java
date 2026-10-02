@@ -7,18 +7,24 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
+import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.spots.*;
 
 import java.nio.file.Files;
@@ -73,12 +79,258 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         run(null, "Relocating", true, false, false);
     }
 
+    static void runReadyRouteCase(JsonNode routeCase) throws Exception {
+        JsonNode given = routeCase.path("given");
+        JsonNode expected = routeCase.path("expect");
+        assertEquals("mismatch", given.path("ownerFence").asText());
+        for (JsonNode intent : given.path("instanceIntent")) {
+            String spotId = "java-stale-ready-" + UUID.randomUUID();
+            Observation observation = new Observation(false, false);
+            current = observation;
+            ObservedStore store = new ObservedStore(spotId, observation);
+            var repository = new ZLinkProviderLocationRepository(store);
+            var options = new DefaultZLinkFrameworkOptions();
+            options.addLocationStore(store);
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.addRouteMesh(MESH)
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingId(RoutingId.from(spotId))
+                    .objects()
+                    .server()
+                    .addEntrySpot(Entry.class)
+                    .addInstanceSpotFactory(
+                            TYPE, Instance.class, factory -> factory.disableRelocation());
+            CapturingBackend backend = new CapturingBackend();
+            try (ArrivalLog flow = new ArrivalLog(spotId);
+                    ZLinkFrameworkRuntime runtime =
+                            ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+                runtime.route()
+                        .requestToSpot(spotId, new InitialProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Reply.class)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var before = snapshot(repository, spotId);
+                var authority =
+                        new ZLinkServiceAuthorityPayloadCodec()
+                                .decode(before.payload())
+                                .orElseThrow();
+                var route =
+                        new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                authority.nodeRid(),
+                                authority.nodeGeneration(),
+                                spotId,
+                                before.objectGeneration(),
+                                before.ownerId(),
+                                before.authorityOwnerGeneration() + 1,
+                                before.ownerLeaseGeneration(),
+                                before.storeVersion());
+                if (given.path("authority").asText().equals("Missing")) {
+                    runtime.route()
+                            .sendToSpot(spotId, new CloseProbe())
+                            .instanceSpot(TYPE)
+                            .inMesh(MESH)
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    observation.closingRelease.complete(null);
+                    assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                    assertInstanceOf(
+                            ZLinkAuthorityMissing.class,
+                            repository
+                                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                }
+                int factoriesBefore = observation.configureGenerations.size();
+                int handlersBefore = observation.pendingGenerations.size();
+                int placementBefore = store.missingPlacementAttempts.get();
+                AtomicInteger terminalCount = new AtomicInteger();
+                ZLinkFrameworkException failure = null;
+                String sendDiagnosticKind = null;
+                if (given.path("messageKind").asText().equals("request")) {
+                    Throwable terminal =
+                            ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
+                                            backend.mesh, route, intent.asBoolean(), terminalCount)
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    failure = assertInstanceOf(ZLinkFrameworkException.class, terminal);
+                } else {
+                    var sourceOptions = new DefaultZLinkFrameworkOptions();
+                    sourceOptions.addLocationStore(store.inner);
+                    sourceOptions
+                            .addRouteMesh(MESH)
+                            .listen("tcp://127.0.0.1:0")
+                            .setRoutingId(RoutingId.from(spotId + "-source"))
+                            .objects()
+                            .server()
+                            .addEntrySpot(Entry.class);
+                    CapturingBackend sourceBackend = new CapturingBackend();
+                    try (var sourceRuntime =
+                            ZLinkFrameworkRuntimeTestAccess.start(sourceOptions, sourceBackend)) {
+                        long peerDeadline = System.nanoTime() + WAIT.toNanos();
+                        while (!backend.mesh.peers().stream()
+                                        .anyMatch(
+                                                peer ->
+                                                        peer.routingId()
+                                                                        .equals(
+                                                                                sourceBackend.mesh
+                                                                                        .routingId())
+                                                                && peer.state()
+                                                                        == MeshPeerState.ADMITTED)
+                                || !sourceBackend.mesh.peers().stream()
+                                        .anyMatch(
+                                                peer ->
+                                                        peer.routingId()
+                                                                        .equals(
+                                                                                backend.mesh
+                                                                                        .routingId())
+                                                                && peer.state()
+                                                                        == MeshPeerState
+                                                                                .ADMITTED)) {
+                            assertTrue(
+                                    System.nanoTime() < peerDeadline,
+                                    "Ready fixture source peer admission timed out");
+                            Thread.sleep(1);
+                        }
+                        long sourceGeneration =
+                                backend.mesh.peers().stream()
+                                        .filter(
+                                                peer ->
+                                                        peer.routingId()
+                                                                .equals(
+                                                                        sourceBackend.mesh
+                                                                                .routingId()))
+                                        .findFirst()
+                                        .orElseThrow()
+                                        .lifecycleGeneration();
+                        var serializer = new ZLinkJsonMessageSerializer();
+                        try (Message payload =
+                                Message.from(serializer.serialize(new PendingProbe()).bytes())) {
+                            List<Message> parts =
+                                    new ZLinkSpotRouteMessages(serializer)
+                                            .encodeSend(
+                                                    MESH,
+                                                    Optional.of(PendingProbe.class.getSimpleName()),
+                                                    payload,
+                                                    null,
+                                                    Map.of(),
+                                                    null);
+                            try {
+                                ZLinkJavaReadyRouteTestAccess.sendReady(
+                                                sourceBackend.mesh,
+                                                route,
+                                                sourceGeneration,
+                                                intent.asBoolean(),
+                                                parts)
+                                        .toCompletableFuture()
+                                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            } finally {
+                                parts.forEach(Message::close);
+                            }
+                        }
+                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        assertTrue(dropped.contains("error_type=ZLinkFrameworkException"), dropped);
+                        int messageStart =
+                                dropped.indexOf("error_message=") + "error_message=".length();
+                        sendDiagnosticKind =
+                                dropped.substring(messageStart, dropped.indexOf(':', messageStart));
+                    }
+                }
+                if (given.path("messageKind").asText().equals("send"))
+                    assertEquals(1, flow.sendDiagnosticCount.get());
+                for (var fields = expected.fields(); fields.hasNext(); ) {
+                    var field = fields.next();
+                    switch (field.getKey()) {
+                        case "messageTerminal" ->
+                                assertEquals(
+                                        field.getValue().asText(),
+                                        failure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                                                ? "Unavailable"
+                                                : failure.kind().toString());
+                        case "messageTerminalCount" ->
+                                assertEquals(field.getValue().asInt(), terminalCount.get());
+                        case "diagnostics" -> {
+                            List<String> diagnostics = new ArrayList<>();
+                            field.getValue().forEach(value -> diagnostics.add(value.asText()));
+                            assertEquals(
+                                    diagnostics,
+                                    List.of(
+                                            sendDiagnosticKind.substring(0, 1)
+                                                    + sendDiagnosticKind
+                                                            .substring(1)
+                                                            .toLowerCase(Locale.ROOT)));
+                        }
+                        case "handlerCalls" ->
+                                assertEquals(
+                                        field.getValue().asInt(),
+                                        observation.pendingGenerations.size() - handlersBefore);
+                        case "factoryCalls" ->
+                                assertEquals(
+                                        field.getValue().asInt(),
+                                        observation.configureGenerations.size() - factoriesBefore);
+                        case "missingPlacementCalls" ->
+                                assertEquals(
+                                        field.getValue().asInt(),
+                                        store.missingPlacementAttempts.get() - placementBefore);
+                        default -> fail("unknown Ready route expectation " + field.getKey());
+                    }
+                }
+            } finally {
+                observation.activeRelease.complete(null);
+                observation.closingRelease.complete(null);
+            }
+        }
+    }
+
+    private static final class CapturingBackend implements ZLinkBackendAdapterProvider {
+        private final ZLinkJavaBackendAdapterFactory delegate =
+                new ZLinkJavaBackendAdapterFactory();
+        ZLinkInternalMeshNode mesh;
+
+        public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createChannelAdapter(options);
+        }
+
+        public ZLinkSpotBackendAdapter createSpotAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createSpotAdapter(options);
+        }
+
+        public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createStreamAdapter(options);
+        }
+
+        public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
+                ZLinkBackendAdapterOptions options) {
+            return delegate.createMonitoringAdapter(options);
+        }
+
+        public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
+            var adapter = delegate.createMeshAdapter(options);
+            return (context, name) -> {
+                mesh = adapter.createMeshNode(context, name);
+                return mesh;
+            };
+        }
+
+        public java.util.function.Function<ZLinkBackendObject, Duration> admissionTimeout() {
+            return delegate.admissionTimeout();
+        }
+    }
+
     static void runBranch(JsonNode branch) throws Exception {
         String name = branch.path("name").asText();
         assertTrue(BRANCHES.contains(name), "unknown close branch " + name);
         if (name.equals("release-during-host-drain-or-relocation")) {
             for (JsonNode host : branch.path("given").path("host")) {
-                run(branch, host.asText(), true, false, false);
+                if (host.asText().equals("Relocating")) {
+                    for (JsonNode seal : branch.path("given").path("relocationSeal"))
+                        run(branch, host.asText(), true, false, false, false, seal.asText());
+                } else {
+                    run(branch, host.asText(), true, false, false);
+                }
             }
         } else {
             boolean intent = branch.path("given").path("pendingIntent").asBoolean(false);
@@ -105,6 +357,18 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             boolean failInitialization,
             boolean failConfigure)
             throws Exception {
+        run(branch, host, intent, queuedBeforeClose, failInitialization, failConfigure, "before");
+    }
+
+    private static void run(
+            JsonNode branch,
+            String host,
+            boolean intent,
+            boolean queuedBeforeClose,
+            boolean failInitialization,
+            boolean failConfigure,
+            String relocationSeal)
+            throws Exception {
         String spotId = "java-close-instance-" + UUID.randomUUID();
         Observation observation = new Observation(failInitialization, queuedBeforeClose);
         observation.failConfigure = failConfigure;
@@ -122,7 +386,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         objects.addInstanceSpotFactory(
                 TYPE, Instance.class, factory -> factory.disableRelocation());
         String name = branch == null ? "pending-before-close" : branch.path("name").asText();
-        ZLinkFrameworkRuntime replacement = null;
         try (ArrivalLog flow = new ArrivalLog(spotId);
                 ZLinkFrameworkRuntime runtime =
                         ZLinkFrameworkRuntimeTestAccess.start(
@@ -176,7 +439,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 if (intent && !queuedBeforeClose) {
                     pending = pending(runtime, spotId, true);
                     flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    if (branch == null && host.equals("Draining")) {
+                    if (!host.equals("Serving")) {
                         runtime.route()
                                 .sendToSpot(spotId, new PendingProbe())
                                 .instanceSpot(TYPE)
@@ -194,30 +457,32 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 CompletionStage<?> hostOperation = null;
                 if (host.equals("Draining")) {
                     hostOperation = runtime.shutdown(WAIT);
-                    assertEquals(ZLinkFrameworkRuntimeState.DRAINING, runtime.status().state());
+                    awaitHostState(runtime, ZLinkFrameworkRuntimeState.DRAINING, hostOperation);
                 } else if (host.equals("Relocating")) {
-                    DefaultZLinkFrameworkOptions replacementOptions =
-                            new DefaultZLinkFrameworkOptions();
-                    replacementOptions.addLocationStore(store.inner);
-                    replacementOptions
-                            .addRouteMesh(MESH)
-                            .listen("tcp://127.0.0.1:0")
-                            .setRoutingId(RoutingId.from(spotId + "-replacement"))
-                            .objects()
-                            .server()
-                            .addEntrySpot(Entry.class);
-                    replacement =
-                            ZLinkFrameworkRuntimeTestAccess.start(
-                                    replacementOptions, new ZLinkJavaBackendAdapterFactory());
-                    CompletableFuture<Void> relocating =
-                            observeState(runtime, ZLinkFrameworkRuntimeState.RELOCATING);
-                    hostOperation =
-                            runtime.relocate(
-                                    new ZLinkFrameworkRelocationOptions(
-                                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                                            null,
-                                            WAIT));
-                    relocating.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    var begin =
+                            ZLinkFrameworkRuntime.class.getDeclaredMethod(
+                                    "beginRelocationAdmission");
+                    begin.setAccessible(true);
+                    ((CompletionStage<?>) begin.invoke(runtime))
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertEquals(ZLinkFrameworkRuntimeState.RELOCATING, runtime.status().state());
+                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+                    spotsField.setAccessible(true);
+                    assertTrue(((ZLinkSpotRuntime) spotsField.get(runtime)).isRelocating());
+                }
+                if (host.equals("Relocating")) {
+                    var field = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
+                    field.setAccessible(true);
+                    var drains =
+                            (systems.zlink.framework.runtime.internal.drain
+                                            .ZLinkMeshDrainCoordinator)
+                                    field.get(runtime);
+                    assertFalse(drains.isSealed(MESH));
+                    if (relocationSeal.equals("after")) {
+                        drains.seal(MESH);
+                        assertTrue(drains.isSealed(MESH));
+                    }
                 }
                 observation.closingRelease.complete(null);
                 if (failInitialization) {
@@ -322,10 +587,15 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         assertFalse(
                                 missingPlacementBeforeInspection,
                                 "accepted intent must not enter Missing placement after release");
-                    if (branch == null && host.equals("Draining")) {
+                    if (!host.equals("Serving")) {
                         String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                         assertTrue(dropped.contains("action=drop"));
-                        assertTrue(dropped.contains("reason=shutdown"));
+                        assertTrue(
+                                dropped.contains(
+                                        "reason="
+                                                + (host.equals("Draining")
+                                                        ? "shutdown"
+                                                        : "location_unavailable")));
                     }
                 }
                 if (branch != null) {
@@ -344,7 +614,10 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                     "factoryCalls",
                                     "thisHostFactoryCalls",
                                     "messageTerminal",
-                                    "messageTerminalCount");
+                                    "messageTerminalCount",
+                                    "messageTerminalByHost",
+                                    "sendDiagnosticsByHost",
+                                    "missingPlacementCalls");
                     expected.fieldNames()
                             .forEachRemaining(
                                     key ->
@@ -403,6 +676,42 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 expected.path("newHandlerCalls").asInt(),
                                 observation.pendingGenerations.size());
                     }
+                    if (expected.has("messageTerminalByHost")) {
+                        String terminal = host.equals("Draining") ? "ShuttingDown" : "Unavailable";
+                        assertEquals(
+                                expected.path("messageTerminalByHost").path(host).asText(),
+                                terminal);
+                        assertEquals(
+                                terminal.equals("ShuttingDown")
+                                        ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                        : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                failure(pending).kind());
+                    }
+                    if (expected.has("sendDiagnosticsByHost")) {
+                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        String terminal =
+                                expected.path("sendDiagnosticsByHost").path(host).asText();
+                        assertTrue(dropped.contains("error_type=ZLinkFrameworkException"), dropped);
+                        int messageStart =
+                                dropped.indexOf("error_message=") + "error_message=".length();
+                        String diagnosticKind =
+                                dropped.substring(messageStart, dropped.indexOf(':', messageStart));
+                        assertTrue(
+                                terminal.equalsIgnoreCase(diagnosticKind.replace("_", "")),
+                                dropped);
+                        assertTrue(
+                                dropped.contains(
+                                        "reason="
+                                                + (terminal.equals("ShuttingDown")
+                                                        ? "shutdown"
+                                                        : "location_unavailable")),
+                                dropped);
+                    }
+                    if (expected.has("missingPlacementCalls")) {
+                        assertEquals(
+                                expected.path("missingPlacementCalls").asInt(),
+                                flow.missingPlacementCalls.get());
+                    }
                     if (expected.has("messageTerminalCount")) {
                         assertEquals(
                                 expected.path("messageTerminalCount").asInt(),
@@ -412,6 +721,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 if (hostOperation != null) {
                     hostOperation.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 }
+                if (!host.equals("Serving")) assertEquals(1, flow.sendDiagnosticCount.get());
             } finally {
                 observation.activeRelease.complete(null);
                 observation.closingRelease.complete(null);
@@ -419,7 +729,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         } finally {
             observation.activeRelease.complete(null);
             observation.closingRelease.complete(null);
-            if (replacement != null) replacement.close();
         }
     }
 
@@ -436,8 +745,12 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 .whenComplete(
                         (reply, error) -> {
                             observation.terminals.incrementAndGet();
-                            if (error != null)
-                                observation.events.add("pendingMessagesTypedFailure");
+                            if (error != null) {
+                                observation.events.add(
+                                        observation.events.contains("authorityReleased")
+                                                ? "pendingMessagesTerminated"
+                                                : "pendingMessagesTypedFailure");
+                            }
                         })
                 .toCompletableFuture();
     }
@@ -471,42 +784,23 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         }
     }
 
-    private static CompletableFuture<Void> observeState(
-            ZLinkFrameworkRuntime runtime, ZLinkFrameworkRuntimeState expected) {
-        CompletableFuture<Void> observed = new CompletableFuture<>();
-        runtime.observe()
-                .subscribe(
-                        new Flow.Subscriber<>() {
-                            private Flow.Subscription subscription;
-
-                            public void onSubscribe(Flow.Subscription next) {
-                                subscription = next;
-                                next.request(Long.MAX_VALUE);
-                            }
-
-                            public void onNext(
-                                    systems.zlink.framework.monitoring.ZLinkObservedStatus<
-                                                    systems.zlink.framework.monitoring
-                                                            .ZLinkFrameworkRuntimeStatus>
-                                            item) {
-                                if (item.status().state() == expected) {
-                                    observed.complete(null);
-                                    subscription.cancel();
-                                }
-                            }
-
-                            public void onError(Throwable error) {
-                                observed.completeExceptionally(error);
-                            }
-
-                            public void onComplete() {
-                                if (!observed.isDone())
-                                    observed.completeExceptionally(
-                                            new IllegalStateException(
-                                                    "expected host state was not published"));
-                            }
-                        });
-        return observed;
+    private static void awaitHostState(
+            ZLinkFrameworkRuntime runtime,
+            ZLinkFrameworkRuntimeState expected,
+            CompletionStage<?> operation)
+            throws Exception {
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (runtime.status().state() != expected) {
+            if (operation.toCompletableFuture().isDone()) {
+                Object result = operation.toCompletableFuture().get();
+                throw new AssertionError(
+                        "Host operation completed before " + expected + ": " + result);
+            }
+            if (System.nanoTime() >= deadline)
+                throw new AssertionError(
+                        "Host did not reach " + expected + ": " + runtime.status().state());
+            Thread.sleep(1);
+        }
     }
 
     public record InitialProbe(String value) {
@@ -691,6 +985,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private final Observation observation;
         private long originalGeneration;
         private long lastGeneration;
+        final AtomicInteger missingPlacementAttempts = new AtomicInteger();
 
         ObservedStore(String spotId, Observation observation) {
             this.spotId = spotId;
@@ -706,6 +1001,12 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         public CompletionStage<ZLinkStoreWriteResult> write(
                 ZLinkStoreWriteRequest request,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            if (request.conditions().stream()
+                    .anyMatch(
+                            condition ->
+                                    condition instanceof ZLinkStoreMissingCondition missing
+                                            && authority(missing.key())))
+                missingPlacementAttempts.incrementAndGet();
             boolean put =
                     request.mutations().stream()
                             .anyMatch(
@@ -789,7 +1090,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         final CompletableFuture<String> ownerArrival = new CompletableFuture<>();
         final CompletableFuture<Void> sendArrival = new CompletableFuture<>();
         final CompletableFuture<String> sendDropped = new CompletableFuture<>();
+        final AtomicInteger sendDiagnosticCount = new AtomicInteger();
         final CompletableFuture<Void> missingPlacement = new CompletableFuture<>();
+        final AtomicInteger missingPlacementCalls = new AtomicInteger();
         private final java.io.BufferedWriter writer;
 
         ArrivalLog(String spotId) throws Exception {
@@ -825,6 +1128,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             if (line.contains("event_id=zlink.dispatch_error")
                     && spotId.equals(fields.get("spot"))
                     && "send".equals(fields.get("kind"))) {
+                sendDiagnosticCount.incrementAndGet();
                 sendDropped.complete(line);
             }
             if (spotId.equals(fields.get("spot"))
@@ -833,6 +1137,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     && fields.containsKey("corr")
                     && ownerArrival.isDone()
                     && Objects.equals(ownerArrival.getNow(null), fields.get("corr"))) {
+                missingPlacementCalls.incrementAndGet();
                 current.events.add("missingPlacement");
                 missingPlacement.complete(null);
             }

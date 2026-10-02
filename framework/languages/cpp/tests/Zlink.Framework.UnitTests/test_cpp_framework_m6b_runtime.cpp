@@ -49,6 +49,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <future>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -109,6 +110,14 @@ class counting_location_repository_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
   public:
+    zlink::framework::task_t<zlink::framework::object_reserve_result_t>
+    reserve (zlink::framework::object_reserve_request_t request,
+             std::stop_token cancellation = {}) override
+    {
+        reservation_calls.fetch_add (1, std::memory_order_relaxed);
+        return in_memory_location_repository_t::reserve (std::move (request), cancellation);
+    }
+
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
     read_authority (zlink::framework::authority_key_t key,
                     std::stop_token cancellation = {}) override
@@ -160,6 +169,7 @@ class counting_location_repository_t final
     }
 
     std::atomic<std::size_t> authority_reads{0};
+    std::atomic<std::size_t> reservation_calls{0};
     std::function<void (const zlink::framework::authority_key_t &,
                         const zlink::framework::runtime::instance_spot_authority_payload_t &)>
       activation_recovery_write_observer;
@@ -5755,9 +5765,27 @@ void verify_remote_user_spot_create_close_terminal_once ()
 
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
-    auto target = std::make_shared<host::public_host_runtime_t> (
+    std::vector<std::string> instance_send_diagnostics;
+    std::mutex instance_send_diagnostics_mutex;
+    const auto send_diagnostic_snapshot = [&] {
+        const std::lock_guard lock (instance_send_diagnostics_mutex);
+        return instance_send_diagnostics;
+    };
+    auto target_options =
       host::host_options_t{.mesh = mesh::raw_mesh_node_options_t{descriptor ("user-target")},
-                           .user_spot_operation_replay_retention = 50ms});
+                           .user_spot_operation_replay_retention = 50ms};
+    target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
+          if (event.surface == dispatch_error_surface_t::instance_spot
+              && event.message_kind == dispatch_message_kind_t::send) {
+              assert (event.action == dispatch_error_action_t::drop);
+              assert (event.error_message);
+              const std::lock_guard lock (instance_send_diagnostics_mutex);
+              instance_send_diagnostics.push_back (*event.error_message);
+          }
+      });
+    auto target = std::make_shared<host::public_host_runtime_t> (std::move (target_options));
     std::size_t materialize_count = 0;
     target->configure_user_spot_operations (
       store,
@@ -5929,45 +5957,112 @@ void verify_remote_user_spot_create_close_terminal_once ()
     const auto *instance_ready = std::get_if<authority_snapshot_t> (&ready_authority);
     assert (instance_ready
             && instance_ready->allocation.state == placement_allocation_state_t::active);
-    auto stale_ready_request = replay_instance_request;
-    stale_ready_request.operation = {123, 459};
-    stale_ready_request.target.object_generation = instance_ready->object_generation;
-    stale_ready_request.target.authority_owner_generation =
-      instance_ready->authority_owner_generation + 1;
-    stale_ready_request.target.owner_id = instance_ready->owner.owner_id;
-    stale_ready_request.target.owner_lease_generation =
-      static_cast<std::uint64_t> (instance_ready->owner.lease_generation);
-    stale_ready_request.target.store_version = instance_ready->store_version;
-    stale_ready_request.target.instance_intent = true;
-    instance_reply_header.reset ();
-    instance_reply_payload.reset ();
-    assert (source
-              ->activate_instance_spot_remote (
-                target->status ().routing_id (), std::move (stale_ready_request),
-                std::vector<std::uint8_t>{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3, 'a', 'b', 'c'},
-                {"quest.start", "application/json", {'{', '}'}}, 5s,
-                [&] (foundation::operation_terminal_t terminal, protocol::reply_header_t header,
-                     std::optional<protocol::application_payload_t> reply_payload) {
-                    assert (terminal == foundation::operation_terminal_t::completed);
-                    instance_reply_header = header;
-                    instance_reply_payload = std::move (reply_payload);
-                })
-              .result ()
-              .value ());
-    deadline = std::chrono::steady_clock::now () + 5s;
-    while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
-    }
-    assert (instance_reply_header);
-    assert (zlink::framework::runtime::messaging::request_failure_mapper_t{}
-              .reply_header_exception (instance_reply_header->terminal_result,
-                                       instance_reply_header->failure_code, "Instance activation")
-              .kind ()
-            == framework_error_kind_t::unavailable);
-    assert (!instance_reply_payload);
-    assert (instance_prepare_count == 1);
-    assert (instance_activation_count == 1);
+    std::ifstream close_fixture_input (ZLINK_SPOT_CLOSE_CONFORMANCE_PATH);
+    assert (close_fixture_input);
+    const auto close_fixture = nlohmann::json::parse (close_fixture_input);
+    std::uint64_t ready_case_operation = 1000;
+    const auto verify_ready_route_cases = [&] (const std::string &authority,
+                                               const authority_snapshot_t &ready) {
+        for (const auto &scenario : close_fixture.at ("readyRouteCases")) {
+            const auto &given = scenario.at ("given");
+            const auto &expected = scenario.at ("expect");
+            if (given.at ("authority") != authority)
+                continue;
+            assert (given.at ("ownerFence") == "mismatch");
+            for (const auto &intent : given.at ("instanceIntent")) {
+                auto request = replay_instance_request;
+                request.operation = {123, ready_case_operation++};
+                request.has_metadata = false;
+                request.target.object_generation = ready.object_generation;
+                request.target.authority_owner_generation = ready.authority_owner_generation + 1;
+                request.target.owner_id = ready.owner.owner_id;
+                request.target.owner_lease_generation =
+                  static_cast<std::uint64_t> (ready.owner.lease_generation);
+                request.target.store_version = ready.store_version;
+                request.target.instance_intent = intent.get<bool> ();
+                request.request = given.at ("messageKind") == "request";
+                const auto prepares_before = instance_prepare_count;
+                const auto handlers_before = instance_activation_count;
+                const auto reservations_before = store->reservation_calls.load ();
+                const auto reads_before = store->authority_reads.load ();
+                instance_reply_header.reset ();
+                instance_reply_payload.reset ();
+                {
+                    const std::lock_guard lock (instance_send_diagnostics_mutex);
+                    instance_send_diagnostics.clear ();
+                }
+                std::size_t terminal_count = 0;
+                if (request.request) {
+                    assert (source
+                              ->activate_instance_spot_remote (
+                                target->status ().routing_id (), request, std::nullopt,
+                                {"quest.start", "application/json", {'{', '}'}}, 5s,
+                                [&] (foundation::operation_terminal_t terminal,
+                                     protocol::reply_header_t header,
+                                     std::optional<protocol::application_payload_t> payload) {
+                                    assert (terminal
+                                            == foundation::operation_terminal_t::completed);
+                                    ++terminal_count;
+                                    instance_reply_header = header;
+                                    instance_reply_payload = std::move (payload);
+                                })
+                              .result ()
+                              .value ());
+                } else {
+                    assert (source
+                              ->send_instance_spot_activation_remote (
+                                target->status ().routing_id (), request, std::nullopt,
+                                {"quest.start", "application/json", {'{', '}'}})
+                              .result ()
+                              .value ());
+                }
+                deadline = std::chrono::steady_clock::now () + 5s;
+                while (
+                  (request.request ? !instance_reply_header : send_diagnostic_snapshot ().empty ())
+                  && std::chrono::steady_clock::now () < deadline) {
+                    (void) target->dispatch_ready (dispatch);
+                    (void) source->dispatch_ready (dispatch);
+                    std::this_thread::sleep_for (1ms);
+                }
+                assert (store->authority_reads.load () > reads_before);
+                if (request.request) {
+                    assert (instance_reply_header);
+                    const auto kind = runtime::messaging::request_failure_mapper_t{}
+                                        .reply_header_exception (
+                                          instance_reply_header->terminal_result,
+                                          instance_reply_header->failure_code, "Ready owner fence")
+                                        .kind ();
+                    const auto terminal_name =
+                      kind == framework_error_kind_t::unavailable ? "Unavailable" : "unexpected";
+                    assert (expected.at ("messageTerminal") == terminal_name);
+                    assert (expected.at ("messageTerminalCount") == terminal_count);
+                    assert (!instance_reply_payload);
+                } else {
+                    assert (!instance_reply_header);
+                    std::vector<std::string> expected_diagnostics;
+                    for (const auto &expected_kind : expected.at ("diagnostics")) {
+                        assert (expected_kind == "Unavailable");
+                        const auto wire =
+                          runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                            framework_error_kind_t::unavailable);
+                        assert (wire);
+                        expected_diagnostics.emplace_back (
+                          runtime::messaging::request_failure_mapper_t{}
+                            .reply_header_exception (wire->terminal_result, wire->failure_code,
+                                                     "Instance Spot activation")
+                            .what ());
+                    }
+                    assert (send_diagnostic_snapshot () == expected_diagnostics);
+                }
+                assert (expected.at ("factoryCalls") == instance_prepare_count - prepares_before);
+                assert (expected.at ("handlerCalls")
+                        == instance_activation_count - handlers_before);
+                assert (expected.at ("missingPlacementCalls")
+                        == store->reservation_calls.load () - reservations_before);
+            }
+        }
+    };
+    verify_ready_route_cases ("Ready", *instance_ready);
     const auto after_stale_ready =
       store
         ->read_authority (
@@ -6189,54 +6284,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
         .value ()));
     close_during_instance_turn = false;
 
-    // 정상 Release 뒤 Missing에 도착한 오래된 Ready 요청은 owner fence가 다르므로
-    // Unavailable로 끝나고 다시 배치하지 않는다(Spot address messaging §9).
-    auto missing_ready_request = replay_instance_request;
-    missing_ready_request.operation = {123, 460};
-    missing_ready_request.has_metadata = false;
-    missing_ready_request.target.object_generation = released->object_generation;
-    missing_ready_request.target.authority_owner_generation = released->authority_owner_generation;
-    missing_ready_request.target.owner_id = released->owner.owner_id;
-    missing_ready_request.target.owner_lease_generation =
-      static_cast<std::uint64_t> (released->owner.lease_generation);
-    missing_ready_request.target.store_version = released->store_version;
-    missing_ready_request.target.instance_intent = true;
-    const auto prepares_before_missing_ready = instance_prepare_count;
-    const auto activations_before_missing_ready = instance_activation_count;
-    instance_reply_header.reset ();
-    instance_reply_payload.reset ();
-    assert (source
-              ->activate_instance_spot_remote (
-                target->status ().routing_id (), missing_ready_request, std::nullopt,
-                {"quest.start", "application/json", {'{', '}'}}, 5s,
-                [&] (foundation::operation_terminal_t terminal, protocol::reply_header_t header,
-                     std::optional<protocol::application_payload_t> payload) {
-                    assert (terminal == foundation::operation_terminal_t::completed);
-                    instance_reply_header = header;
-                    instance_reply_payload = std::move (payload);
-                })
-              .result ()
-              .value ());
-    deadline = std::chrono::steady_clock::now () + 5s;
-    while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
-        (void) target->dispatch_ready (dispatch);
-        (void) source->dispatch_ready (dispatch);
-        std::this_thread::sleep_for (1ms);
-    }
-    assert (instance_reply_header);
-    assert (runtime::messaging::request_failure_mapper_t{}
-              .reply_header_exception (instance_reply_header->terminal_result,
-                                       instance_reply_header->failure_code, "Missing Ready owner")
-              .kind ()
-            == framework_error_kind_t::unavailable);
-    assert (!instance_reply_payload);
-    assert (instance_prepare_count == prepares_before_missing_ready
-            && instance_activation_count == activations_before_missing_ready);
+    verify_ready_route_cases ("Missing", *released);
     assert (std::holds_alternative<authority_missing_t> (
       store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
         .result ()
         .value ()));
-
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (

@@ -1035,11 +1035,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
             /* Bounded record of a failed one-way send: this state lives
              * inside _relocation_target_attempts, which is itself bounded
              * by the attempt authority settlement, so this is not unbounded
-             * ad-hoc logging. There is no gated trace/diagnostics sink
-             * reachable from public_host_runtime_t (message_flow_tracer_t
-             * and dispatch_error_reporter_t both require a
-             * dispatch_options_t this runtime does not hold); wiring one
-             * in is a separate, larger change. */
+             * ad-hoc logging. Dispatch diagnostics use the host's existing
+             * mesh dispatch options; this retained state belongs to the
+             * relocation attempt settlement. */
             bool send_failed = false;
         };
         protocol::relocation_prepare_t prepare;

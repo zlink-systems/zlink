@@ -136,6 +136,7 @@ class spot_node_builder_state_t
     runtime::spot_address_resolver_t *spot_location_resolver = nullptr;
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
+    std::function<framework_runtime_state_t ()> host_phase;
     /* The host admission gate (Spot address messaging §9): a draining host
      * ends new Spot creation and Actor admission with ShuttingDown before any
      * Spot seal is consulted. The host owns the flag (bind_drain_flag). */
@@ -1668,6 +1669,7 @@ class spot_node_runtime_t
     void bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver);
     void bind_service_provider (service_provider_t &services);
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
+    void bind_host_phase (std::function<framework_runtime_state_t ()> read_phase);
     /* Entry spots are host infrastructure and are excluded. */
     std::size_t active_user_spot_count () const;
     task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;

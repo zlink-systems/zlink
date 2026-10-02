@@ -12,6 +12,8 @@ const protocol = require('../../packages/framework/dist/runtime/channels/channel
 const fs = require('node:fs');
 const path = require('node:path');
 const closeFixture = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../../runtime/conformance/spot-close-v1.json'), 'utf8'));
+const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = require('../../packages/framework/dist/runtime/execution');
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeTaskErrorSink(), new AbortController().signal);
 
 function branchExpectation(name) {
   const branch = closeFixture.closeBranches?.find((candidate) => candidate.name === name);
@@ -182,8 +184,17 @@ for (const { state, sealed } of [
   { state: framework.ZLinkFrameworkRuntimeState.Relocating, sealed: true }
 ]) for (const readyIntent of [false, true]) for (const send of [false, true]) {
   test(`Close release terminates ${readyIntent ? 'Ready' : 'Missing'} intent ${send ? 'send' : 'request'} in ${state} (sealed=${sealed}) without placement`, async () => {
+    const expectation = branchExpectation('release-during-host-drain-or-relocation');
+    const hostName = framework.ZLinkFrameworkRuntimeState[state];
+    if (state === framework.ZLinkFrameworkRuntimeState.Relocating) {
+      assert.ok(closeFixture.closeBranches.find((branch) => branch.name === 'release-during-host-drain-or-relocation')
+        .given.relocationSeal.includes(sealed ? 'after' : 'before'));
+    }
     const fixture = await authorityFixture();
     const ready = await commitFixture(fixture);
+    let missingPlacementCalls = 0;
+    const reserve = fixture.store.reserve.bind(fixture.store);
+    fixture.store.reserve = (...args) => { missingPlacementCalls++; return reserve(...args); };
     const entered = deferred();
     const finish = deferred();
     const arrived = deferred();
@@ -192,6 +203,7 @@ for (const { state, sealed } of [
     let releases = 0;
     let applicationReleases = 0;
     const failures = [];
+    const terminalEvents = [];
     class Room {
       async onInitialize() { initializations++; }
       async onClosing() { entered.resolve(); await finish.promise; }
@@ -202,17 +214,24 @@ for (const { state, sealed } of [
       nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
       authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
       ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
-    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [],
+    const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
       instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
       spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
       statefulExecution: { admissionOpen: () => false, hostState: () => state },
       instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
       admission: { claim() { arrived.resolve(); return { close() { applicationReleases++; } }; } },
       dispatchErrors: { flow: { flowCreationEnabled: () => false, accepts: () => false },
-        report(event) { failures.push(event); } },
+        report(event) {
+          if (failures.length === 0) terminalEvents.push('pendingMessagesTerminated');
+          failures.push(event);
+        } },
       beginInstanceClosingAuthority: async (...args) => {
         const authority = await claims.beginInstanceClosing(...args);
-        return { release: async () => { releases++; await authority.release(); },
+        return { release: async () => {
+          releases++;
+          await authority.release();
+          terminalEvents.push('authorityReleased');
+        },
           reincarnate() { reincarnations++; assert.fail('host cannot reincarnate while draining or relocating'); } };
       }
     });
@@ -239,17 +258,20 @@ for (const { state, sealed } of [
     finish.resolve();
     await Promise.all([closing, dispatch]);
     await activation.serial.whenIdle();
-    const expected = state === framework.ZLinkFrameworkRuntimeState.Draining
-      ? framework.ZLinkFrameworkErrorKind.ShuttingDown : framework.ZLinkFrameworkErrorKind.Unavailable;
-    assert.equal(replies.length, send ? 0 : 1);
+    const expected = framework.ZLinkFrameworkErrorKind[expectation.messageTerminalByHost[hostName]];
+    assert.equal(replies.length, send ? 0 : expectation.messageTerminalCount);
     if (!send) assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => error.kind === expected);
     assert.ok(failures.length > 0, 'released intent must leave a diagnostic');
-    for (const failure of failures) assert.equal(failure.error.kind, expected);
+    for (const failure of failures) assert.equal(failure.error.kind,
+      framework.ZLinkFrameworkErrorKind[expectation.sendDiagnosticsByHost[hostName]]);
     assert.equal(applicationReleases, 1);
     assert.equal(initializations, 1);
+    assert.equal(initializations - 1, expectation.thisHostFactoryCalls);
     assert.equal(reincarnations, 0);
+    assert.equal(missingPlacementCalls, expectation.missingPlacementCalls);
     assert.equal(releases, 1);
-    assert.equal((await fixture.store.readAuthority(fixture.key)).kind, 'missing');
+    assert.equal((await fixture.store.readAuthority(fixture.key)).kind === 'missing' ? 'Missing' : 'other', expectation.authority);
+    assert.deepEqual(terminalEvents, expectation.order);
     if (relocationSeal !== undefined) activation.commitExecutionSeal(relocationSeal);
     for (const part of [...parts, ...replies.flat()]) part.close();
   });
@@ -324,7 +346,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
       authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
       ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
-    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [],
+    const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
       instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
       spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
       instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: targetGeneration }),

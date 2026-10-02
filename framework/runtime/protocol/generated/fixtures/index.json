@@ -26,7 +26,7 @@
     {
       "kind": "durable",
       "goldenFixture": "golden/instance-activation-recovery-v1.json",
-      "goldenSha256": "2a24de2bf97ea819f32a37dd2e330d42a5a9332111e3240da0ad1b4807f82acb",
+      "goldenSha256": "1198bf6c82fa7c33b959cf17970f0de4e46fc7a3217414e95f4e3ace60911a61",
       "surface": {
         "format": "instance-activation-recovery-v1",
         "type": "instance-activation-recovery-v1",

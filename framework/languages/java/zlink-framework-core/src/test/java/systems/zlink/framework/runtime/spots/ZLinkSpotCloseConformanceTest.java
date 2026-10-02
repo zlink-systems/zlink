@@ -294,6 +294,13 @@ final class ZLinkSpotCloseConformanceTest {
             ranBranches.add(name);
         }
         assertEquals(ZLinkInstanceSpotCloseConformanceTest.BRANCHES, Set.copyOf(ranBranches));
+        for (JsonNode routeCase : fixture.path("readyRouteCases")) {
+            try {
+                ZLinkInstanceSpotCloseConformanceTest.runReadyRouteCase(routeCase);
+            } catch (AssertionError | Exception failure) {
+                failures.add(routeCase.path("name").asText() + ": " + failure);
+            }
+        }
         assertEquals(List.of(), failures);
     }
 

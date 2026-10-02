@@ -181,6 +181,9 @@ public final class ZLinkDispatchErrorReporter {
         if (message == null) {
             message = "";
         }
+        if (current
+                instanceof systems.zlink.framework.errors.ZLinkFrameworkException frameworkError)
+            message = frameworkError.kind() + ": " + message;
         if (!message.isEmpty()) {
             int carriageReturn = message.indexOf('\r');
             int lineFeed = message.indexOf('\n');

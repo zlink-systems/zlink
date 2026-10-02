@@ -6213,7 +6213,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         || ready.SourceNodeGeneration != ResolvePeerGeneration(sourceRid)
                     )
                         break;
-                    return ProcessStateful(sourceRid, ready, ownership);
+                    return ProcessStateful(sourceRid, ready, ownership, instanceReadyRoute: true);
                 }
                 if (
                     !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
@@ -7647,7 +7647,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private bool ProcessStateful(
         RoutingId sourceRid,
         ZLinkServiceWireCodec.StatefulRecord stateful,
-        RawIngressOwnership ownership
+        RawIngressOwnership ownership,
+        bool instanceReadyRoute = false
     )
     {
         var received = ownership.Receipt;
@@ -7783,6 +7784,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"stateful_spot_rejected source={sourceRid} target_node={stateful.TargetNodeRid} spot={stateful.TargetSpotId} wire_spot_gen={stateful.TargetSpotGeneration} wire_authority_gen={stateful.AuthorityOwnerGeneration} wire_lease_gen={stateful.OwnerLeaseGeneration} has_spot={hasTargetSpot} local_spot_gen={(hasTargetSpot ? spot!.LifecycleGeneration : 0)} local_authority_gen={(hasTargetSpot ? spot!.AuthorityOwnerGeneration : 0)} local_lease_gen={localOwnerLeaseGeneration}"
                 );
+                if (instanceReadyRoute)
+                {
+                    const ServiceWireConstants.FrameworkErrorCode failureCode = ServiceWireConstants
+                        .FrameworkErrorCode
+                        .SpotMoving;
+                    if (request)
+                        Reply(RequestResult.Conflict, (uint)failureCode, Array.Empty<Message>());
+                    else if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
+                        reporter.Report(
+                            new ZLinkDispatchFailure(
+                                ZLinkDispatchErrorSurface.SpotRoute,
+                                ZLinkDispatchMessageKind.Send,
+                                ZLinkDispatchErrorReason.StaleTarget,
+                                ZLinkDispatchErrorAction.Drop,
+                                PacketName: null,
+                                SpotId: stateful.TargetSpotId,
+                                SourceRid: sourceRid.ToString(),
+                                Exception: ZLinkRequestFailureMapper.CreateCompletionException(
+                                    RequestResult.Conflict,
+                                    (int)failureCode,
+                                    "Ready Instance Spot owner fence"
+                                ),
+                                MeshName: _logicalMulticastMeshName
+                            )
+                        );
+                    return false;
+                }
                 if (request)
                 {
                     //  Schema terminal-failure-integrity: a genuinely missing

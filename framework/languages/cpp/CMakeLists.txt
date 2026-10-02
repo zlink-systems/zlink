@@ -978,14 +978,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_service_wire_codec
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
-    framework/src/runtime/protocol/service_wire_codec.cpp
-    framework/src/runtime/messaging/envelope_codec.cpp
-    framework/src/runtime/codecs/serializer.cpp
-    framework/src/runtime/diagnostics/flow_context.cpp
-    framework/src/runtime/dispatch/offload_executor.cpp
-    framework/src/runtime/execution/state_lane.cpp
-    framework/src/runtime/mesh/service_topology_registry.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp)
   target_compile_features(test_cpp_framework_service_wire_codec PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -1004,7 +997,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-request-v1.json"
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
-    zlink::cpp
+    zlink::framework
     zlink::framework_provider_abstractions
     nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
@@ -1205,6 +1198,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework_m6b_runtime
     zlink_framework
     Threads::Threads)
+  target_compile_definitions(test_cpp_framework_m6b_runtime PRIVATE
+    ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6b_runtime
     COMMAND test_cpp_framework_m6b_runtime

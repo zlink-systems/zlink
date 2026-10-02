@@ -2855,7 +2855,10 @@ final class ZLinkJavaRawMeshNode
                                     },
                                     failure -> {
                                         if (!request) {
-                                            recordInstanceActivationDrop(failure);
+                                            recordInstanceActivationDrop(
+                                                    header.route().targetSpotId(),
+                                                    header.sourceNodeRid(),
+                                                    failure);
                                         }
                                         if (operation == null)
                                             completion.completeExceptionally(unwrap(failure));
@@ -3736,7 +3739,18 @@ final class ZLinkJavaRawMeshNode
                             .RecoveryEnvelope
                     envelope,
             ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
-        return ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
+        CompletionStage<Void> recovery =
+                ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        if (envelope.request()
+                || (!ZLinkRuntimeMetrics.enabled()
+                        && (reporter == null || !reporter.captureEnabled()))) return recovery;
+        return recovery.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null)
+                        recordInstanceActivationDrop(
+                                envelope.targetSpotId(), envelope.sourceNodeRid(), failure);
+                });
     }
 
     private void completeUserSpotCreate(
@@ -4729,20 +4743,41 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    private void recordInstanceActivationDrop(Throwable failure) {
+    private void recordInstanceActivationDrop(
+            String spotId, RoutingId sourceRid, Throwable failure) {
         Throwable cause = unwrap(failure);
-        String reason = "no_handler";
-        if (cause instanceof ZLinkFrameworkException framework) {
-            reason =
-                    switch (framework.kind()) {
-                        case SHUTTING_DOWN -> "shutdown";
-                        case NOT_FOUND, TYPE_MISMATCH -> "stale_target";
-                        case PROTOCOL_ERROR -> "decode_error";
-                        default -> "no_handler";
-                    };
+        if (ZLinkRuntimeMetrics.enabled()) {
+            int[] pair = relayedFailurePair(cause);
+            recordOneWayFailure(
+                    ZLinkDispatchErrorSurface.INSTANCE_SPOT.traceName(), pair[0], pair[1]);
         }
-        // An unsuccessful activation leaves no handler to receive this send.
-        messageMetrics.dropped("instance_spot", reason);
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        if (reporter != null && reporter.captureEnabled()) {
+            ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HANDLER_MISSING;
+            if (cause instanceof ZLinkFrameworkException framework) {
+                reason =
+                        switch (framework.kind()) {
+                            case SHUTTING_DOWN -> ZLinkDispatchErrorReason.SHUTDOWN;
+                            case NOT_FOUND, TYPE_MISMATCH -> ZLinkDispatchErrorReason.STALE_TARGET;
+                            case UNAVAILABLE -> ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE;
+                            case PROTOCOL_ERROR -> ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED;
+                            default -> ZLinkDispatchErrorReason.HANDLER_MISSING;
+                        };
+            }
+            reporter.report(
+                    ZLinkDispatchErrorSurface.INSTANCE_SPOT,
+                    ZLinkDispatchMessageKind.SEND,
+                    reason,
+                    ZLinkDispatchErrorAction.DROP,
+                    null,
+                    null,
+                    null,
+                    spotId,
+                    null,
+                    sourceRid,
+                    null,
+                    cause);
+        }
     }
 
     private void replyApplicationProtocolFailure(
@@ -5427,7 +5462,10 @@ final class ZLinkJavaRawMeshNode
                                             int[] pair = relayedFailurePair(failure);
                                             replyInstanceFailure(inbound, header, pair[0], pair[1]);
                                         } else {
-                                            recordInstanceActivationDrop(failure);
+                                            recordInstanceActivationDrop(
+                                                    header.route().targetSpotId(),
+                                                    header.sourceNodeRid(),
+                                                    failure);
                                         }
                                     }
                                 });

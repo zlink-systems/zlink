@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/diagnostics/mesh_trace.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -4239,8 +4240,29 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
           instance_owner_resolver = _instance_spot_owner;
       })
       .get ();
-    const auto reply_terminal = [transport = _transport, mailbox_record,
+    const auto reply_terminal = [lifetime, owned_command, transport = _transport, mailbox_record,
                                  done] (instance_spot_activation_result_t result) {
+        if (!done && !owned_command->activation.request && result.terminal_result != 0) {
+            detail::dispatch_error_reporter_t (lifetime->_options.mesh.dispatch).report_lazy ([&] {
+                const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
+                  result.terminal_result, result.failure_code, "Instance Spot activation");
+                message_dispatch_error_event_t event{
+                  .surface = dispatch_error_surface_t::instance_spot,
+                  .message_kind = dispatch_message_kind_t::send,
+                  .reason = detail::dispatch_reason_from_error (&error),
+                  .action = dispatch_error_action_t::drop,
+                  .packet_name = owned_command->application_payload.packet_name,
+                  .spot_id = owned_command->activation.target.spot_id,
+                  .source_rid =
+                    zlink::routing_id_t::from (owned_command->activation.source_node_routing_id)
+                      .to_string (),
+                  .exception = std::make_exception_ptr (error),
+                  .mesh_name = lifetime->_options.mesh.descriptor.mesh_name};
+                event.flow_id = owned_command->application_payload.flow_id;
+                event.flow_origin = owned_command->application_payload.flow_origin;
+                return event;
+            });
+        }
         if (done) {
             done (std::move (result));
             return;

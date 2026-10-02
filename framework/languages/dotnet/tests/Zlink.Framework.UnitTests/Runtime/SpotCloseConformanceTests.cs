@@ -8,6 +8,7 @@ using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
@@ -67,6 +68,12 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         string hostMode,
         bool sealedAdmission,
         string expectedReason
+    ) => await RunAcceptedReadySendDiagnosticAsync(hostMode, sealedAdmission, expectedReason);
+
+    private async Task<string> RunAcceptedReadySendDiagnosticAsync(
+        string hostMode,
+        bool sealedAdmission,
+        string expectedReason
     )
     {
         var flowPath = Path.Combine(
@@ -121,6 +128,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     && line.Contains("\"action\":\"drop\"", StringComparison.Ordinal)
                     && line.Contains($"\"reason\":\"{expectedReason}\"", StringComparison.Ordinal)
             );
+            return await ObserveSendDiagnosticKindAsync(flowPath);
         }
         finally
         {
@@ -489,7 +497,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
 
     private static async Task<CloseBranchObservation> RunCloseBranchAsync(
         string name,
-        string hostMode = "Serving"
+        string hostMode = "Serving",
+        string relocationSeal = "before"
     )
     {
         var flowPath = Path.Combine(
@@ -551,6 +560,11 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 order.Enqueue("newIncarnationInitialized");
         };
         host.State.BranchOrder = order;
+        if (hostMode != "Serving")
+        {
+            host.Store.ObserveAuthorityReleaseFor = spotId;
+            host.Store.OnAuthorityReleased = () => order.Enqueue("authorityReleased");
+        }
         var current = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
                 await host
@@ -576,6 +590,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             Assert.IsType<ZLinkFrameworkException>(noIntent).Kind
         );
         var callsBefore = host.State.HandlerCalls;
+        host.Store.ObserveMissingPlacementFor = spotId;
         var initializedBefore = host.State.InitializedGenerations.Count;
         if (hostMode != "Serving")
             host.Runtime.DrainAdmission.BeginDrain(
@@ -588,6 +603,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(callsBefore, host.State.HandlerCalls);
             Assert.Equal(initializedBefore, host.State.InitializedGenerations.Count);
         }
+        if (hostMode == "Relocating" && relocationSeal == "after")
+            host.Runtime.DrainAdmission.Seal();
         host.State.ReleaseOnClosing.TrySetResult();
         if (failInitialize)
         {
@@ -618,7 +635,6 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             );
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
-            order.Enqueue("authorityReleased");
             order.Enqueue("pendingMessagesTerminated");
             terminalKind = failure.Kind.ToString();
             terminalCount = 1;
@@ -669,6 +685,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             host.State.InitializedGenerations.Count - initializedBefore,
             terminalKind,
             terminalCount,
+            host.Store.MissingPlacementCalls,
             objectGenerationChanged,
             ownerGenerationChanged,
             ownerPreserved,
@@ -685,6 +702,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         int FactoryCalls,
         string? Terminal,
         int TerminalCount,
+        int MissingPlacementCalls,
         bool ObjectGenerationChanged,
         bool OwnerGenerationChanged,
         bool OwnerPreserved,
@@ -741,9 +759,32 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                         : ["Serving"];
                 foreach (var mode in modes)
                 {
-                    var observed = await RunCloseBranchAsync(name, mode)
-                        .WaitAsync(TimeSpan.FromSeconds(60));
-                    AssertCloseBranch(branch.GetProperty("expect"), observed);
+                    var seals =
+                        mode == "Relocating"
+                        && given.TryGetProperty("relocationSeal", out var sealValues)
+                            ? sealValues
+                                .EnumerateArray()
+                                .Select(static item => item.GetString()!)
+                                .ToArray()
+                            : ["before"];
+                    foreach (var seal in seals)
+                    {
+                        var observed = await RunCloseBranchAsync(name, mode, seal)
+                            .WaitAsync(TimeSpan.FromSeconds(60));
+                        var expected = branch.GetProperty("expect");
+                        AssertCloseBranch(expected, observed, mode);
+                        if (expected.TryGetProperty("sendDiagnosticsByHost", out var diagnostics))
+                            Assert.Equal(
+                                diagnostics.GetProperty(mode).GetString(),
+                                await RunAcceptedReadySendDiagnosticAsync(
+                                    mode,
+                                    seal == "after",
+                                    diagnostics.GetProperty(mode).GetString() == "ShuttingDown"
+                                        ? "shutdown"
+                                        : "stale_target"
+                                )
+                            );
+                    }
                 }
             }
             catch (Exception exception)
@@ -753,7 +794,182 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 );
             }
         }
+        foreach (var routeCase in root.GetProperty("readyRouteCases").EnumerateArray())
+        {
+            try
+            {
+                foreach (
+                    var intent in routeCase
+                        .GetProperty("given")
+                        .GetProperty("instanceIntent")
+                        .EnumerateArray()
+                )
+                    await RunReadyRouteCaseAsync(routeCase, intent.GetBoolean())
+                        .WaitAsync(TimeSpan.FromSeconds(60));
+            }
+            catch (Exception exception)
+            {
+                failures.Add(
+                    $"{routeCase.GetProperty("name").GetString()}: {exception.Message.ReplaceLineEndings(" ")}"
+                );
+            }
+        }
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    private static async Task RunReadyRouteCaseAsync(JsonElement routeCase, bool instanceIntent)
+    {
+        var given = routeCase.GetProperty("given");
+        var expected = routeCase.GetProperty("expect");
+        Assert.Equal("mismatch", given.GetProperty("ownerFence").GetString());
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"stale-ready-{Guid.NewGuid():N}";
+        var flowPath = Path.Combine(Path.GetTempPath(), "zlink-close-dotnet", $"{spotId}.flow");
+        using var flow = new TestHostMessageFlowListener(flowPath);
+        await host.RequestInstanceAsync(spotId);
+        await using var source = await SpotCloseHost.StartAsync(host.Store);
+        using (var peerDeadline = new CancellationTokenSource(Wait))
+        {
+            while (true)
+            {
+                peerDeadline.Token.ThrowIfCancellationRequested();
+                try
+                {
+                    source.Runtime.EnsureKnownRouteMeshPeer(
+                        SpotCloseHost.MeshName,
+                        host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
+                        $"SPOT '{spotId}'"
+                    );
+                    host.Runtime.EnsureKnownRouteMeshPeer(
+                        SpotCloseHost.MeshName,
+                        source.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
+                        $"SPOT '{spotId}'"
+                    );
+                    break;
+                }
+                catch (ZLinkFrameworkException error)
+                    when (error.Kind == ZLinkFrameworkErrorKind.Unavailable)
+                {
+                    await Task.Yield();
+                }
+            }
+        }
+        var resolved = Assert.IsType<ZLinkResolvedSpotHandle>(
+            await source.Runtime.ResolveSpotHandleAsync(spotId, CancellationToken.None)
+        );
+        var stale = resolved.Snapshot with
+        {
+            AuthorityOwnerGeneration = resolved.Snapshot.AuthorityOwnerGeneration + 1,
+        };
+        if (given.GetProperty("authority").GetString() == "Missing")
+        {
+            host.State.HandlerMode = "closeAndReturn";
+            await host.RequestInstanceAsync(spotId);
+            Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+            Assert.Equal("Missing", await host.AuthorityAsync(spotId));
+        }
+        else
+            Assert.Equal("Ready", await host.AuthorityAsync(spotId));
+        var handlersBefore = host.State.HandlerCalls;
+        var factoriesBefore = host.State.InitializedGenerations.Count;
+        var placementCalls = 0;
+        var target = new ZLinkResolvedSpotHandle(
+            stale,
+            1,
+            _ =>
+            {
+                placementCalls++;
+                return ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(
+                    null
+                );
+            }
+        );
+        string terminal;
+        var terminalCount = 0;
+        if (given.GetProperty("messageKind").GetString() == "request")
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                new ZLinkRouteSpotRequestCall<SpotCloseProbeRequest>(
+                    source.Runtime,
+                    target,
+                    new("stale"),
+                    instanceIntent
+                )
+                    .Async<SpotCloseInstanceReply>()
+                    .AsTask()
+            );
+            terminal = error.Kind.ToString();
+            terminalCount++;
+        }
+        else
+        {
+            await new ZLinkRouteSpotSendCall<SpotCloseProbeSignal>(
+                source.Runtime,
+                target,
+                new("stale"),
+                instanceIntent
+            ).Async();
+            terminal = await ObserveSendDiagnosticKindAsync(flowPath);
+        }
+        foreach (var field in expected.EnumerateObject())
+        {
+            switch (field.Name)
+            {
+                case "messageTerminal":
+                    Assert.Equal(field.Value.GetString(), terminal);
+                    break;
+                case "messageTerminalCount":
+                    Assert.Equal(field.Value.GetInt32(), terminalCount);
+                    break;
+                case "diagnostics":
+                    Assert.Equal(
+                        field.Value.EnumerateArray().Select(static item => item.GetString()),
+                        new[] { terminal }
+                    );
+                    break;
+                case "handlerCalls":
+                    Assert.Equal(field.Value.GetInt32(), host.State.HandlerCalls - handlersBefore);
+                    break;
+                case "factoryCalls":
+                    Assert.Equal(
+                        field.Value.GetInt32(),
+                        host.State.InitializedGenerations.Count - factoriesBefore
+                    );
+                    break;
+                case "missingPlacementCalls":
+                    Assert.Equal(field.Value.GetInt32(), placementCalls);
+                    break;
+                default:
+                    throw new Xunit.Sdk.XunitException(
+                        $"Unknown Ready route expectation '{field.Name}'."
+                    );
+            }
+        }
+    }
+
+    private static async Task<string> ObserveSendDiagnosticKindAsync(string flowPath)
+    {
+        using var deadline = new CancellationTokenSource(Wait);
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            foreach (var line in File.ReadAllLines(flowPath))
+            {
+                if (!line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal))
+                    continue;
+                var tagsOffset = line.IndexOf(" tags=", StringComparison.Ordinal);
+                using var tags = JsonDocument.Parse(line[(tagsOffset + " tags=".Length)..]);
+                Assert.Equal(
+                    nameof(ZLinkFrameworkException),
+                    tags.RootElement.GetProperty("error_type").GetString()
+                );
+                var message = tags.RootElement.GetProperty("error_message").GetString()!;
+                var kind = message[..message.IndexOf(':')];
+                Assert.True(Enum.TryParse<ZLinkFrameworkErrorKind>(kind, out _));
+                return kind;
+            }
+            await Task.Yield();
+        }
     }
 
     [Fact]
@@ -1097,7 +1313,11 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
-    private static void AssertCloseBranch(JsonElement expected, CloseBranchObservation observed)
+    private static void AssertCloseBranch(
+        JsonElement expected,
+        CloseBranchObservation observed,
+        string hostMode
+    )
     {
         foreach (var field in expected.EnumerateObject())
         {
@@ -1121,6 +1341,15 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 case "factoryCalls":
                 case "thisHostFactoryCalls":
                     Assert.Equal(field.Value.GetInt32(), observed.FactoryCalls);
+                    break;
+                case "sendDiagnosticsByHost":
+                    Assert.Equal(observed.Terminal, field.Value.GetProperty(hostMode).GetString());
+                    break;
+                case "missingPlacementCalls":
+                    Assert.Equal(field.Value.GetInt32(), observed.MissingPlacementCalls);
+                    break;
+                case "messageTerminalByHost":
+                    Assert.Equal(field.Value.GetProperty(hostMode).GetString(), observed.Terminal);
                     break;
                 case "messageTerminal":
                     Assert.Equal(field.Value.GetString(), observed.Terminal);
@@ -1241,9 +1470,10 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal SpotCloseFaultStore Store { get; }
     internal SpotCloseProbeState State { get; }
 
-    internal static async Task<SpotCloseHost> StartAsync()
+    internal static async Task<SpotCloseHost> StartAsync(SpotCloseFaultStore? sharedStore = null)
     {
-        var store = new SpotCloseFaultStore(new ZLinkInMemoryProviderLocationStore());
+        var store =
+            sharedStore ?? new SpotCloseFaultStore(new ZLinkInMemoryProviderLocationStore());
         var state = new SpotCloseProbeState();
         var services = new ServiceCollection();
         services.AddSingleton(state);
@@ -1678,6 +1908,11 @@ internal sealed class SpotCloseProbeHandler
 internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLocationStore
 {
     internal string? ConflictPutsFor { get; set; }
+    internal string? ObserveMissingPlacementFor { get; set; }
+    internal string? ObserveAuthorityReleaseFor { get; set; }
+    internal Action? OnAuthorityReleased { get; set; }
+    private int _missingPlacementCalls;
+    internal int MissingPlacementCalls => Volatile.Read(ref _missingPlacementCalls);
 
     public ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
@@ -1689,6 +1924,15 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         CancellationToken cancellationToken = default
     )
     {
+        if (
+            ObserveMissingPlacementFor is { } observedSpot
+            && request.Conditions.Any(condition =>
+                condition is ZLinkStoreCondition.Missing missing
+                && missing.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && missing.Key.Value.EndsWith("\0" + observedSpot, StringComparison.Ordinal)
+            )
+        )
+            Interlocked.Increment(ref _missingPlacementCalls);
         if (
             ConflictPutsFor is { } conflict
             && request.Mutations.Any(mutation =>
@@ -1706,7 +1950,18 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
                     : DateTimeOffset.UtcNow
             );
         }
-        return await inner.WriteAsync(request, cancellationToken);
+        var written = await inner.WriteAsync(request, cancellationToken);
+        if (
+            written is ZLinkStoreWriteResult.Applied
+            && ObserveAuthorityReleaseFor is { } releasedSpot
+            && request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Delete delete
+                && delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && delete.Key.Value.EndsWith("\0" + releasedSpot, StringComparison.Ordinal)
+            )
+        )
+            OnAuthorityReleased?.Invoke();
+        return written;
     }
 
     public ValueTask<ZLinkStoreScanResult> ScanAsync(
