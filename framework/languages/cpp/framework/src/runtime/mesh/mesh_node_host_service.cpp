@@ -1857,101 +1857,127 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 _nodes[index]->configure_instance_spot_operations (
                   store, instance_relocations, [this] { return current_location_owner (); },
                   host::instance_spot_activation_materializer_t{
-                    [registration,
-                     store] (const protocol::instance_spot_activation_header_t &request) {
-                        const auto authority =
-                          store->read_authority (spot_authority_key (request.target.spot_id))
-                            .result ()
-                            .value ();
-                        const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
-                        if (!snapshot
-                            || snapshot->allocation.object_kind
-                                 != placement_object_kind_t::instance_spot
-                            || snapshot->allocation.stable_type != request.target.stable_type
-                            || snapshot->allocation.target.mesh_name != request.target.mesh_name
-                            || snapshot->allocation.target.node_rid.value ()
+                    [registration] (const protocol::instance_spot_activation_header_t &request,
+                                    const authority_snapshot_t &snapshot) {
+                        if (snapshot.allocation.object_kind
+                              != placement_object_kind_t::instance_spot
+                            || snapshot.allocation.stable_type != request.target.stable_type
+                            || snapshot.allocation.target.mesh_name != request.target.mesh_name
+                            || snapshot.allocation.target.node_rid.value ()
                                  != zlink::routing_id_t::from (
                                       request.target.target_node_routing_id)
                                       .to_string ()
-                            || snapshot->allocation.target.node_lifecycle_generation
+                            || snapshot.allocation.target.node_lifecycle_generation
                                  != request.target.target_node_generation)
                             return false;
                         const auto created =
                           detail::spot_node_runtime_t (registration->spot_state)
                             .get_or_create_spot (
                               request.target.stable_type, spot_id_t (request.target.spot_id),
-                              zlink::message_t{}, snapshot->object_generation,
-                              request.target.mesh_name, snapshot->authority_owner_generation);
+                              zlink::message_t{}, snapshot.object_generation,
+                              request.target.mesh_name, snapshot.authority_owner_generation);
                         return created.state == spot_create_state_t::created
                                || created.state == spot_create_state_t::existing;
                     },
-                    [this, registration,
-                     &services] (const protocol::instance_spot_activation_header_t &request,
-                                 const std::optional<std::vector<std::uint8_t>> &metadata,
-                                 const protocol::application_payload_t &application) {
-                        std::function<void ()> accepted_turn_terminal;
-                        try {
-                            std::map<std::string, std::string> decoded_metadata;
-                            if (metadata
-                                && !detail::mesh_metadata_codec_t::decode (*metadata,
-                                                                           decoded_metadata))
-                                return host::instance_spot_activation_result_t{
-                                  107,
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::requestFailed),
-                                  std::nullopt};
-                            auto reply =
-                              detail::spot_node_runtime_t (registration->spot_state)
-                                .dispatch_instance_activation (
-                                  spot_id_t (request.target.spot_id), application.packet_name,
-                                  application.content_type, application.payload_bytes (),
-                                  std::move (decoded_metadata), request.request,
-                                  std::to_string (request.operation.high) + ":"
-                                    + std::to_string (request.operation.low),
-                                  services, *_serializers, application.flow_id,
-                                  application.flow_origin, &accepted_turn_terminal)
-                                .result ()
-                                .value ();
-                            std::optional<protocol::application_payload_t> application_reply;
-                            if (request.request) {
-                                application_reply = protocol::application_payload_t{
-                                  application.packet_name, "application/octet-stream",
-                                  reply.to_bytes ()};
-                                /* flow-correlation §4: at Off the inbound flow
-                             * pair must not be copied onto the next message;
-                             * the reply carries it only while tracing is on. */
-                                if (detail::message_flow_tracer_t (_dispatch_options)
-                                      .capture_enabled ()) {
-                                    application_reply->flow_id = application.flow_id;
-                                    application_reply->flow_origin = application.flow_origin;
-                                }
-                            }
-                            return host::instance_spot_activation_result_t{
-                              0, 0, std::move (application_reply),
-                              std::move (accepted_turn_terminal)};
+                    [this, registration, &services] (
+                      std::shared_ptr<const protocol::instance_activation_recovery_t>
+                        original_command,
+                      std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing,
+                      std::shared_ptr<detail::deferred_barrier_t> *activation_terminal) {
+                        const auto &request = original_command->activation;
+                        const auto &metadata = original_command->metadata;
+                        const auto &application = original_command->application_payload;
+                        auto completion = std::make_shared<
+                          task_completion_source_t<host::instance_spot_activation_result_t>> ();
+                        auto output = completion->task ();
+                        auto done = [completion] (host::instance_spot_activation_result_t result) {
+                            completion->complete (
+                              result_t<host::instance_spot_activation_result_t>::success (
+                                std::move (result)));
+                        };
+                        std::map<std::string, std::string> decoded;
+                        if (metadata
+                            && !detail::mesh_metadata_codec_t::decode (*metadata, decoded)) {
+                            done ({107,
+                                   static_cast<std::uint32_t> (
+                                     protocol::framework_error_code::requestFailed),
+                                   std::nullopt});
+                            return output;
                         }
-                        catch (const framework_exception_t &error) {
-                            detail::dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
-                                return message_dispatch_error_event_t{
-                                  .surface = dispatch_error_surface_t::spot_route,
-                                  .message_kind = dispatch_message_kind_t::request,
-                                  .reason = detail::dispatch_reason_from_error (&error),
-                                  .action = dispatch_error_action_t::reply_error,
-                                  .packet_name = application.packet_name,
-                                  .spot_id = request.target.spot_id,
-                                  .exception = std::make_exception_ptr (error)};
-                            });
-                            return host::instance_spot_activation_result_t{
-                              105,
-                              static_cast<std::uint32_t> (
-                                protocol::framework_error_code::requestFailed),
-                              std::nullopt, std::move (accepted_turn_terminal)};
+                        auto terminal = std::make_shared<std::function<void ()>> ();
+                        std::shared_ptr<const detail::instance_spot_retained_message_t> original;
+                        if (request.target.authority_owner_generation == 0
+                            || request.target.instance_intent) {
+                            original =
+                              std::make_shared<const detail::instance_spot_retained_message_t> (
+                                original_command, [missing = std::move (missing), terminal] {
+                                    return missing (*terminal);
+                                });
                         }
-                        catch (...) {
-                            if (accepted_turn_terminal)
-                                accepted_turn_terminal ();
-                            throw;
-                        }
+                        auto running = std::make_shared<task_t<zlink::message_t>> (
+                          detail::spot_node_runtime_t (registration->spot_state)
+                            .dispatch_instance_activation (
+                              spot_id_t (request.target.spot_id), application.packet_name,
+                              application.content_type, application.payload_bytes (),
+                              std::move (decoded), request.request,
+                              std::to_string (request.operation.high) + ":"
+                                + std::to_string (request.operation.low),
+                              services, *_serializers, application.flow_id, application.flow_origin,
+                              terminal.get (), original, activation_terminal));
+                        detail::observe_task_completion (
+                          *running, [this, running, original_command, terminal,
+                                     done] (const result_t<zlink::message_t> &reply) {
+                              if (!reply) {
+                                  const auto *error = reply.error ();
+                                  detail::dispatch_error_reporter_t (_dispatch_options)
+                                    .report_lazy ([&] {
+                                        return message_dispatch_error_event_t{
+                                          .surface = dispatch_error_surface_t::spot_route,
+                                          .message_kind = dispatch_message_kind_t::request,
+                                          .reason = detail::dispatch_reason_from_error (error),
+                                          .action = dispatch_error_action_t::reply_error,
+                                          .packet_name =
+                                            original_command->application_payload.packet_name,
+                                          .spot_id = original_command->activation.target.spot_id,
+                                          .exception = std::make_exception_ptr (*error)};
+                                    });
+                                  const auto failure =
+                                    messaging::request_failure_mapper_t{}.target_failure_reply (
+                                      reply.error_kind ());
+                                  if (!failure) {
+                                      done ({105,
+                                             static_cast<std::uint32_t> (
+                                               protocol::framework_error_code::requestFailed),
+                                             std::nullopt, std::move (*terminal)});
+                                      return;
+                                  }
+                                  done ({failure->terminal_result, failure->failure_code,
+                                         std::nullopt, std::move (*terminal)});
+                                  return;
+                              }
+                              std::optional<protocol::application_payload_t> response;
+                              if (original_command->activation.request) {
+                                  response = protocol::application_payload_t{
+                                    original_command->application_payload.packet_name,
+                                    "application/octet-stream", reply.value ().to_bytes ()};
+                                  if (detail::message_flow_tracer_t (_dispatch_options)
+                                        .capture_enabled ()) {
+                                      response->flow_id =
+                                        original_command->application_payload.flow_id;
+                                      response->flow_origin =
+                                        original_command->application_payload.flow_origin;
+                                  }
+                              }
+                              done ({0, 0, std::move (response), std::move (*terminal)});
+                          });
+                        return output;
+                    },
+                    [registration] (const protocol::instance_spot_activation_header_t &request) {
+                        const auto select = registration->spot_state->select_instance_spot_target;
+                        return select
+                                 ? select (request)
+                                 : result_t<protocol::instance_spot_activation_header_t>::success (
+                                     request);
                     }});
             }
         }

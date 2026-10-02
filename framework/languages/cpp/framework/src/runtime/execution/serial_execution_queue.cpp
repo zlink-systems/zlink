@@ -945,6 +945,25 @@ void serial_execution_queue_t::drain ()
     });
 }
 
+std::shared_ptr<const void> serial_execution_queue_t::first_pending_message () const
+{
+    std::lock_guard lock (_mutex);
+    for (const auto &item : _application.queue)
+        if (item.retained_message)
+            return item.retained_message;
+    return {};
+}
+
+std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messages () const
+{
+    std::lock_guard lock (_mutex);
+    std::vector<std::shared_ptr<const void>> messages;
+    for (const auto &item : _application.queue)
+        if (item.retained_message)
+            messages.push_back (item.retained_message);
+    return messages;
+}
+
 void serial_execution_queue_t::close ()
 {
     std::lock_guard<std::mutex> lock (_mutex);
@@ -1087,7 +1106,8 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
                                       {},
                                       options.holds_application_while_waiting,
                                       std::move (origin.chain),
-                                      std::move (origin.slot)});
+                                      std::move (origin.slot),
+                                      std::move (options.retained_message)});
     ++lane.messages;
     lane.bytes += bytes;
     if (schedule_drain_locked ())
@@ -1119,11 +1139,17 @@ serial_execution_queue_t::next_lifecycle_locked () noexcept
 
 bool serial_execution_queue_t::has_ready_locked () noexcept
 {
-    return !_application.queue.empty ()
+    return application_ready_locked ()
            || (_suspended_lifecycle
                && (bool (_suspended_lifecycle->work)
                    || bool (_suspended_lifecycle->suspended_completion)))
            || (!_suspended_lifecycle && next_lifecycle_locked () != _lifecycle.queue.end ());
+}
+
+bool serial_execution_queue_t::application_ready_locked () const noexcept
+{
+    return !_application.queue.empty ()
+           && (!_suspended_lifecycle || !_suspended_lifecycle->holds_application_while_waiting);
 }
 
 std::shared_ptr<serial_turn_handle_impl_t> serial_execution_queue_t::create_turn (
@@ -1175,7 +1201,7 @@ void serial_execution_queue_t::activate_turn_locked (work_item_t &item) noexcept
 
 serial_execution_queue_t::work_item_t serial_execution_queue_t::take_next_locked ()
 {
-    const bool application_ready = !_application.queue.empty ();
+    const bool application_ready = application_ready_locked ();
     const auto lifecycle_next = next_lifecycle_locked ();
     const bool lifecycle_ready =
       _suspended_lifecycle
@@ -1267,8 +1293,7 @@ void serial_execution_queue_t::execute_item (work_item_t item)
             if (auto active_turn = weak_turn.lock ())
                 (void) active_turn->complete (std::move (completion));
         });
-        if (item.lane == serial_work_lane_t::lifecycle && !item.holds_application_while_waiting
-            && !turn->released ()) {
+        if (item.lane == serial_work_lane_t::lifecycle && !turn->released ()) {
             item.turn = turn;
             suspend_lifecycle (std::move (item));
         }

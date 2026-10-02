@@ -3,9 +3,69 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <service_wire_constants.hpp>
 
+#include <tuple>
+
 namespace zlink::framework::runtime::messaging
 {
 
+namespace
+{
+using terminal_t = protocol::request_terminal_result;
+using failure_t = protocol::framework_error_code;
+using kind_t = framework_error_kind_t;
+
+// The first entry for each ErrorKind is its outgoing representation. Later entries
+// retain incoming fine-code aliases and their existing diagnostic text.
+constexpr std::tuple<kind_t, failure_t, terminal_t, const char *> wire_failure_mapping[] = {
+  {kind_t::not_found, failure_t::requestTargetNotFound, terminal_t::notFound,
+   " failed because the target was not found."},
+  {kind_t::already_exists, failure_t::actorAlreadyExists, terminal_t::conflict,
+   " failed because the actor already exists."},
+  {kind_t::type_mismatch, failure_t::spotTypeMismatch, terminal_t::conflict,
+   " failed because the object type did not match."},
+  {kind_t::rejected, failure_t::requestRejected, terminal_t::rejected, " was rejected."},
+  {kind_t::unavailable, failure_t::routeNotConnected, terminal_t::internalError,
+   " failed because the target route is not connected."},
+  {kind_t::deadline_exceeded, failure_t::workerTimedOut, terminal_t::internalError,
+   " timed out inside the worker."},
+  {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr},
+  {kind_t::protocol_error, failure_t::requestProtocolError, terminal_t::protocolError,
+   " failed with a protocol error."},
+  {kind_t::invalid_operation, failure_t::none, terminal_t::invalidState, nullptr},
+  {kind_t::data_lost, failure_t::relocationDataLost, terminal_t::internalError,
+   " failed because relocation data was lost."},
+  {kind_t::internal_failure, failure_t::requestFailed, terminal_t::internalError, " failed."},
+  {kind_t::type_mismatch, failure_t::actorTypeMismatch, terminal_t::conflict,
+   " failed because the object type did not match."},
+  {kind_t::invalid_operation, failure_t::actorSessionNotBound, terminal_t::notFound,
+   " failed because the actor session is not bound."},
+  {kind_t::not_found, failure_t::handlerNotFound, terminal_t::notFound,
+   " failed because the handler was not found."},
+  {kind_t::protocol_error, failure_t::payloadDecodeFailed, terminal_t::protocolError,
+   " failed because the payload could not be decoded."},
+  // Legacy peers may still report an unavailable target as workerQueueFull.
+  {kind_t::unavailable, failure_t::workerQueueFull, terminal_t::rejected,
+   " failed because the remote worker queue is full."},
+  {kind_t::internal_failure, failure_t::workerFailed, terminal_t::internalError,
+   " failed inside the worker."},
+  {kind_t::unavailable, failure_t::actorLocationStale, terminal_t::conflict,
+   " failed because the actor location was stale."},
+  {kind_t::invalid_operation, failure_t::spotGenerationStale, terminal_t::conflict,
+   " failed because the spot generation was stale."},
+  {kind_t::unavailable, failure_t::spotMoving, terminal_t::conflict,
+   " failed because the spot is moving."}};
+}
+
+std::optional<request_wire_failure_t>
+request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind) const
+{
+    for (const auto &[mapped_kind, failure, terminal, message] : wire_failure_mapping) {
+        if (mapped_kind == kind)
+            return request_wire_failure_t{static_cast<std::uint32_t> (terminal),
+                                          static_cast<std::uint32_t> (failure)};
+    }
+    return std::nullopt;
+}
 framework_exception_t
 request_failure_mapper_t::completion_exception (request_result_t result,
                                                 const std::string &operation_name) const
@@ -180,76 +240,14 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
                                                   std::uint32_t failure_code,
                                                   const std::string &operation_name) const
 {
-    switch (static_cast<protocol::framework_error_code> (failure_code)) {
-        case protocol::framework_error_code::actorAlreadyExists:
-            return framework_exception_t (framework_error_kind_t::already_exists,
-                                          operation_name
-                                            + " failed because the actor already exists.");
-        case protocol::framework_error_code::actorTypeMismatch:
-        case protocol::framework_error_code::spotTypeMismatch:
-            return framework_exception_t (framework_error_kind_t::type_mismatch,
-                                          operation_name
-                                            + " failed because the object type did not match.");
-        case protocol::framework_error_code::actorSessionNotBound:
-            return framework_exception_t (framework_error_kind_t::invalid_operation,
-                                          operation_name
-                                            + " failed because the actor session is not bound.");
-        case protocol::framework_error_code::handlerNotFound:
-            return framework_exception_t (framework_error_kind_t::not_found,
-                                          operation_name
-                                            + " failed because the handler was not found.");
-        case protocol::framework_error_code::payloadDecodeFailed:
-            return framework_exception_t (framework_error_kind_t::protocol_error,
-                                          operation_name
-                                            + " failed because the payload could not be decoded.");
-        case protocol::framework_error_code::routeNotConnected:
-            return framework_exception_t (framework_error_kind_t::unavailable,
-                                          operation_name
-                                            + " failed because the target route is not connected.");
-        case protocol::framework_error_code::requestTargetNotFound:
-            return framework_exception_t (framework_error_kind_t::not_found,
-                                          operation_name
-                                            + " failed because the target was not found.");
-        case protocol::framework_error_code::requestRejected:
-            return framework_exception_t (framework_error_kind_t::rejected,
-                                          operation_name + " was rejected.");
-        case protocol::framework_error_code::requestProtocolError:
-            return framework_exception_t (framework_error_kind_t::protocol_error,
-                                          operation_name + " failed with a protocol error.");
-        case protocol::framework_error_code::requestFailed:
-            return framework_exception_t (framework_error_kind_t::internal_failure,
-                                          operation_name + " failed.");
-        case protocol::framework_error_code::workerQueueFull:
-            // Legacy peers may still send workerQueueFull for an unavailable
-            // remote target.
-            return framework_exception_t (framework_error_kind_t::unavailable,
-                                          operation_name
-                                            + " failed because the remote worker queue is full.");
-        case protocol::framework_error_code::workerTimedOut:
-            return framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                          operation_name + " timed out inside the worker.");
-        case protocol::framework_error_code::workerFailed:
-            return framework_exception_t (framework_error_kind_t::internal_failure,
-                                          operation_name + " failed inside the worker.");
-        case protocol::framework_error_code::actorLocationStale:
-            return framework_exception_t (framework_error_kind_t::unavailable,
-                                          operation_name
-                                            + " failed because the actor location was stale.");
-        case protocol::framework_error_code::spotGenerationStale:
-            return framework_exception_t (framework_error_kind_t::invalid_operation,
-                                          operation_name
-                                            + " failed because the spot generation was stale.");
-        case protocol::framework_error_code::spotMoving:
-            return framework_exception_t (framework_error_kind_t::unavailable,
-                                          operation_name + " failed because the spot is moving.");
-        case protocol::framework_error_code::relocationDataLost:
-            return framework_exception_t (framework_error_kind_t::data_lost,
-                                          operation_name
-                                            + " failed because relocation data was lost.");
-        default:
-            break;
+    // Fine codes retain precedence even for an invalid terminal/code combination.
+    // None is decoded by the unchanged source/native terminal fallback below.
+    if (failure_code != static_cast<std::uint32_t> (failure_t::none)) {
+        for (const auto &[kind, failure, terminal, message] : wire_failure_mapping) {
+            if (failure_code == static_cast<std::uint32_t> (failure))
+                return framework_exception_t (kind, operation_name + message);
+        }
     }
-
     switch (static_cast<protocol::request_terminal_result> (terminal_result)) {
         case protocol::request_terminal_result::timedOut:
             return completion_exception (request_result_t::timed_out, operation_name);

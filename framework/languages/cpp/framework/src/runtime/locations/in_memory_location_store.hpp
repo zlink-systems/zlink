@@ -480,10 +480,18 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
               }
 
+              if (std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
+                      return entry.second.status == aggregate_status_t::prepared
+                             && std::any_of (entry.second.request.participants.begin (),
+                                             entry.second.request.participants.end (),
+                                             [&] (const auto &participant) {
+                                                 return participant.key.value == key.value;
+                                             });
+                  }))
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+
               if (std::holds_alternative<authority_delete_t> (mutation)) {
-                  if (found == _authorities.end ())
-                      return completed (authority_compare_exchange_result_t{
-                        authority_conflict_t{authority_missing_t{now}}});
                   if (found->second.allocation.state != placement_allocation_state_t::active
                       || !owner_token_is_live (found->second.owner, now)
                       || !capacity_bundle_present (_active_by_placement,
@@ -559,14 +567,11 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
               }
 
-              auto put = std::get<authority_put_t> (std::move (mutation));
-              if (found == _authorities.end ()
-                  || found->second.allocation.state != placement_allocation_state_t::active)
-                  return completed (authority_compare_exchange_result_t{authority_conflict_t{
-                    found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
-                                                 : authority_read_result_t{found->second}}});
+              if (found->second.allocation.state != placement_allocation_state_t::active)
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
               auto owner = found->second.owner;
-              const auto object_generation = found->second.object_generation;
+              auto object_generation = found->second.object_generation;
               auto owner_generation = found->second.authority_owner_generation;
               auto allocation = found->second.allocation;
               if (!owner_token_is_live (found->second.owner, now))
@@ -576,7 +581,19 @@ class in_memory_location_repository_t : public location_repository_t
                   return completed (
                     authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
-              authority_snapshot_t snapshot{next_store_version (), std::move (put.payload),
+              std::vector<std::byte> payload;
+              if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+                  if (!issue_generations (
+                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                      return completed (
+                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                  object_generation = _object_generation;
+                  owner_generation = _authority_owner_generation;
+                  payload = std::move (reincarnate->payload);
+              } else {
+                  payload = std::move (std::get<authority_put_t> (mutation).payload);
+              }
+              authority_snapshot_t snapshot{next_store_version (), std::move (payload),
                                             object_generation,     owner_generation,
                                             std::move (owner),     now,
                                             std::move (allocation)};

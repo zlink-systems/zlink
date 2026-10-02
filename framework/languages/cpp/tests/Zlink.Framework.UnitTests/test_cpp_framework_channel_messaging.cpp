@@ -3288,10 +3288,12 @@ int main ()
     test_spot_address_resolver_t activation_resolver;
     activation_runtime.bind_spot_address_resolver (activation_resolver);
     std::atomic_int activation_count{0};
+    std::atomic_int ready_instance_request_count{0};
     activation_runtime.bind_instance_spot_activator (
       [&] (const zlink::framework::spot_id_t &spot_id,
-           const zlink::framework::detail::spot_activation_intent_t &intent, const std::string &,
-           std::type_index, auto, const std::map<std::string, std::string> &)
+           const zlink::framework::detail::spot_activation_intent_t &intent,
+           const std::optional<zlink::framework::runtime::spot_address_t> &cached_route,
+           const std::string &, std::type_index, auto, const std::map<std::string, std::string> &)
         -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (std::string (spot_id) != "cart-17" || intent.mesh_name != "commerce"
               || intent.stable_type != "shopping-cart") {
@@ -3305,11 +3307,20 @@ int main ()
           activation_resolver.set ("cart-17", address);
           co_return zlink::framework::result_t<void>::success ();
       },
-      [] (const auto &, const auto &, auto, auto, auto, auto, auto) {
+      [&] (const auto &, const auto &, const auto &cached_route, auto, auto, auto, auto, auto) {
+          if (!cached_route || cached_route->mesh_name != "commerce"
+              || cached_route->node_rid.to_string () != "cart-node"
+              || cached_route->spot_id != "cart-17") {
+              return zlink::framework::task_t<zlink::message_t> (
+                zlink::framework::result_t<zlink::message_t>::failure (
+                  zlink::framework::framework_error_kind_t::internal_failure,
+                  "Ready Instance route was not retained"));
+          }
+          ++ready_instance_request_count;
           return zlink::framework::task_t<zlink::message_t> (
-            zlink::framework::result_t<zlink::message_t>::failure (
-              zlink::framework::framework_error_kind_t::internal_failure,
-              "Ready resolve should bypass cold activation"));
+            zlink::framework::result_t<zlink::message_t>::success (
+              zlink::framework::detail::encoded_payload_to_raw (
+                serializers.get<reply_t> ().serialize (reply_t{617}))));
       });
     std::atomic_int activation_send_count{0};
     std::atomic_int activation_request_count{0};
@@ -3351,7 +3362,7 @@ int main ()
                                     .result ();
     if (!activation_send || !activation_reply || activation_reply.value ().value != 617
         || activation_count.load () != 1 || activation_send_count.load () != 0
-        || activation_request_count.load () != 1) {
+        || activation_request_count.load () != 0 || ready_instance_request_count.load () != 1) {
         return 150;
     }
 

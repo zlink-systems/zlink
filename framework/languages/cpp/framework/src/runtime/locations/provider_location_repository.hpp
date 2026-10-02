@@ -418,16 +418,40 @@ class provider_location_repository_t final : public location_repository_t
             return authority_write_result (row_key, snapshot, std::move (written));
         }
 
-        auto put = std::get<authority_put_t> (std::move (mutation));
         if (snapshot.allocation.state != placement_allocation_state_t::active)
             return authority_conflict (std::move (current));
-        snapshot.payload = std::move (put.payload);
         auto live_owner = read_live_owner (snapshot.owner);
         if (!live_owner)
             return authority_conflict (std::move (current));
-        auto written = write (
-          {{version_condition (row_key, found->value.version), owner_condition (snapshot.owner)},
-           {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}});
+        store_write_request_t write_request;
+        write_request.conditions = {version_condition (row_key, found->value.version),
+                                    owner_condition (snapshot.owner)};
+        if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+            auto object_generations = read (object_counter_key);
+            auto owner_generations = read (authority_owner_counter_key);
+            const auto object_generation = counter_next_value (object_generations);
+            const auto owner_generation = counter_next_value (owner_generations);
+            if (object_generation >= max_generation || owner_generation >= max_generation)
+                return completed (
+                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+            snapshot.object_generation = object_generation;
+            snapshot.authority_owner_generation = owner_generation;
+            snapshot.payload = std::move (reincarnate->payload);
+            write_request.conditions.push_back (
+              condition_for (object_counter_key, object_generations));
+            write_request.conditions.push_back (
+              condition_for (authority_owner_counter_key, owner_generations));
+            write_request.mutations = {
+              store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
+                          std::nullopt},
+              store_put_t{authority_owner_counter_key,
+                          to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
+        } else {
+            snapshot.payload = std::move (std::get<authority_put_t> (mutation).payload);
+        }
+        write_request.mutations.push_back (
+          store_put_t{row_key, encode_authority (snapshot), std::nullopt});
+        auto written = write (std::move (write_request));
         return authority_write_result (row_key, snapshot, std::move (written));
     }
 

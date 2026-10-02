@@ -148,6 +148,8 @@ struct serial_work_options_t
     // A relocation readiness boundary instead holds application jobs until it
     // completes (Spot model §5.1).
     bool holds_application_while_waiting = false;
+    // application dispatcher가 소유한 원본 메시지를 그대로 보존한다.
+    std::shared_ptr<const void> retained_message;
 };
 
 using serial_submission_id_t = std::uint64_t;
@@ -214,6 +216,8 @@ class serial_execution_queue_t
     std::size_t pending_count (serial_work_lane_t lane) const;
     std::size_t pending_bytes () const;
     bool closed () const;
+    std::shared_ptr<const void> first_pending_message () const;
+    std::vector<std::shared_ptr<const void>> pending_messages () const;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
 
   private:
@@ -235,6 +239,7 @@ class serial_execution_queue_t
         std::shared_ptr<serial_turn_chain_t> chain;
         // The deferred-work position this item holds; empty otherwise.
         std::shared_ptr<serial_deferred_slot_t> slot;
+        std::shared_ptr<const void> retained_message;
     };
 
     struct item_origin_t
@@ -300,6 +305,7 @@ class serial_execution_queue_t
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
     bool has_ready_locked () noexcept;
+    bool application_ready_locked () const noexcept;
     work_item_t take_next_locked ();
     void report_deferred_error (const std::string &name,
                                 const std::exception_ptr &error) const noexcept;
