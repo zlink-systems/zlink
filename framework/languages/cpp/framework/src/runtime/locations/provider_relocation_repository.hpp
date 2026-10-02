@@ -54,8 +54,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
                                                 "relocation retention must be positive");
 
         const auto retention_ms = std::chrono::duration_cast<std::chrono::milliseconds> (retention);
-        const auto checksum = zlink::framework::detail::crc32c (
-          std::span<const std::byte> (payload));
+        const auto checksum =
+          zlink::framework::detail::crc32c (std::span<const std::byte> (payload));
         auto reference = make_reference ();
         for (;;) {
             if (auto terminal = check_operation ())
@@ -63,10 +63,11 @@ class provider_relocation_repository_t final : public relocation_repository_t
             auto pending_put = _store->put (
               blob_reference_t{reference},
               std::span<const std::byte> (payload.data (), payload.size ()), retention_ms);
-            auto response =
-              pending_put.result_for (std::chrono::ceil<std::chrono::milliseconds> (
-                                        operation_deadline - std::chrono::steady_clock::now ()),
-                                      cancellation);
+            auto response = detail::observe_task_result_for (
+              pending_put,
+              std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
+                                                            - std::chrono::steady_clock::now ()),
+              cancellation);
             if (auto terminal = check_operation ()) {
                 detail::observe_task_terminal (pending_put, [payload = std::move (payload)] (
                                                               const result_t<blob_put_result_t> &) {
@@ -90,10 +91,11 @@ class provider_relocation_repository_t final : public relocation_repository_t
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
             auto pending_read = _store->read (blob_reference_t{reference});
-            auto read_response =
-              pending_read.result_for (std::chrono::ceil<std::chrono::milliseconds> (
-                                         operation_deadline - std::chrono::steady_clock::now ()),
-                                       cancellation);
+            auto read_response = detail::observe_task_result_for (
+              pending_read,
+              std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
+                                                            - std::chrono::steady_clock::now ()),
+              cancellation);
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
             auto read = std::move (*read_response);

@@ -874,7 +874,7 @@ TEST (CppFrameworkOpaqueRelocationStore, ExpiredOperationDoesNotStartProviderIo)
     }
     catch (...) {
         const auto failure =
-          detail::current_exception_to_message_result ("expired operation lost its typed failure");
+          detail::current_exception_result<void> ("expired operation lost its typed failure");
         EXPECT_EQ (failure.error_kind (), framework_error_kind_t::deadline_exceeded);
     }
 }
@@ -928,8 +928,8 @@ class pending_relocation_store_t final : public relocation_store_t
     stage_t _stage;
     std::vector<std::byte> _payload;
     std::promise<void> _started;
-    detail::task_completion_source_t<blob_put_result_t> _put;
-    detail::task_completion_source_t<blob_read_result_t> _read;
+    task_completion_source_t<blob_put_result_t> _put;
+    task_completion_source_t<blob_read_result_t> _read;
 };
 
 void expect_pending_relocation_operation_deadline (pending_relocation_store_t::stage_t stage)

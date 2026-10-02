@@ -34,21 +34,32 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     @Test
     void weightEncoderAcceptsBothBoundsAndRejectsValuesOutsideTheContract() throws Exception {
         for (int weight : new int[] {0, 10_000}) {
-            var entry = new ServiceWireCodec.ChannelEntry(
-                    new ServiceWireCodec.Text8("channel"), new ServiceWireCodec.U32(weight));
-            assertEquals(entry, ServiceWireCodec.decodeChannelEntry(
-                    ServiceWireCodec.encodeChannelEntry(entry, CONTEXT), CONTEXT));
+            var entry =
+                    new ServiceWireCodec.ChannelEntry(
+                            new ServiceWireCodec.Text8("channel"),
+                            new ServiceWireCodec.U32(weight));
+            assertEquals(
+                    entry,
+                    ServiceWireCodec.decodeChannelEntry(
+                            ServiceWireCodec.encodeChannelEntry(entry, CONTEXT), CONTEXT));
             var server = weightedServer(weight);
             byte[] encoded = ServiceWireCodec.encodeClientServerAdmission(server, CONTEXT);
-            assertArrayEquals(encoded, ServiceWireCodec.encodeClientServerAdmission(
-                    ServiceWireCodec.decodeClientServerAdmission(encoded, CONTEXT), CONTEXT));
+            assertArrayEquals(
+                    encoded,
+                    ServiceWireCodec.encodeClientServerAdmission(
+                            ServiceWireCodec.decodeClientServerAdmission(encoded, CONTEXT),
+                            CONTEXT));
         }
         for (int weight : new int[] {-1, 10_001}) {
-            var entry = new ServiceWireCodec.ChannelEntry(
-                    new ServiceWireCodec.Text8("channel"), new ServiceWireCodec.U32(weight));
+            var entry =
+                    new ServiceWireCodec.ChannelEntry(
+                            new ServiceWireCodec.Text8("channel"),
+                            new ServiceWireCodec.U32(weight));
             var server = weightedServer(weight);
-            assertThrows(IOException.class, () -> ServiceWireCodec.encodeChannelEntry(entry, CONTEXT));
-            assertThrows(IOException.class,
+            assertThrows(
+                    IOException.class, () -> ServiceWireCodec.encodeChannelEntry(entry, CONTEXT));
+            assertThrows(
+                    IOException.class,
                     () -> ServiceWireCodec.encodeClientServerAdmission(server, CONTEXT));
         }
     }
@@ -59,9 +70,12 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 new ServiceWireCodec.Text8("channel"),
                 ServiceWireCodec.ClientServerDirection.CLIENT_TO_SERVER,
                 new ServiceWireCodec.Rid(new byte[] {1}),
-                new ServiceWireCodec.NonzeroU64(1), new ServiceWireCodec.NonzeroU64(1),
-                new ServiceWireCodec.U32(weight), ServiceWireCodec.RuntimeState.SERVING,
-                new ServiceWireCodec.Text8("identity"), new ServiceWireCodec.NonzeroU32(1),
+                new ServiceWireCodec.NonzeroU64(1),
+                new ServiceWireCodec.NonzeroU64(1),
+                new ServiceWireCodec.U32(weight),
+                ServiceWireCodec.RuntimeState.SERVING,
+                new ServiceWireCodec.Text8("identity"),
+                new ServiceWireCodec.NonzeroU32(1),
                 new ServiceWireCodec.Endpoint("tcp://127.0.0.1:1234"));
     }
 

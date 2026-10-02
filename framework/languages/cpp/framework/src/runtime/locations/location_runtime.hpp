@@ -214,43 +214,41 @@ class location_runtime_t
 
     void stop () noexcept
     {
-        if (!_started.exchange (false)) {
+        if (!_started.exchange (false))
             return;
-        }
         stop_heartbeat ();
-        try {
-            const auto token = current_owner_token_unchecked ();
-            if (token) {
-                _store->remove_all_by_owner (*token).result ().value ();
-                _store->release_owner_lease (*token).result ().value ();
-                _lane
-                  .run_checked ([this] {
-                      _owner_token.reset ();
-                      _owner_lease_admission_deadline.reset ();
-                  })
-                  .get ();
-            }
-        }
-        catch (const std::exception &error) {
-            record_store_error ();
-            record_failure (error.what ());
-        }
+        static_cast<void> (cleanup_owner ());
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
      * heartbeat, then removes this owner's lease and rows while the store
      * stays usable for the rest of teardown. Returns false when the store
      * rejects the cleanup (the drain worker maps it to OwnerCleanupFailed). */
-    bool cleanup_owner () noexcept
+    bool cleanup_owner (std::optional<std::chrono::steady_clock::time_point> requested_deadline_at =
+                          std::nullopt) noexcept
     {
+        const auto deadline_at = requested_deadline_at.value_or (
+          std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
         if (_started.exchange (false)) {
             stop_heartbeat ();
         }
         try {
             const auto token = current_owner_token_unchecked ();
             if (token) {
-                _store->remove_all_by_owner (*token).result ().value ();
-                _store->release_owner_lease (*token).result ().value ();
+                auto await_cleanup = [&] (auto request) {
+                    if (remaining_until (deadline_at) <= std::chrono::milliseconds::zero ())
+                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                                               "owner lease cleanup timed out");
+                    auto pending = request ();
+                    const auto completed = detail::observe_task_result_for (
+                      pending, remaining_until (deadline_at), std::stop_token{});
+                    if (!completed)
+                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                                               "owner lease cleanup timed out");
+                    completed->value ();
+                };
+                await_cleanup ([&] { return _store->remove_all_by_owner (*token); });
+                await_cleanup ([&] { return _store->release_owner_lease (*token); });
                 _lane
                   .run_checked ([this] {
                       _owner_token.reset ();
@@ -263,9 +261,6 @@ class location_runtime_t
         catch (const std::exception &error) {
             record_store_error ();
             record_failure (error.what ());
-            return false;
-        }
-        catch (...) {
             return false;
         }
     }

@@ -239,7 +239,9 @@ public final class ZLinkFrameworkRegistration {
                             ? locationOptions.ownerLeaseRenewInterval()
                             : renewTimeout;
             Duration fencedLifetime =
-                    locationOptions.ownerLeaseTtl().minus(locationOptions.ownerLeaseFencingMargin());
+                    locationOptions
+                            .ownerLeaseTtl()
+                            .minus(locationOptions.ownerLeaseFencingMargin());
             if (maximumRenewalTime.compareTo(fencedLifetime) >= 0
                     || renewTimeout.compareTo(fencedLifetime.minus(maximumRenewalTime)) >= 0) {
                 throw new ZLinkConfigurationException(

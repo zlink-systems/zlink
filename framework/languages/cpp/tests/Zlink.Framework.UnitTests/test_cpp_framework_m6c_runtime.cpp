@@ -3624,7 +3624,7 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
     std::atomic<std::uint64_t> observed_session_sequence{0};
-    detail::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
+    framework::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
       first_route_resolution;
     std::promise<void> first_route_started;
     auto route_started = first_route_started.get_future ();

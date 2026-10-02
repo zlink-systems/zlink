@@ -101,7 +101,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             if (Interlocked.CompareExchange(ref _shutdownRequested, 1, 0) == 0)
                 _shutdownDeadline.CancelAfter(deadline);
             sealCancellationToken = _shutdownDeadline.Token;
-            deadlineToken = _shutdownDeadline.Token;
         }
         var absoluteDeadline = DateTimeOffset.UtcNow + deadline;
         ulong committedUnitCount = 0;

@@ -386,6 +386,7 @@ final class NodesAndServicesTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
             CompletionStage<ZLinkActorCreateResult> first =
                     runtime.actorManager().getOrCreate("player-serial", "blocking-player").submit();
             CompletionStage<ZLinkActorCreateResult> second =

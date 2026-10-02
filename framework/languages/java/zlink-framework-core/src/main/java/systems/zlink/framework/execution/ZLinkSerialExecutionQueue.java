@@ -1150,7 +1150,7 @@ public final class ZLinkSerialExecutionQueue {
                     && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
                 gate.complete(null);
             }
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | Error error) {
             entry.result.completeExceptionally(error);
             gate.complete(null);
         } finally {
