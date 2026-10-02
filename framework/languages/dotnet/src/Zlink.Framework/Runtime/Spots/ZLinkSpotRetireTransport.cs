@@ -1006,7 +1006,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     internal void ScheduleCanonicalCutoverWarning(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
-    ) => _ = RunCanonicalCutoverWarningAsync(prepare);
+    )
+    {
+        var fence = new ZLinkAggregateFence(
+            DecodeRelocationId(prepare.RelocationId),
+            prepare.TargetAttemptGeneration
+        );
+        if (_staged.TryGetValue(fence, out var entry) && entry is TargetStage stage)
+            _ = stage.RunCanonicalCutoverWarningAsync(() => RunCanonicalCutoverWarningAsync(prepare));
+    }
 
     internal async ValueTask AbortCanonicalPreparedTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -2828,9 +2836,18 @@ internal sealed record TargetStage(
     public int RelocationReadyDelivered;
     public int RelocatedInitializationCompleted;
     private readonly ZLinkStateLane _lane = new();
+    private Lazy<Task>? _canonicalCutoverWarning;
     private int _sessionRouteConvergenceRunning;
     private ZLinkRelocationParticipantEnvelope? _spotParticipant;
     public SemaphoreSlim PublishGate { get; } = new(1, 1);
+
+    internal async Task RunCanonicalCutoverWarningAsync(Func<Task> warning)
+    {
+        var operation = await _lane
+            .RunAsync(() => _canonicalCutoverWarning ??= new Lazy<Task>(warning))
+            .ConfigureAwait(false);
+        await operation.Value.ConfigureAwait(false);
+    }
 
     //  The stage's SPOT participant is fixed once the immutable Envelope is
     //  staged — resolve the single-scan once and reuse the materialized

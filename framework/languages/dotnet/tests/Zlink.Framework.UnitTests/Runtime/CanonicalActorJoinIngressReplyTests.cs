@@ -1,11 +1,106 @@
 using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
+    [Fact]
+    public async Task RelocationPrepare_DuplicateRepliesShareRestoreAndManifestConflictRepliesFailed()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(null);
+        var target = new CountingRelocationTarget();
+        runtime.Target.SetCanonicalRelocationTarget(target);
+        var envelope = new ZLinkRelocationEnvelope(
+            Guid.NewGuid(), 1, new byte[32],
+            [new ZLinkRelocationParticipantEnvelope(
+                new ZLinkAuthorityKey("actor:mesh:actor"), ZLinkPlacementObjectKind.Actor,
+                1, 1, new byte[] { 1 }, [], [])]
+        );
+        var payload = ZLinkRelocationTransferPayload.Create(envelope, 64 * 1024);
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 1), 1,
+            new("source-owner", 1, runtime.SourceRid, 1, "v-source"),
+            new(runtime.TargetRid, runtime.Target.Status().LifecycleGeneration, "target-owner", 1),
+            1, new(1, "actor", "actor", 1, 1), runtime.SourceRid, 1,
+            (ulong)payload.TotalLength, (uint)payload.ChunkCount, payload.ChecksumCrc32c, 1
+        );
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
+            ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare), out var wirePrepare, out var prepareError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, prepareError);
+        prepare = wirePrepare;
+        Task<IReadOnlyList<Message>> Request(ZLinkServiceWireCodec.RelocationPrepareRecord record)
+        {
+            using var message = Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(record));
+            return runtime.Source.Request().Message(message).Timeout(TimeSpan.FromSeconds(2))
+                .Async(CancellationToken.None).Reply;
+        }
+        var first = Request(prepare);
+        var duplicate = Request(prepare);
+        var conflict = prepare with { PayloadChecksumCrc32c = prepare.PayloadChecksumCrc32c ^ 1 };
+        var failedParts = await Request(conflict);
+        try
+        {
+            Assert.Single(failedParts);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationFailed(
+                failedParts[0].AsReadOnlyMemory().Span, out var failed, out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(new ZLinkServiceWireCodec.RelocationFailedRecord(
+                conflict.RelocationId, conflict.TargetAttemptGeneration, conflict.Coordinator,
+                conflict.Target, conflict.Object, 2,
+                ServiceWireConstants.FrameworkErrorCode.RelocationDataLost), failed);
+            Assert.Equal(0, target.PrepareCount);
+        }
+        finally { ZLinkMessageParts.DisposeAll(failedParts); }
+        for (var ordinal = 0; ordinal < payload.ChunkCount; ordinal++)
+        {
+            using var chunk = Message.From(ZLinkServiceWireCodec.EncodeRelocationState(
+                new(prepare.RelocationId, prepare.TargetAttemptGeneration, prepare.Coordinator,
+                    1, prepare.Object, (uint)ordinal, payload.Chunk(ordinal))));
+            await runtime.Source.Send().Message(chunk).Async(CancellationToken.None).Admitted;
+        }
+        foreach (var reply in await Task.WhenAll(first, duplicate))
+        {
+            try
+            {
+                Assert.Single(reply);
+                Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationReady(
+                    reply[0].AsReadOnlyMemory().Span, out var ready, out var error));
+                Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+                Assert.Equal(new ZLinkServiceWireCodec.RelocationReadyRecord(
+                    prepare.RelocationId, prepare.TargetAttemptGeneration, prepare.Coordinator,
+                    prepare.Target, prepare.Object, 2), ready);
+            }
+            finally { ZLinkMessageParts.DisposeAll(reply); }
+        }
+        Assert.Equal(1, target.PrepareCount);
+    }
+
+    private sealed class CountingRelocationTarget : ICanonicalRelocationTarget
+    {
+        internal int PrepareCount;
+        public ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare, ZLinkRelocationEnvelope envelope,
+            RoutingId source, ZLinkCanonicalRelocationPreparationLease lease, CancellationToken token)
+        {
+            Interlocked.Increment(ref PrepareCount);
+            lease.MarkPrepared();
+            return ValueTask.FromResult(new ZLinkServiceWireCodec.RelocationReadyRecord(
+                prepare.RelocationId, prepare.TargetAttemptGeneration, prepare.Coordinator,
+                prepare.Target, prepare.Object, 2));
+        }
+        public void ReadySubmitted(ZLinkServiceWireCodec.RelocationPrepareRecord prepare, RoutingId source) { }
+        public void ReadySubmissionFailed(ZLinkServiceWireCodec.RelocationPrepareRecord prepare, RoutingId source) { }
+        public ValueTask AbortPreparedAsync(ZLinkServiceWireCodec.RelocationPrepareRecord prepare, RoutingId source) =>
+            ValueTask.CompletedTask;
+        public ValueTask StageDataAsync(ZLinkServiceWireCodec.RelocationDataRecord data, RoutingId source, CancellationToken token) =>
+            throw new NotSupportedException();
+        public ValueTask CutoverAsync(ZLinkServiceWireCodec.RelocationCutoverRecord cutover, RoutingId source, CancellationToken token) =>
+            throw new NotSupportedException();
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(true, false, false)]
@@ -1408,7 +1503,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
 
         internal static async Task<ConnectedRuntime> CreateAsync(
-            Func<ReplySubmitOperation, SubmitResult> submit,
+            Func<ReplySubmitOperation, SubmitResult>? submit,
             TimeProvider? deadlineTimeProvider = null
         )
         {

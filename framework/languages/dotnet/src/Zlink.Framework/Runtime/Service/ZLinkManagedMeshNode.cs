@@ -44,7 +44,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ILogger<ZLinkManagedMeshNode>? _logger;
     private readonly TimeProvider _deadlineTimeProvider;
     private readonly ZLinkApplicationJobQueue? _applicationJobQueue;
-    private readonly Func<ReplySubmitOperation, SubmitResult>? _nativeTerminalReplySubmitOverride;
+    internal Func<
+        ReplySubmitOperation,
+        ServiceWireConstants.Command?,
+        SubmitResult?
+    >? NativeTerminalReplySubmitOverride { get; set; }
     private readonly ZLinkStateLane _lane = new();
     private readonly ZLinkStateLane _operationLane = new();
     private readonly ZLinkStateLane _inboundOperationLane = new();
@@ -96,7 +100,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     //  ordered connection always find their assembly.
     private readonly ConcurrentDictionary<
         PendingRelocationPrepareKey,
-        ZLinkRelocationChunkAssembler
+        InboundRelocationPreparation
     > _inboundRelocationAssemblies = new();
 
     //  Per-peer and node-wide in-flight relocation chunk budgets
@@ -237,7 +241,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _deadlineTimeProvider = deadlineTimeProvider ?? TimeProvider.System;
         _deadlineClock = new ZLinkDeadlineClock(_deadlineTimeProvider);
         _applicationJobQueue = applicationJobQueue;
-        _nativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride;
+        NativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride is null
+            ? null
+            : (reply, _) => nativeTerminalReplySubmitOverride(reply);
         _routedSubmitScheduler = new ConcurrentExclusiveSchedulerPair(
             routedSubmitScheduler ?? TaskScheduler.Default,
             maxConcurrencyLevel: 1
@@ -6702,48 +6708,48 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             prepare.TargetAttemptGeneration,
             prepare.Coordinator
         );
-        ZLinkRelocationChunkAssembler assembler;
-        var createdAssembly = false;
+        InboundRelocationPreparation preparation;
         try
         {
-            var candidate = new ZLinkRelocationChunkAssembler(
+            var assembler = new ZLinkRelocationChunkAssembler(
                 prepare.PayloadTotalLength,
                 prepare.PayloadChunkCount,
                 prepare.PayloadChecksumCrc32c
             );
-            assembler = _inboundRelocationAssemblies.GetOrAdd(assemblyKey, candidate);
-            createdAssembly = ReferenceEquals(assembler, candidate);
-            if (
-                !assembler.MatchesManifest(
-                    prepare.PayloadTotalLength,
-                    prepare.PayloadChunkCount,
-                    prepare.PayloadChecksumCrc32c
+            var lease = new ZLinkCanonicalRelocationPreparationLease();
+            var candidate = new InboundRelocationPreparation(
+                prepare,
+                assembler,
+                lease,
+                new Lazy<Task<ZLinkServiceWireCodec.RelocationReadyRecord>>(() =>
+                    PrepareRelocationTargetAsync(target, sourceNodeRid, prepare, assembler, lease)
                 )
-            )
+            );
+            preparation = _inboundRelocationAssemblies.GetOrAdd(assemblyKey, candidate);
+            if (preparation.Prepare != prepare)
                 throw new ZLinkRelocationDataLostException(
-                    "A relocation prepare retry changed its payload manifest."
+                    "A relocation prepare retry changed its declaration."
                 );
         }
         catch (ZLinkRelocationDataLostException exception)
         {
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare-manifest", exception);
+            RunInboundOperation(() => SendRelocationPrepareFailureAsync(nativeReply, prepare, exception));
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
-        // A Prepare is retried while the source waits for Ready.  The first
-        // command owns the single assembler and waiter; duplicate commands
-        // must not start parallel restore attempts after the chunks complete.
-        if (createdAssembly)
-            RunInboundOperation(() =>
-                ProcessRelocationPrepareAsync(
-                    target,
-                    sourceNodeRid,
-                    nativeReply,
-                    prepare,
-                    assemblyKey,
-                    assembler
-                )
-            );
+        // Same-identity requests share assembly and target preparation (spec
+        // 28 §4.3), but each native request retains its own READY reply leg.
+        RunInboundOperation(() =>
+            ProcessRelocationPrepareAsync(
+                target,
+                sourceNodeRid,
+                nativeReply,
+                prepare,
+                assemblyKey,
+                preparation
+            )
+        );
     }
 
     /// <summary>
@@ -6824,41 +6830,50 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         };
     }
 
+    private async Task<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareRelocationTargetAsync(
+        ICanonicalRelocationTarget target,
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationChunkAssembler assembler,
+        ZLinkCanonicalRelocationPreparationLease lease
+    )
+    {
+        using var assemblyDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+            _stop?.Token ?? CancellationToken.None
+        );
+        assemblyDeadline.CancelAfter(TimeSpan.FromSeconds(30));
+        await assembler.Completed.WaitAsync(assemblyDeadline.Token).ConfigureAwait(false);
+        var envelope = assembler.VerifyAndDecode();
+        return await target
+            .PrepareAsync(
+                prepare,
+                envelope,
+                sourceNodeRid,
+                lease,
+                _stop?.Token ?? CancellationToken.None
+            )
+            .ConfigureAwait(false);
+    }
+
     private async Task ProcessRelocationPrepareAsync(
         ICanonicalRelocationTarget target,
         RoutingId sourceNodeRid,
         ReplyOperation nativeReply,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         PendingRelocationPrepareKey assemblyKey,
-        ZLinkRelocationChunkAssembler assembler
+        InboundRelocationPreparation preparation
     )
     {
-        var lease = new ZLinkCanonicalRelocationPreparationLease();
+        var lease = preparation.Lease;
         try
         {
-            //  Assemble and verify the directly transferred payload before
-            //  restoring (spec 28 §4.3). A checksum mismatch or a chunk
-            //  conflict fails the prepare explicitly — no partial restore.
-            using var assemblyDeadline = CancellationTokenSource.CreateLinkedTokenSource(
-                _stop?.Token ?? CancellationToken.None
-            );
-            assemblyDeadline.CancelAfter(TimeSpan.FromSeconds(30));
-            await assembler.Completed.WaitAsync(assemblyDeadline.Token).ConfigureAwait(false);
-            var envelope = assembler.VerifyAndDecode();
-            var ready = await target
-                .PrepareAsync(
-                    prepare,
-                    envelope,
-                    sourceNodeRid,
-                    lease,
-                    _stop?.Token ?? CancellationToken.None
-                )
-                .ConfigureAwait(false);
+            var ready = await preparation.Ready.Value.ConfigureAwait(false);
             try
             {
                 await SendRelocationPrepareTerminalAsync(
                         nativeReply,
                         ZLinkServiceWireCodec.EncodeRelocationReady(ready),
+                        ServiceWireConstants.Command.RelocationReady,
                         CancellationToken.None
                     )
                     .ConfigureAwait(false);
@@ -6873,9 +6888,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // an explicit terminal.
                 target.ReadySubmissionFailed(prepare, sourceNodeRid);
                 _inboundRelocationAssemblies.TryRemove(
-                    new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
+                    new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
                         assemblyKey,
-                        assembler
+                        preparation
                     )
                 );
                 ZLinkFrameworkDebugLog.TaskFailure(
@@ -6889,9 +6904,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}"
             );
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
+                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
                     assemblyKey,
-                    assembler
+                    preparation
                 )
             );
         }
@@ -6903,9 +6918,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // retransmitted Prepare submit READY again.
             target.ReadySubmissionFailed(prepare, sourceNodeRid);
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
+                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
                     assemblyKey,
-                    assembler
+                    preparation
                 )
             );
             ZLinkFrameworkDebugLog.TaskFailure(
@@ -6916,57 +6931,53 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (Exception exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
+                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
                     assemblyKey,
-                    assembler
+                    preparation
                 )
             );
-            try
-            {
-                if (lease.IsPrepared)
-                    await target.AbortPreparedAsync(prepare, sourceNodeRid).ConfigureAwait(false);
-            }
-            catch (Exception abortFailure)
-            {
-                ZLinkFrameworkDebugLog.TaskFailure(
-                    "canonical-relocation-prepare-abort",
-                    abortFailure
-                );
-            }
-            try
-            {
-                await SendRelocationPrepareTerminalAsync(
-                        nativeReply,
-                        ZLinkServiceWireCodec.EncodeRelocationFailed(
-                            new ZLinkServiceWireCodec.RelocationFailedRecord(
-                                prepare.RelocationId,
-                                prepare.TargetAttemptGeneration,
-                                prepare.Coordinator,
-                                prepare.Target,
-                                prepare.Object,
-                                2,
-                                ResolveRelocationFailedWireCode(exception, prepare.Object.Kind)
-                            )
-                        ),
-                        CancellationToken.None
-                    )
-                    .ConfigureAwait(false);
-            }
-            catch (Exception replyFailure)
-            {
-                ZLinkFrameworkDebugLog.TaskFailure(
-                    "canonical-relocation-failure-reply",
-                    replyFailure
-                );
-            }
+            await SendRelocationPrepareFailureAsync(nativeReply, prepare, exception).ConfigureAwait(false);
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare", exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+        }
+    }
+
+    private async Task SendRelocationPrepareFailureAsync(
+        ReplyOperation nativeReply,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        Exception exception
+    )
+    {
+        try
+        {
+            await SendRelocationPrepareTerminalAsync(
+                    nativeReply,
+                    ZLinkServiceWireCodec.EncodeRelocationFailed(
+                        new ZLinkServiceWireCodec.RelocationFailedRecord(
+                            prepare.RelocationId,
+                            prepare.TargetAttemptGeneration,
+                            prepare.Coordinator,
+                            prepare.Target,
+                            prepare.Object,
+                            2,
+                            ResolveRelocationFailedWireCode(exception, prepare.Object.Kind)
+                        )
+                    ),
+                    ServiceWireConstants.Command.RelocationFailed,
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception replyFailure)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-failure-reply", replyFailure);
         }
     }
 
     private ValueTask SendRelocationPrepareTerminalAsync(
         ReplyOperation nativeReply,
         byte[] terminal,
+        ServiceWireConstants.Command command,
         CancellationToken cancellationToken
     )
     {
@@ -6979,7 +6990,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         try
         {
             message = Message.From(terminal);
-            SubmitCapturedNativeReply(nativeReply.Message(message));
+            var submitted = SubmitNativeTerminalReply(nativeReply.Message(message), command);
+            if (submitted != SubmitResult.Ok)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "The command 40 relocation terminal could not be submitted on its reply leg.",
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
             message = null;
         }
         catch (ZlinkException exception)
@@ -7129,7 +7146,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             state.TargetAttemptGeneration,
             state.Coordinator
         );
-        if (!_inboundRelocationAssemblies.TryGetValue(key, out var assembler))
+        if (!_inboundRelocationAssemblies.TryGetValue(key, out var preparation))
         {
             //  Spec 28 §4.3: a chunk whose exact identity has no in-progress
             //  assembly is discarded and never attached to another assembly.
@@ -7143,17 +7160,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  Spec 33: the chunk is copied into the framework-owned assembly
             //  buffer synchronously and the transport buffer returns
             //  immediately — chunk bytes never transfer into a backlog lease.
-            assembler.Append(state.ChunkOrdinal, state.ChunkData.Span);
+            preparation.Assembler.Append(state.ChunkOrdinal, state.ChunkData.Span);
         }
         catch (ZLinkRelocationDataLostException exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<PendingRelocationPrepareKey, ZLinkRelocationChunkAssembler>(
+                new KeyValuePair<PendingRelocationPrepareKey, InboundRelocationPreparation>(
                     key,
-                    assembler
+                    preparation
                 )
             );
-            assembler.Fail(exception);
+            preparation.Assembler.Fail(exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }
     }
@@ -10804,10 +10821,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private SubmitResult SubmitNativeTerminalReply(ReplySubmitOperation reply)
+    private SubmitResult SubmitNativeTerminalReply(
+        ReplySubmitOperation reply,
+        ServiceWireConstants.Command? command = null
+    )
     {
-        if (_nativeTerminalReplySubmitOverride is { } submitOverride)
-            return submitOverride(reply);
+        if (NativeTerminalReplySubmitOverride?.Invoke(reply, command) is { } submitted)
+            return submitted;
         try
         {
             SubmitCapturedNativeReply(reply);
@@ -12759,6 +12779,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || Completion.Task.IsCompletedSuccessfully && Completion.Task.Result == response;
         }
     }
+
+    private sealed record InboundRelocationPreparation(
+        ZLinkServiceWireCodec.RelocationPrepareRecord Prepare,
+        ZLinkRelocationChunkAssembler Assembler,
+        ZLinkCanonicalRelocationPreparationLease Lease,
+        Lazy<Task<ZLinkServiceWireCodec.RelocationReadyRecord>> Ready
+    );
 
     private sealed class PendingRelocationPrepare(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
