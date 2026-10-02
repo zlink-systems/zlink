@@ -492,7 +492,7 @@ or lifecycle information changed after selection.
 |---|---|
 | Shape | A composite fence fixing target descriptor identity and lifecycle |
 | .NET notation | A combination of `ZLinkMeshNodeDescriptorKey`, a `ulong` lifecycle generation, and `ZLinkLocationOwnerToken` |
-| Public composition | Includes the MeshName/RID descriptor key, target lifecycle generation, and that target's owner lease token. A Store write that changes target capacity (a creation reservation, an owner-change CAS) also verifies capacity and descriptor conditions together. |
+| Public composition | Includes the MeshName/RID descriptor key, target lifecycle generation, and that target's owner lease token. A Store write that newly occupies target capacity (a creation reservation, a standalone owner-change CAS, a `SpotWide` Prepare) also verifies capacity and descriptor conditions together. [Location runtime §3.5](../05-location-relocation/01-location-runtime.en.md#35-progress-records-of-a-spotwide-relocation) defines the conditions of the other `SpotWide` writes. |
 | Creation/management | Fixed by the source when selecting a target, and re-verified by the target and Store before that write. |
 | Lifetime | Becomes stale if the descriptor lifecycle or owner lease changes. |
 
