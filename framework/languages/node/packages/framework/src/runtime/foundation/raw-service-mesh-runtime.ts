@@ -154,6 +154,7 @@ export class RawServiceMeshRuntime {
       readonly endpoint?: string;
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
+      helloSubmittedGeneration?: bigint;
     }
   >();
   private readonly endpointOnlyPeers = new Set<string>();
@@ -234,13 +235,16 @@ export class RawServiceMeshRuntime {
 
   connectPeer(endpoint: string, expected: ServiceNodeDescriptor): void {
     this.requireStarted().connectToRoutingId(expected.nodeRoutingId, endpoint);
-    this.expectedPeers.set(expected.nodeRoutingId, {
-      meshName: expected.meshName,
-      nodeRoutingId: expected.nodeRoutingId,
-      endpoint,
-      securityIdentity: expected.securityIdentity,
-      lifecycleGeneration: expected.lifecycleGeneration
-    });
+    this.expectedPeers.set(
+      expected.nodeRoutingId,
+      Object.assign(this.expectedPeers.get(expected.nodeRoutingId) ?? {}, {
+        meshName: expected.meshName,
+        nodeRoutingId: expected.nodeRoutingId,
+        endpoint,
+        securityIdentity: expected.securityIdentity,
+        lifecycleGeneration: expected.lifecycleGeneration
+      })
+    );
   }
 
   connectPeerByRoutingId(
@@ -250,13 +254,16 @@ export class RawServiceMeshRuntime {
     lifecycleGeneration?: bigint
   ): void {
     this.requireStarted().connectToRoutingId(nodeRoutingId, endpoint);
-    this.expectedPeers.set(nodeRoutingId, {
-      meshName: this.topology.localDescriptor().meshName,
+    this.expectedPeers.set(
       nodeRoutingId,
-      endpoint,
-      securityIdentity,
-      lifecycleGeneration
-    });
+      Object.assign(this.expectedPeers.get(nodeRoutingId) ?? {}, {
+        meshName: this.topology.localDescriptor().meshName,
+        nodeRoutingId,
+        endpoint,
+        securityIdentity,
+        lifecycleGeneration
+      })
+    );
   }
 
   expectPeerByRoutingId(
@@ -265,13 +272,16 @@ export class RawServiceMeshRuntime {
     securityIdentity?: string,
     lifecycleGeneration?: bigint
   ): void {
-    this.expectedPeers.set(nodeRoutingId, {
-      meshName: this.topology.localDescriptor().meshName,
+    this.expectedPeers.set(
       nodeRoutingId,
-      endpoint,
-      securityIdentity,
-      lifecycleGeneration
-    });
+      Object.assign(this.expectedPeers.get(nodeRoutingId) ?? {}, {
+        meshName: this.topology.localDescriptor().meshName,
+        nodeRoutingId,
+        endpoint,
+        securityIdentity,
+        lifecycleGeneration
+      })
+    );
   }
 
   connectPeerEndpoint(endpoint: string): void {
@@ -359,11 +369,25 @@ export class RawServiceMeshRuntime {
   }
 
   async announcePeer(nodeRoutingId: string): Promise<boolean> {
-    if (!this.expectedPeers.has(nodeRoutingId) || this.peerAdmissionSealed?.() === true)
+    const expected = this.expectedPeers.get(nodeRoutingId);
+    const generation = this.selectedRoutes.get(nodeRoutingId);
+    if (
+      expected === undefined ||
+      generation === undefined ||
+      expected.helloSubmittedGeneration === generation ||
+      this.peerAdmissionSealed?.() === true
+    )
       return false;
-    return this.send(nodeRoutingId, [
+    const accepted = await this.send(nodeRoutingId, [
       encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
     ]);
+    if (
+      accepted &&
+      this.expectedPeers.get(nodeRoutingId) === expected &&
+      this.selectedRoutes.get(nodeRoutingId) === generation
+    )
+      expected.helloSubmittedGeneration = generation;
+    return accepted;
   }
 
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
@@ -381,11 +405,6 @@ export class RawServiceMeshRuntime {
   async announceExpectedPeers(): Promise<number> {
     let accepted = 0;
     for (const nodeRoutingId of this.expectedPeers.keys()) {
-      // Admission is a one-time fence for the current selected route.
-      // Re-sending Hello after the peer is admitted would re-run admission on
-      // every poll and reset the liveness record before application traffic
-      // can use the route. A peer whose selected route ended is removed by the
-      // route observer and remains eligible for the next admission attempt.
       if (this.topology.peer(nodeRoutingId) !== undefined) continue;
       if (await this.announcePeer(nodeRoutingId)) accepted++;
     }
@@ -429,7 +448,6 @@ export class RawServiceMeshRuntime {
     for (const peer of this.topology.peers()) {
       await this.send(peer.descriptor.nodeRoutingId, [update]);
     }
-    await this.announceExpectedPeers();
   }
 
   replaceDiscoveredNotRequired(descriptors: readonly ServiceNodeDescriptor[]): void {
@@ -982,6 +1000,8 @@ export class RawServiceMeshRuntime {
     for (const [nodeRoutingId, generation] of this.selectedRoutes) {
       if (observed.get(nodeRoutingId) === generation) continue;
       changes++;
+      const expected = this.expectedPeers.get(nodeRoutingId);
+      if (expected !== undefined) delete expected.helloSubmittedGeneration;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer !== undefined && peer.connectionId === routeConnectionId(generation)) {
         this.removePeer(peer);

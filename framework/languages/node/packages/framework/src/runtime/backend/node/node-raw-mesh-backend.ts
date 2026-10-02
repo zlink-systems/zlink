@@ -531,7 +531,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
             lifecycleGeneration: options.expectedLifecycleGeneration
           })
     });
-    if (nodeRoutingId !== undefined) await runtime.announcePeer(nodeRoutingId);
     return intent;
   }
 
