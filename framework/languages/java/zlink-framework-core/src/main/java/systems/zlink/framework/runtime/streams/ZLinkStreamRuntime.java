@@ -1020,15 +1020,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
         final ZLinkStreamHeader dispatchHeader = streamHeader;
-        SessionState state =
+        SessionState receivedState =
                 inStateLane(
                         () -> {
-                            SessionState current =
-                                    dispatchHeader.kind() == ZLinkStreamMessageKind.CONTROL
-                                                    || draining
-                                            ? sessions.get(sessionKey(streamNode, routingId))
-                                            : getOrCreateSessionState(
-                                                    streamNode, stream, routingId);
+                            SessionState current = sessions.get(sessionKey(streamNode, routingId));
                             if (current != null) {
                                 current.markInboundReceived(nanoTime.getAsLong());
                                 if (dispatchHeader.kind() != ZLinkStreamMessageKind.CONTROL) {
@@ -1037,6 +1032,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             }
                             return current;
                         });
+        if (receivedState == null
+                && dispatchHeader.kind() != ZLinkStreamMessageKind.CONTROL
+                && !draining) {
+            receivedState = getOrCreateSessionState(streamNode, stream, routingId);
+            SessionState created = receivedState;
+            inStateLane(
+                    () -> {
+                        created.markInboundReceived(nanoTime.getAsLong());
+                        created.markApplicationReceived();
+                        return null;
+                    });
+        }
+        final SessionState state = receivedState;
         final ZLinkFlowContext.State incomingFlow = capturedFlow;
         if (streamHeader.kind() == ZLinkStreamMessageKind.CONTROL) {
             dispatchControl(streamNode, stream, routingId, streamHeader, payload);
@@ -1194,10 +1202,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             int nativeCode,
             String message) {
         if (event == MonitorEventType.CONNECTION_READY) {
-            inStateLane(
-                    () ->
-                            getOrCreateSessionState(
-                                    streamNode, streamsByName.get(streamNode.name()), routingId));
+            getOrCreateSessionState(streamNode, streamsByName.get(streamNode.name()), routingId);
             return;
         }
         receiveLoops.stream()
@@ -1224,20 +1229,37 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                         state, nativeCode, message)));
     }
 
-    /** Creates and publishes the peer's Session in one owner lane turn. */
+    /** Constructs outside the state lane and publishes one Session per peer in one lane turn. */
     private SessionState getOrCreateSessionState(
             StreamNodeRegistration streamNode,
             ZLinkBackendStreamSocket stream,
             RoutingId routingId) {
         String key = sessionKey(streamNode, routingId);
-        SessionState existing = sessions.get(key);
+        SessionState existing = inStateLane(() -> sessions.get(key));
         if (existing != null) {
             return existing;
         }
         SessionState state = createSessionState(streamNode, stream, routingId);
-        sessions.put(key, state);
-        ZLinkRuntimeMetrics.add("zlink.stream.connections.active", 1, Map.of());
-        ZLinkRuntimeMetrics.increment("zlink.stream.connections.opened", Map.of());
+        existing =
+                inStateLane(
+                        () -> {
+                            SessionState current = sessions.putIfAbsent(key, state);
+                            if (current == null) {
+                                ZLinkRuntimeMetrics.add(
+                                        "zlink.stream.connections.active", 1, Map.of());
+                                ZLinkRuntimeMetrics.increment(
+                                        "zlink.stream.connections.opened", Map.of());
+                            }
+                            return current;
+                        });
+        if (existing != null) {
+            try {
+                state.context().closeReplyRetries();
+            } finally {
+                sessionContexts.remove(state.context());
+            }
+            return existing;
+        }
         dispatchConnected(state);
         return state;
     }

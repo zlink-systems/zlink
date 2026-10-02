@@ -170,6 +170,20 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void heartbeatContractConstructionRunsOutsideStateLane() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        TestSession.constructionHook =
+                () ->
+                        assertNull(
+                                systems.zlink.framework.runtime.internal.execution.ZLinkStateLane
+                                        .current());
+        stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
+        dispatchDeterministic(runtime, "initial", false);
+    }
+
+    @Test
     void heartbeatContractReadyAndDataPublishOneSession() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
