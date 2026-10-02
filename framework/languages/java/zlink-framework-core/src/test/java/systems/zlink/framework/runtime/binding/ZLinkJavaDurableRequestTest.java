@@ -289,7 +289,22 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void permanentBindingFailureIsPreserved() {
+    void typedInternalFailureIsProjectedWithItsOriginalCause() {
+        var failure = new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR);
+        var completion =
+                ZLinkJavaDurableRequest.request(
+                        () -> List.of(new byte[] {1}),
+                        (frames, remaining) -> CompletableFuture.failedFuture(failure),
+                        () -> false,
+                        Duration.ofSeconds(1));
+        assertFailure(
+                completion.toCompletableFuture(),
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                failure);
+    }
+
+    @Test
+    void terminatedBindingFailureIsProjectedAsShuttingDownWithOriginalCause() {
         var failure = new ZlinkSubmitException(SubmitResult.TERMINATED);
         var completion =
                 ZLinkJavaDurableRequest.request(
@@ -297,12 +312,9 @@ final class ZLinkJavaDurableRequestTest {
                         (frames, remaining) -> CompletableFuture.failedFuture(failure),
                         () -> false,
                         Duration.ofSeconds(1));
-        assertSame(
-                failure,
-                assertThrows(
-                                CompletionException.class,
-                                () -> completion.toCompletableFuture().join())
-                        .getCause());
+        // Spec: 07-framework-error-model.ko.md:84; 01-submit-and-completion.ko.md:191.
+        assertFailure(
+                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure);
     }
 
     private static void assertFailure(

@@ -121,9 +121,9 @@ final class ZLinkJavaDurableRequest {
                 return;
             }
         }
-        RequestResult terminal = ZLinkJavaRawMeshNode.requestTerminal(cause, initialSubmission);
+        RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(cause, initialSubmission);
         completion.completeExceptionally(
-                terminal == RequestResult.INTERNAL_ERROR
+                terminal == null
                         ? cause
                         : new ZLinkFrameworkException(
                                 ZLinkJavaRawMeshNode.backendResult(terminal).toFrameworkErrorKind(),
