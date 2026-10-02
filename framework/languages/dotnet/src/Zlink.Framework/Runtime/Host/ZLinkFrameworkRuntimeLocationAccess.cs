@@ -65,7 +65,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 row.SpotGeneration,
                 row.SpotKind,
                 row.AuthorityOwnerGeneration,
-                row.OwnerNodeGeneration
+                row.OwnerNodeGeneration,
+                checked((ulong)row.LeaseGeneration),
+                row.OwnerId,
+                row.StoreVersion
             ),
             row.AuthorityOwnerGeneration,
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),

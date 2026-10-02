@@ -622,6 +622,111 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal("Missing", await host.AuthorityAsync(spot.SpotId));
     }
 
+    [Fact]
+    public async Task Ready_instance_intent_waits_for_successor_while_owner_is_closing()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-ready-intent-{Guid.NewGuid():N}";
+        var first = await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+
+        var withoutIntent = Assert.IsType<ZLinkFrameworkException>(await host.RequestAsync(spotId));
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, withoutIntent.Kind);
+
+        var pending = host.RequestInstanceAsync(spotId, "ready-intent");
+        try
+        {
+            Assert.False(pending.IsCompleted);
+            var authority = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await host
+                        .Runtime.Registration.Locations.ResolveStore()!
+                        .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+                )
+                .Snapshot;
+            var closing = await host
+                .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+                .Catalog.TryGetInstanceActivationAsync(
+                    spotId,
+                    SpotCloseHost.InstanceType,
+                    authority.ObjectGeneration
+                );
+            Assert.NotNull(closing);
+            await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
+            host.State.ReleaseOnClosing.TrySetResult();
+            var reply = await pending.WaitAsync(Wait);
+            Assert.NotEqual(first.Generation, reply.Generation);
+            Assert.Equal("ready-intent", reply.Marker);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Ready_instance_send_keeps_its_intent_across_close()
+    {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"ready-send-{Guid.NewGuid():N}.flow"
+        );
+        using var listener = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-ready-send-{Guid.NewGuid():N}";
+        var first = await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await host
+                    .Runtime.Registration.Locations.ResolveStore()!
+                    .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+            )
+            .Snapshot;
+        var closing = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                authority.ObjectGeneration
+            );
+        Assert.NotNull(closing);
+
+        try
+        {
+            await host.SendInstanceAsync(spotId, "ready-send");
+            await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
+            host.State.ReleaseOnClosing.TrySetResult();
+            Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+            host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .InvalidateSpotRoute(new ZLinkSpotLocationKey(spotId));
+            var after = await host.RequestInstanceAsync(spotId, "after-ready-send").WaitAsync(Wait);
+            Assert.NotEqual(first.Generation, after.Generation);
+            Assert.Contains("ready-send", host.State.InstanceHandlerMarkers);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+        }
+    }
+
+    private static async Task ObserveOwnerAcceptanceAsync(ZLinkSpotActivation closing)
+    {
+        while (!closing.HasPendingCreationIntent)
+            await Task.Yield();
+    }
+
     private static async Task<SpotCloseObservation> RunScenarioAsync(string name, JsonElement given)
     {
         await using (var host = await SpotCloseHost.StartAsync())
@@ -992,6 +1097,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         services.AddScoped<SpotCloseScopedResource>();
         services.AddTransient<SpotCloseJoinHandler>();
         services.AddTransient<SpotCloseInstanceHandler>();
+        services.AddTransient<SpotCloseInstanceSignalHandler>();
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
@@ -1052,6 +1158,14 @@ internal sealed class SpotCloseHost : IAsyncDisposable
             .InMesh(MeshName)
             .Timeout(TimeSpan.FromSeconds(10))
             .Async<SpotCloseInstanceReply>();
+
+    internal ValueTask SendInstanceAsync(string spotId, string marker) =>
+        _provider
+            .GetRequiredService<IZLinkSpotClient>()
+            .SendToSpot(spotId, new SpotCloseProbeSignal(marker))
+            .InstanceSpot(InstanceType)
+            .InMesh(MeshName)
+            .Async();
 
     internal async Task<object?> CloseAsync(SpotRef spot)
     {
@@ -1180,6 +1294,8 @@ internal sealed class SpotCloseProbeFailure() : Exception("OnClosing probe failu
 
 internal sealed record SpotCloseProbeRequest(string Marker);
 
+internal sealed record SpotCloseProbeSignal(string Marker);
+
 internal sealed record SpotCloseProbeReply(string Marker);
 
 internal sealed record SpotCloseInstanceReply(string Marker, ulong Generation);
@@ -1245,6 +1361,21 @@ internal sealed class SpotCloseInstanceHandler
         if (spot.State.HandlerMode == "closeAndReturn" || request.Marker == "pending-close")
             spot.State.ContextCloseTask = spot.Context.CloseAsync().AsTask();
         return new SpotCloseInstanceReply(request.Marker, spot.Context.ObjectGeneration);
+    }
+}
+
+internal sealed class SpotCloseInstanceSignalHandler
+    : IZLinkSpotPacketHandler<SpotCloseInstance, SpotCloseProbeSignal>
+{
+    public ValueTask HandleAsync(
+        SpotCloseInstance spot,
+        SpotCloseProbeSignal message,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        spot.State.InstanceHandlerMarkers.Enqueue(message.Marker);
+        return ValueTask.CompletedTask;
     }
 }
 

@@ -44,7 +44,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         ulong deadlineUnixMs = 0,
         IDisposable? payloadOwner = null,
-        ZLinkMultipartPayloadView? applicationPayloadView = null
+        ZLinkMultipartPayloadView? applicationPayloadView = null,
+        bool instanceIntent = false
     )
     {
         Parts = parts;
@@ -63,6 +64,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         RequestSource = requestSource;
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
+        InstanceIntent = instanceIntent;
         _payloadOwner = payloadOwner;
     }
 
@@ -113,6 +115,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     public ZLinkServiceWireCodec.RequestSourceFence? RequestSource { get; }
 
     public ulong DeadlineUnixMs { get; }
+    internal bool InstanceIntent { get; }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
         (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;

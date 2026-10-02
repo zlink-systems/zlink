@@ -468,7 +468,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
@@ -492,7 +493,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (!TryReadCommittedCanonicalTarget(snapshot, out var canonical, out var targetNodeRid))
             return null;
@@ -515,7 +517,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         if (
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
@@ -536,7 +539,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 snapshot.OwnerId,
                 snapshot.OwnerLeaseGeneration,
                 snapshot.StoreNow,
-                snapshot.AuthorityOwnerGeneration
+                snapshot.AuthorityOwnerGeneration,
+                snapshot.StoreVersion
             );
         return null;
     }

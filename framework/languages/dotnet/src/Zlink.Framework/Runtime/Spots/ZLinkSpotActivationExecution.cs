@@ -648,7 +648,7 @@ internal abstract partial class ZLinkSpotActivation
             requestSource: requestSource,
             deadlineUnixMs: originalOperation.DeadlineUnixMs
         );
-        var state = new DurableActivationDispatch(received, completion, request, originalOperation);
+        var state = new DurableActivationDispatch(received, completion, originalOperation);
         int acceptedJournalLength;
         try
         {
@@ -743,26 +743,34 @@ internal abstract partial class ZLinkSpotActivation
                         []
                     )
                 );
-            else if (!state.Completion.Task.IsCompleted)
+            else if (state.Operation is null || !state.Completion.Task.IsCompleted)
                 state.Completion.TrySetResult(
                     new InstanceSpotActivationTerminal(
-                        RequestResult.InternalError,
-                        Systems
-                            .Zlink
-                            .Framework
-                            .Runtime
-                            .Protocol
-                            .ServiceWireConstants
-                            .FrameworkErrorCode
-                            .RequestFailed,
+                        state.Operation is null ? RequestResult.Ok : RequestResult.InternalError,
+                        state.Operation is null
+                            ? Systems
+                                .Zlink
+                                .Framework
+                                .Runtime
+                                .Protocol
+                                .ServiceWireConstants
+                                .FrameworkErrorCode
+                                .None
+                            : Systems
+                                .Zlink
+                                .Framework
+                                .Runtime
+                                .Protocol
+                                .ServiceWireConstants
+                                .FrameworkErrorCode
+                                .RequestFailed,
                         []
                     )
                 );
         }
         catch (Exception error)
         {
-            state.Received.Dispose();
-            state.Completion.TrySetException(error);
+            state.Fail(error);
         }
     }
 
@@ -773,14 +781,14 @@ internal abstract partial class ZLinkSpotActivation
         var received = state.Received;
         var journalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
             received,
-            state.Request ? state.Operation.OperationId.Low : 0
+            state.Request ? received.OperationId.Low : 0
         );
         var admission = _serial.QueueAcceptedOnLane(
             journalLength,
             () =>
                 ZLinkSpotAcceptedJournal.Encode(
                     received,
-                    state.Request ? state.Operation.OperationId.Low : 0
+                    state.Request ? received.OperationId.Low : 0
                 ),
             (activation, ct) => activation.DispatchQueuedApplicationRouteAsync(state, ct),
             state.ReleaseForRelocation,
@@ -827,21 +835,33 @@ internal abstract partial class ZLinkSpotActivation
     private sealed record DurableActivationDispatch(
         ZLinkBackendRouteReceived Received,
         TaskCompletionSource<InstanceSpotActivationTerminal> Completion,
-        bool Request,
-        InstanceSpotActivationOperation Operation
+        InstanceSpotActivationOperation? Operation,
+        Action<Exception>? OnFailure = null
     )
     {
-        internal void ReleaseForRelocation()
+        internal bool Request => Received.CanReply;
+
+        internal void Fail(Exception error)
         {
-            Received.Dispose();
-            Completion.TrySetException(
+            try
+            {
+                OnFailure?.Invoke(error);
+            }
+            finally
+            {
+                Received.Dispose();
+                Completion.TrySetException(error);
+            }
+        }
+
+        internal void ReleaseForRelocation() =>
+            Fail(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     "The Instance Spot activation queue released its accepted record.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 )
             );
-        }
     }
 
     internal bool HasPendingCreationIntent
@@ -850,7 +870,8 @@ internal abstract partial class ZLinkSpotActivation
         {
             var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             return _serial.HasPendingAcceptedState(state =>
-                state is DurableActivationDispatch pending && pending.Operation.DeadlineUnixMs > now
+                state is DurableActivationDispatch pending
+                && (pending.Operation is null || pending.Operation.Value.DeadlineUnixMs > now)
             );
         }
     }
@@ -1342,7 +1363,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueApplicationRouteSerialized(ZLinkBackendRouteReceived received)
     {
-        if (RejectNonIntentClosing(received, hasIntent: false))
+        if (RejectNonIntentClosing(received, received.InstanceIntent))
             return true;
         var replyRouteId = 0UL;
         if (received.CanReply)
@@ -1377,6 +1398,41 @@ internal abstract partial class ZLinkSpotActivation
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
             ZLinkSpotAcceptedJournal.Encode(received, replyRouteId);
+
+        var state = received.InstanceIntent
+            ? new DurableActivationDispatch(
+                received,
+                new(TaskCreationOptions.RunContinuationsAsynchronously),
+                null,
+                error =>
+                    ZLinkSpotActivationDispatcher.RejectApplicationRouteForFailure(
+                        received,
+                        ChannelName,
+                        error,
+                        _runtime.Flow.CaptureEnabled
+                    )
+            )
+            : null;
+        if (state is not null)
+            return QueueApplicationSerialized(
+                static (activation, retained, ct) =>
+                    activation.DispatchQueuedApplicationRouteAsync(retained, ct),
+                state,
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                received.MessageFollowHopCount != 0,
+                received.CanReply,
+                admission =>
+                    ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
+                        received,
+                        ChannelName,
+                        admission,
+                        received.SourceNodeRid == NodeRid,
+                        _runtime.Flow.CaptureEnabled
+                    ),
+                state.ReleaseForRelocation,
+                state.ReleaseForRelocation
+            );
 
         return QueueApplicationSerialized(
             static (activation, state, ct) =>
@@ -1426,10 +1482,24 @@ internal abstract partial class ZLinkSpotActivation
                 "Instance Spot accepted message"
             );
         }
-        if (RejectNonIntentClosing(received, originalOperation is not null))
+        if (
+            RejectNonIntentClosing(
+                received,
+                originalOperation is not null || received.InstanceIntent
+            )
+        )
             return;
         if (HasClosingSeal)
         {
+            if (originalOperation is null)
+            {
+                ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
+                    received,
+                    ChannelName,
+                    _runtime.Flow.CaptureEnabled
+                );
+                return;
+            }
             var turn =
                 ZLinkSerialTurn.Current
                 ?? throw new InvalidOperationException(
@@ -2410,7 +2480,8 @@ internal abstract partial class ZLinkSpotActivation
                 authorityOwnerGeneration: journal.AuthorityOwnerGeneration,
                 ownerLeaseGeneration: journal.OwnerLeaseGeneration,
                 messageFollowHopCount: journal.MessageFollowHopCount,
-                sourceNodeGeneration: journal.SourceNodeGeneration
+                sourceNodeGeneration: journal.SourceNodeGeneration,
+                instanceIntent: journal.InstanceIntent
             );
             try
             {

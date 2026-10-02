@@ -64,7 +64,9 @@ internal sealed class ZLinkSpotOutboundTransport(
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         try
@@ -85,7 +87,8 @@ internal sealed class ZLinkSpotOutboundTransport(
                     parts,
                     SendFlags.None,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    readyRoute
                 )
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
@@ -294,7 +297,9 @@ internal sealed class ZLinkSpotOutboundTransport(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         try
@@ -316,7 +321,8 @@ internal sealed class ZLinkSpotOutboundTransport(
                     SendFlags.None,
                     timeout,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    readyRoute
                 )
                 .ConfigureAwait(false);
         }

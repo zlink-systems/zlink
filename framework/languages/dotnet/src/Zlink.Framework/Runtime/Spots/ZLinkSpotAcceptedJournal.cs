@@ -16,13 +16,14 @@ internal sealed record ZLinkSpotAcceptedJournalRecord(
     ulong OwnerLeaseGeneration,
     byte MessageFollowHopCount,
     ZLinkMessageMetadata Metadata,
-    IReadOnlyList<ReadOnlyMemory<byte>> Parts
+    IReadOnlyList<ReadOnlyMemory<byte>> Parts,
+    bool InstanceIntent = false
 );
 
 internal static class ZLinkSpotAcceptedJournal
 {
     private const uint Magic = 0x5a4a5231; // ZJR1
-    private const ushort Version = 6;
+    private const ushort Version = 7;
     private const int MaxRecordBytes = 64 * 1024 * 1024;
     private const int MaxParts = 65_536;
 
@@ -51,7 +52,7 @@ internal static class ZLinkSpotAcceptedJournal
     {
         ArgumentNullException.ThrowIfNull(received);
         if (
-            received.OperationId == default
+            received.CanReply && received.OperationId == default
             || received.TargetNodeGeneration == 0
             || received.AuthorityOwnerGeneration == 0
             || received.OwnerLeaseGeneration == 0
@@ -111,6 +112,7 @@ internal static class ZLinkSpotAcceptedJournal
             + 8
             + 8
             + 1
+            + 1
         );
         var metadataLength = ZLinkMeshMetadataCodec.MeasureEncodedLength(received.Metadata);
         length = checked(length + 4 + metadataLength + 4);
@@ -127,7 +129,7 @@ internal static class ZLinkSpotAcceptedJournal
     {
         ArgumentNullException.ThrowIfNull(received);
         if (
-            received.OperationId == default
+            received.CanReply && received.OperationId == default
             || received.TargetNodeGeneration == 0
             || received.AuthorityOwnerGeneration == 0
             || received.OwnerLeaseGeneration == 0
@@ -176,6 +178,7 @@ internal static class ZLinkSpotAcceptedJournal
         writer.Write(received.AuthorityOwnerGeneration);
         writer.Write(received.OwnerLeaseGeneration);
         writer.Write(received.MessageFollowHopCount);
+        writer.Write(received.InstanceIntent);
         WriteBytes(writer, ZLinkMeshMetadataCodec.Encode(received.Metadata).Span);
         if (received.Parts.Count > MaxParts)
             throw new InvalidOperationException(
@@ -201,7 +204,7 @@ internal static class ZLinkSpotAcceptedJournal
         if (reader.ReadUInt32() != Magic)
             throw new InvalidDataException("The accepted Spot journal record header is invalid.");
         var version = reader.ReadUInt16();
-        if (version is not (4 or 5 or Version))
+        if (version is not (4 or 5 or 6 or Version))
             throw new InvalidDataException("The accepted Spot journal record header is invalid.");
         var sourceNodeRid = ReadRoutingId(reader);
         var sourceNodeGeneration = version >= 5 ? reader.ReadUInt64() : 0;
@@ -234,8 +237,9 @@ internal static class ZLinkSpotAcceptedJournal
         var authorityOwnerGeneration = reader.ReadUInt64();
         var ownerLeaseGeneration = reader.ReadUInt64();
         var messageFollowHopCount = reader.ReadByte();
+        var instanceIntent = version >= Version && reader.ReadBoolean();
         if (
-            operationId == default
+            replyRouteId != 0 && operationId == default
             || targetNodeGeneration == 0
             || authorityOwnerGeneration == 0
             || ownerLeaseGeneration == 0
@@ -270,7 +274,8 @@ internal static class ZLinkSpotAcceptedJournal
             ownerLeaseGeneration,
             messageFollowHopCount,
             metadata,
-            parts
+            parts,
+            instanceIntent
         );
     }
 

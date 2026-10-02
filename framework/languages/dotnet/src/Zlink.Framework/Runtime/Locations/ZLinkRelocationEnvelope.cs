@@ -1252,6 +1252,8 @@ internal static class ZLinkRelocationEnvelopeCodec
                     "The Instance relocation authority fence is invalid."
                 );
             _ = route.ReadText16();
+            if (route.ReadByte() > 1)
+                throw new InvalidDataException("The Instance relocation intent is invalid.");
         }
         else
         {

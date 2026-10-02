@@ -134,7 +134,9 @@ internal sealed class ZLinkLocationAddressResolvers
             row.SpotKind,
             row.AuthorityOwnerGeneration,
             row.OwnerNodeGeneration,
-            checked((ulong)row.LeaseGeneration)
+            checked((ulong)row.LeaseGeneration),
+            row.OwnerId,
+            row.StoreVersion
         );
 
     internal ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedActorLocation row) =>
@@ -169,7 +171,9 @@ internal readonly record struct ZLinkSpotHandleSnapshot(
     ZLinkSpotKind SpotKind = ZLinkSpotKind.User,
     ulong AuthorityOwnerGeneration = 0,
     ulong NodeGeneration = 0,
-    ulong OwnerLeaseGeneration = 0
+    ulong OwnerLeaseGeneration = 0,
+    string OwnerId = "",
+    string StoreVersion = ""
 );
 
 internal sealed class ZLinkResolvedSpotHandle

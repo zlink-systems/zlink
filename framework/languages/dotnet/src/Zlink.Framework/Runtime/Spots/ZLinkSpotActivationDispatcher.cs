@@ -535,6 +535,33 @@ internal sealed class ZLinkSpotActivationDispatcher
         }
     }
 
+    internal static void RejectApplicationRouteForFailure(
+        ZLinkBackendRouteReceived received,
+        string channelName,
+        Exception error,
+        bool validateFlow
+    )
+    {
+        using (received)
+        {
+            if (!received.CanReply || received.Parts.Count == 0)
+                return;
+            var header = DecodeRejectionHeader(received, channelName, validateFlow);
+            if (header is null)
+                return;
+            ZLinkSpotReplySubmitter.SubmitAndDispose(
+                received,
+                ZLinkSpotReplyEnvelope.EncodeErrorParts(
+                    channelName,
+                    header.MessageName,
+                    header.CorrelationId,
+                    error,
+                    forceFrameworkOrigin: true
+                )
+            );
+        }
+    }
+
     //  Shared decode step for the rejection replies above. Returns null when the
     //  operation was already completed (as ProtocolError) or cannot be decoded.
     private static ZLinkEnvelopeHeader? DecodeRejectionHeader(

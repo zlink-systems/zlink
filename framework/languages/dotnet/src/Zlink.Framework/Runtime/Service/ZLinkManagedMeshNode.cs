@@ -4127,7 +4127,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<Message> parts,
         SendFlags flags,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ServiceWireCodec.InstanceRouteV1Case0? readyRoute = null
     )
     {
         if (targetRid == _routingId)
@@ -4141,7 +4142,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request: false,
                 operation: null,
                 flags,
-                metadata
+                metadata,
+                readyRoute: readyRoute
             );
             if (result != SubmitResult.Ok)
                 throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
@@ -4149,21 +4151,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         var peer = RequireDirectSpotPeer(targetRid, spotId, spotGeneration, out var authority);
         var operationId = NextStandaloneOperationId();
-        var head = ZLinkServiceWireCodec.EncodeSpot(
-            ServiceWireConstants.Command.SpotSend,
-            0,
-            operationId,
-            sourceSpotId,
-            spotId,
-            spotGeneration,
-            targetRid,
-            authority.TargetNodeGeneration,
-            authority.AuthorityOwnerGeneration,
-            authority.OwnerLeaseGeneration,
-            !metadata.IsEmpty,
-            0,
-            0
-        );
+        var head = readyRoute is not null
+            ? ZLinkServiceWireCodec.EncodeInstanceSpotReady(
+                readyRoute,
+                _lifecycleGeneration,
+                _routingId,
+                sourceSpotId,
+                operationId,
+                false,
+                !metadata.IsEmpty
+            )
+            : ZLinkServiceWireCodec.EncodeSpot(
+                ServiceWireConstants.Command.SpotSend,
+                0,
+                operationId,
+                sourceSpotId,
+                spotId,
+                spotGeneration,
+                targetRid,
+                authority.TargetNodeGeneration,
+                authority.AuthorityOwnerGeneration,
+                authority.OwnerLeaseGeneration,
+                !metadata.IsEmpty,
+                0,
+                0
+            );
         await SendDirectWireAsync(
                 peer.PhysicalRoutingId,
                 CreateStatefulWire(head, parts, metadata),
@@ -4182,7 +4194,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendFlags flags,
         ReadOnlyMemory<byte> metadata,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ServiceWireCodec.InstanceRouteV1Case0? readyRoute = null
     )
     {
         if (targetRid == _routingId)
@@ -4206,7 +4219,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request: true,
                 operation,
                 flags,
-                metadata
+                metadata,
+                readyRoute: readyRoute
             );
             if (result != SubmitResult.Ok)
             {
@@ -4235,21 +4249,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         var peer = RequireDirectSpotPeer(targetRid, spotId, spotGeneration, out var authority);
         var operationId = NextStandaloneOperationId();
-        var head = ZLinkServiceWireCodec.EncodeSpot(
-            ServiceWireConstants.Command.SpotRequest,
-            operationId.Low,
-            operationId,
-            sourceSpotId,
-            spotId,
-            spotGeneration,
-            targetRid,
-            authority.TargetNodeGeneration,
-            authority.AuthorityOwnerGeneration,
-            authority.OwnerLeaseGeneration,
-            !metadata.IsEmpty,
-            0,
-            checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds())
-        );
+        var head = readyRoute is not null
+            ? ZLinkServiceWireCodec.EncodeInstanceSpotReady(
+                readyRoute,
+                _lifecycleGeneration,
+                _routingId,
+                sourceSpotId,
+                operationId,
+                true,
+                !metadata.IsEmpty
+            )
+            : ZLinkServiceWireCodec.EncodeSpot(
+                ServiceWireConstants.Command.SpotRequest,
+                operationId.Low,
+                operationId,
+                sourceSpotId,
+                spotId,
+                spotGeneration,
+                targetRid,
+                authority.TargetNodeGeneration,
+                authority.AuthorityOwnerGeneration,
+                authority.OwnerLeaseGeneration,
+                !metadata.IsEmpty,
+                0,
+                checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds())
+            );
         var reply = await RequestDirectWireAsync(
                 peer.PhysicalRoutingId,
                 CreateStatefulWire(head, parts, metadata),
@@ -4308,7 +4332,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation? operation,
         SendFlags flags,
         ReadOnlyMemory<byte> metadata,
-        SpotMessageFollowRoute? messageFollowRoute = null
+        SpotMessageFollowRoute? messageFollowRoute = null,
+        ServiceWireCodec.InstanceRouteV1Case0? readyRoute = null
     )
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -4387,7 +4412,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             string.Empty,
             _lifecycleGeneration,
             default,
-            routedOperationId,
+            readyRoute is not null && !request ? default : routedOperationId,
             request ? MeshOperationKind.SpotRequest : default,
             null,
             null,
@@ -4408,7 +4433,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ?? throw new InvalidOperationException(
                         "Spot requests require an absolute deadline."
                     )
-                : 0
+                : 0,
+            instanceIntent: readyRoute?.InstanceIntent == ServiceWireCodec.Bool8.True
         );
         EnqueueOwned(MailboxKey.ForSpot(spot, MeshReadyDomains.Application), record, retained);
         return SubmitResult.Ok;
@@ -6157,6 +6183,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             case ServiceWireConstants.Command.InstanceSpot:
             {
                 if (
+                    ZLinkServiceWireCodec.TryDecodeInstanceSpotReady(
+                        head,
+                        out var ready,
+                        out var readySource
+                    )
+                )
+                {
+                    if (
+                        readySource != sourceRid
+                        || ready.SourceNodeGeneration != ResolvePeerGeneration(sourceRid)
+                    )
+                        break;
+                    return ProcessStateful(sourceRid, ready, ownership);
+                }
+                if (
                     !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
                         head,
                         recordCommand,
@@ -7633,6 +7674,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         if (
             request
+            && stateful.DeadlineUnixMs != 0
             && stateful.DeadlineUnixMs
                 <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
         )
@@ -7839,7 +7881,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ownerLeaseGeneration: stateful.OwnerLeaseGeneration,
                 messageFollowHopCount: stateful.MessageFollowHopCount,
                 replyRouteId: stateful.Correlation,
-                deadlineUnixMs: stateful.DeadlineUnixMs
+                deadlineUnixMs: stateful.DeadlineUnixMs,
+                instanceIntent: stateful.InstanceIntent
             ),
             parts,
             true,
