@@ -11,6 +11,33 @@ const {
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+
+test('target rollback reports the original location release failure after one submission', async () => {
+  const failure = new Error('location release provider failure');
+  let releases = 0;
+  let rollbacks = 0;
+  const state = {
+    actorType: 'player', ownsLocation: true,
+    markLocationReleased() { throw new Error('failed release must retain ownership'); }
+  };
+  const lifecycle = {
+    async releaseActor() { releases++; throw failure; },
+    async releaseActorEventually() { releases++; }
+  };
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => state,
+      async rollbackTransferredActor() { rollbacks++; }
+    }),
+    locationLifecycle: () => lifecycle
+  });
+  await assert.rejects(
+    runtime.rollbackRoutedActor({ context: { actorId: 'rollback-release' } }),
+    (error) => error === failure
+  );
+  assert.equal(releases, 1);
+  assert.equal(rollbacks, 1);
+});
 const {
   ZLinkEntryActorRuntimeService
 } = require('../../packages/framework/dist/runtime/host/entry-actor-runtime');
@@ -201,7 +228,7 @@ test('ZLinkActorManager create find and getOrCreate follow dotnet actor semantic
   assert.deepEqual(events, ['create:alice', 'configure:alice']);
 });
 
-test('actor relocation terminal awaits handler cleanup and preserves state on cleanup failure', async () => {
+test('source retirement removes the registry after handler cleanup failure and restores a fresh instance', async () => {
   class PlayerActor {
     constructor(context) {
       this.context = context;
@@ -236,12 +263,16 @@ test('actor relocation terminal awaits handler cleanup and preserves state on cl
   await completion;
   assert.equal(manager.getState('alice'), undefined);
 
+  let disposeCalls = 0;
   class FailingHandler {
     dispose() {
+      disposeCalls++;
       throw new Error('handler cleanup failed');
     }
   }
-  const failedActor = await manager.getOrCreateActor('bob', 'player');
+  const sourceRef = { nodeRid: rid('source'), actorId: 'bob', generation: 9n, meshName: 'play' };
+  const failedActor = await manager.getOrCreateWithNativeRef('bob', 'player', sourceRef);
+  assert.equal(failedActor.context.objectGeneration, 9n);
   await resolveLifecycleHandler(failedActor, FailingHandler, {
     create: (type) => new type()
   });
@@ -250,9 +281,47 @@ test('actor relocation terminal awaits handler cleanup and preserves state on cl
     () => manager.completeCoreRelocationSource('bob'),
     /handler cleanup failed/
   );
-  assert.notEqual(manager.getState('bob'), undefined);
+  assert.equal(manager.getState('bob'), undefined);
   await manager.completeCoreRelocationSource('bob');
   assert.equal(manager.getState('bob'), undefined);
+  assert.equal(disposeCalls, 1);
+  const restored = await manager.getOrCreateWithNativeRef('bob', 'player', sourceRef);
+  assert.notStrictEqual(restored, failedActor);
+  assert.equal(restored.context.objectGeneration, 9n);
+  assert.strictEqual(await manager.getOrCreateActor('bob', 'player'), restored);
+});
+
+test('source retirement continues application cleanup after native discard fails', async () => {
+  const nativeFailure = new Error('native discard failed');
+  const disposeFailure = new Error('handler dispose failed');
+  let nativeCalls = 0;
+  let disposeCalls = 0;
+  class PlayerFactory {
+    async create(context) { return { context }; }
+  }
+  class FailingHandler {
+    dispose() { disposeCalls++; throw disposeFailure; }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    nativeActorNode: {
+      discardRelocatedActor() { nativeCalls++; throw nativeFailure; }
+    }
+  });
+  const sourceRef = { nodeRid: rid('source'), actorId: 'native-failure', generation: 9n, meshName: 'play' };
+  const actor = await manager.getOrCreateWithNativeRef('native-failure', 'player', sourceRef);
+  await resolveLifecycleHandler(actor, FailingHandler, { create: (type) => new type() });
+  await assert.rejects(manager.completeRelocationSource('native-failure'), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [nativeFailure, disposeFailure]);
+    return true;
+  });
+  assert.equal(manager.getState('native-failure'), undefined);
+  assert.equal(nativeCalls, 1);
+  assert.equal(disposeCalls, 1);
+  const restored = await manager.getOrCreateWithNativeRef('native-failure', 'player', sourceRef);
+  assert.notStrictEqual(restored, actor);
+  assert.equal(restored.context.objectGeneration, 9n);
 });
 
 test('actor transfer registry uses custom state adapters and defaults missing adapters to empty state', async () => {
@@ -1495,7 +1564,10 @@ test('ZLinkSpotSerialExecutor serializes same actor and allows different actors 
   assert.deepEqual(events, ['alice:first:start', 'bob:first', 'alice:first:end', 'alice:second']);
 });
 
-test('ZLinkActorContext delegates join calls to coordinator with timeout', async () => {
+test('ZLinkActorContext delegates join calls to coordinator with timeout', async (t) => {
+  let monotonicNow = 0;
+  let clockStep = 1;
+  t.mock.method(performance, 'now', () => { monotonicNow += clockStep; return monotonicNow; });
   const calls = [];
   // Deferred Join은 절대 deadline을 유지하므로 coordinator는 남은 시간을 받는다.
   // 네 언어 runtime이 모두 같은 의미라 정확한 ms 대신 상한만 검증한다.
@@ -1558,9 +1630,15 @@ test('ZLinkActorContext delegates join calls to coordinator with timeout', async
   ]);
   assert.equal(timeouts.length, 3);
   for (const [index, configured] of [25, 10, 5].entries()) {
-    assert.ok(timeouts[index] > 0 && timeouts[index] <= configured,
-      `join timeout ${timeouts[index]} must be within (0, ${configured}]`);
+    assert.ok(timeouts[index] > 0 && timeouts[index] < configured,
+      `join timeout ${timeouts[index]} must be within (0, ${configured})`);
   }
+  clockStep = 10;
+  await assert.rejects(
+    submitDeferredActorJoin(actor, actor.context.joinEntrySpot().timeout(5)),
+    /Deferred Actor Join failed/
+  );
+  assert.equal(calls.length, 3, 'expired admission must not submit to the coordinator');
   // Deferred completion은 raw reply를 runtime이 닫고 framework message만 넘긴다.
   replyMessage.close();
 });
@@ -3459,8 +3537,7 @@ test('one-way command 44 shutdown failure preserves the committed target without
       assert.equal(ownerNodeGeneration, 4n);
       return { status: 'claimed', generation: 17n, claimed: { leaseGeneration: 23n } };
     },
-    async releaseActor() { released++; },
-    async releaseActorEventually() { throw new Error('not used'); }
+    async releaseActor() { released++; }
   };
   const targetAuthority = {
     kind: 'snapshot',

@@ -929,9 +929,9 @@ class actor_client_impl_t final : public actor_client_t
             co_return result_t<std::optional<zlink::message_t>>::success (
               std::make_optional (std::move (body.value ())));
         }
-        catch (const framework_exception_t &error) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (error.kind (),
-                                                                          error.what ());
+        catch (const framework_exception_t &) {
+            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              std::current_exception ());
         }
         catch (const std::exception &error) {
             co_return map_native_exception<std::optional<zlink::message_t>> (
@@ -1004,6 +1004,8 @@ class actor_client_impl_t final : public actor_client_t
     static result_t<TResult> map_native_exception (const std::exception &error,
                                                    const char *fallback)
     {
+        if (detail::is_cancellation_exception (error))
+            return detail::result_access_t::failure<TResult> (std::current_exception ());
         const std::string message = error.what () && *error.what () ? error.what () : fallback;
         const auto *system = dynamic_cast<const std::system_error *> (&error);
         if (system

@@ -2103,6 +2103,93 @@ function authority(live: Set<string>): ZLinkInMemoryAuthorityStore {
   );
 }
 
+for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target lease loss'] as const) {
+  const description =
+    boundary === 'cancellation' || boundary === 'target lease loss'
+      ? `provider aggregate commit retains its ${boundary} terminal`
+      : `provider aggregate commit remains prepared beyond its former ${boundary} boundary`;
+  test(description, async (t) => {
+    const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+    const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+    const source = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+    const destination = await writeTargetDescriptor(store, 'owner-b', 'node-b', 60_000);
+    const active = await createActive(store, 'aggregate-retry', {
+      meshName: 'mesh',
+      nodeRid: source.rid,
+      nodeLifecycleGeneration: source.lifecycleGeneration,
+      owner: owner(source.ownerId, source.leaseGeneration)
+    });
+    const prepared = await store.prepareAggregate({
+      aggregateId: { value: '44444444-4444-4444-8444-444444444444' } as ZLinkAggregateId,
+      aggregateGeneration: 1n,
+      participants: [
+        {
+          authorityKey: authorityKey('aggregate-retry'),
+          expectedStoreVersion: active.storeVersion,
+          ownerTransition: 'newOwner',
+          authorityPayload: Buffer.from('retry-ready'),
+          membershipMutation: Buffer.from('retry-membership')
+        }
+      ],
+      inventoryDigest: Buffer.alloc(32, 9),
+      targetDescriptor: { meshName: 'mesh', rid: destination.rid },
+      targetDescriptorLifecycleGeneration: destination.lifecycleGeneration,
+      capacity: userSpotCapacity('room'),
+      targetOwner: owner(destination.ownerId, destination.leaseGeneration)
+    });
+    assert.equal(prepared.kind, 'prepared');
+    if (prepared.kind !== 'prepared') throw new Error('aggregate was not prepared');
+    let attempts = 0;
+    let clock = 0;
+    const cancellation = new AbortController();
+    const cancellationFailure = new Error('aggregate commit cancelled');
+    if (boundary === 'cancellation') {
+      const read = provider.read.bind(provider);
+      t.mock.method(provider, 'read', (key: Parameters<typeof read>[0]) => read(key));
+    }
+    t.mock.method(performance, 'now', () => clock);
+    // Advance existing retry timers without introducing real-time ordering into the test.
+    t.mock.method(globalThis, 'setTimeout', (callback: () => void) => {
+      queueMicrotask(callback);
+      return undefined;
+    });
+    const write = provider.write.bind(provider);
+    t.mock.method(provider, 'write', async (...args: Parameters<typeof write>) => {
+      const isCommit = args[0].mutations.some(
+        (mutation) =>
+          mutation.kind === 'put' &&
+          Buffer.from(mutation.bytes).toString().includes('"state":"committed"')
+      );
+      if (isCommit) {
+        attempts++;
+        if (boundary === 'elapsed time') clock = 5_001;
+        if (boundary === 'cancellation') cancellation.abort(cancellationFailure);
+        if (boundary === 'target lease loss') {
+          assert.equal(
+            await store.releaseOwnerLease(owner(destination.ownerId, destination.leaseGeneration)),
+            'released'
+          );
+        }
+        if (attempts <= 65) return { kind: 'conflict' as const };
+      }
+      return await write(...args);
+    });
+    if (boundary === 'cancellation') {
+      await assert.rejects(
+        store.commitAggregate(prepared.fence, cancellation.signal),
+        (error) => error === cancellationFailure
+      );
+      assert.equal(attempts, 1);
+    } else if (boundary === 'target lease loss') {
+      assert.deepEqual(await store.commitAggregate(prepared.fence), { kind: 'stale' });
+      assert.equal(attempts, 1);
+    } else {
+      assert.deepEqual(await store.commitAggregate(prepared.fence), { kind: 'committed' });
+      assert.equal(attempts, 66);
+    }
+  });
+}
+
 async function writeTargetDescriptor(
   store: ZLinkInMemoryLocationStore,
   ownerId: string,
@@ -2230,7 +2317,7 @@ function userSpotCapacity(stableType: string) {
 }
 
 async function createActive(
-  store: ZLinkInMemoryAuthorityStore,
+  store: Pick<ZLinkInMemoryAuthorityStore, 'reserve' | 'commit'>,
   globalId: string,
   placement: ZLinkObjectCreationTarget
 ) {

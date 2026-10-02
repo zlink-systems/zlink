@@ -107,6 +107,7 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -3213,7 +3214,7 @@ final class ZLinkJavaRawMeshNode
                         Objects.requireNonNull(
                                 handler.handle(routingId, command),
                                 "Actor Left handler returned null");
-                started.exceptionally(failure -> null);
+                observeActorLeftCompletion(started);
                 return CompletableFuture.completedFuture(null);
             } catch (RuntimeException failure) {
                 return CompletableFuture.failedFuture(failure);
@@ -4909,14 +4910,18 @@ final class ZLinkJavaRawMeshNode
                     Objects.requireNonNull(
                             handler.handle(inbound.source(), left),
                             "Actor Left handler returned null");
-            completion.exceptionally(
-                    failure -> {
-                        LOGGER.warning("Actor Left handler failed: " + unwrap(failure));
-                        return null;
-                    });
+            observeActorLeftCompletion(completion);
         } catch (RuntimeException failure) {
             LOGGER.warning("Actor Left handler failed to start: " + failure);
         }
+    }
+
+    private static void observeActorLeftCompletion(CompletionStage<Void> completion) {
+        completion.exceptionally(
+                failure -> {
+                    LOGGER.log(Level.WARNING, "Actor Left handler failed:", unwrap(failure));
+                    return null;
+                });
     }
 
     private void dispatchMessageFollow(ZLinkJavaRawServicePort.Inbound inbound) {

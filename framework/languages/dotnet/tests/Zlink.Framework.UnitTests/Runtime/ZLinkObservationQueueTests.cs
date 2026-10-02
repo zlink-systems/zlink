@@ -120,6 +120,56 @@ public sealed class ZLinkObservationQueueTests
     }
 
     [Fact]
+    public async Task Client_server_channel_source_survives_peer_removal_until_channel_terminal()
+    {
+        var rid = RoutingId.From("observation-source");
+        var now = DateTimeOffset.UtcNow;
+        var clientIntermediate = new ZLinkClientServerStatus(
+            "client-server-channel",
+            Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
+            ZLinkTopologyState.Ready,
+            IsReady: true,
+            ReadyTargetCount: 1,
+            [new ZLinkClientServerTargetStatus(rid, 1, ZLinkPeerState.Ready, null)],
+            Sequence: 2,
+            ObservedAt: now
+        );
+        var clientRemoved = clientIntermediate with
+        {
+            State = ZLinkTopologyState.Degraded,
+            IsReady = false,
+            ReadyTargetCount = 0,
+            Targets = [],
+            Sequence = 3,
+        };
+        var clientTerminal = clientRemoved with
+        {
+            State = ZLinkTopologyState.Stopped,
+            Sequence = 4,
+        };
+        var clientServer = new ZLinkObservationQueue<ZLinkClientServerStatus>(static item =>
+            item.ChannelName
+        );
+        clientServer.Publish(clientIntermediate, terminal: false);
+        clientServer.Publish(clientRemoved, terminal: false);
+        await using var clientReader = clientServer.ReadAllAsync().GetAsyncEnumerator();
+        Assert.True(await clientReader.MoveNextAsync());
+        Assert.Same(clientRemoved, clientReader.Current.Status);
+        Assert.Equal(clientIntermediate.ChannelName, clientReader.Current.Status.ChannelName);
+        Assert.Equal(3UL, clientReader.Current.Status.Sequence);
+        Assert.Empty(clientReader.Current.Status.Targets);
+        Assert.Equal(1UL, clientReader.Current.Loss.CoalescedCount);
+        clientServer.Publish(clientTerminal, terminal: true);
+        clientServer.Complete();
+        Assert.True(await clientReader.MoveNextAsync());
+        Assert.Same(clientTerminal, clientReader.Current.Status);
+        Assert.Equal(clientIntermediate.ChannelName, clientReader.Current.Status.ChannelName);
+        Assert.Equal(4UL, clientReader.Current.Status.Sequence);
+        Assert.Equal(1UL, clientReader.Current.Loss.CoalescedCount);
+        Assert.False(await clientReader.MoveNextAsync());
+    }
+
+    [Fact]
     public async Task Terminal_source_slot_blocks_intermediate_until_delivery()
     {
         var queue = new ZLinkObservationQueue<TestStatus>(

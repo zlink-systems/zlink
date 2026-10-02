@@ -137,6 +137,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
     {
         actors.erase (actor.actor_id);
         players.erase (actor.actor_id);
+        std::cout << "tictactoe-lifecycle leave-completed actor=" << actor.actor_id << std::endl;
         co_return;
     }
 

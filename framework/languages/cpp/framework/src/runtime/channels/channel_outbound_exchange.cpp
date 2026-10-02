@@ -181,31 +181,34 @@ encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
 
 // The binding typed result owns the classification; errno only details the
 // same failure (Core errors §Result와 errno 대응), so it is never consulted here.
-framework_exception_t map_native_exception (const std::exception &error)
+std::exception_ptr map_native_exception (const std::exception &error)
 {
+    if (detail::is_cancellation_exception (error))
+        return std::current_exception ();
     if (const auto *framework_error = dynamic_cast<const framework_exception_t *> (&error)) {
-        return *framework_error;
+        return std::current_exception ();
     }
     if (const auto *request_error = dynamic_cast<const zlink::request_error_t *> (&error);
         request_error != nullptr) {
-        return runtime::messaging::map_request_result_exception (request_error->result (),
-                                                                 request_error->what ());
+        return std::make_exception_ptr (runtime::messaging::map_request_result_exception (
+          request_error->result (), request_error->what ()));
     }
     if (const auto *recv_error = dynamic_cast<const zlink::recv_error_t *> (&error);
         recv_error != nullptr) {
         if (recv_error->result () == zlink::recv_result_t::no_data) {
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    "channel request timed out");
+            return std::make_exception_ptr (detail::make_boundary_exception (
+              detail::boundary_error_t::timed_out, "channel request timed out"));
         }
-        return framework_exception_t (framework_error_kind_t::internal_failure,
-                                      recv_error->what ());
+        return std::make_exception_ptr (
+          framework_exception_t (framework_error_kind_t::internal_failure, recv_error->what ()));
     }
     if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
         submit_error != nullptr) {
-        return runtime::messaging::map_channel_submit_result_exception (submit_error->result (),
-                                                                        submit_error->what ());
+        return std::make_exception_ptr (runtime::messaging::map_channel_submit_result_exception (
+          submit_error->result (), submit_error->what ()));
     }
-    return framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
+    return std::make_exception_ptr (
+      framework_exception_t (framework_error_kind_t::internal_failure, error.what ()));
 }
 
 void trace_channel_backpressure (const dispatch_options_t &dispatch,
@@ -411,10 +414,10 @@ class channel_native_client_t
                                             trace_packet_name, correlation_id);
             }
             const auto mapped = map_native_exception (error);
-            throw mapped;
+            std::rethrow_exception (mapped);
         }
         catch (const std::exception &error) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
+            std::rethrow_exception (map_native_exception (error));
         }
     }
 
@@ -635,7 +638,7 @@ class channel_native_publisher_t
                 (void) _socket.publish (topic).message (header).message (body).submit ();
             }
             catch (const std::exception &error) {
-                throw map_native_exception (error);
+                std::rethrow_exception (map_native_exception (error));
             }
         }
         co_return;
@@ -875,15 +878,13 @@ struct channel_request_metrics_guard_t
     bool timed_out = false;
 };
 
-message_flow_result_t request_terminal_result (const framework_exception_t &error) noexcept
+message_flow_result_t request_terminal_result (const std::exception &error) noexcept
 {
-    if (error.kind () == framework_error_kind_t::shutting_down
-        || detail::boundary_state (error) == detail::boundary_error_t::shutdown) {
-        return message_flow_result_t::shutdown;
-    }
-    if (detail::boundary_state (error) == detail::boundary_error_t::cancelled) {
+    if (detail::is_cancellation_exception (error))
         return message_flow_result_t::cancelled;
-    }
+    const auto *framework = dynamic_cast<const framework_exception_t *> (&error);
+    if (framework && framework->kind () == framework_error_kind_t::shutting_down)
+        return message_flow_result_t::shutdown;
     return message_flow_result_t::failed;
 }
 
@@ -927,12 +928,22 @@ struct channel_request_terminal_trace_t
 
     void succeeded () noexcept { result = message_flow_result_t::succeeded; }
     void backpressured () noexcept { result = message_flow_result_t::backpressured; }
-    void failed_as (const framework_exception_t &error) noexcept
+    void failed_as (const std::exception &error) noexcept
     {
         if (result == message_flow_result_t::backpressured) {
             return;
         }
         result = request_terminal_result (error);
+    }
+
+    void failed_as (const std::exception_ptr &error) noexcept
+    {
+        try {
+            std::rethrow_exception (error);
+        }
+        catch (const std::exception &failure) {
+            failed_as (failure);
+        }
     }
 
     const dispatch_options_t *dispatch;
@@ -1033,8 +1044,10 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto mapped = map_native_exception (error);
                 terminal_trace.failed_as (mapped);
+                const auto *framework = detail::framework_error (mapped);
                 request_metrics.timed_out =
-                  detail::boundary_state (mapped) == detail::boundary_error_t::timed_out;
+                  framework
+                  && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
                 co_return detail::result_access_t::failure<zlink::message_t> (mapped);
             }
         }
@@ -1152,8 +1165,10 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             const auto mapped = map_native_exception (error);
             terminal_trace.failed_as (mapped);
+            const auto *framework = detail::framework_error (mapped);
             request_metrics.timed_out =
-              detail::boundary_state (mapped) == detail::boundary_error_t::timed_out;
+              framework
+              && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
             co_return detail::result_access_t::failure<zlink::message_t> (mapped);
         }
     }
@@ -1232,8 +1247,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                     && submit_error->result () == zlink::submit_result_t::backpressured) {
                     trace_channel_backpressure (state->dispatch, channel_name, call_packet_name);
                 }
-                throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                             error.what ());
+                std::rethrow_exception (map_native_exception (error));
             }
         }
         try {
@@ -1284,7 +1298,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
             throw;
         }
         catch (const std::exception &error) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
+            std::rethrow_exception (map_native_exception (error));
         }
     }
     co_return;
@@ -1343,7 +1357,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 throw;
             }
             catch (const std::exception &error) {
-                throw map_native_exception (error);
+                std::rethrow_exception (map_native_exception (error));
             }
         }
         try {
@@ -1393,7 +1407,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             throw;
         }
         catch (const std::exception &error) {
-            throw map_native_exception (error);
+            std::rethrow_exception (map_native_exception (error));
         }
     }
     co_return;

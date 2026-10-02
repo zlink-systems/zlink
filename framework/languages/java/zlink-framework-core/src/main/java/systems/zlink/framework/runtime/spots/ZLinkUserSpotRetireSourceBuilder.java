@@ -6,6 +6,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableSpotFactory;
@@ -1626,13 +1627,20 @@ final class ZLinkUserSpotRetireSourceBuilder {
             List<String> actorIds = captured.inventory().actorIds();
             String spotId = captured.inventory().spot().id();
             long generation = captured.inventory().spot().snapshot().objectGeneration();
+            List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
             if (relocationReplies != null) {
-                actorIds.forEach(relocationReplies::closeActorTimersAfterRelocation);
+                for (String actorId : actorIds)
+                    cleanups.add(
+                            () ->
+                                    ZLinkHandlerStages.fromRunnable(
+                                            () ->
+                                                    relocationReplies
+                                                            .closeActorTimersAfterRelocation(
+                                                                    actorId)));
             }
-            return actors.completeRelocationSource(actorIds)
-                    .thenCompose(
-                            ignored ->
-                                    spots.completeRelocationSource(spotId, generation, deadline));
+            cleanups.add(() -> actors.completeRelocationSource(actorIds));
+            cleanups.add(() -> spots.completeRelocationSource(spotId, generation, deadline));
+            return ZLinkHandlerStages.completeAll(cleanups);
         }
     }
 

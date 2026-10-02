@@ -435,7 +435,8 @@ namespace detail
 {
 struct actor_join_reply_t
 {
-    int result_code = 0;
+    static constexpr int accepted = 0;
+    int result_code = accepted;
     actor_ref_t actor;
     zlink::message_t reply;
 };
@@ -568,6 +569,9 @@ class actor_join_call_t
 
   private:
     friend class actor_context_t;
+    friend class spot_context_t;
+
+    static constexpr std::chrono::milliseconds default_timeout{5000};
 
     actor_join_call_t (deferred_fn_t deferred,
                        detail::deferred_barrier_reserver_t reserve_barrier) :
@@ -584,7 +588,7 @@ class actor_join_call_t
     deferred_fn_t _deferred;
     async_deferred_fn_t _async_deferred;
     detail::deferred_barrier_reserver_t _reserve_barrier;
-    std::chrono::milliseconds _timeout{5000};
+    std::chrono::milliseconds _timeout{default_timeout};
     bool _deferred_once = false;
 };
 
@@ -791,6 +795,7 @@ class actor_context_t
   private:
     friend class spot_node_builder_t;
     friend class detail::spot_node_runtime_t;
+    friend class spot_context_t;
     friend class session_actor_t;
     friend class session_actor_manager_t;
     friend class detail::actor_gateway_runtime_t;
@@ -808,6 +813,10 @@ class actor_context_t
                                                          std::string content_type,
                                                          std::chrono::milliseconds timeout);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_join_barrier () const;
+    static task_t<detail::actor_join_reply_t>
+    join_entry_spot_erased (std::shared_ptr<actor_context_t> context,
+                            zlink::message_t request,
+                            std::chrono::milliseconds timeout);
     serializer_registry_t *serializer_registry () const noexcept;
     std::optional<zlink::message_t> create_payload () const;
 

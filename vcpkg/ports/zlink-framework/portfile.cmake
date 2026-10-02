@@ -18,8 +18,8 @@ vcpkg_cmake_configure(
         -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
         -DZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES=OFF
         -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.12.0
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.12.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.13.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.13.0
         # Resolve the server framework's binding and Core packages from the
         # vcpkg prefix instead of the repository's local-package layout.
         -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX=${CURRENT_INSTALLED_DIR}

@@ -1442,7 +1442,13 @@ test('an exact current-owner context bypasses an older Message Follow route', as
   assert.equal(markers.some((entry) => entry.marker === 'message_follow_relay'), false);
 });
 
-test('chained relocation keeps exact source-owner routes with one ObjectGeneration', async () => {
+test('chained relocation keeps exact source-owner routes with one ObjectGeneration', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  t.after(() => {
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
   const { coordinator, followed, messageFollowPayloads, setRequestSource } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
@@ -1501,7 +1507,7 @@ test('chained relocation keeps exact source-owner routes with one ObjectGenerati
   );
   assert.equal(messageFollowPayloads[1].messageFollowContext.hopCount, 2);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  t.mock.timers.tick(20);
   assert.equal(coordinator.messageFollowCount('actor-1'), 0);
 });
 

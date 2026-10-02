@@ -533,7 +533,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
             mesh::service_mailbox_record_t rejected{
               state.second, mesh::service_mailbox_domain_t::application, std::move (received.parts),
               std::move (received.source_routing_id), received.reply_token};
-            (void) reply (rejected, *header.error (), &rejection_context);
+            (void) co_await reply (rejected, *header.error (), &rejection_context);
         }
         co_return client_server_pump_result_t::protocol_error;
     }
@@ -621,11 +621,11 @@ raw_client_server_server_t::next_liveness_activity_task () const
     return _lane.run_task ([this] { return _liveness.next_activity (); });
 }
 
-bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
-                                        const protocol::application_payload_t &payload)
+task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
+                                                const protocol::application_payload_t &payload)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
-        return false;
+        co_return false;
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
@@ -634,9 +634,9 @@ bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &re
     if (!request_header) {
         throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
     }
-    const auto port = _lane.run_checked ([this] { return _port; }).get ();
+    const auto port = co_await _lane.run_task ([this] { return _port; });
     if (!port)
-        return false;
+        co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
     auto header =
       writer.create_reply_header (messaging::message_kind_t::response,
@@ -653,16 +653,16 @@ bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &re
                + (request.reply_token ? std::string ("present") : std::string ("-"))
                + " delivered=" + (delivered ? "true" : "false");
     });
-    return delivered;
+    co_return delivered;
 }
 
-bool raw_client_server_server_t::reply (
+task_t<bool> raw_client_server_server_t::reply (
   const mesh::service_mailbox_record_t &request,
   const framework_exception_t &error,
   const std::optional<messaging::envelope_header_t> *decoded_context)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
-        return false;
+        co_return false;
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
@@ -680,16 +680,16 @@ bool raw_client_server_server_t::reply (
         decoded_context = &owned_header;
     }
     const auto &decoded_header = **decoded_context;
-    const auto port = _lane.run_checked ([this] { return _port; }).get ();
+    const auto port = co_await _lane.run_task ([this] { return _port; });
     if (!port)
-        return false;
+        co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
     auto header = writer.create_error_header (decoded_header.channel_name, decoded_header, error);
     //  The error reply body is the JSON literal `null`, matching the other
     //  language runtimes' error envelope emission.
     auto parts = envelope_wire_parts (writer.reply_raw_envelope (
       header, zlink::message_t::from (std::vector<std::uint8_t>{'n', 'u', 'l', 'l'})));
-    return port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
+    co_return port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
 }
 
 bool raw_client_server_server_t::byte_vector_less_t::operator() (
@@ -1301,22 +1301,20 @@ task_t<zlink::submit_result_t>
 raw_client_server_client_t::send (const protocol::application_payload_t &payload,
                                   std::map<std::string, std::string> metadata)
 {
-    const auto state = _lane
-                         .run_checked ([this] {
-                             struct state_t
-                             {
-                                 std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-                                 std::string channel;
-                                 bool ready = false;
-                             } value;
-                             value.ready = _ready;
-                             if (value.ready) {
-                                 value.port = _port;
-                                 value.channel = _options.admission.channel_name;
-                             }
-                             return value;
-                         })
-                         .get ();
+    const auto state = co_await _lane.run_task ([this] {
+        struct state_t
+        {
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            std::string channel;
+            bool ready = false;
+        } value;
+        value.ready = _ready;
+        if (value.ready) {
+            value.port = _port;
+            value.channel = _options.admission.channel_name;
+        }
+        return value;
+    });
     const auto &port = state.port;
     const auto &channel = state.channel;
     const auto ready = state.ready;
@@ -1333,16 +1331,15 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     const auto wire = envelope_wire_parts (messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (payload.payload_bytes ())));
     trace_client_server_lazy ("client-send-wire", [&] {
-        return "endpoint=" + _options.expected_server.advertised_endpoint + " packet="
-               + payload.packet_name + " payload_bytes=" + std::to_string (wire[1].size ())
+        return "channel=" + channel + " packet=" + payload.packet_name
+               + " payload_bytes=" + std::to_string (wire[1].size ())
                + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
     });
     if (!port)
         co_return zlink::submit_result_t::terminated;
     const auto submitted = co_await port->send_result (wire);
     trace_client_server_lazy ("client-send-result", [&] {
-        return "endpoint=" + _options.expected_server.advertised_endpoint
-               + " packet=" + payload.packet_name
+        return "channel=" + channel + " packet=" + payload.packet_name
                + " submitted=" + std::to_string (static_cast<int> (submitted));
     });
     co_return submitted;
@@ -1356,27 +1353,22 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("ClientServer request timeout must be positive");
     }
-    const auto state = _lane
-                         .run_checked ([this] {
-                             struct state_t
-                             {
-                                 std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-                                 std::string channel;
-                                 std::string endpoint;
-                                 bool ready = false;
-                             } value;
-                             value.ready = _ready && static_cast<bool> (_port);
-                             if (value.ready) {
-                                 value.port = _port;
-                                 value.channel = _options.admission.channel_name;
-                                 value.endpoint = _options.expected_server.advertised_endpoint;
-                             }
-                             return value;
-                         })
-                         .get ();
+    const auto state = co_await _lane.run_task ([this] {
+        struct state_t
+        {
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            std::string channel;
+            bool ready = false;
+        } value;
+        value.ready = _ready && static_cast<bool> (_port);
+        if (value.ready) {
+            value.port = _port;
+            value.channel = _options.admission.channel_name;
+        }
+        return value;
+    });
     const auto &port = state.port;
     const auto &channel = state.channel;
-    const auto &endpoint = state.endpoint;
     const auto ready = state.ready;
     if (!ready) {
         co_return client_server_request_completion_t{
@@ -1392,20 +1384,19 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     header.metadata = std::move (metadata);
     const auto correlation_id = header.correlation_id;
     trace_client_server_lazy ("client-request-submit", [&] {
-        return "endpoint=" + endpoint + " channel=" + channel + " client="
-               + routing_id_label (_options.client_routing_id) + " correlation=" + correlation_id;
+        return "channel=" + channel + " correlation=" + correlation_id;
     });
     const auto wire = envelope_wire_parts (messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (payload.payload_bytes ())));
     trace_client_server_lazy ("client-request-wire", [&] {
-        return "endpoint=" + endpoint + " correlation=" + correlation_id + " packet="
+        return "channel=" + channel + " correlation=" + correlation_id + " packet="
                + payload.packet_name + " payload_bytes=" + std::to_string (wire[1].size ())
                + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
     });
     pending_request_guard_t pending_request (_pending_requests);
     auto completion = co_await port->request (wire, timeout);
     trace_client_server_lazy ("client-request-complete", [&] {
-        return "endpoint=" + endpoint + " correlation=" + correlation_id
+        return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.result))
                + " parts=" + std::to_string (completion.parts.size ());
     });

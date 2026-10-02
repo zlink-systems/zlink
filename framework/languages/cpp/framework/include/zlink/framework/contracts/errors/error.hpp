@@ -39,7 +39,6 @@ enum class boundary_error_t
     shutdown = 2,
     disconnected = 3,
     closed = 4,
-    cancelled = 5,
     stale_generation = 6
 };
 
@@ -65,13 +64,24 @@ enum class error_origin_t
     application = 2
 };
 
+inline std::exception_ptr make_cancellation_exception (std::string message)
+{
+    return std::make_exception_ptr (std::system_error (
+      std::make_error_code (std::errc::operation_canceled), std::move (message)));
+}
+
+inline bool is_cancellation_exception (const std::exception &error) noexcept
+{
+    const auto *system = dynamic_cast<const std::system_error *> (&error);
+    return system && system->code () == std::errc::operation_canceled;
+}
+
 inline std::error_code boundary_error_code (boundary_error_t state) noexcept
 {
     switch (state) {
         case boundary_error_t::timed_out:
             return std::make_error_code (std::errc::timed_out);
         case boundary_error_t::shutdown:
-        case boundary_error_t::cancelled:
             return std::make_error_code (std::errc::operation_canceled);
         case boundary_error_t::disconnected:
             return std::make_error_code (std::errc::not_connected);
@@ -134,8 +144,7 @@ inline framework_exception_t detail_make_boundary_exception (detail::boundary_er
       : state == detail::boundary_error_t::disconnected || state == detail::boundary_error_t::closed
           || state == detail::boundary_error_t::stale_generation
         ? framework_error_kind_t::unavailable
-      : state == detail::boundary_error_t::cancelled ? framework_error_kind_t::invalid_operation
-                                                     : framework_error_kind_t::internal_failure;
+        : framework_error_kind_t::internal_failure;
     framework_exception_t error (kind, std::move (message));
     error._boundary = state;
     return error;

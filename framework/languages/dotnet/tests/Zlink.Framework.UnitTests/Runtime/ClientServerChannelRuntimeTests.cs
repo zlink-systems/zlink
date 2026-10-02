@@ -972,6 +972,55 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObservePublishesCurrentStatusForEverySubscriber(bool existingSubscriber)
+    {
+        await using var provider = CreateLocalClientAndServer();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        var lifecycle = provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var admitted = await provider
+                .GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("ready"))
+                .Async<EchoReply>();
+            Assert.Equal("local:ready", admitted.Value);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var existing = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator();
+            if (existingSubscriber)
+            {
+                var first = existing.MoveNextAsync().AsTask();
+                lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Relocating);
+                Assert.True(await first);
+            }
+            var expected = monitoring.GetStatus("work");
+            await using var observer = monitoring
+                .ObserveAsync("work", timeout.Token)
+                .GetAsyncEnumerator();
+            Assert.True(await observer.MoveNextAsync());
+            Assert.Equal(expected.ChannelName, observer.Current.Status.ChannelName);
+            Assert.Equal(expected.Sequence, observer.Current.Status.Sequence);
+            Assert.Equal(expected.Targets, observer.Current.Status.Targets);
+            Assert.Equal(0UL, observer.Current.Loss.CoalescedCount);
+            lifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Stopped);
+            while (await observer.MoveNextAsync())
+                if (observer.Current.Status.State == ZLinkTopologyState.Stopped)
+                    break;
+            Assert.Equal(ZLinkTopologyState.Stopped, observer.Current.Status.State);
+            Assert.True(observer.Current.Status.Sequence > expected.Sequence);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task ExactRuntimeProjectsLiveLocalServerAndPublishesDrainingEvent()
     {

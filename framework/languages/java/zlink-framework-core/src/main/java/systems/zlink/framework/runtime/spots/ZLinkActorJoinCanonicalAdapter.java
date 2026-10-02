@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
@@ -20,6 +21,7 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /** Direct-Join goal/profile adapter owned by the canonical relocation host. */
@@ -198,9 +201,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                                     : CompletableFuture.completedFuture(null))
                             .exceptionally(
                                     failure -> {
-                                        LOGGER.warning(
-                                                "Actor Join authority-loss cleanup failed: "
-                                                        + unwrap(failure));
+                                        LOGGER.log(
+                                                Level.WARNING,
+                                                "Actor Join authority-loss cleanup failed:",
+                                                unwrap(failure));
                                         return null;
                                     });
                 });
@@ -658,23 +662,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             SourceAttempt attempt, ZLinkServiceM6BWireCodec.ActorLeft left) {
         attempt.leaveClaimed().set(true);
         ZLinkActor actor = attempt.prepared().actor();
-        CompletionStage<Void> lifecycle;
-        if (actor == null) {
-            lifecycle = CompletableFuture.completedFuture(null);
-        } else {
-            lifecycle =
-                    spots.notifySourceActorLeftForRemoteMove(actor)
-                            .exceptionally(
-                                    failure -> {
-                                        LOGGER.warning(
-                                                "Actor Join source OnLeave failed: "
-                                                        + unwrap(failure));
-                                        return null;
-                                    });
-        }
-        return lifecycle
-                .thenCompose(ignored -> attempt.prepared().cleanupLocal())
-                .thenCompose(ignored -> attempt.prepared().discardInitialAfterCommit())
+        return ZLinkHandlerStages.completeAll(
+                        List.of(
+                                () ->
+                                        actor == null
+                                                ? CompletableFuture.completedFuture(null)
+                                                : spots.notifySourceActorLeftForRemoteMove(actor),
+                                () -> attempt.prepared().cleanupLocal(),
+                                () -> attempt.prepared().discardInitialAfterCommit()))
                 .whenComplete(
                         (ignored, failure) -> sources.remove(left.actor().actorId(), attempt));
     }

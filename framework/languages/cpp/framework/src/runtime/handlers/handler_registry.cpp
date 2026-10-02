@@ -351,8 +351,7 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
             return terminal ();
         }
         catch (...) {
-            return task_t<zlink::message_t> (
-              detail::current_exception_result<zlink::message_t> ("handler threw an exception"));
+            return task_t<zlink::message_t> (detail::current_exception_result<zlink::message_t> ());
         }
     }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
