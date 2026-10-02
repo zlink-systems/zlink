@@ -21,7 +21,6 @@ struct wire_failure_mapping_t
     failure_t failure;
     terminal_t terminal;
     const char *message;
-    detail::boundary_error_t boundary = detail::boundary_error_t::none;
     bool receive = true;
     failure_t code_only_failure = failure;
 };
@@ -42,20 +41,19 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
    " failed because the object type did not match."},
   {kind_t::type_mismatch, failure_t::actorTypeMismatch, terminal_t::conflict,
    " failed because the object type did not match."},
-  {kind_t::not_configured, failure_t::requestFailed, terminal_t::internalError, " failed.",
-   detail::boundary_error_t::none, false},
+  {kind_t::not_configured, failure_t::requestFailed, terminal_t::internalError, " failed.", false},
   {kind_t::rejected, failure_t::requestRejected, terminal_t::rejected, " was rejected."},
   {kind_t::rejected, failure_t::actorCreateRejected, terminal_t::rejected, " was rejected."},
   {kind_t::unavailable, failure_t::routeNotConnected, terminal_t::internalError,
-   " failed because the target route is not connected.", detail::boundary_error_t::disconnected},
+   " failed because the target route is not connected."},
   {kind_t::deadline_exceeded, failure_t::workerTimedOut, terminal_t::internalError,
    " timed out inside the worker."},
-  {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr,
-   detail::boundary_error_t::none, true, failure_t::routeNotConnected},
+  {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr, true,
+   failure_t::routeNotConnected},
   {kind_t::protocol_error, failure_t::requestProtocolError, terminal_t::protocolError,
    " failed with a protocol error."},
-  {kind_t::invalid_operation, failure_t::none, terminal_t::invalidState, nullptr,
-   detail::boundary_error_t::none, true, failure_t::requestFailed},
+  {kind_t::invalid_operation, failure_t::none, terminal_t::invalidState, nullptr, true,
+   failure_t::requestFailed},
   {kind_t::data_lost, failure_t::relocationDataLost, terminal_t::internalError,
    " failed because relocation data was lost."},
   {kind_t::internal_failure, failure_t::requestFailed, terminal_t::internalError, " failed."},
@@ -350,10 +348,7 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
         for (const auto &row : wire_failure_mapping) {
             if (row.receive && failure_code == static_cast<std::uint32_t> (row.failure))
                 return detail::with_failure_code (
-                  row.boundary == detail::boundary_error_t::none
-                    ? framework_exception_t (row.kind, operation_name + row.message)
-                    : detail::make_boundary_exception (row.boundary, operation_name + row.message),
-                  failure_code);
+                  framework_exception_t (row.kind, operation_name + row.message), failure_code);
         }
     }
     switch (static_cast<protocol::request_terminal_result> (terminal_result)) {
