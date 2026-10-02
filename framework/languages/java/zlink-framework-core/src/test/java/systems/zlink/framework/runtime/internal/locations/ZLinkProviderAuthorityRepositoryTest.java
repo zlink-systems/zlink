@@ -56,6 +56,130 @@ import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
     @Test
+    void reservationIdentityIsStableAcrossProviderConflict() throws Exception {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var key = authorityKey(ZLinkAuthorityKeyCodec.spot("1304-stable-reservation"));
+        var identities = new ArrayList<String>();
+        ZLinkLocationStore provider =
+                new ZLinkLocationStore() {
+                    @Override
+                    public CompletionStage<ZLinkStoreReadResult> read(
+                            ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+                        return inner.read(key, cancellation);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkStoreWriteResult> write(
+                            ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+                        for (var mutation : request.mutations()) {
+                            if (mutation instanceof ZLinkStorePut put && put.key().equals(key)) {
+                                try {
+                                    identities.add(
+                                            new com.fasterxml.jackson.databind.ObjectMapper()
+                                                    .readTree(put.bytes())
+                                                    .path("pendingCreation")
+                                                    .path("reservationId")
+                                                    .asText());
+                                } catch (java.io.IOException failure) {
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                                if (identities.size() == 1) {
+                                    return CompletableFuture.completedFuture(
+                                            new systems.zlink.framework.locationprovider
+                                                    .ZLinkStoreWriteConflict(Instant.now()));
+                                }
+                            }
+                        }
+                        return inner.write(request, cancellation);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkStoreScanResult> scan(
+                            ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+                        return inner.scan(request, cancellation);
+                    }
+                };
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner =
+                ((ZLinkOwnerLeaseClaimed)
+                                owners.claim("1304-stable-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        descriptors
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        var repository = new ZLinkProviderAuthorityRepository(provider, descriptors);
+        var request =
+                capacityRequest(
+                        ZLinkAuthorityKeyCodec.spot("1304-stable-reservation"), descriptor, owner);
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(request, () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        assertEquals(2, identities.size());
+        assertTrue(!identities.get(0).isEmpty());
+        assertEquals(identities.get(0), identities.get(1));
+        assertEquals(identities.get(0), reservation.reservationVersion());
+    }
+
+    @Test
+    void creationCompletionRejectsExpiredOwnerWithoutConsumingReservedCapacity() throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner =
+                ((ZLinkOwnerLeaseClaimed)
+                                owners.claim("1304-expired-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        descriptors
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        var repository = new ZLinkProviderAuthorityRepository(provider, descriptors);
+        var request =
+                capacityRequest(
+                        ZLinkAuthorityKeyCodec.spot("1304-expired-spot"), descriptor, owner);
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(request, () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        owners.release(owner).toCompletableFuture().get();
+        assertEquals(
+                ZLinkObjectCommitResult.STALE,
+                repository
+                        .commit(reservation, new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertEquals(
+                ZLinkObjectAbortResult.STALE,
+                repository.abort(reservation, () -> false).toCompletableFuture().get());
+        var authority =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        repository
+                                .read(request.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .get());
+        assertEquals(reservation.storeVersion(), authority.storeVersion());
+        assertTrue(authority.pendingCreation().isPresent());
+    }
+
+    @Test
     void opaqueProviderCapacityIsReservedCommittedAndReleasedAtomically() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);

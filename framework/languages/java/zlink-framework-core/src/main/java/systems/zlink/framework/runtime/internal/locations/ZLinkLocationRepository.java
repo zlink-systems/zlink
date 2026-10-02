@@ -74,6 +74,24 @@ public interface ZLinkLocationRepository {
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation);
 
+    default CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
+        return commit(
+                reservation, readyPayload, () -> System.currentTimeMillis() >= deadlineUnixMs);
+    }
+
+    default CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkCreationOperationTerminal terminal,
+            long deadlineUnixMs) {
+        return commit(
+                reservation,
+                readyPayload,
+                terminal,
+                () -> System.currentTimeMillis() >= deadlineUnixMs);
+    }
+
     CompletionStage<ZLinkObjectRejectResult> reject(
             ZLinkObjectReservation reservation,
             ZLinkCreationOperationTerminal terminal,

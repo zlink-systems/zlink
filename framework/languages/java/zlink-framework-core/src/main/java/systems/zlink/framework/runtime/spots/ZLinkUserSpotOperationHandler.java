@@ -655,7 +655,8 @@ final class ZLinkUserSpotOperationHandler
                     .handle(
                             (ignored, failure) ->
                                     SpotActivationBase.finishCleanup(
-                                            failure, abort(admission.reservation())))
+                                            failure,
+                                            authorityStore.abort(admission.reservation(), OPEN)))
                     .thenCompose(stage -> stage)
                     .thenApply(
                             ignored ->
@@ -676,7 +677,7 @@ final class ZLinkUserSpotOperationHandler
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
         return authorityStore
-                .commit(admission.reservation(), ready, OPEN)
+                .commit(admission.reservation(), ready, request.intent().deadlineUnixMs())
                 .thenCompose(
                         result -> {
                             if (result != ZLinkObjectCommitResult.COMMITTED

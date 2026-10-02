@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -48,8 +49,8 @@ final class ZLinkProviderAuthorityRepository {
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
-    private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
     private static final int AGGREGATE_COUNTER_RETRY_LIMIT = 64;
+    private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
     private final ZLinkLocationStore provider;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkAggregateInventoryStore aggregateInventory;
@@ -423,6 +424,13 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<ZLinkObjectReserveResult> reserve(
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
+        return reserve(request, cancellation, UUID.randomUUID().toString());
+    }
+
+    private CompletionStage<ZLinkObjectReserveResult> reserve(
+            ZLinkObjectReservationRequest request,
+            ZLinkStoreCancellation cancellation,
+            String reservationVersion) {
         Objects.requireNonNull(request, "request");
         var opaqueCancellation = adapt(cancellation);
         ZLinkStoreKey key = authorityKey(request.authorityKey());
@@ -446,7 +454,10 @@ final class ZLinkProviderAuthorityRepository {
                                                 reclaim ->
                                                         switch (reclaim) {
                                                             case RECLAIMED ->
-                                                                    reserve(request, cancellation);
+                                                                    reserve(
+                                                                            request,
+                                                                            cancellation,
+                                                                            reservationVersion);
                                                             case CONFLICT, RECOVERY_REQUIRED ->
                                                                     completed(
                                                                             new ZLinkObjectConflict(
@@ -516,10 +527,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                                             return completed(
                                                                                                     new ZLinkObjectGenerationExhausted());
                                                                                         }
-                                                                                        String
-                                                                                                reservationVersion =
-                                                                                                        UUID.randomUUID()
-                                                                                                                .toString();
                                                                                         AuthorityRecord
                                                                                                 record =
                                                                                                         new AuthorityRecord(
@@ -588,9 +595,31 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             if (result
                                                                                                                     instanceof
                                                                                                                     ZLinkStoreWriteConflict) {
-                                                                                                                return reserve(
-                                                                                                                        request,
-                                                                                                                        cancellation);
+                                                                                                                return canRebuild(
+                                                                                                                                key,
+                                                                                                                                null,
+                                                                                                                                null,
+                                                                                                                                request
+                                                                                                                                        .targetOwner(),
+                                                                                                                                opaqueCancellation)
+                                                                                                                        .thenComposeAsync(
+                                                                                                                                eligible ->
+                                                                                                                                        eligible
+                                                                                                                                                ? reserve(
+                                                                                                                                                        request,
+                                                                                                                                                        cancellation,
+                                                                                                                                                        reservationVersion)
+                                                                                                                                                : provider.read(
+                                                                                                                                                                key,
+                                                                                                                                                                opaqueCancellation)
+                                                                                                                                                        .thenCompose(
+                                                                                                                                                                current ->
+                                                                                                                                                                        projectRead(
+                                                                                                                                                                                current,
+                                                                                                                                                                                opaqueCancellation))
+                                                                                                                                                        .thenApply(
+                                                                                                                                                                ZLinkObjectConflict
+                                                                                                                                                                        ::new));
                                                                                                             }
                                                                                                             var
                                                                                                                     applied =
@@ -759,6 +788,38 @@ final class ZLinkProviderAuthorityRepository {
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
+        return commit(reservation, readyPayload, terminal, cancellation, OptionalLong.empty());
+    }
+
+    CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
+        return commit(
+                reservation,
+                readyPayload,
+                null,
+                () -> System.currentTimeMillis() >= deadlineUnixMs,
+                OptionalLong.of(deadlineUnixMs));
+    }
+
+    CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkCreationOperationTerminal terminal,
+            long deadlineUnixMs) {
+        return commit(
+                reservation,
+                readyPayload,
+                terminal,
+                () -> System.currentTimeMillis() >= deadlineUnixMs,
+                OptionalLong.of(deadlineUnixMs));
+    }
+
+    private CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkCreationOperationTerminal terminal,
+            ZLinkStoreCancellation cancellation,
+            OptionalLong deadlineUnixMs) {
         Objects.requireNonNull(reservation, "reservation");
         Objects.requireNonNull(readyPayload, "readyPayload");
         if (terminal != null) {
@@ -788,7 +849,8 @@ final class ZLinkProviderAuthorityRepository {
                                             current,
                                             readyPayload,
                                             terminal,
-                                            opaqueCancellation)
+                                            opaqueCancellation,
+                                            deadlineUnixMs)
                                     .thenApply(
                                             applied ->
                                                     applied
@@ -834,7 +896,8 @@ final class ZLinkProviderAuthorityRepository {
                                             current,
                                             null,
                                             terminal,
-                                            opaqueCancellation)
+                                            opaqueCancellation,
+                                            OptionalLong.empty())
                                     .thenApply(
                                             applied ->
                                                     applied
@@ -865,7 +928,11 @@ final class ZLinkProviderAuthorityRepository {
             AuthorityRecord current,
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            OptionalLong deadlineUnixMs) {
+        if (cancellation.isCancellationRequested()) {
+            return completed(false);
+        }
         return readCapacity(current.allocation(), cancellation)
                 .thenCompose(
                         capacity -> {
@@ -932,10 +999,77 @@ final class ZLinkProviderAuthorityRepository {
                                                 terminal.terminalEnvelope(),
                                                 retention));
                             }
-                            return provider.write(
-                                            new ZLinkStoreWriteRequest(conditions, mutations),
-                                            cancellation)
-                                    .thenApply(result -> result instanceof ZLinkStoreWriteApplied);
+                            return requireLiveOwner(current, conditions, cancellation)
+                                    .thenCompose(
+                                            live -> {
+                                                if (!live) {
+                                                    return completed(false);
+                                                }
+                                                return provider.write(
+                                                                new ZLinkStoreWriteRequest(
+                                                                        conditions, mutations),
+                                                                cancellation)
+                                                        .thenCompose(
+                                                                result -> {
+                                                                    if (result
+                                                                            instanceof
+                                                                            ZLinkStoreWriteApplied) {
+                                                                        return completed(true);
+                                                                    }
+                                                                    if (deadlineUnixMs.isEmpty()) {
+                                                                        return completed(false);
+                                                                    }
+                                                                    return canRebuild(
+                                                                                    key,
+                                                                                    authority
+                                                                                            .version()
+                                                                                            .value(),
+                                                                                    current.pendingCreation()
+                                                                                            .map(
+                                                                                                    ZLinkPendingObjectCreation
+                                                                                                            ::reservationId)
+                                                                                            .orElse(
+                                                                                                    null),
+                                                                                    new ZLinkLocationOwnerToken(
+                                                                                            current
+                                                                                                    .ownerId(),
+                                                                                            current
+                                                                                                    .ownerLeaseGeneration()),
+                                                                                    cancellation)
+                                                                            .thenCompose(
+                                                                                    eligible -> {
+                                                                                        if (!eligible
+                                                                                                || terminal
+                                                                                                        == null) {
+                                                                                            return completed(
+                                                                                                    eligible);
+                                                                                        }
+                                                                                        return provider.read(
+                                                                                                        creationTerminalKey(
+                                                                                                                terminal
+                                                                                                                        .operation()),
+                                                                                                        cancellation)
+                                                                                                .thenApply(
+                                                                                                        read ->
+                                                                                                                read
+                                                                                                                        instanceof
+                                                                                                                        ZLinkStoreReadMissing);
+                                                                                    })
+                                                                            .thenComposeAsync(
+                                                                                    eligible ->
+                                                                                            eligible
+                                                                                                    ? writeCreationTransition(
+                                                                                                            key,
+                                                                                                            authority,
+                                                                                                            current,
+                                                                                                            readyPayload,
+                                                                                                            terminal,
+                                                                                                            cancellation,
+                                                                                                            deadlineUnixMs)
+                                                                                                    : completed(
+                                                                                                            false));
+                                                                });
+                                            });
                         });
     }
 
@@ -1225,17 +1359,6 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(fence, "fence");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return commitAggregate(
-                fence, cancellation, 0, Instant.now().plus(AGGREGATE_COUNTER_RETRY_WINDOW));
-    }
-
-    private CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation,
-            int retryAttempt,
-            Instant retryDeadline) {
         ZLinkStoreKey marker = aggregateKey(fence);
         var opaqueCancellation = adapt(cancellation);
         return provider.read(marker, opaqueCancellation)
@@ -1331,8 +1454,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                 return retryAggregateCommit(
                                                                                                                         fence,
                                                                                                                         cancellation,
-                                                                                                                        retryAttempt,
-                                                                                                                        retryDeadline);
+                                                                                                                        found.value()
+                                                                                                                                .version(),
+                                                                                                                        request);
                                                                                                             }
                                                                                                             return normalizeAggregateParticipants(
                                                                                                                             fence,
@@ -1352,8 +1476,8 @@ final class ZLinkProviderAuthorityRepository {
     private CompletionStage<ZLinkAggregateCommitResult> retryAggregateCommit(
             ZLinkAggregateFence fence,
             ZLinkStoreCancellation cancellation,
-            int retryAttempt,
-            Instant retryDeadline) {
+            ZLinkStoreVersion initialVersion,
+            ZLinkAggregatePrepareRequest request) {
         ZLinkStoreKey marker = aggregateKey(fence);
         var opaqueCancellation = adapt(cancellation);
         return provider.read(marker, opaqueCancellation)
@@ -1363,6 +1487,9 @@ final class ZLinkProviderAuthorityRepository {
                                 return completed(ZLinkAggregateCommitResult.STALE);
                             }
                             PreparedAggregate current = decodeAggregate(found.value().bytes());
+                            if (!sameAggregateRequest(current, request)) {
+                                return completed(ZLinkAggregateCommitResult.STALE);
+                            }
                             if (current.state() == AGGREGATE_COMMITTED) {
                                 return aggregateInventory
                                         .load(
@@ -1382,20 +1509,21 @@ final class ZLinkProviderAuthorityRepository {
                                                                 .ALREADY_COMMITTED);
                             }
                             if (current.state() != AGGREGATE_PREPARED
-                                    || retryAttempt >= AGGREGATE_COUNTER_RETRY_LIMIT
-                                    || !Instant.now().isBefore(retryDeadline)
+                                    || !found.value().version().equals(initialVersion)
                                     || cancellation.isCancellationRequested()) {
                                 return completed(ZLinkAggregateCommitResult.STALE);
                             }
-                            return delayAggregateCounterRetry(
-                                            retryAttempt, retryDeadline, cancellation)
-                                    .thenCompose(
-                                            ignored ->
-                                                    commitAggregate(
-                                                            fence,
-                                                            cancellation,
-                                                            retryAttempt + 1,
-                                                            retryDeadline));
+                            return requireLiveOwner(
+                                            request.targetOwner(),
+                                            new ArrayList<>(),
+                                            opaqueCancellation)
+                                    .thenComposeAsync(
+                                            live ->
+                                                    live
+                                                            ? commitAggregate(fence, cancellation)
+                                                            : completed(
+                                                                    ZLinkAggregateCommitResult
+                                                                            .STALE));
                         });
     }
 
@@ -2421,6 +2549,40 @@ final class ZLinkProviderAuthorityRepository {
                             }
                             ZLinkStoreVersion version = applied.putVersions().get(key);
                             return stored(next, version.value(), applied.storeNow());
+                        });
+    }
+
+    private CompletionStage<Boolean> canRebuild(
+            ZLinkStoreKey key,
+            String initialVersion,
+            String reservationId,
+            ZLinkLocationOwnerToken owner,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested()) {
+            return completed(false);
+        }
+        return provider.read(key, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (initialVersion == null) {
+                                if (!(read instanceof ZLinkStoreReadMissing)) {
+                                    return completed(false);
+                                }
+                                return requireLiveOwner(owner, new ArrayList<>(), cancellation);
+                            }
+                            if (!(read instanceof ZLinkStoreReadFound found)
+                                    || !found.value().version().value().equals(initialVersion)) {
+                                return completed(false);
+                            }
+                            AuthorityRecord current = decode(found.value().bytes());
+                            if (reservationId != null
+                                    && !current.pendingCreation()
+                                            .map(ZLinkPendingObjectCreation::reservationId)
+                                            .filter(reservationId::equals)
+                                            .isPresent()) {
+                                return completed(false);
+                            }
+                            return requireLiveOwner(owner, new ArrayList<>(), cancellation);
                         });
     }
 
