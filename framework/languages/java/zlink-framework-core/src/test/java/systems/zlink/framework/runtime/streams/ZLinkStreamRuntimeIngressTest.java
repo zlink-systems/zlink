@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.streams;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -100,6 +101,207 @@ final class ZLinkStreamRuntimeIngressTest {
     private ZLinkFrameworkRegistration lastRegistration;
 
     @Test
+    void heartbeatContractConnectionWithoutInboundClosesAtTimeout() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofSeconds(5).toNanos() - 1);
+        runtime.checkSessionLiveness();
+        assertEquals(0, stream.sessionClosingSends.get());
+        clock.incrementAndGet();
+        List<String> reasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
+            runtime.checkSessionLiveness();
+            assertEquals(1, stream.sessionClosingSends.get());
+            assertEquals(List.of("heartbeat_timeout"), reasons);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application", "pong"})
+    void heartbeatContractAnyInboundExtendsTimeout(String inbound) throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        dispatchDeterministic(runtime, "initial", false);
+        for (int index = 1; index <= 3; index++) {
+            clock.addAndGet(Duration.ofSeconds(5).toNanos() - 1);
+            dispatchDeterministic(
+                    runtime,
+                    inbound.equals("pong") ? HEARTBEAT_PONG : "activity",
+                    inbound.equals("pong"));
+            clock.incrementAndGet();
+            runtime.checkSessionLiveness();
+            assertEquals(0, stream.sessionClosingSends.get());
+        }
+        clock.addAndGet(Duration.ofSeconds(5).toNanos());
+        List<String> reasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
+            runtime.checkSessionLiveness();
+            assertEquals(1, stream.sessionClosingSends.get());
+            assertEquals(List.of("heartbeat_timeout"), reasons);
+        }
+    }
+
+    @Test
+    void heartbeatContractDisabledActiveTimerStillRepliesToPing() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        stream.deferHeartbeatPongSend = true;
+        dispatchDeterministic(runtime, HEARTBEAT_PING, true);
+        assertEquals(0, stream.heartbeatPongAsyncAttempted.getCount());
+        stream.deferredHeartbeatPong.complete(null);
+    }
+
+    @Test
+    void heartbeatContractPingsRepeatWithoutPong() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        for (int second = 1; second <= 2; second++) {
+            clock.set(Duration.ofSeconds(second).toNanos());
+            runtime.checkSessionLiveness();
+        }
+        assertEquals(0, stream.heartbeatPingAttempted.getCount());
+        assertEquals(0, stream.sessionClosingSends.get());
+    }
+
+    @Test
+    void heartbeatContractReadyAndDataPublishOneSession() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        var ready =
+                CompletableFuture.runAsync(
+                        () ->
+                                stream.errorHandler.handle(
+                                        PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready"));
+        dispatchDeterministic(runtime, "initial", false);
+        ready.get(5, TimeUnit.SECONDS);
+        TestSession original = TestSession.lastSession.get();
+        clock.set(Duration.ofSeconds(4).toNanos());
+        dispatchDeterministic(runtime, "activity", false);
+        clock.set(Duration.ofSeconds(8).toNanos());
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        runtime.checkSessionLiveness();
+        assertSame(original, TestSession.lastSession.get());
+        assertEquals(0, stream.sessionClosingSends.get());
+        clock.set(Duration.ofSeconds(9).toNanos());
+        runtime.checkSessionLiveness();
+        assertEquals(1, stream.sessionClosingSends.get());
+    }
+
+    @Test
+    void heartbeatContractSlowConstructionPreservesApplicationIdleStart() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        TestSession.constructionHook = () -> clock.set(Duration.ofSeconds(4).toNanos());
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        for (int second = 4; second <= 28; second += 4) {
+            clock.set(Duration.ofSeconds(second).toNanos());
+            dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
+            runtime.checkSessionLiveness();
+        }
+        clock.set(Duration.ofSeconds(30).toNanos());
+        dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
+        runtime.checkSessionLiveness();
+        assertEquals(0, stream.sessionClosingSends.get());
+        clock.set(Duration.ofSeconds(34).toNanos());
+        dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
+        List<String> reasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
+            runtime.checkSessionLiveness();
+            assertEquals(List.of("idle_timeout"), reasons);
+        }
+    }
+
+    @Test
+    void heartbeatContractFailedReadyConstructionReleasesContext() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        var contextsField = ZLinkStreamRuntime.class.getDeclaredField("sessionContexts");
+        contextsField.setAccessible(true);
+        var contexts = (java.util.Set<?>) contextsField.get(runtime);
+        TestSession.failNextConstruction = true;
+        assertThrows(
+                RuntimeException.class,
+                () ->
+                        stream.errorHandler.handle(
+                                PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready"));
+        assertEquals(0, contexts.size());
+        stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
+        assertEquals(1, contexts.size());
+    }
+
+    private ZLinkStreamRuntime startDeterministic(
+            FakeStream stream, java.util.concurrent.atomic.AtomicLong clock) {
+        var registration = streamRegistration(new DefaultZLinkFrameworkOptions(), 64 * 1024);
+        lastRegistration = registration;
+        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var runtime =
+                new ZLinkStreamRuntime(
+                                new FakeProvider(stream),
+                                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                                registration,
+                                Map.of(),
+                                Map.of(),
+                                new ZLinkJsonMessageSerializer(),
+                                null,
+                                ZLinkHandlerActivator.reflection(),
+                                ignored -> true,
+                                null,
+                                null,
+                                new FakeContext(),
+                                false,
+                                (ignoredBackend, ignoredKey) ->
+                                        (ignoredReady, ignoredShutdown) ->
+                                                CompletableFuture.completedFuture(null),
+                                clock::get,
+                                () -> scheduler)
+                        .start();
+        scheduler.shutdownNow();
+        runtimes.add(runtime);
+        return runtime;
+    }
+
+    private void dispatchDeterministic(ZLinkStreamRuntime runtime, String packet, boolean control)
+            throws Exception {
+        var method =
+                ZLinkStreamRuntime.class.getDeclaredMethod(
+                        "dispatchToSession",
+                        StreamNodeRegistration.class,
+                        RoutingId.class,
+                        ZLinkStreamHeader.class,
+                        Message.class);
+        method.setAccessible(true);
+        var header =
+                new ZLinkStreamHeader(
+                        control ? ZLinkStreamMessageKind.CONTROL : ZLinkStreamMessageKind.SEND,
+                        control ? ZLinkStreamCodec.RAW : ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        packet,
+                        Map.of());
+        try (Message payload =
+                Message.from(control ? new byte[0] : "{}".getBytes(StandardCharsets.UTF_8))) {
+            ((CompletionStage<?>)
+                            method.invoke(
+                                    runtime,
+                                    lastRegistration.streamNodes().getFirst(),
+                                    PEER_A,
+                                    header,
+                                    payload))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void receiveThreadRejectsPublicBlockingSubmitAndLaterCompletionStillRuns() throws Exception {
         FakeStream stream = new FakeStream();
         CompletableFuture<Void> admission = new CompletableFuture<>();
@@ -149,6 +351,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void resetSessionProbe() {
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
+        TestSession.constructionHook = null;
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
@@ -508,6 +711,9 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, TestSession.createdCount.get());
         assertEquals(PEER_B, session.context.routingId().orElseThrow());
         assertEquals(List.of("good"), session.packetNames);
+        var contexts = ZLinkStreamRuntime.class.getDeclaredField("sessionContexts");
+        contexts.setAccessible(true);
+        assertEquals(1, ((java.util.Set<?>) contexts.get(runtime)).size());
     }
 
     @Test
@@ -1243,6 +1449,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static final AtomicInteger createdCount = new AtomicInteger();
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
+        private static volatile Runnable constructionHook;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
         private static volatile boolean replyOnDispatch;
@@ -1260,6 +1467,9 @@ final class ZLinkStreamRuntimeIngressTest {
         private final List<String> packetNames = Collections.synchronizedList(new ArrayList<>());
 
         public TestSession(ZLinkSessionContext context) {
+            if (constructionHook != null) {
+                constructionHook.run();
+            }
             if (failNextConstruction) {
                 failNextConstruction = false;
                 throw new IllegalStateException("test session construction failure");

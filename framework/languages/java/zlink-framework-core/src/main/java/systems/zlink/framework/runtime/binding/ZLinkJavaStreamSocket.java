@@ -2,8 +2,8 @@ package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.eventing.MonitorEventFlags;
 import systems.zlink.contracts.eventing.MonitorEventType;
-import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.sockets.RecvFlags;
@@ -15,6 +15,8 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
@@ -36,8 +38,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJavaSocketBacked {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
     private final StreamSocket socket;
     private final ZLinkJavaRawMeshNode meshNode;
     private final BoundSessionSink boundSessionSink;
@@ -48,7 +53,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private SocketMonitor monitor;
+    private ZLinkJavaSocketMonitor monitor;
     private volatile boolean sessionServiceStarted;
 
     ZLinkJavaStreamSocket(StreamSocket socket, ZLinkJavaRawMeshNode meshNode) {
@@ -178,30 +183,71 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         inStateLane(
                 () -> {
                     closeMonitor();
-                    monitor = socket.monitorOpen(MonitorEventType.DISCONNECTED);
+                    monitor =
+                            new ZLinkJavaSocketMonitor(
+                                    socket.monitorOpen(
+                                            MonitorEventType.CONNECTION_READY,
+                                            MonitorEventType.DISCONNECTED));
+                    ZLinkJavaSocketMonitor eventMonitor = monitor;
                     Thread.ofVirtual()
                             .name("zlink-stream-monitor")
-                            .start(
-                                    () -> {
-                                        while (!closed.get()) {
-                                            try {
-                                                var event = monitor.recv();
-                                                event.routingId()
-                                                        .ifPresent(
-                                                                routingId ->
-                                                                        handler.handle(
-                                                                                routingId,
-                                                                                event.event(),
-                                                                                0,
-                                                                                event.event()
-                                                                                        .name()));
-                                            } catch (RuntimeException closedOrFailed) {
-                                                return;
-                                            }
-                                        }
-                                    });
+                            .start(() -> receiveMonitorEvents(eventMonitor, handler));
                     return null;
                 });
+    }
+
+    private void receiveMonitorEvents(
+            ZLinkBackendSocketMonitor eventMonitor, ZLinkBackendStreamErrorHandler handler) {
+        while (!closed.get() && !eventMonitor.isClosed()) {
+            ZLinkBackendSocketMonitorEvent event;
+            MonitorEventType eventType;
+            try {
+                if (!eventMonitor.waitForReadable(ZLinkBackendSocketMonitor.RECEIVE_POLL_TIMEOUT)) {
+                    continue;
+                }
+                event = eventMonitor.recvDontWait();
+                if (event == null) {
+                    continue;
+                }
+                eventType = MonitorEventType.valueOf(event.event());
+                if (eventType == MonitorEventType.CONNECTION_READY
+                        && (event.flags() & MonitorEventFlags.CONNECTION_READY_EDGE.mask()) == 0) {
+                    continue;
+                }
+            } catch (RuntimeException failure) {
+                if (!closed.get() && !eventMonitor.isClosed()) {
+                    LOGGER.log(Level.WARNING, "STREAM monitor receive failed", failure);
+                }
+                return;
+            }
+            event.routingId()
+                    .ifPresent(
+                            routingId -> {
+                                try {
+                                    handler.handle(
+                                            routingId,
+                                            MonitorEventType.valueOf(event.event()),
+                                            0,
+                                            event.event());
+                                } catch (RuntimeException failure) {
+                                    LOGGER.log(
+                                            Level.WARNING,
+                                            "STREAM monitor callback failed for peer " + routingId,
+                                            failure);
+                                    try {
+                                        disconnectPeer(routingId);
+                                    } catch (RuntimeException disconnectFailure) {
+                                        if (!closed.get()) {
+                                            LOGGER.log(
+                                                    Level.WARNING,
+                                                    "STREAM monitor failed to disconnect peer "
+                                                            + routingId,
+                                                    disconnectFailure);
+                                        }
+                                    }
+                                }
+                            });
+        }
     }
 
     @Override

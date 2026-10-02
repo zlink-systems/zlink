@@ -3,12 +3,9 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
 
-import java.time.Duration;
 import java.util.function.Consumer;
 
 final class ZLinkSocketMonitorDrainLoop {
-    private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
-
     private ZLinkSocketMonitorDrainLoop() {}
 
     static Thread start(
@@ -21,7 +18,8 @@ final class ZLinkSocketMonitorDrainLoop {
                         () -> {
                             Thread current = Thread.currentThread();
                             while (!current.isInterrupted() && !monitor.isClosed()) {
-                                if (!monitor.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
+                                if (!monitor.waitForReadable(
+                                        ZLinkBackendSocketMonitor.RECEIVE_POLL_TIMEOUT)) {
                                     continue;
                                 }
                                 ZLinkBackendSocketMonitorEvent event;
