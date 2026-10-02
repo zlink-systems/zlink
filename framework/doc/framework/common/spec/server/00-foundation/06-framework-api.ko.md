@@ -285,8 +285,7 @@ Pending activation 제한은 object population limit이 아니라 동시에 진�
 admission 제한이며 active·reserved population count를 바꾸지 않는다. 세는 작업, 세는 구간, 기본값과 허용 범위는
 [MeshNode §5.1](../03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)이 정한다.
 
-하나의 object에 필요한 capacity는 하나의 typed bundle이다. 생성은 이 bundle을 생성 전에 예약하고,
-단독 relocation은 owner를 바꾸는 CAS가 이 bundle을 source에서 target으로 옮긴다.
+하나의 object를 만들거나 relocation할 때 필요한 모든 capacity는 하나의 typed bundle로 예약한다.
 Actor bundle에는 Actor slot 하나가 들어간다. Spot bundle에는 Spot 전체 slot 하나와, stable type limit을
 설정했다면 Entry·User·Instance 중 어떤 종류의 Spot인지 나타내는 값인
 [Spot kind](02-glossary.ko.md#spot-kind)·stable type slot 하나가 함께 들어간다. User Spot
@@ -726,9 +725,17 @@ subscriber 수, 수신 또는 handler 완료 정보를 포함하지 않는다.
 
 Spot factory와 typed Actor factory는 Object Server builder에 등록한다. User·Instance Spot type은 UTF-8
 1..255 bytes의 case-sensitive stable name이며 언어 class 이름을 wire·Store identity로 사용하지 않는다.
-Entry Spot ID는 Framework가 발급하고 caller가 생성하지 않는다. MeshNode descriptor가 그 Entry
+Entry Spot ID는 Framework가 Object Server MeshNode lifecycle마다
+`<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급하고 caller가 생성하지 않는다. MeshNode와
+Entry Spot은 같은 diagnostic prefix를 사용하되 각각 별도의 UUID v4를 생성한다. 같은 lifecycle에서는 같은
+Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를 발급한다. MeshNode descriptor가 그 Entry
 Spot ID와 lifecycle generation의 관계를 게시하며 Actor placement와 Entry Spot join은 이 mapping을
-사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다. Entry Spot ID의 발급·형식과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
+사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다.
+
+Entry Spot ID가 global Spot ID authority와 충돌하면 새 UUID나 reservation을 만들지 않고 startup을 즉시
+`AlreadyExists`로 끝낸다. Caller가 User·Instance Spot ID로
+`<prefix>-entry-<lowercase-canonical-uuid-v4>` 예약 형식을 지정하면 Store operation이나 factory를 시작하기
+전에 startup configuration error로 거부한다. Instance Spot은 actor-free lifecycle을 사용하며 Actor handler,
 Actor membership과 Logical Multicast subscription을 등록할 수 없다.
 
 Actor manager와 User Spot manager는 global ID를 받는 `Create`, `GetOrCreate`, `Find` family를 제공한다. Actor

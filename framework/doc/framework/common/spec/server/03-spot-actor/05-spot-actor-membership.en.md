@@ -947,7 +947,7 @@ callback can start the next round or match here.
 
 **An explicit failure before relay-ready is accepted finishes an
 `Aborted` CAS, confirms route and source location snapshot cancellation,
-cleans up the target staging, and restores
+cleans up the relocation reservation and target staging, and restores
 source state before reopening source admission. After that boundary,
 source resumption follows the `Preserve` fence in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)** — this is the
 common authority rule, and it applies to both Actor Join and User Spot aggregate

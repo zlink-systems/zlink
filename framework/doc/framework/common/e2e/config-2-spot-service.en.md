@@ -212,7 +212,8 @@ change independently from the RID on a replacement?
 
 Priority: `P0`
 
-The reserved format of the Entry Spot ID the Framework issues can't be used as an Application object ID.
+Using the Entry Spot namespace the Framework issues as an Application object ID conflicts with the
+current Entry identity.
 
 **Verification question:** Are User create and Instance intent with a reserved Entry-style ID
 `InvalidOperation`?
@@ -222,7 +223,7 @@ The reserved format of the Entry Spot ID the Framework issues can't be used as a
   ID.
 - Verification: Both calls are `InvalidOperation`, with no factory callback or application handler
   evidence.
-- Detailed behavior: verifies [Transport RID and Spot ID policy §6.3](../spec/server/02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
+- Detailed behavior: verifies [Entry Spot in the Glossary](../spec/server/00-foundation/02-glossary.en.md).
 
 #### SM-A12 Automatic User Spot IDs Differ Across Concurrent Creates
 

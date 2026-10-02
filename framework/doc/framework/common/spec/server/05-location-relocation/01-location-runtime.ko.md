@@ -38,8 +38,7 @@ Framework는 다음 결과를 보장한다.
 
 - 현재 요청을 처리할 수 있는 service와 연결 주소를 찾는다.
 - Actor·Spot마다 현재 owner를 하나만 인정한다.
-- Actor·Spot을 만들 node의 수용 공간은 생성 전에 확보하고, 옮길 때는 owner를 바꾸는 CAS가 수용
-  공간을 옮긴다.
+- Actor·Spot을 만들거나 옮길 node에 필요한 수용 공간을 미리 확보한다.
 - 같은 Actor·Spot을 동시에 두 번 만들지 않는다.
 - 이전 owner가 뒤늦게 위치를 변경하지 못하게 한다.
 - Host 교체 중 application state와 아직 실행하지 않은 작업을 다른 node에서 복원한다.
@@ -154,8 +153,7 @@ payload chunk 전송, temporary queue, ingress hold, backlog 병합 순서 — �
 Location Store가 기록하는 record와 조건만 §8~§9에서 다시 구체화한다.
 
 1. Framework가 현재 실행 중인 node 정보, owner의 사용 기한과 위치 record를 확인한다.
-2. Target node가 그 object의 type을 제공하고 남은 수용 공간이 있는지 확인한다. 수용 공간은 owner를
-   바꾸는 CAS가 옮긴다(§6.1 `NewOwner`).
+2. Location Store에서 target node가 사용할 수용 공간을 확보한다.
 3. Source는 현재 application turn을 끝낸 뒤 application state와 아직 실행하지 않은
    작업을 capture하여 memory에 유지한다. Location Store에는 capture 완료를 `Captured`로
    기록한다.
@@ -851,7 +849,7 @@ Deadline을 넘거나 현재 host 실행 조합이 Store 값과 다르면 다음
 | Descriptor 게시와 automatic RID owner 변경 |
 | Actor·Spot·Instance message와 timer callback 시작 |
 | Factory·restore 결과를 Store에 확정하는 작업 |
-| Relocation source·target 상태 변경 |
+| Relocation source·target 상태 변경과 수용 공간 확보 |
 
 이미 local queue가 받은 작업의 결과 처리와 정리는 별도 deadline 안에서 진행할 수 있다.
 하지만 만료된 owner 자격으로 새 Store 변경을 만들지 않는다.
@@ -883,7 +881,7 @@ Authority를 읽으면 record가 없는 `Missing(StoreNow)` 또는 현재 값이
 | `Commit` | 그 reservation의 `Reserved → Active`다. |
 | `Abort` | 그 reservation의 `Reserved → Missing`이다. |
 | `Preserve` | Active owner, generation과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. 일반 사용에는 target 정보가 없어야 한다. Relocation 정리에서는 같은 `RelocationId`의 target 정보를 제거할 수 있다. |
-| `NewOwner` | Active record를 target owner로 바꾼다. ObjectGeneration은 유지하고 AuthorityOwnerGeneration을 증가시킨다. 같은 요청에서 source의 사용 중 수용 공간을 줄이고 target의 것을 늘린다([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)의 capacity counter). |
+| `NewOwner` | Active record를 target owner로 바꾼다. ObjectGeneration은 유지하고 AuthorityOwnerGeneration을 증가시킨다. 미리 확보한 target 수용 공간을 사용한다. |
 | `Delete` | Active record와 조회용 index를 제거하고 사용 중인 수용 공간을 같은 요청에서 감소시킨다. |
 | `Reincarnate` | Explicit Close 중인 Active record를 같은 owner의 새 incarnation으로 바꾼다. 새 ObjectGeneration과 첫 AuthorityOwnerGeneration을 발급하고 owner·lease와 사용 중인 수용 공간을 유지한다. [Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계) 3단계에서만 쓴다. |
 
@@ -892,8 +890,8 @@ Reserved record에 `Preserve`, `NewOwner`, `Reincarnate` 또는 `Delete`를 적�
 수행한다. 별도의 create 작업 이름은 없다.
 
 Framework는 예상 version, counter, record와 조회용 index 변경을 한 Store 요청에 넣는다.
-`Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 target에
-남은 수용 공간을 검증한다. Record가 없거나 lease가 오래됐으면
+`Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 해당
+relocation이 미리 확보한 수용 공간을 검증한다. Record가 없거나 lease가 오래됐으면
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
@@ -906,10 +904,11 @@ counter·descriptor record를 다시 읽어 조건과 변경 전체를 다시 �
 deadline 안에서 하며 별도 횟수 상한을 두지 않는다. 다만 relocation target의 `NewOwner`와 `SpotWide`
 whole-unit batch의 반복이 끝나는 조건은 [§10](#10-store-응답을-받지-못했을-때)이 정한다.
 
-일반 `Preserve`에는 relocation 진행 정보가 없다. Standalone relocation에서 완료 기록
-payload의 위치를 갱신하거나 target 준비 완료를 기록할 때만 relocation 진행 정보를 함께 쓴다.
-Framework는 authority key, 처음 읽은 `StoreVersion`과 source·target owner를 확인한다. 성공하면
-target `NewOwner`가 기대하는 `StoreVersion`도 같은 요청에서 갱신한다. Owner와 수용 공간은 유지한다. Relocation 정리의 `Preserve`도 기존 작업이다. `SpotWide` unit에서는 source `Preserve`와 target의 전체-unit 조건부 batch가 같은 Spot aggregate authority record의 `StoreVersion`을 조건으로 검사하고, 성공한 요청이 그 version을 변경한다. 따라서 둘 다 commit할 수 없다. Source가 target `NewOwner`가 기대하는 `StoreVersion`을 조건으로 이를 먼저 commit하면
+일반 `Preserve`에는 relocation reservation 정보가 없다. Standalone relocation에서 완료 기록
+payload의 위치를 갱신하거나 target 준비 완료를 기록할 때만 미리 확보한 reservation 정보를
+함께 전달할 수 있다. Framework는 authority key, 처음 읽은 `StoreVersion`, source·target
+owner와 현재 수용 공간을 모두 확인한다. 성공하면 reservation이 기대하는 `StoreVersion`도
+같은 요청에서 갱신한다. Owner, 수용 공간과 reservation 상태는 유지한다. Relocation 정리의 `Preserve`도 기존 작업이다. `SpotWide` unit에서는 source `Preserve`와 target의 전체-unit 조건부 batch가 같은 Spot aggregate authority record의 `StoreVersion`을 조건으로 검사하고, 성공한 요청이 그 version을 변경한다. 따라서 둘 다 commit할 수 없다. Source가 target `NewOwner`가 기대하는 `StoreVersion`을 조건으로 이를 먼저 commit하면
 owner와 generation은 그대로 두고 version을 바꾸므로 늦은 target CAS는 실패한다. Source는
 현재 owner lease를 확인하고 같은 `RelocationId`의 target 정보를 정리한다. 반대로 target
 `NewOwner`가 먼저 commit했으면 source `Preserve`는 성공하지 않는다. 응답이 불명확하면
@@ -1228,6 +1227,7 @@ sequenceDiagram
 |---|---|
 | `RelocationId` | 이동 하나를 식별하는 0이 아닌 128-bit 난수다. Runtime만 사용한다. |
 | `TargetAttemptGeneration` | 같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 0이 아닌 값이다. 다른 target 선택에 사용하지 않는다. 언제나 정확 equality로만 대조하며 숫자 크기 순서로 판정하지 않는다([51 §9](../02-channel-transport/06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)). Target node의 lifecycle generation에서 유도해서는 안 된다 — 그 값으로는 같은 target node로 보낸 두 번째 시도를 첫 번째와 구분할 수 없다. |
+| [Reservation ID](../00-foundation/02-glossary.ko.md#reservation-id) | Target 수용 공간을 확보한 요청을 식별하는 0이 아닌 128-bit 값이다. 생성용 ID와 별개다. |
 
 Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록은 여러 record로 나누고,
 완료 기록 payload는 Relocation Store에 저장한다.
@@ -1244,14 +1244,20 @@ Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록은 여�
 않는다. 전체 항목 수와 목록 내용 확인값은 이동 대상 목록이 빠짐없고 바뀌지 않았는지 확인한다.
 Membership의 기준은 §1.2가 정한다.
 
-Target을 확인할 때는 object ID, `StoreVersion`, 종류와 stable type, source와 target의 host 실행
-세대와 owner 정보를 함께 확인한다.
+Target 공간을 확보할 때는 object ID, `StoreVersion`, 종류와 stable type, source와 target의
+host 실행 세대, owner 정보와 필요한 공간을 모두 고정한다.
 
 | 확인 결과 | 처리 |
 |---|---|
 | 현재 owner와 사용 중인 공간이 요청과 같음 | Target 검사를 계속한다. |
 | Source descriptor가 없거나 그 owner lease가 만료됨 | Relocation을 자동으로 이어받지 않는다. 남은 staging record와 payload는 정리 대상으로 둔다. |
-| Target host 실행 세대, owner lease, 제공 type과 남은 공간이 모두 유효함 | 이동을 계속한다. 수용 공간은 owner를 바꾸는 CAS가 옮긴다(§6.1). |
+| Target host 실행 세대, owner lease, 제공 type과 남은 공간이 모두 유효함 | Target 공간을 같은 Store 요청에서 확보한다. |
+| 같은 Reservation ID와 같은 내용 | 앞서 발급한 값을 다시 반환한다. |
+| 같은 ID의 내용이 다르거나 target이 만료됨 | `Conflict`이며 아무것도 변경하지 않는다. |
+
+공간을 확보했다는 사실만으로 owner를 바꾸거나 source의 새 작업을 허용하지 않는다. 시간이
+지났다는 이유만으로 공간을 반환하지 않는다. 실행 중인 source와 target이 Location Store의
+정확한 record를 확인한 뒤에만 계속하거나 취소할 수 있다.
 
 `SpotWide` User Spot 전체를 옮길 때는 두 종류의 Store 변경만 허용한다.
 
@@ -1350,8 +1356,8 @@ target attempt가 다르면 이전 attempt의 temporary queue와 조립 상태�
 재사용한다. 같은 결합 값에 다른 길이나 checksum이 도착하면 기존 조립 상태를 재사용하지도
 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다.
 
-**Authority commit(위 "Owner 변경" 행의 CAS)은 authority row 자신의 identity — 처음 읽은
-`StoreVersion`과 이 CAS가 어느 이동에 속하는지 식별하는 generation(`AuthorityOwnerGeneration`, target
+**Authority commit(위 "Owner 변경" 행의 CAS)은 authority row 자신의 identity — reservation
+id와 이 CAS가 어느 이동에 속하는지 식별하는 generation(`AuthorityOwnerGeneration`, target
 attempt) — 만 fence한다.** Target node의 liveness나 target의 lifecycle generation 검증은
 여기서 하지 않으며, 그 검증은 Restore 이전에 실행된 admission/join 경로(§7)의 책임이지 Store
 commit 자체의 책임이 아니다. 일치하는 identity fence 아래 성공한 Store commit은 그 순간
@@ -1446,7 +1452,7 @@ Relay-ready reply가 accepted 상태가 되기 전 명시적으로 취소할 때
    하는 일 — matching seal 해제와 held message 제출 순서 — 은
    [session/02 「8. Actor relocation 중 Session의 책임」](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
    정의한다. 여기서는 적용 reply를 기다리지 않는다는 사실만 필요하다.
-4. Target의 조립 중인 chunk staging을 정리한다.
+4. 확보한 target 공간과 target의 조립 중인 chunk staging을 정리한다.
 5. Location Store를 읽거나 쓰지 않고 source owner, generation과 사용 중인 공간을 유지하며
    이동 진행 정보만 제거한다.
 6. Source가 새 작업을 다시 받는다.

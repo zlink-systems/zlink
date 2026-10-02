@@ -459,7 +459,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 | 공통 개념 | Node.js |
 | 자동 종료(기본) | framework가 `onApplicationShutdown()`에서 진행 중인 host 종료에 합류하거나 `Shutdown`을 시작한다 |
 | `Shutdown` 순서 | 신규 application 수락 차단 → 이미 수락한 실행 차례와 request 완료 → 진행 중인 relocation·STREAM barrier 확인 → local object·ownership·peer resource 정리 → 필요하면 제한된 강제 종료 |
-| `Retire` 순서 | all-or-none preflight → target 확인 → admission seal → Actor·Instance Spot continuity relocation → STREAM barrier → host resource 정리 |
+| `Retire` 순서 | all-or-none preflight → target reservation → admission seal → Actor·Instance Spot continuity relocation → STREAM barrier → host resource 정리 |
 | Spot 재생성 경계 | public `create`·`getOrCreate`는 local-only다. Instance address cold activation과 명시적 `Retire` target materialization만 별도 계약으로 실행되며 stale handle은 숨은 remote create를 시작하지 않는다 |
 | 명시 제어 | host singleton `ZLinkFrameworkRuntime`의 `retire(options?)`와 `shutdown(options?)`; 기본 deadline은 30,000ms이고 `AbortSignal`은 waiter만 끝낸다 |
 | 종료 결과 | `ZLinkTerminationResult`가 effective intent, `Stopped|Blocked|ForceStopped` outcome과 닫힌 reason을 함께 제공한다 |

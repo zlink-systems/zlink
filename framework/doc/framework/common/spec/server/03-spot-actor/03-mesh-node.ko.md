@@ -56,7 +56,7 @@ MeshNode automatic RID의 발급·형식·충돌·lifecycle 규칙은
 
 ### 3.2 Entry Spot ID
 
-Object Server MeshNode의 Entry Spot ID 발급·형식 규칙은
+Object Server MeshNode의 Entry Spot ID 발급·형식·충돌 규칙은
 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 
 Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
@@ -442,7 +442,7 @@ runtime snapshot과 event)만으로 다음을 확인한다.
   `Server`가 아닌 node의 descriptor에는 없다.
 - Entry Spot ID가 MeshNode와 같은 diagnostic prefix, 별도로 생성한 UUID v4를 사용하며 descriptor가
   lifecycle mapping을 공개한다.
-- Replacement lifecycle이 새 Entry Spot ID를 발급한다.
+- Replacement lifecycle이 새 Entry Spot ID를 발급하고 Entry Spot authority 충돌에서 즉시 실패한다.
 - Stable type 중복과 relocation policy 생략이 startup에서 실패한다.
 - Placement weight는 `0`, 기본값 `100`과 상한 `10000`을 허용하고 `-1`과 `10001`은
   startup 설정과 runtime 변경에서 거부한다.
