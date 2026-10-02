@@ -179,7 +179,7 @@ final class ZLinkJavaRawMeshNode
     private volatile Map<RoutingId, Long> selectedRoutes = Map.of();
     private final Map<RoutingId, String> admissionControlReadyConnections =
             new ConcurrentHashMap<>();
-    private final Map<RoutingId, Long> announcedRouteGenerations = new ConcurrentHashMap<>();
+    final Map<RoutingId, Long> announcedRouteGenerations = new ConcurrentHashMap<>();
     private volatile RoutingId routingId;
     private volatile String bindEndpoint;
     private volatile String advertiseHost;
@@ -984,13 +984,20 @@ final class ZLinkJavaRawMeshNode
         PeerIntent removed = peerIntents.remove(connectionIntentId);
         closedPeerIntents.remove(connectionIntentId);
         closeRequestedPeerIntents.remove(connectionIntentId);
-        peerIntentRoutingIds.remove(connectionIntentId);
+        RoutingId learnedRoutingId = peerIntentRoutingIds.remove(connectionIntentId);
         if (removed != null && router != null) {
             if (removed.expectedRoutingId() != null) {
                 notRequiredPeers.remove(removed.expectedRoutingId());
                 rejectedPeers.remove(removed.expectedRoutingId());
                 disconnectAdmitted(removed.expectedRoutingId());
                 forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
+            }
+            RoutingId announcementRid =
+                    removed.expectedRoutingId() != null
+                            ? removed.expectedRoutingId()
+                            : learnedRoutingId;
+            if (announcementRid != null) {
+                announcedRouteGenerations.remove(announcementRid);
             }
             if (disconnectEndpoint) {
                 router.disconnect(removed.endpoint());
@@ -6670,9 +6677,10 @@ final class ZLinkJavaRawMeshNode
     }
 
     /**
-     * admission을 확립한 선택 route가 종료되었다. intent는 유지하고 endpoint reconnect는 Core가
-     * 소유한다(transport-liveness §6). 제출한 generation을 제거하여 다음 선택 route에서 HELLO를 한 번 제출한다. expected
-     * RID가 없는 intent는 새 handshake에서 RID를 다시 확인한다.
+     * The selected route that established admission has ended. Core owns endpoint reconnect while
+     * the intent remains (transport-liveness §6). Clear the submitted generation so the next
+     * selected route receives HELLO once. An intent without an expected RID resolves it through the
+     * new handshake.
      */
     private void endRouteAdmission(RoutingId peerRid) {
         disconnectAdmitted(peerRid);
@@ -6744,42 +6752,48 @@ final class ZLinkJavaRawMeshNode
                 });
     }
 
-    /** 설정된 intent가 소유한 미승인 선택 route에 HELLO를 제출한다. 같은 route generation에서는 한 번만 제출한다. */
+    /** Submits HELLO once per selected route generation owned by an unadmitted intent. */
     private void announceExpectedPeers() {
         if (peerAdmissionSealed.getAsBoolean()) {
             return;
         }
         Map<RoutingId, Long> routes = selectedRoutes;
         Set<RoutingId> owned = new HashSet<>();
-        boolean intentWithoutRoutingId = false;
+        Map.Entry<Long, PeerIntent> intentWithoutRoutingId = null;
         for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
             RoutingId expected =
                     entry.getValue().expectedRoutingId() != null
                             ? entry.getValue().expectedRoutingId()
                             : peerIntentRoutingIds.get(entry.getKey());
             if (expected == null) {
-                intentWithoutRoutingId |=
-                        !closeRequestedPeerIntents.contains(entry.getKey())
-                                && !closedPeerIntents.contains(entry.getKey());
+                if (!closeRequestedPeerIntents.contains(entry.getKey())
+                        && !closedPeerIntents.contains(entry.getKey())) {
+                    intentWithoutRoutingId = entry;
+                }
                 continue;
             }
             owned.add(expected);
-            announce(expected, routes);
+            announce(expected, routes, entry.getKey(), entry.getValue());
         }
-        if (!intentWithoutRoutingId) {
+        if (intentWithoutRoutingId == null) {
             return;
         }
         // An endpoint-only intent cannot address its route before it knows
-        // the peer RID. It greets every selected route no intent owns; the
+        // the peer RID. It submits HELLO on selected routes no intent owns; the
         // advertised endpoint in the reply identifies its own route.
         for (RoutingId peerRid : routes.keySet()) {
             if (!owned.contains(peerRid)) {
-                announce(peerRid, routes);
+                announce(
+                        peerRid,
+                        routes,
+                        intentWithoutRoutingId.getKey(),
+                        intentWithoutRoutingId.getValue());
             }
         }
     }
 
-    private void announce(RoutingId peerRid, Map<RoutingId, Long> routes) {
+    private void announce(
+            RoutingId peerRid, Map<RoutingId, Long> routes, long intentId, PeerIntent intent) {
         Long generation = routes.get(peerRid);
         if (generation == null
                 || topology.peer(peerRid).isPresent()
@@ -6787,11 +6801,20 @@ final class ZLinkJavaRawMeshNode
                 || generation.equals(announcedRouteGenerations.get(peerRid))) {
             return;
         }
-        announcedRouteGenerations.put(peerRid, generation);
-        port.send(
-                requireStarted(),
-                peerRid,
-                List.of(wire.encodeAdmission(ServiceWireConstants.COMMAND_HELLO, localDescriptor)));
+        CompletionStage<Void> submission =
+                port.send(
+                        requireStarted(),
+                        peerRid,
+                        List.of(
+                                wire.encodeAdmission(
+                                        ServiceWireConstants.COMMAND_HELLO, localDescriptor)));
+        if (ZLinkOneWayCalls.isImmediateAdmission(submission)
+                || !submission.toCompletableFuture().isCompletedExceptionally()) {
+            announcedRouteGenerations.compute(
+                    peerRid,
+                    (ignored, announced) ->
+                            peerIntents.get(intentId) == intent ? generation : announced);
+        }
     }
 
     private void tickLiveness(long nowNanos) {

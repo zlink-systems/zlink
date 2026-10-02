@@ -227,7 +227,18 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 // (mesh-node §7.1); replacement closes it through the owner.
                 replaceAfterClose(
                         local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
-                await(() -> local.isPeerTransportConnected(remoteRid));
+                var selectedRouteObserved = new CountDownLatch(2);
+                local.setPeerAdmissionSealGate(
+                        () -> {
+                            if (local.isPeerTransportConnected(remoteRid)) {
+                                selectedRouteObserved.countDown();
+                            }
+                            return drains.isSealed("mesh");
+                        });
+                await(() -> selectedRouteObserved.getCount() == 0);
+                assertFalse(
+                        local.announcedRouteGenerations.containsKey(remoteRid),
+                        "sealed selected route must not have an announcement");
                 assertEquals(MeshNodeState.DRAINING, local.status().state());
                 assertEquals(ZLinkServiceNodeDescriptor.State.DRAINING, descriptor(local).state());
                 assertFalse(admitted(replacement));

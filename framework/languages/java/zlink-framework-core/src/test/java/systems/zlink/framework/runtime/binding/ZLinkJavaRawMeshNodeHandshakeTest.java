@@ -38,6 +38,34 @@ final class ZLinkJavaRawMeshNodeHandshakeTest {
     }
 
     @Test
+    void removedIntentCanHandshakeAgainOnTheSameSelectedRoute() {
+        RoutingId peerRid = RoutingId.from("java-1156-renewed-peer");
+        try (var context = Zlink.createContext();
+                var local = new ZLinkJavaRawMeshNode(context, "mesh");
+                var port = new ZLinkJavaRawServicePort(context);
+                var peer = port.openRouter(peerRid);
+                var endpointPeer = port.openRouter(RoutingId.from("java-1156-intent-endpoint"))) {
+            String localEndpoint = "inproc://java-1156-renewed-local-" + System.nanoTime();
+            String intentEndpoint = "inproc://java-1156-intent-endpoint-" + System.nanoTime();
+            endpointPeer.bind(intentEndpoint);
+            local.setRoutingId(RoutingId.from("java-1156-renewed-local"));
+            local.setBind(localEndpoint);
+            local.start();
+            peer.options().probe(true);
+            peer.connect(localEndpoint);
+            long intent = local.connectPeer(intentEndpoint, peerRid);
+            assertEquals(ServiceWireConstants.COMMAND_HELLO, receiveCommand(port, peer));
+            long generation = port.routesSnapshot(peer).getFirst().routeGeneration();
+            local.removePeerConnection(intent);
+            assertTrue(local.isPeerTransportConnected(peerRid));
+            local.connectPeer(intentEndpoint, peerRid);
+            assertEquals(ServiceWireConstants.COMMAND_HELLO, receiveCommand(port, peer));
+            assertEquals(generation, port.routesSnapshot(peer).getFirst().routeGeneration());
+            assertNull(receiveCommand(port, peer));
+        }
+    }
+
+    @Test
     void sealedSelectedRouteDoesNotReceiveHello() {
         try (var context = Zlink.createContext();
                 var local = new ZLinkJavaRawMeshNode(context, "mesh");
