@@ -150,14 +150,13 @@ public sealed class test_optimization_guard
     [Fact]
     public void shutdown_errno_maps_to_terminated_submit_result()
     {
-        string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
-            "Errors", "ZlinkException.Native.cs");
-        string source = File.ReadAllText(path);
-
-        Assert.Contains("EshutdownFallback", source,
-            StringComparison.Ordinal);
-        Assert.Contains("(int)ErrorCode.EShutdown or 58 or 10058 or EshutdownFallback", source,
-            StringComparison.Ordinal);
+        Type exceptionType = typeof(ZlinkException);
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(exceptionType,
+            "IsTerminationError", CoreTestSupport.Errno("ESHUTDOWN"))!);
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(exceptionType,
+            "IsTerminationError", CoreTestSupport.Errno("ETERM"))!);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(exceptionType,
+            "IsTerminationError", CoreTestSupport.Errno("EAGAIN"))!);
     }
 
     [Fact]

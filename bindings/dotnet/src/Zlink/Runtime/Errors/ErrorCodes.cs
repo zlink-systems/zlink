@@ -47,45 +47,65 @@ internal enum ConfigResult
     Busy = 709
 }
 
-internal enum ErrorCode
+internal static class ErrorCode
 {
-    None = 0,
-    Unknown = -1,
+    internal static readonly int EBusy;
+    internal static readonly int EAgain;
+    internal static readonly int EBadf;
+    internal static readonly int ENoent;
+    internal static readonly int ESrch;
+    internal static readonly int EIo;
+    internal static readonly int EAccess;
+    internal static readonly int EExist;
+    internal static readonly int EInval;
+    internal static readonly int ENotSock;
+    internal static readonly int EProtoNoSupport;
+    internal static readonly int EProto;
+    internal static readonly int ENotSup;
+    internal static readonly int EAfNoSupport;
+    internal static readonly int ENotConn;
+    internal static readonly int ETimedOut;
+    internal static readonly int EShutdown;
+    internal static readonly int Efsm;
+    internal static readonly int Eterm;
 
-    EBusy = 16,
-    EIntr = 4,
-    EAgain = 11,
-    EBadf = 9,
-    ENoent = 2,
-    ENomem = 12,
-    EIo = 5,
-    EAccess = 13,
-    EExist = 17,
-    EFault = 14,
-    EInval = 22,
-    ENotSock = 88,
-    EMsgSize = 90,
-    EProtoNoSupport = 93,
-    EProto = 71,
-    ENotSup = 95,
-    EAfNoSupport = 97,
-    EAddrInUse = 98,
-    EAddrNotAvail = 99,
-    ENetDown = 100,
-    ENetUnreach = 101,
-    ENetReset = 102,
-    EConnAborted = 103,
-    EConnReset = 104,
-    ENoBufs = 105,
-    ENotConn = 107,
-    ETimedOut = 110,
-    EConnRefused = 111,
-    EHostUnreach = 113,
-    EInProgress = 115,
-    EShutdown = 108,
-
-    Efsm = 156384763,
-    EnoCompatProto = 156384764,
-    Eterm = 156384765,
-    EmThread = 156384766
+    static ErrorCode()
+    {
+        string platform = OperatingSystem.IsWindows() ? "windows"
+            : OperatingSystem.IsMacOS() ? "darwin"
+            : OperatingSystem.IsLinux() ? "linux"
+            : throw new PlatformNotSupportedException();
+        using Stream stream = typeof(ErrorCode).Assembly.GetManifestResourceStream(
+            $"Zlink.Errno.{platform}.properties")
+            ?? throw new InvalidOperationException("Core errno resource is missing.");
+        using var reader = new StreamReader(stream);
+        var values = new Dictionary<string, int>(StringComparer.Ordinal);
+        while (reader.ReadLine() is { } line)
+        {
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+            int separator = line.IndexOf('=');
+            values.Add(line[..separator], int.Parse(line[(separator + 1)..],
+                System.Globalization.CultureInfo.InvariantCulture));
+        }
+        EBusy = values["EBUSY"];
+        EAgain = values["EAGAIN"];
+        EBadf = values["EBADF"];
+        ENoent = values["ENOENT"];
+        ESrch = values["ESRCH"];
+        EIo = values["EIO"];
+        EAccess = values["EACCES"];
+        EExist = values["EEXIST"];
+        EInval = values["EINVAL"];
+        ENotSock = values["ENOTSOCK"];
+        EProtoNoSupport = values["EPROTONOSUPPORT"];
+        EProto = values["EPROTO"];
+        ENotSup = values["ENOTSUP"];
+        EAfNoSupport = values["EAFNOSUPPORT"];
+        ENotConn = values["ENOTCONN"];
+        ETimedOut = values["ETIMEDOUT"];
+        EShutdown = values["ESHUTDOWN"];
+        Efsm = values["EFSM"];
+        Eterm = values["ETERM"];
+    }
 }

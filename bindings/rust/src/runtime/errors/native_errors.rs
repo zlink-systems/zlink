@@ -39,19 +39,7 @@ pub(crate) fn submit_error_from_rc(rc: i32, native_errno: i32) -> SubmitError {
 /// Core already projected the result; each native value is the public value
 /// with the same number.
 pub(crate) fn config_result_from_native(result: ffi::zlink_config_result_t) -> ConfigResult {
-    use ffi::zlink_config_result_t as Native;
-    match result {
-        Native::ZLINK_CONFIG_OK => ConfigResult::Ok,
-        Native::ZLINK_CONFIG_INVALID_HANDLE => ConfigResult::InvalidHandle,
-        Native::ZLINK_CONFIG_INVALID_ARGUMENT => ConfigResult::InvalidArgument,
-        Native::ZLINK_CONFIG_NOT_SUPPORTED => ConfigResult::NotSupported,
-        Native::ZLINK_CONFIG_INTERNAL_ERROR => ConfigResult::InternalError,
-        Native::ZLINK_CONFIG_INVALID_STATE => ConfigResult::InvalidState,
-        Native::ZLINK_CONFIG_NOT_FOUND => ConfigResult::NotFound,
-        Native::ZLINK_CONFIG_CONFLICT => ConfigResult::Conflict,
-        Native::ZLINK_CONFIG_BUFFER_TOO_SMALL => ConfigResult::BufferTooSmall,
-        Native::ZLINK_CONFIG_BUSY => ConfigResult::Busy,
-    }
+    config_result_from_rc(result as i32)
 }
 
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
@@ -162,15 +150,16 @@ pub(crate) fn check_config_rc(rc: i32) -> Result<(), ConfigError> {
 
 fn config_result_from_rc(rc: i32) -> ConfigResult {
     match rc {
-        701 => ConfigResult::InvalidHandle,
-        702 => ConfigResult::InvalidArgument,
-        703 => ConfigResult::NotSupported,
-        704 => ConfigResult::InternalError,
-        705 => ConfigResult::InvalidState,
-        706 => ConfigResult::NotFound,
-        707 => ConfigResult::Conflict,
-        708 => ConfigResult::BufferTooSmall,
-        709 => ConfigResult::Busy,
+        value if value == ConfigResult::Ok as i32 => ConfigResult::Ok,
+        value if value == ConfigResult::InvalidHandle as i32 => ConfigResult::InvalidHandle,
+        value if value == ConfigResult::InvalidArgument as i32 => ConfigResult::InvalidArgument,
+        value if value == ConfigResult::NotSupported as i32 => ConfigResult::NotSupported,
+        value if value == ConfigResult::InternalError as i32 => ConfigResult::InternalError,
+        value if value == ConfigResult::InvalidState as i32 => ConfigResult::InvalidState,
+        value if value == ConfigResult::NotFound as i32 => ConfigResult::NotFound,
+        value if value == ConfigResult::Conflict as i32 => ConfigResult::Conflict,
+        value if value == ConfigResult::BufferTooSmall as i32 => ConfigResult::BufferTooSmall,
+        value if value == ConfigResult::Busy as i32 => ConfigResult::Busy,
         _ => ConfigResult::InternalError,
     }
 }

@@ -2,13 +2,14 @@
 
 package systems.zlink.contracts.errors;
 
+import systems.zlink.internal.NativeErrorCodes;
 
 /** Native zlink-specific errno values above the POSIX range. */
 enum ErrorCode {
-    EFSM(156384763),
-    ENOCOMPATPROTO(156384764),
-    ETERM(156384765),
-    EMTHREAD(156384766);
+    EFSM(NativeErrorCodes.EFSM),
+    ENOCOMPATPROTO(NativeErrorCodes.ENOCOMPATPROTO),
+    ETERM(NativeErrorCodes.ETERM),
+    EMTHREAD(NativeErrorCodes.EMTHREAD);
 
     private final int value;
     ErrorCode(int v) { this.value = v; }

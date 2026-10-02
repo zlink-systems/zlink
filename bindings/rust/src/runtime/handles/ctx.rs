@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString, c_void};
 use std::time::Duration;
 
 use crate::core_context::{AutoHwmProfile, AutoHwmRecalcReason, Context, CoreHwmBudgetSnapshot};
-use crate::error::{CloseError, ConfigError, ConfigResult};
+use crate::error::{CloseError, ConfigError};
 use crate::ffi;
 use crate::internal::ContextStorage;
 use crate::native_errors::{check_close_rc, check_config_rc, config_validation_error, last_errno};
@@ -136,20 +136,8 @@ impl ContextStorage {
     fn get_int_option(&self, option: i32) -> Result<i32, ConfigError> {
         let mut result = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
         let value = unsafe { ffi::zlink_ctx_get(self.handle, raw_option(option), &mut result) };
-        if result != ffi::zlink_config_result_t::ZLINK_CONFIG_OK {
-            let code = match result {
-                ffi::zlink_config_result_t::ZLINK_CONFIG_INVALID_HANDLE => {
-                    ConfigResult::InvalidHandle
-                }
-                ffi::zlink_config_result_t::ZLINK_CONFIG_NOT_SUPPORTED => {
-                    ConfigResult::NotSupported
-                }
-                _ => ConfigResult::InvalidArgument,
-            };
-            Err(ConfigError::new(code, last_errno()))
-        } else {
-            Ok(value)
-        }
+        check_config_rc(result as i32)?;
+        Ok(value)
     }
 
     fn get_u64_data_option(&self, option: i32) -> Result<u64, ConfigError> {

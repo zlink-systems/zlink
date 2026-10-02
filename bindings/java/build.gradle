@@ -139,6 +139,10 @@ def windowsCorePackage = coreSource == 'release' && corePackagePrefix != null
 sourceSets {
     main {
         resources.srcDir(generatedNativeResourcesDir)
+        // builtBy makes every consumer of main resources (processResources,
+        // sourcesJar) depend on the generator.
+        resources.srcDir(files(layout.buildDirectory.dir('generated/zlink-errno-resources'))
+            .builtBy('prepareZlinkErrnoResources'))
     }
 }
 
@@ -300,6 +304,12 @@ tasks.register('prepareZlinkNativeResources') {
             }
         }
     }
+}
+
+tasks.register('prepareZlinkErrnoResources', Copy) {
+    from '../common/errno'
+    include '*.properties'
+    into layout.buildDirectory.dir('generated/zlink-errno-resources/systems/zlink/internal/errno')
 }
 
 processResources {
