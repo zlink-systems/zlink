@@ -32,7 +32,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     );
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
-    private static readonly TimeSpan AdmissionRetryInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan NativeReplySubmissionTimeout = TimeSpan.FromSeconds(5);
 
@@ -592,6 +591,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void NotifyPeerConnectionIntentRemoved(RoutingId target)
     {
+        var targets = RunInboundOperationState(() =>
+            _controlSends
+                .Keys.Where(key => key.Command == ServiceWireConstants.Command.Hello)
+                .Select(key => key.Target)
+                .Distinct()
+                .ToArray()
+        );
+        foreach (var routingId in targets)
+            if (
+                !_peerExpectations.ContainsKey(routingId)
+                && !_peersByIntent.Values.Any(intent =>
+                    IsHelloOwnedByIntentUnderLock(intent, routingId)
+                )
+            )
+                RetireHelloSubmissions(routingId);
         var hasOwner =
             _peerExpectations.ContainsKey(target)
             || _peersByIntent.Values.Any(intent =>
@@ -3357,6 +3371,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _ownedMailboxes.Clear();
         Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)?.Dispose();
         RunState(_selectedRoutes.Clear);
+        RunInboundOperationState(_controlSends.Clear);
         while (_pendingNativeTerminalReplies.TryDequeue(out var pendingReply))
             pendingReply.Dispose();
         foreach (var spot in _spots.Values)
@@ -5434,7 +5449,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // §10.1). Apply selected-route changes before dispatching the
                 // records that the same wait reported.
                 if (count > 0 && (events[0].Revents & PollEventFlags.PollRoute) != 0)
-                    ObserveSelectedRoutes(now);
+                    ObserveSelectedRoutes();
                 if (count > 0)
                     DrainRawSocket(cancellationToken, admissions);
                 ProcessInfrastructure(now);
@@ -6880,7 +6895,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceNodeRid,
         ReplyOperation nativeReply,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        (ZLinkServiceWireCodec.RelocationWireId RelocationId, ulong TargetAttemptGeneration) assemblyKey,
+        (
+            ZLinkServiceWireCodec.RelocationWireId RelocationId,
+            ulong TargetAttemptGeneration
+        ) assemblyKey,
         InboundRelocationPreparation preparation
     )
     {
@@ -6908,10 +6926,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // an explicit terminal.
                 target.ReadySubmissionFailed(prepare, sourceNodeRid);
                 _inboundRelocationAssemblies.TryRemove(
-                    new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
-                        assemblyKey,
-                        preparation
-                    )
+                    new KeyValuePair<
+                        (ZLinkServiceWireCodec.RelocationWireId, ulong),
+                        InboundRelocationPreparation
+                    >(assemblyKey, preparation)
                 );
                 ZLinkFrameworkDebugLog.TaskFailure(
                     "canonical-relocation-ready-submit",
@@ -6924,10 +6942,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}"
             );
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
-                    assemblyKey,
-                    preparation
-                )
+                new KeyValuePair<
+                    (ZLinkServiceWireCodec.RelocationWireId, ulong),
+                    InboundRelocationPreparation
+                >(assemblyKey, preparation)
             );
         }
         catch (Exception readySubmissionFailure) when (lease.IsPrepared)
@@ -6938,10 +6956,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // retransmitted Prepare submit READY again.
             target.ReadySubmissionFailed(prepare, sourceNodeRid);
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
-                    assemblyKey,
-                    preparation
-                )
+                new KeyValuePair<
+                    (ZLinkServiceWireCodec.RelocationWireId, ulong),
+                    InboundRelocationPreparation
+                >(assemblyKey, preparation)
             );
             ZLinkFrameworkDebugLog.TaskFailure(
                 "canonical-relocation-ready-submit",
@@ -6951,10 +6969,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (Exception exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
-                    assemblyKey,
-                    preparation
-                )
+                new KeyValuePair<
+                    (ZLinkServiceWireCodec.RelocationWireId, ulong),
+                    InboundRelocationPreparation
+                >(assemblyKey, preparation)
             );
             await SendRelocationPrepareFailureAsync(nativeReply, prepare, exception)
                 .ConfigureAwait(false);
@@ -7191,10 +7209,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (ZLinkRelocationDataLostException exception)
         {
             _inboundRelocationAssemblies.TryRemove(
-                new KeyValuePair<(ZLinkServiceWireCodec.RelocationWireId, ulong), InboundRelocationPreparation>(
-                    key,
-                    preparation
-                )
+                new KeyValuePair<
+                    (ZLinkServiceWireCodec.RelocationWireId, ulong),
+                    InboundRelocationPreparation
+                >(key, preparation)
             );
             preparation.Assembler.Fail(exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
@@ -8945,8 +8963,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         )
         {
             var closedRid = EndRouteAdmissionUnderLock(
-                new RouterRoute(sourceRid, previousRoutePeer.RouteGeneration),
-                Stopwatch.GetTimestamp()
+                new RouterRoute(sourceRid, previousRoutePeer.RouteGeneration)
             );
             if (closedRid is { } endedRid)
                 Publish(MeshMonitorEventKind.PeerClosed, peerRid: endedRid);
@@ -9293,7 +9310,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             (_peersByIntent.Values.ToArray(), _peersByRid.Values.ToArray())
         );
         bool? admissionSealed = null;
-        HashSet<RoutingId>? greetedRoutes = null;
 
         foreach (var intent in intents)
         {
@@ -9308,55 +9324,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
             )
                 continue;
-            if (now < intent.NextAdmissionTimestamp)
-                continue;
             admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
             if (admissionSealed.Value)
                 continue;
-            var (target, routeGeneration, unboundRoutes, hello) = RunState(() =>
+            var (target, routeGeneration, unboundRoutes) = RunState(() =>
             {
                 if (
                     !_peersByIntent.TryGetValue(intent.Id, out var current)
                     || !ReferenceEquals(current, intent)
                 )
-                    return (default(RoutingId), 0UL, Array.Empty<RoutingId>(), (byte[]?)null);
-                current.NextAdmissionTimestamp = Add(now, AdmissionRetryInterval);
+                    return (default(RoutingId), 0UL, Array.Empty<RoutingId>());
                 var rid =
                     current.ExpectedRid
-                    ?? (
-                        _selectedRoutes.GenerationOf(current.ResolvedRid) != 0
-                            ? current.ResolvedRid
-                            : default
-                    );
+                    ?? (NeedsUnboundHelloRouteUnderLock(current) ? default : current.ResolvedRid);
                 if (!rid.IsEmpty)
                 {
-                    return (
-                        rid,
-                        _selectedRoutes.GenerationOf(rid),
-                        Array.Empty<RoutingId>(),
-                        (byte[]?)null
-                    );
+                    return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>());
                 }
-                var routes = UnboundSelectedRoutesUnderLock();
-                return (
-                    default(RoutingId),
-                    0UL,
-                    routes,
-                    routes.Length == 0
-                        ? null
-                        : EncodeLocalAdmission(ServiceWireConstants.Command.Hello)
-                );
+                return (default(RoutingId), 0UL, UnboundSelectedRoutesUnderLock(current));
             });
             if (!target.IsEmpty && routeGeneration != 0)
-                SendControl(
-                    target,
-                    routeGeneration,
-                    ServiceWireConstants.Command.Hello,
-                    EncodeLocalAdmission(ServiceWireConstants.Command.Hello)
-                );
+                SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello, null);
             foreach (var routingId in unboundRoutes)
-                if ((greetedRoutes ??= []).Add(routingId))
-                    TryScheduleRoutedSend(routingId, [hello!]);
+                SendControl(
+                    routingId,
+                    RunState(() => _selectedRoutes.GenerationOf(routingId)),
+                    ServiceWireConstants.Command.Hello,
+                    null
+                );
         }
 
         foreach (var peer in peers)
@@ -9370,8 +9365,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 var closed = RunState(() =>
                     EndRouteAdmissionUnderLock(
-                        new RouterRoute(peer.RoutingId, peer.RouteGeneration),
-                        now
+                        new RouterRoute(peer.RoutingId, peer.RouteGeneration)
                     )
                 );
                 if (closed is { } closedRid)
@@ -9446,7 +9440,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // Reads Core's selected-route snapshot and ends the logical admission of
     // every RID whose observed route disappeared or was replaced. Only the
     // receive loop calls this, so the socket has one route observer.
-    private void ObserveSelectedRoutes(long now)
+    private void ObserveSelectedRoutes()
     {
         IReadOnlyList<RouterRoute> routes;
         lock (_socketGate)
@@ -9461,7 +9455,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             var closedRids = new List<RoutingId>();
             foreach (var ended in _selectedRoutes.Apply(routes))
-                if (EndRouteAdmissionUnderLock(ended, now) is { } peerRid)
+                if (EndRouteAdmissionUnderLock(ended) is { } peerRid)
                     closedRids.Add(peerRid);
             return closedRids;
         });
@@ -9469,9 +9463,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.PeerClosed, peerRid: peerRid);
     }
 
-    private RoutingId? EndRouteAdmissionUnderLock(RouterRoute ended, long now)
+    private RoutingId? EndRouteAdmissionUnderLock(RouterRoute ended)
     {
         var routingId = ended.RoutingId;
+        RetireHelloSubmissions(routingId, ended.RouteGeneration);
         _peersByRid.TryGetValue(routingId, out var peer);
         // A handshake already made on the replacing route (its record can
         // precede this observation) is not ended by the old route.
@@ -9513,21 +9508,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.Liveness = null;
         var endedRid = peer.RoutingId;
         RebuildChannelSelectionPlansUnderLock();
-        ScheduleAdmissionRetryForRouteUnderLock(endedRid, now);
         SetPeerLossStateUnderLock();
         return endedRid;
-    }
-
-    private void ScheduleAdmissionRetryForRouteUnderLock(RoutingId endedRid, long now)
-    {
-        foreach (
-            var intent in _peersByIntent.Values.Where(intent =>
-                intent.ResolvedRid == endedRid || intent.ExpectedRid == endedRid
-            )
-        )
-        {
-            intent.NextAdmissionTimestamp = now;
-        }
     }
 
     private SubmitResult SubmitRequest(
@@ -11674,7 +11656,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ConnectPeerCore(ZLinkMeshConnectionIntent intent)
     {
         ConnectPeerTransport(intent);
-        intent.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_connect local={_routingId} peer={ZLinkFrameworkDebugLog.OrAbsent(intent.ExpectedRid)} endpoint={intent.Endpoint} intent={intent.Id}"
         );
@@ -11745,30 +11726,59 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceSecurityIdentity.Plaintext
         );
 
-    private RoutingId[] UnboundSelectedRoutesUnderLock() =>
+    private RoutingId[] UnboundSelectedRoutesUnderLock(ZLinkMeshConnectionIntent intent) =>
         _selectedRoutes
             .RoutingIds.Where(routingId =>
-                !_peersByRid.ContainsKey(routingId)
+                IsHelloOwnedByIntentUnderLock(intent, routingId)
                 && !_peersByIntent.Values.Any(intent =>
                     intent.ResolvedRid == routingId || intent.ExpectedRid == routingId
                 )
             )
             .ToArray();
 
+    private bool NeedsUnboundHelloRouteUnderLock(ZLinkMeshConnectionIntent intent) =>
+        intent.ExpectedRid is null && _selectedRoutes.GenerationOf(intent.ResolvedRid) == 0;
+
+    private bool IsHelloOwnedByIntentUnderLock(
+        ZLinkMeshConnectionIntent intent,
+        RoutingId target
+    ) =>
+        intent.ExpectedRid == target
+        || intent.ResolvedRid == target
+        || NeedsUnboundHelloRouteUnderLock(intent)
+            && _selectedRoutes.GenerationOf(target) != 0
+            && !_peersByRid.ContainsKey(target);
+
+    private static bool IsValidControlHead(ServiceWireConstants.Command command, byte[] head) =>
+        TryGetInfrastructureControlCommand([head], out var encodedCommand)
+        && encodedCommand == command
+        && IsInfrastructureControlFrameShape(command, 1)
+        && IsWithinInfrastructureControlBounds([head], command);
+
+    private void RetireHelloSubmissions(RoutingId target, ulong? routeGeneration = null) =>
+        RunInboundOperationState(() =>
+        {
+            foreach (
+                var key in _controlSends
+                    .Keys.Where(key =>
+                        key.Command == ServiceWireConstants.Command.Hello
+                        && key.Target == target
+                        && (routeGeneration is null || key.RouteGeneration == routeGeneration)
+                    )
+                    .ToArray()
+            )
+                _controlSends.Remove(key);
+        });
+
     private bool SendControl(
         RoutingId target,
         ulong routeGeneration,
         ServiceWireConstants.Command command,
-        byte[] head,
+        byte[]? head,
         SendOperation? exactFirstAttempt = null
     )
     {
-        if (
-            !TryGetInfrastructureControlCommand([head], out var encodedCommand)
-            || encodedCommand != command
-            || !IsInfrastructureControlFrameShape(command, 1)
-            || !IsWithinInfrastructureControlBounds([head], command)
-        )
+        if (routeGeneration == 0 || head is not null && !IsValidControlHead(command, head))
             return false;
 
         var key = new ControlSendKey(target, routeGeneration, command);
@@ -11782,12 +11792,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return ((ControlSendState?)null, false);
                 if (_controlSends.TryGetValue(key, out var current))
                 {
+                    if (command == ServiceWireConstants.Command.Hello)
+                        // 같은 generation의 진행 중인 제출 또는 수락 기록을 재사용한다.
+                        return (current, false);
                     // Admission and liveness are retryable state signals. If a
                     // previous attempt is still waiting for Core admission,
                     // retain only the newest signal for this peer epoch and
                     // command. This bounds temporal amplification without
                     // moving retry or completion ownership out of Core.
-                    current.Pending = new ControlSendAttempt(head, exactFirstAttempt);
+                    current.Pending = new ControlSendAttempt(head!, exactFirstAttempt);
                     return (current, false);
                 }
 
@@ -11806,25 +11819,43 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!start)
             return true;
 
-        if (
-            RunRoutedOperation(() =>
-                DrainControlSendAsync(
-                    key,
-                    state,
-                    head,
-                    exactFirstAttempt,
-                    _stop?.Token ?? CancellationToken.None
+        try
+        {
+            if (head is null)
+            {
+                head = RunState(() => EncodeLocalAdmission(command));
+                if (!IsValidControlHead(command, head))
+                    return false;
+            }
+            if (
+                RunRoutedOperation(() =>
+                    DrainControlSendAsync(
+                        key,
+                        state,
+                        head,
+                        exactFirstAttempt,
+                        _stop?.Token ?? CancellationToken.None
+                    )
                 )
             )
-        )
-            return true;
-
-        RunInboundOperationState(() =>
+            {
+                start = false;
+                return true;
+            }
+            return false;
+        }
+        finally
         {
-            if (_controlSends.TryGetValue(key, out var current) && ReferenceEquals(current, state))
-                _controlSends.Remove(key);
-        });
-        return false;
+            if (start)
+                RunInboundOperationState(() =>
+                {
+                    if (
+                        _controlSends.TryGetValue(key, out var current)
+                        && ReferenceEquals(current, state)
+                    )
+                        _controlSends.Remove(key);
+                });
+        }
     }
 
     private async Task DrainControlSendAsync(
@@ -11835,11 +11866,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
+        var accepted = false;
         try
         {
             while (true)
             {
-                bool accepted;
                 if (exactFirstAttempt is not null)
                 {
                     // The exact operation snapshots the physical route, but
@@ -11890,6 +11921,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         || !ReferenceEquals(current, state)
                     )
                         return null;
+                    if (key.Command == ServiceWireConstants.Command.Hello)
+                    {
+                        // 수락 뒤의 entry가 HELLO 제출 사실을 소유한다. 실패는 새 기회를 막지 않는다.
+                        if (!accepted)
+                            _controlSends.Remove(key);
+                        return null;
+                    }
                     var pending = state.Pending;
                     state.Pending = null;
                     if (pending is null)
@@ -11904,14 +11942,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         finally
         {
-            RunInboundOperationState(() =>
-            {
-                if (
-                    _controlSends.TryGetValue(key, out var current)
-                    && ReferenceEquals(current, state)
-                )
-                    _controlSends.Remove(key);
-            });
+            if (!accepted || key.Command != ServiceWireConstants.Command.Hello)
+                RunInboundOperationState(() =>
+                {
+                    if (
+                        _controlSends.TryGetValue(key, out var current)
+                        && ReferenceEquals(current, state)
+                    )
+                        _controlSends.Remove(key);
+                });
         }
     }
 
@@ -11966,7 +12005,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             command == ServiceWireConstants.Command.Hello
                 ? _selectedRoutes.GenerationOf(target) == routeGeneration
                     && _peersByIntent.Values.Any(intent =>
-                        intent.ResolvedRid == target || intent.ExpectedRid == target
+                        IsHelloOwnedByIntentUnderLock(intent, target)
                     )
                 : _peersByRid.TryGetValue(target, out var peer)
                     && peer.RouteGeneration == routeGeneration
@@ -12072,8 +12111,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // Route loss and control-send failure end the same admission epoch.
             // Only the matching Core route generation may be retired.
             var ended = EndRouteAdmissionUnderLock(
-                new RouterRoute(physicalRoutingId, routeGeneration),
-                Stopwatch.GetTimestamp()
+                new RouterRoute(physicalRoutingId, routeGeneration)
             );
             if (ended is { } rid)
             {
