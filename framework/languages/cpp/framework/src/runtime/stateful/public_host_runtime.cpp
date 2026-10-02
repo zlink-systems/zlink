@@ -5002,6 +5002,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         continue;
                     }
                     object_reserve_request_t reserve;
+                    reserve.operation_deadline = std::chrono::system_clock::time_point (
+                      std::chrono::milliseconds (request.target.deadline_unix_ms));
                     reserve.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
                     reserve.intent.stable_type = request.target.stable_type;
                     reserve.intent.request_content_reference = recovery_root.reference;
@@ -5077,7 +5079,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto committed =
                       store
                         ->commit ({reserve.key, reservation->fence,
-                                   encode_instance_spot_authority_payload (ready_state)})
+                                   encode_instance_spot_authority_payload (ready_state)},
+                                  {}, reserve.operation_deadline)
                         .result ()
                         .value ();
                     const auto *created = std::get_if<object_committed_t> (&committed);
@@ -5348,7 +5351,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
                     if (!materialized.accepted) {
                         (void) store
-                          ->abort ({{placement_object_kind_t::user_spot, global_id}, fence})
+                          ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
+                                   std::chrono::system_clock::time_point (
+                                     std::chrono::milliseconds (request.deadline_unix_ms)))
                           .result ()
                           .value ();
                         (void) _objects.abort_create (local.attempt);
@@ -5362,7 +5367,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         ->commit ({{placement_object_kind_t::user_spot, global_id},
                                    fence,
                                    ready_user_spot_authority_payload (
-                                     exact_ref, request.stable_type, fence.target)})
+                                     exact_ref, request.stable_type, fence.target)},
+                                  {},
+                                  std::chrono::system_clock::time_point (
+                                    std::chrono::milliseconds (request.deadline_unix_ms)))
                         .result ()
                         .value ();
                     const auto *ready = std::get_if<object_committed_t> (&committed);

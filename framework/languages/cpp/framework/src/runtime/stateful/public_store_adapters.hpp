@@ -100,114 +100,89 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || target.mesh_name.empty () || target.node_id.empty ())
             return {authority_publish_status_t::failed, std::nullopt};
         const auto key = authority_key (source);
-        // A relocation NewOwner CAS is conditioned on the StoreVersion the
-        // source fence carries (01 §6.1), so a source Preserve that changed
-        // only that version makes it conflict. Any other publish CAS is
-        // against the previous logical fence (ObjectGeneration +
-        // AuthorityOwnerGeneration): a version-only conflict re-reads and
-        // retries; only a fence change is a genuine conflict.
-        constexpr int max_attempts = 8;
-        for (int attempt = 0; attempt != max_attempts; ++attempt) {
-            const auto read = _store->read_authority (key).result ().value ();
-            const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-            if (!snapshot || snapshot->object_generation != source.object_generation
-                || snapshot->authority_owner_generation != source.authority_owner_generation) {
-                if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
-                    std::cerr << "zlink authority-publish stage=snapshot-mismatch key="
-                              << source.key << " expected-object=" << source.object_generation
-                              << " expected-owner=" << source.authority_owner_generation;
-                    if (snapshot != nullptr) {
-                        std::cerr << " snapshot-object=" << snapshot->object_generation
-                                  << " snapshot-owner=" << snapshot->authority_owner_generation;
-                    } else {
-                        std::cerr << " snapshot=absent";
-                    }
-                    std::cerr << '\n';
-                }
-                return {authority_publish_status_t::conflict, decode_current (read)};
-            }
-
-            if (target_placement.mesh_name != target.mesh_name
-                || target_placement.node_rid.value () != target.node_id
-                || !same_owner (target_placement.owner, target_owner))
-                return {authority_publish_status_t::failed, std::nullopt};
-            std::string cas_version =
-              expected_store_version.empty () ? snapshot->store_version : expected_store_version;
-            if (source.kind == object_kind_t::actor && !expected_store_version.empty ()
-                && snapshot->store_version != expected_store_version) {
-                const auto source_payload =
-                  runtime::decode_direct_actor_authority_payload (snapshot->payload);
-                if (!source_payload || source_payload->relocation_phase != 2
-                    || source_payload->relocation_expected_store_version != expected_store_version)
-                    return {authority_publish_status_t::conflict, decode_current (read)};
-                // A captured source row advances StoreVersion while retaining
-                // the original coordinator fence for this relocation.
-                cas_version = snapshot->store_version;
-            }
-            std::vector<std::byte> application_payload = target_application_payload;
-            authority_relocation_reference_t reference{
-              source,
-              source,
-              relocation_reference,
-              checksum_crc32c,
-              inventory_digest,
-              target_owner,
-              application_payload.empty () ? snapshot->payload : std::move (application_payload)};
-            reference.target = target;
-            if (source.kind == object_kind_t::actor) {
-                const auto projection = runtime::decode_actor_authority_payload (
-                  reference.application_payload, snapshot->object_generation);
-                if (!projection || projection->actor.actor_id ().value () != source.key
-                    || projection->actor.node_rid ().value () != target.node_id
-                    || projection->actor.mesh_name () != target.mesh_name
-                    || projection->actor.object_generation () != target.object_generation)
-                    return {authority_publish_status_t::failed, std::nullopt};
-            }
-            const auto exchanged = _store
-                                     ->compare_exchange_authority (
-                                       key, cas_version,
-                                       authority_retarget_t{source.kind == object_kind_t::actor
-                                                              ? reference.application_payload
-                                                              : encode (reference),
-                                                            target_placement})
-                                     .result ()
-                                     .value ();
-            if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
-                if (source.kind == object_kind_t::actor) {
-                    reference.application_payload = stored->snapshot.payload;
-                    if (!same_owner (stored->snapshot.owner, target_owner))
-                        return {authority_publish_status_t::failed, std::nullopt};
-                    // Location Store authority generations are globally
-                    // allocated, so another object's commit can make the
-                    // durable target generation larger than source + 1.
-                    // Return the Store-assigned fence, not the proposal.
-                    reference.target.authority_owner_generation =
-                      stored->snapshot.authority_owner_generation;
-                    return {authority_publish_status_t::published, std::move (reference)};
-                }
-                auto current = decode (stored->snapshot);
-                if (!current || !same_owner (stored->snapshot.owner, target_owner)) {
-                    if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
-                        std::cerr << "zlink authority-publish stage=stored-owner-mismatch key="
-                                  << source.key << " decoded=" << (current ? 1 : 0) << '\n';
-                    }
-                    return {authority_publish_status_t::failed, std::move (current)};
-                }
-                return {authority_publish_status_t::published, std::move (current)};
-            }
-            const auto *conflict = std::get_if<authority_conflict_t> (&exchanged);
-            if (conflict == nullptr)
-                return {authority_publish_status_t::failed, std::nullopt};
+        const auto read = _store->read_authority (key).result ().value ();
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        if (!snapshot || snapshot->object_generation != source.object_generation
+            || snapshot->authority_owner_generation != source.authority_owner_generation) {
             if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
-                std::cerr << "zlink authority-publish stage=cas-conflict key=" << source.key
-                          << " attempt=" << attempt << '\n';
+                std::cerr << "zlink authority-publish stage=snapshot-mismatch key=" << source.key
+                          << " expected-object=" << source.object_generation
+                          << " expected-owner=" << source.authority_owner_generation;
+                if (snapshot != nullptr) {
+                    std::cerr << " snapshot-object=" << snapshot->object_generation
+                              << " snapshot-owner=" << snapshot->authority_owner_generation;
+                } else {
+                    std::cerr << " snapshot=absent";
+                }
+                std::cerr << '\n';
             }
-            if (!expected_store_version.empty () || attempt + 1 == max_attempts)
-                return {authority_publish_status_t::conflict, decode_current (conflict->current)};
+            return {authority_publish_status_t::conflict, decode_current (read)};
         }
-        return {authority_publish_status_t::failed, std::nullopt};
-    }
 
+        if (target_placement.mesh_name != target.mesh_name
+            || target_placement.node_rid.value () != target.node_id
+            || !same_owner (target_placement.owner, target_owner))
+            return {authority_publish_status_t::failed, std::nullopt};
+        if (!expected_store_version.empty () && snapshot->store_version != expected_store_version)
+            return {authority_publish_status_t::conflict, decode_current (read)};
+        const std::string cas_version =
+          expected_store_version.empty () ? snapshot->store_version : expected_store_version;
+        std::vector<std::byte> application_payload = target_application_payload;
+        authority_relocation_reference_t reference{
+          source,
+          source,
+          relocation_reference,
+          checksum_crc32c,
+          inventory_digest,
+          target_owner,
+          application_payload.empty () ? snapshot->payload : std::move (application_payload)};
+        reference.target = target;
+        if (source.kind == object_kind_t::actor) {
+            const auto projection = runtime::decode_actor_authority_payload (
+              reference.application_payload, snapshot->object_generation);
+            if (!projection || projection->actor.actor_id ().value () != source.key
+                || projection->actor.node_rid ().value () != target.node_id
+                || projection->actor.mesh_name () != target.mesh_name
+                || projection->actor.object_generation () != target.object_generation)
+                return {authority_publish_status_t::failed, std::nullopt};
+        }
+        const auto exchanged =
+          _store
+            ->compare_exchange_authority (key, cas_version,
+                                          authority_retarget_t{source.kind == object_kind_t::actor
+                                                                 ? reference.application_payload
+                                                                 : encode (reference),
+                                                               target_placement})
+            .result ()
+            .value ();
+        if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
+            if (source.kind == object_kind_t::actor) {
+                reference.application_payload = stored->snapshot.payload;
+                if (!same_owner (stored->snapshot.owner, target_owner))
+                    return {authority_publish_status_t::failed, std::nullopt};
+                // Location Store authority generations are globally
+                // allocated, so another object's commit can make the
+                // durable target generation larger than source + 1.
+                // Return the Store-assigned fence, not the proposal.
+                reference.target.authority_owner_generation =
+                  stored->snapshot.authority_owner_generation;
+                return {authority_publish_status_t::published, std::move (reference)};
+            }
+            auto current = decode (stored->snapshot);
+            if (!current || !same_owner (stored->snapshot.owner, target_owner)) {
+                if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
+                    std::cerr << "zlink authority-publish stage=stored-owner-mismatch key="
+                              << source.key << " decoded=" << (current ? 1 : 0) << '\n';
+                }
+                return {authority_publish_status_t::failed, std::move (current)};
+            }
+            return {authority_publish_status_t::published, std::move (current)};
+        }
+        const auto *conflict = std::get_if<authority_conflict_t> (&exchanged);
+        if (conflict == nullptr)
+            return {authority_publish_status_t::failed, std::nullopt};
+        return {authority_publish_status_t::conflict, decode_current (conflict->current)};
+    }
     std::optional<std::vector<relocation_participant_identity_t>>
     list_participant_identities () override
     {
