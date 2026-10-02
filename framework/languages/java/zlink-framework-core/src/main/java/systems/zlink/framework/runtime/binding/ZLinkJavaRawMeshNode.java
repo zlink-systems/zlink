@@ -1188,7 +1188,8 @@ final class ZLinkJavaRawMeshNode
                                                             new ZLinkFrameworkException(
                                                                     ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
-                                                                    "peer connection intent ended"));
+                                                                    "peer connection intent"
+                                                                            + " ended"));
                                                     return null;
                                                 }
                                                 if (isReadyPeer(selected)) admitted.complete(null);
@@ -6735,6 +6736,7 @@ final class ZLinkJavaRawMeshNode
             if (admitted != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
                 if (topology.peer(inbound.source()).isEmpty()) {
                     boolean newlyRejected = rejectedPeers.add(inbound.source());
+                    if (newlyRejected) signalStateChanged(inbound.source());
                 }
                 trySendAdmissionControl(
                         inbound.source(),

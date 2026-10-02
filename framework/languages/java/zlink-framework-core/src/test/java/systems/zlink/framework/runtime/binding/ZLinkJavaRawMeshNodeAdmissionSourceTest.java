@@ -16,6 +16,102 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
     @Test
+    void topologyAdmissionRejectionSignalsTheTargetObserverOnce() throws Exception {
+        try (var context = Zlink.createContext();
+                var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            start(source, "rejected-observer");
+            var peerRid = RoutingId.from("rejected-peer");
+            var descriptorField = ZLinkJavaRawMeshNode.class.getDeclaredField("localDescriptor");
+            descriptorField.setAccessible(true);
+            var local = (ZLinkServiceNodeDescriptor) descriptorField.get(source);
+            var peer =
+                    new ZLinkServiceNodeDescriptor(
+                            "another-mesh",
+                            peerRid,
+                            local.lifecycleGeneration(),
+                            local.descriptorRevision(),
+                            local.advertisedEndpoint(),
+                            local.channels(),
+                            local.state(),
+                            local.securityIdentity(),
+                            local.applicationVersion(),
+                            local.protocolCapabilities(),
+                            local.objectRole(),
+                            local.placementWeight(),
+                            local.activeCapacityLimit(),
+                            local.pendingCapacityLimit(),
+                            local.activeCapacityUsed(),
+                            local.pendingCapacityUsed());
+            var observer =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                            "onPeerStateChanged", RoutingId.class, Runnable.class);
+            observer.setAccessible(true);
+            var admission =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                            "dispatchAdmission", ZLinkJavaRawServicePort.Inbound.class, int.class);
+            admission.setAccessible(true);
+            var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
+            laneField.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            laneField.get(source);
+            var observed = new AtomicInteger();
+            var initial = new CompletableFuture<Void>();
+            var rejected = new CompletableFuture<Void>();
+            try (var registration =
+                    (AutoCloseable)
+                            observer.invoke(
+                                    source,
+                                    peerRid,
+                                    (Runnable)
+                                            () -> {
+                                                if (observed.incrementAndGet() == 1)
+                                                    initial.complete(null);
+                                                else rejected.complete(null);
+                                            })) {
+                initial.get(1, TimeUnit.SECONDS);
+                int hello =
+                        systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_HELLO;
+                var wire =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceM6AWireCodec();
+                try (var inbound =
+                        new ZLinkJavaRawServicePort.Inbound(
+                                peerRid,
+                                null,
+                                java.util.List.of(wire.encodeAdmission(hello, peer)),
+                                new systems.zlink.contracts.messaging.Received())) {
+                    lane.runAsync(
+                                    () -> {
+                                        try {
+                                            admission.invoke(source, inbound, hello);
+                                        } catch (ReflectiveOperationException failure) {
+                                            throw new CompletionException(failure);
+                                        }
+                                        return null;
+                                    })
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS);
+                    rejected.get(1, TimeUnit.SECONDS);
+                    lane.runAsync(
+                                    () -> {
+                                        try {
+                                            admission.invoke(source, inbound, hello);
+                                        } catch (ReflectiveOperationException failure) {
+                                            throw new CompletionException(failure);
+                                        }
+                                        return null;
+                                    })
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS);
+                    lane.runAsync(() -> null).toCompletableFuture().get(1, TimeUnit.SECONDS);
+                    assertEquals(2, observed.get());
+                }
+            }
+        }
+    }
+
+    @Test
     void preparationOwnsDescriptorFenceAndReusesTheAdmittedIntent() throws Exception {
         try (var context = Zlink.createContext();
                 var source = new ZLinkJavaRawMeshNode(context, "mesh");
