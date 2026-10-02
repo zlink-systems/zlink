@@ -18,6 +18,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -74,12 +77,158 @@ public final class ZLinkSerialExecutionQueue {
      * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
     private CompletionStage<Void> admissionFailureLocked() {
-        if (closingAdmissionSealed) {
+        LifecycleTransition transition = lifecycleTransitionLocked();
+        if (closingAdmissionSealed || (transition != null && transition.committed.getAsBoolean())) {
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.framework(
-                            ZLinkFrameworkErrorKind.REJECTED, "Spot is closing"));
+                            closingAdmissionSealed
+                                    ? ZLinkFrameworkErrorKind.REJECTED
+                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
+                            "Spot incarnation is closing"));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
+    }
+
+    private LifecycleTransition lifecycleTransitionLocked() {
+        Entry owner = suspendedLifecycle == null ? active : suspendedLifecycle;
+        return owner != null && owner.operation instanceof LifecycleTransition transition
+                ? transition
+                : null;
+    }
+
+    /**
+     * Keeps accepted messages in this owner's FIFO while a lifecycle operation replaces its
+     * incarnation.
+     */
+    public CompletionStage<Void> enqueueLifecycleTransition(
+            Supplier<CompletionStage<Void>> operation,
+            Function<Object, CompletionStage<Void>> dispatch,
+            BooleanSupplier committed,
+            Predicate<Object> retains) {
+        return enqueueBarrierNext(
+                new LifecycleTransition(operation, dispatch, committed, retains), null);
+    }
+
+    /** The original message is retained; its old handler closure is never replayed. */
+    public CompletionStage<Void> enqueueMessage(
+            Object message,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable release,
+            CompletableFuture<Void> admission) {
+        EnqueueResult result;
+        synchronized (this) {
+            Objects.requireNonNull(message, "message");
+            LifecycleTransition transition = lifecycleTransitionLocked();
+            if (transition != null
+                    && transition.committed.getAsBoolean()
+                    && !transition.retains.test(message)) {
+                CompletionStage<Void> rejected = admissionFailureLocked();
+                if (admission != null)
+                    rejected.whenComplete(
+                            (ignored, failure) -> admission.completeExceptionally(failure));
+                return rejected;
+            }
+            result = enqueueAccepted(null, payloadBytes, operation, release, message);
+        }
+        if (admission != null) admission.complete(null);
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
+    }
+
+    public synchronized List<Object> pendingMessages() {
+        return applicationPending.stream()
+                .map(entry -> entry.message)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private final class LifecycleTransition implements Supplier<CompletionStage<Void>> {
+        private final Supplier<CompletionStage<Void>> operation;
+        private final Function<Object, CompletionStage<Void>> dispatch;
+        private final BooleanSupplier committed;
+        private final Predicate<Object> retains;
+
+        private LifecycleTransition(
+                Supplier<CompletionStage<Void>> operation,
+                Function<Object, CompletionStage<Void>> dispatch,
+                BooleanSupplier committed,
+                Predicate<Object> retains) {
+            this.operation = Objects.requireNonNull(operation, "operation");
+            this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
+            this.committed = Objects.requireNonNull(committed, "committed");
+            this.retains = Objects.requireNonNull(retains, "retains");
+        }
+
+        @Override
+        public CompletionStage<Void> get() {
+            return operation
+                    .get()
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (!committed.getAsBoolean()) return;
+                                synchronized (ZLinkSerialExecutionQueue.this) {
+                                    for (Entry entry : applicationPending) {
+                                        entry.operation =
+                                                failure == null
+                                                        ? () -> dispatchPending(entry)
+                                                        : () -> {
+                                                            entry.relocationRelease.run();
+                                                            return CompletableFuture.failedFuture(
+                                                                    failure);
+                                                        };
+                                    }
+                                }
+                            });
+        }
+
+        private void commit() {
+            List<Entry> discarded;
+            synchronized (ZLinkSerialExecutionQueue.this) {
+                discarded =
+                        applicationPending.stream()
+                                .filter(
+                                        entry ->
+                                                entry.message == null
+                                                        || !retains.test(entry.message))
+                                .toList();
+                applicationPending.removeAll(discarded);
+                for (Entry entry : applicationPending) {
+                    entry.operation = () -> dispatchPending(entry);
+                }
+                discarded.forEach(ZLinkSerialExecutionQueue.this::release);
+            }
+            for (Entry entry : discarded) {
+                entry.relocationRelease.run();
+                if (entry.message != null || entry.hasRelocationRecord()) {
+                    entry.result.completeExceptionally(
+                            ZLinkFrameworkErrorOrigin.framework(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                    "Spot incarnation was closed"));
+                } else entry.result.complete(null);
+            }
+        }
+
+        private CompletionStage<Void> dispatchPending(Entry entry) {
+            if (entry.message != null) return dispatch.apply(entry.message);
+            entry.relocationRelease.run();
+            return entry.hasRelocationRecord()
+                    ? CompletableFuture.failedFuture(
+                            ZLinkFrameworkErrorOrigin.framework(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                    "Spot incarnation was closed"))
+                    : CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public void commitLifecycleTransition() {
+        LifecycleTransition transition;
+        synchronized (this) {
+            transition = lifecycleTransitionLocked();
+        }
+        if (transition == null)
+            throw new IllegalStateException("lifecycle transition is not active");
+        transition.commit();
     }
 
     public synchronized CompletionStage<Void> admitIngress(
@@ -508,6 +657,15 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueAccepted(record, payloadBytes, operation, relocationRelease, null);
+    }
+
+    private EnqueueResult enqueueAccepted(
+            byte[] record,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message) {
         Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
@@ -519,7 +677,7 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (relocation != null) {
             return new EnqueueResult(
-                    holdRelocationIngress(record, operation, relocationRelease), false);
+                    holdRelocationIngress(record, operation, relocationRelease, message), false);
         }
         Entry entry =
                 new Entry(
@@ -533,12 +691,21 @@ public final class ZLinkSerialExecutionQueue {
                         Lane.APPLICATION,
                         false);
         outstanding++;
+        entry.message = message;
         applicationPending.addLast(entry);
         return new EnqueueResult(entry.result, requestDrainLocked());
     }
 
     private CompletionStage<Void> holdRelocationIngress(
             byte[] record, Supplier<CompletionStage<Void>> operation, Runnable relocationRelease) {
+        return holdRelocationIngress(record, operation, relocationRelease, null);
+    }
+
+    private CompletionStage<Void> holdRelocationIngress(
+            byte[] record,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            Object message) {
         Entry entry =
                 new Entry(
                         nextSequence++,
@@ -551,6 +718,7 @@ public final class ZLinkSerialExecutionQueue {
                         Lane.APPLICATION,
                         false);
         outstanding++;
+        entry.message = message;
         holdRelocationEntry(entry);
         return entry.result;
     }
@@ -622,11 +790,15 @@ public final class ZLinkSerialExecutionQueue {
                 }
             }
             if (ownerContinuation != null
-                    && ((applicationContinuation == null && applicationPending.isEmpty())
+                    && (suspendedLifecycle.operation instanceof LifecycleTransition
+                            || (applicationContinuation == null && applicationPending.isEmpty())
                             || lifecycleStreak < lifecycleBurstLimit)) {
                 lifecycleStreak++;
                 continuationPending.remove(ownerContinuation);
                 return ownerContinuation;
+            }
+            if (suspendedLifecycle.operation instanceof LifecycleTransition) {
+                return null;
             }
             if (applicationContinuation != null) {
                 lifecycleStreak = 0;
@@ -642,7 +814,9 @@ public final class ZLinkSerialExecutionQueue {
         boolean lifecycleReady = !lifecyclePending.isEmpty();
         boolean applicationReady = !applicationPending.isEmpty();
         boolean continuationReady = !continuationPending.isEmpty();
-        if (lifecycleReady && lifecyclePending.peekFirst().relocationBoundary != null) {
+        if (lifecycleReady
+                && (lifecyclePending.peekFirst().relocationBoundary != null
+                        || lifecyclePending.peekFirst().operation instanceof LifecycleTransition)) {
             if (continuationReady) {
                 lifecycleStreak = 0;
                 return continuationPending.removeFirst();
@@ -667,6 +841,12 @@ public final class ZLinkSerialExecutionQueue {
 
     private boolean requestDrainLocked() {
         if (drainScheduled || active != null || !hasPending()) {
+            return false;
+        }
+        if (suspendedLifecycle != null
+                && suspendedLifecycle.operation instanceof LifecycleTransition
+                && continuationPending.stream()
+                        .noneMatch(entry -> entry.origin == suspendedLifecycle)) {
             return false;
         }
         if (suspendedLifecycle != null
@@ -696,15 +876,23 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void drainScheduled() {
-        Entry entry;
-        synchronized (this) {
-            drainScheduled = false;
-            entry = takeNextForDrainLocked();
-        }
-        if (entry != null) {
-            try {
-                executor.execute(() -> drainBatch(entry));
-            } catch (RuntimeException rejected) {
+        try {
+            executor.execute(
+                    () -> {
+                        Entry entry;
+                        synchronized (this) {
+                            drainScheduled = false;
+                            entry = takeNextForDrainLocked();
+                        }
+                        if (entry != null) drainBatch(entry);
+                    });
+        } catch (RuntimeException rejected) {
+            Entry entry;
+            synchronized (this) {
+                drainScheduled = false;
+                entry = takeNextForDrainLocked();
+            }
+            if (entry != null) {
                 entry.result.completeExceptionally(rejected);
                 finish(entry, false);
             }
@@ -1840,7 +2028,8 @@ public final class ZLinkSerialExecutionQueue {
         private final long sequence;
         private byte[] record;
         private final Supplier<byte[]> lazyRecord;
-        private final Supplier<CompletionStage<Void>> operation;
+        private Supplier<CompletionStage<Void>> operation;
+        private Object message;
         private final Runnable relocationRelease;
         private final CompletableFuture<Void> result;
         private final ZLinkFlowContext.State flow;

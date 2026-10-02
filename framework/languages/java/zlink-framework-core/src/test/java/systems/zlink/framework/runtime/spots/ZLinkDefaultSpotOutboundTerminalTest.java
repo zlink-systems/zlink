@@ -47,66 +47,102 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                 : ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "first operation failed");
         var probe = new SpotTerminalProbe(terminal, missing);
-        var backend =
-                (ZLinkBackendSpot)
-                        Proxy.newProxyInstance(
-                                ZLinkBackendSpot.class.getClassLoader(),
-                                new Class<?>[] {ZLinkBackendSpot.class},
-                                (proxy, method, arguments) -> {
-                                    if (method.getName().equals("sendToSpot")
-                                            || method.getName().equals("requestToSpot")) {
-                                        probe.submissions++;
-                                        return CompletableFuture.failedFuture(terminal);
-                                    }
-                                    if (method.getName().equals("admissionTimeout")) {
-                                        return Duration.ofSeconds(1);
-                                    }
-                                    if (method.getReturnType() == void.class) {
-                                        return null;
-                                    }
-                                    throw new AssertionError(
-                                            "unexpected backend call: " + method.getName());
-                                });
-        var serializer = new ZLinkJsonMessageSerializer();
-        var direct =
-                new ZLinkSpotDirectOutbound(
-                        new ZLinkSpotRouteMessages(serializer),
-                        Runnable::run,
-                        new ZLinkMessageFlowTracer(
-                                new ZLinkDispatchOptionsRegistration(), null, Runnable::run));
-        var outbound =
-                new DefaultSpotOutbound(
-                        backend,
-                        "mesh",
-                        null,
-                        serializer,
-                        ignored -> ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
-                        null,
-                        direct,
-                        null,
-                        null,
-                        false,
-                        Duration.ofSeconds(1),
-                        () -> probe,
-                        probe);
-        java.util.concurrent.CompletionStage<?> result;
-        if (request) {
-            var call = outbound.requestToSpot("spot", new Packet("request"));
-            result = (instance ? call.instanceSpot() : call).submit(String.class);
-        } else {
-            var call = outbound.sendToSpot("spot", new Packet("send"));
-            result = (instance ? call.instanceSpot() : call).submit();
+        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        try (var operations =
+                new systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry(
+                        scheduler)) {
+            var backend =
+                    (ZLinkBackendSpot)
+                            Proxy.newProxyInstance(
+                                    ZLinkBackendSpot.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkBackendSpot.class},
+                                    (proxy, method, arguments) -> {
+                                        if (method.getName().equals("sendToSpot")) {
+                                            probe.submissions++;
+                                            return CompletableFuture.failedFuture(terminal);
+                                        }
+                                        if (method.getName().equals("requestToSpot")) {
+                                            probe.submissions++;
+                                            return operations.submit(
+                                                    systems.zlink.framework.runtime.internal.service
+                                                            .ZLinkServiceOperationIds.next(),
+                                                    (Duration) arguments[arguments.length - 1],
+                                                    () -> CompletableFuture.failedFuture(terminal),
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                                    .ZLinkBackendReceived
+                                                            ::close);
+                                        }
+                                        if (method.getName().equals("admissionTimeout")) {
+                                            return Duration.ofSeconds(1);
+                                        }
+                                        if (method.getReturnType() == void.class) {
+                                            return null;
+                                        }
+                                        throw new AssertionError(
+                                                "unexpected backend call: " + method.getName());
+                                    });
+            var serializer = new ZLinkJsonMessageSerializer();
+            var direct =
+                    new ZLinkSpotDirectOutbound(
+                            new ZLinkSpotRouteMessages(serializer),
+                            Runnable::run,
+                            new ZLinkMessageFlowTracer(
+                                    new ZLinkDispatchOptionsRegistration(), null, Runnable::run));
+            var outbound =
+                    new DefaultSpotOutbound(
+                            backend,
+                            "mesh",
+                            null,
+                            serializer,
+                            ignored -> ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                            null,
+                            direct,
+                            null,
+                            null,
+                            false,
+                            Duration.ofSeconds(1),
+                            () -> probe,
+                            probe);
+            probe.readySend =
+                    payload ->
+                            backend.sendToSpot(
+                                            probe.address.targetNodeRid(),
+                                            probe.address.spotId(),
+                                            probe.address.spotGeneration(),
+                                            java.util.List.of(payload))
+                                    .whenComplete((ignored, failure) -> payload.close());
+            probe.readyRequest =
+                    (payload, timeout) ->
+                            backend.requestToSpot(
+                                            probe.address.targetNodeRid(),
+                                            probe.address.spotId(),
+                                            probe.address.spotGeneration(),
+                                            java.util.List.of(payload),
+                                            timeout)
+                                    .thenApply(received -> received.parts())
+                                    .whenComplete((ignored, failure) -> payload.close());
+            java.util.concurrent.CompletionStage<?> result;
+            if (request) {
+                var call = outbound.requestToSpot("spot", new Packet("request"));
+                result = (instance ? call.instanceSpot() : call).submit(String.class);
+            } else {
+                var call = outbound.sendToSpot("spot", new Packet("send"));
+                result = (instance ? call.instanceSpot() : call).submit();
+            }
+            var failure =
+                    assertThrows(
+                            CompletionException.class, () -> result.toCompletableFuture().join());
+            assertSame(terminal, failure.getCause());
+            assertEquals(missing ? 0 : 1, probe.submissions);
+            assertEquals(1, probe.resolves);
+            assertEquals(stale && !missing ? 1 : 0, probe.invalidations);
+            assertEquals(
+                    missing ? 1 : 0,
+                    probe.activations,
+                    "failure must not create an activation operation");
+        } finally {
+            scheduler.shutdownNow();
         }
-        var failure =
-                assertThrows(CompletionException.class, () -> result.toCompletableFuture().join());
-        assertSame(terminal, failure.getCause());
-        assertEquals(missing ? 0 : 1, probe.submissions);
-        assertEquals(1, probe.resolves);
-        assertEquals(stale && !missing ? 1 : 0, probe.invalidations);
-        assertEquals(
-                missing ? 1 : 0,
-                probe.activations,
-                "failure must not create an activation operation");
     }
 
     private record Packet(String value) {}

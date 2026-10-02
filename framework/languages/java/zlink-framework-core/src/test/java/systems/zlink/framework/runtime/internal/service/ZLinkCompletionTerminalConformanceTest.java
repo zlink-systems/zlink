@@ -43,7 +43,7 @@ final class ZLinkCompletionTerminalConformanceTest {
                                     4,
                                     5,
                                     "version"),
-                            "stable.Type",
+                            true,
                             6,
                             RoutingId.from("source"),
                             "source-spot",

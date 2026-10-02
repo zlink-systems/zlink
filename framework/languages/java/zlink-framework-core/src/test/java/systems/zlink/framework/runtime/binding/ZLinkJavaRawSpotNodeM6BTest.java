@@ -68,6 +68,59 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
+    void readyFrameWithoutIntentPassesFalseToClosingOwnerAdmission() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            var spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            spots.setSpotAdmissionResolver(
+                    (spotId, generation, instanceIntent, activationPresent) -> {
+                        assertFalse(instanceIntent);
+                        assertFalse(activationPresent);
+                        return CompletableFuture.completedFuture(
+                                new ZLinkFrameworkException(
+                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                                .NOT_FOUND,
+                                        "Closing owner rejects a request without Instance intent"));
+                    });
+            var codec = new ZLinkServiceM6BWireCodec();
+            var message =
+                    new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                            0,
+                            new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                    RoutingId.from("owner"),
+                                    1,
+                                    "spot",
+                                    2,
+                                    "owner",
+                                    3,
+                                    4,
+                                    "version"),
+                            false,
+                            5,
+                            RoutingId.from("source"),
+                            null,
+                            true,
+                            6,
+                            7,
+                            8L);
+            CompletableFuture<Throwable> rejected = new CompletableFuture<>();
+            assertTrue(
+                    spots.enqueueRemoteInstanceSpot(
+                            RoutingId.from("source"),
+                            codec.decodeInstanceSpotHeader(codec.encodeInstanceSpotHeader(message)),
+                            new byte[0],
+                            List.of(),
+                            null,
+                            ignored -> {},
+                            rejected::complete));
+            var failure = rejected.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ((ZLinkFrameworkException) failure).kind());
+        }
+    }
+
+    @Test
     void serviceDescriptorStaysPreparingUntilHostMarksReady() throws Exception {
         RoutingId targetRid = RoutingId.from("jvm-ready-target");
         RoutingId sourceRid = RoutingId.from("jvm-ready-source");

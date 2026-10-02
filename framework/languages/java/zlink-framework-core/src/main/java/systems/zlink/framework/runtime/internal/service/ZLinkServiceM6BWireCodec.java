@@ -396,22 +396,36 @@ public final class ZLinkServiceM6BWireCodec {
                 || (message.replyRouteId() != null && message.replyRouteId() <= 0)) {
             throw protocol("invalid Instance Spot message header");
         }
-        Writer route = new Writer();
-        route.rid(message.route().targetNodeRid(), "targetNodeRid");
-        route.opaqueNonzero(message.route().targetNodeGeneration(), "targetNodeGeneration");
-        route.text8(message.route().targetSpotId(), "targetSpotId");
-        route.nonzero(message.route().objectGeneration(), "objectGeneration");
-        route.text8(message.route().ownerId(), "ownerId");
-        route.nonzero(message.route().authorityOwnerGeneration(), "authorityOwnerGeneration");
-        route.nonzero(message.route().leaseGeneration(), "leaseGeneration");
-        route.text16(message.route().storeVersion(), "storeVersion");
-        route.text8(message.stableType(), "stableType");
-        byte[] routeBody = route.toByteArray();
+        byte[] routeBytes;
+        var route = message.route();
+        try {
+            routeBytes =
+                    ServiceWireCodec.encodeInstanceRouteV1(
+                            new ServiceWireCodec.InstanceRouteV1Ready(
+                                    ServiceWireCodec.InstanceRouteKind.READY,
+                                    new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
+                                    new ServiceWireCodec.Text8(route.targetSpotId()),
+                                    new ServiceWireCodec.AuthorityGenerationFence(
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    route.objectGeneration()),
+                                            new ServiceWireCodec.Text8(route.ownerId()),
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    route.authorityOwnerGeneration()),
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    route.leaseGeneration()),
+                                            new ServiceWireCodec.AuthorityStoreVersion(
+                                                    route.storeVersion())),
+                                    message.instanceIntent()
+                                            ? ServiceWireCodec.Bool8.TRUE
+                                            : ServiceWireCodec.Bool8.FALSE),
+                            null);
+        } catch (IOException failure) {
+            throw protocol("invalid Ready Instance route: " + failure.getMessage());
+        }
 
         Writer writer = prefix(ServiceWireConstants.COMMAND_INSTANCE_SPOT, message.flags());
-        writer.u8(1);
-        writer.u16(routeBody.length);
-        writer.bytes(routeBody);
+        writer.bytes(routeBytes);
         writer.opaqueNonzero(message.sourceNodeGeneration(), "sourceNodeGeneration");
         writer.rid(message.sourceNodeRid(), "sourceNodeRid");
         writer.optionalText8(message.sourceSpotId(), "sourceSpotId");
@@ -431,26 +445,37 @@ public final class ZLinkServiceM6BWireCodec {
         Reader reader = new Reader(frame);
         Header header = reader.prefix();
         if (header.command() != ServiceWireConstants.COMMAND_INSTANCE_SPOT
-                || (header.flags() & ~ServiceWireConstants.FLAG_METADATA) != 0
-                || reader.u8("instanceRoute.version") != 1) {
+                || (header.flags() & ~ServiceWireConstants.FLAG_METADATA) != 0) {
             throw protocol("command is not Instance Spot");
         }
+        int routeStart = reader.position();
+        reader.u8("instanceRoute.kind");
         int routeLength = reader.u16("instanceRoute.length");
         int routeEnd = reader.position() + routeLength;
+        reader.skip(routeLength);
+        ServiceWireCodec.InstanceRouteV1Ready ready;
+        try {
+            var decoded =
+                    ServiceWireCodec.decodeInstanceRouteV1(
+                            java.util.Arrays.copyOfRange(frame, routeStart, routeEnd), null);
+            if (!(decoded instanceof ServiceWireCodec.InstanceRouteV1Ready selected)) {
+                throw protocol("command is not a Ready Instance Spot");
+            }
+            ready = selected;
+        } catch (IOException failure) {
+            throw protocol("invalid Ready Instance route: " + failure.getMessage());
+        }
+        var authority = ready.authority();
         InstanceRouteFence route =
                 new InstanceRouteFence(
-                        reader.rid("targetNodeRid"),
-                        reader.nonzeroU64("targetNodeGeneration"),
-                        reader.text8("targetSpotId"),
-                        reader.nonzeroU64("objectGeneration"),
-                        reader.text8("ownerId"),
-                        reader.nonzeroU64("authorityOwnerGeneration"),
-                        reader.nonzeroU64("leaseGeneration"),
-                        reader.text16("storeVersion"));
-        String stableType = reader.text8("stableType");
-        if (reader.position() != routeEnd) {
-            throw protocol("invalid Instance route body length");
-        }
+                        RoutingId.from(ready.targetNodeRid().value()),
+                        ready.targetNodeGeneration().value(),
+                        ready.targetSpotId().value(),
+                        authority.objectGeneration().value(),
+                        authority.ownerId().value(),
+                        authority.authorityOwnerGeneration().value(),
+                        authority.leaseGeneration().value(),
+                        authority.storeVersion().value());
         long sourceNodeGeneration = reader.nonzeroU64("sourceNodeGeneration");
         RoutingId sourceNodeRid = reader.rid("sourceNodeRid");
         String sourceSpotId = reader.optionalText8("sourceSpotId");
@@ -471,7 +496,7 @@ public final class ZLinkServiceM6BWireCodec {
         return new InstanceSpotMessage(
                 header.flags(),
                 route,
-                stableType,
+                ready.instanceIntent() == ServiceWireCodec.Bool8.TRUE,
                 sourceNodeGeneration,
                 sourceNodeRid,
                 sourceSpotId,
@@ -1481,7 +1506,7 @@ public final class ZLinkServiceM6BWireCodec {
     public record InstanceSpotMessage(
             int flags,
             InstanceRouteFence route,
-            String stableType,
+            boolean instanceIntent,
             long sourceNodeGeneration,
             RoutingId sourceNodeRid,
             String sourceSpotId,
@@ -1492,9 +1517,6 @@ public final class ZLinkServiceM6BWireCodec {
         public InstanceSpotMessage {
             Objects.requireNonNull(route, "route");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-            if (stableType == null || stableType.isBlank()) {
-                throw protocol("Instance Spot stable type is required");
-            }
         }
     }
 
@@ -2139,6 +2161,11 @@ public final class ZLinkServiceM6BWireCodec {
 
         int position() {
             return input.position();
+        }
+
+        void skip(int length) {
+            require(length, "body");
+            input.position(input.position() + length);
         }
 
         Reader reader(int length) {

@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -62,6 +63,106 @@ import java.util.concurrent.atomic.AtomicBoolean;
 class ZLinkInMemoryLocationStoreTest {
     private static final Instant NOW = Instant.parse("2026-07-03T00:00:00Z");
     private static final RoutingId NODE_A = RoutingId.from(new byte[] {0x01});
+
+    @Test
+    void reincarnatePreservesOwnerAllocationAndFencesThePreviousGeneration() throws Exception {
+        var store = newAuthorityStore();
+        var owner = new ZLinkLocationOwnerToken("close-owner", 1);
+        String key = "zla1:a:4:mesh:5:close";
+        var before = createActive(store, key, owner);
+        var after =
+                assertInstanceOf(
+                        ZLinkAuthorityStored.class,
+                        store.compareExchange(
+                                        key,
+                                        new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                        ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .get());
+        assertEquals(before.objectGeneration() + 1, after.objectGeneration());
+        assertEquals(before.authorityOwnerGeneration() + 1, after.authorityOwnerGeneration());
+        assertEquals(before.ownerId(), after.ownerId());
+        assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
+        assertEquals(before.allocation(), after.allocation());
+        assertArrayEquals(new byte[] {3}, after.payload());
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                store.compareExchange(
+                                key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityDelete(),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var visible =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(key, () -> false).toCompletableFuture().get());
+        assertEquals(after.storeVersion(), visible.storeVersion());
+        assertEquals(after.objectGeneration(), visible.objectGeneration());
+    }
+
+    @Test
+    void reservedReincarnateDoesNotConsumeGenerations() throws Exception {
+        var store = newAuthorityStore();
+        var owner = new ZLinkLocationOwnerToken("close-owner", 1);
+        String key = "zla1:a:4:mesh:8:reserved";
+        var reserved = reserveActor(store, key, owner);
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(key, () -> false).toCompletableFuture().get());
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                store.compareExchange(
+                                key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var after =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(key, () -> false).toCompletableFuture().get());
+        assertEquals(before.storeVersion(), after.storeVersion());
+        assertArrayEquals(before.payload(), after.payload());
+        var next = reserveActor(store, "zla1:a:4:mesh:4:next", owner);
+        assertEquals(reserved.objectGeneration() + 1, next.objectGeneration());
+        assertEquals(reserved.authorityOwnerGeneration() + 1, next.authorityOwnerGeneration());
+    }
+
+    @Test
+    void expiredOwnerReincarnateLeavesAuthorityUnchanged() throws Exception {
+        var leaseLive = new AtomicBoolean(true);
+        var store =
+                new ZLinkInMemoryAuthorityStore(
+                        Clock.fixed(NOW, ZoneOffset.UTC),
+                        ignored -> leaseLive.get(),
+                        (descriptor, generation, owner) ->
+                                meshNodeDescriptor(owner, 1, "tcp://127.0.0.1:7000"));
+        var owner = new ZLinkLocationOwnerToken("close-owner", 1);
+        String key = "zla1:a:4:mesh:7:expired";
+        var before = createActive(store, key, owner);
+        leaseLive.set(false);
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                store.compareExchange(
+                                key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                ZLinkAuthorityMutation.reincarnate(new byte[] {3}),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var after =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(key, () -> false).toCompletableFuture().get());
+        assertEquals(before.storeVersion(), after.storeVersion());
+        assertEquals(before.objectGeneration(), after.objectGeneration());
+        assertEquals(before.authorityOwnerGeneration(), after.authorityOwnerGeneration());
+    }
 
     @Test
     void creationTerminalsAreScopedToExactOperationAndRejectionReopensReservation()

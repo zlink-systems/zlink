@@ -81,7 +81,7 @@ mission_b_config="$RUN_DIR/mission-b.properties"
 api_a_config="$RUN_DIR/api-a.properties"
 api_b_config="$RUN_DIR/api-b.properties"
 client_config="$RUN_DIR/client.properties"
-rehydrate_client_config="$RUN_DIR/rehydrate-client.properties"
+close_replay_release_file="$RUN_DIR/close-replay.release"
 owner_unavailable_client_config="$RUN_DIR/owner-unavailable-client.properties"
 owner_unavailable_release_file="$RUN_DIR/owner-unavailable.release"
 write_role_config "$mission_a_config" mission-a channelEndpoint "$mission_a_channel" "$mission_a_http"
@@ -112,13 +112,15 @@ sample.scenario=${scenario}
 EOF
 }
 write_client_config "$client_config" full
-write_client_config "$rehydrate_client_config" rehydrate
+cat >>"$client_config" <<EOF
+sample.ownerUnavailableReleaseFile=${close_replay_release_file}
+EOF
 write_client_config "$owner_unavailable_client_config" owner-unavailable
 cat >>"$owner_unavailable_client_config" <<EOF
 sample.ownerUnavailableReleaseFile=${owner_unavailable_release_file}
 EOF
 chmod 0600 "$mission_a_config" "$mission_b_config" "$api_a_config" "$api_b_config" \
-  "$client_config" "$rehydrate_client_config" "$owner_unavailable_client_config"
+  "$client_config" "$owner_unavailable_client_config"
 
 cd "$ROOT_DIR"
 if grep -rEn 'markRehydrated|recordRehydrated|owner-rehydrates' Server; then
@@ -283,7 +285,17 @@ wait_log_count "$LOG_DIR/api-a.log" \
 wait_log_count "$LOG_DIR/api-b.log" \
   "gamequest-ready kind=spot-route node=api-b mesh=gamequest.player-quests" 1
 
-"$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1
+"$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1 &
+client_pid="$!"
+pids+=("$client_pid")
+wait_log_count "$LOG_DIR/client.log" "gamequest-close-requested player=player-alice" 1
+curl --fail --silent --request POST \
+  "$mission_a_http/self-check/owner/player-alice/close" \
+  | grep -q '"closed":true'
+wait_log_total_count "gamequest-mission closing player=player-alice generation=" 1 \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+touch "$close_replay_release_file"
+wait "$client_pid"
 cat "$LOG_DIR/client.log"
 
 grep -q "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
@@ -296,11 +308,7 @@ wait_log_total_count \
   "gamequest-mission reconciled player=player-alice quest=first-hunt" 1 \
   "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
 
-curl --fail --silent --request POST \
-  "$mission_a_http/self-check/owner/player-alice/close" \
-  | grep -q '"closed":true'
-"$(app_bin Client Client)" --config "$rehydrate_client_config" >"$LOG_DIR/rehydrate-client.log" 2>&1
-cat "$LOG_DIR/rehydrate-client.log"
+grep -q "gamequest-close-replay=completed" "$LOG_DIR/client.log"
 alice_events="$(curl --fail --silent "$mission_a_http/self-check/events")"
 grep -q '"questId":"first-hunt"' <<<"$alice_events"
 grep -q '"eventType":"QuestProgressReconciledEvent"' <<<"$alice_events"
@@ -308,6 +316,12 @@ grep -q '"currentCount":5' <<<"$alice_events"
 wait_log_total_count \
   "gamequest-mission replayed player=player-alice generation=" 1 \
   "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+closing_generation="$(sed -n 's/.*gamequest-mission closing player=player-alice generation=\([0-9]*\).*/\1/p' "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")"
+replay_generation="$(sed -n 's/.*gamequest-mission replayed player=player-alice generation=\([0-9]*\).*/\1/p' "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")"
+if [[ -z "$closing_generation" || -z "$replay_generation" || "$closing_generation" == "$replay_generation" ]]; then
+  echo "Close replay must execute in a new runtime ObjectGeneration." >&2
+  exit 1
+fi
 
 "$(app_bin Client Client)" --config "$owner_unavailable_client_config" \
   >"$LOG_DIR/owner-unavailable-client.log" 2>&1 &

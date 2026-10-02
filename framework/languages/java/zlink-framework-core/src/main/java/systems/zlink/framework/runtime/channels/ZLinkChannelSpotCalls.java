@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 final class RouteSpotSendCall implements ZLinkSpotSendCall {
@@ -246,30 +245,40 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                                                     .ZLinkFlowContext.call(
                                                     operationFlow,
                                                     () -> {
-                                                        if (failure == null) {
-                                                            return resolver.observeTerminal(
-                                                                    target,
-                                                                    submitExisting(address));
-                                                        }
-                                                        RuntimeException error =
-                                                                SpotCallAddresses.unwrap(failure);
-                                                        if (!instanceIntent
-                                                                || activation == null
-                                                                || !SpotTransportAddressResolver
-                                                                        .isStaleRoute(error)) {
+                                                        if (failure != null
+                                                                && (!instanceIntent
+                                                                        || !SpotTransportAddressResolver
+                                                                                .isStaleRoute(
+                                                                                        failure))) {
                                                             return CompletableFuture
-                                                                    .<Void>failedFuture(error);
+                                                                    .<Void>failedFuture(
+                                                                            SpotCallAddresses
+                                                                                    .unwrap(
+                                                                                            failure));
                                                         }
-                                                        return activation.send(
-                                                                target,
-                                                                stableType,
-                                                                selectedMesh,
-                                                                payload,
-                                                                packetName,
-                                                                contentType,
-                                                                metadata.values());
+                                                        CompletionStage<Void> submitted =
+                                                                instanceIntent
+                                                                        ? activation == null
+                                                                                ? CompletableFuture
+                                                                                        .failedFuture(
+                                                                                                new ZLinkConfigurationException(
+                                                                                                        "Instance Spot runtime is not configured"))
+                                                                                : activation.send(
+                                                                                        target,
+                                                                                        stableType,
+                                                                                        selectedMesh,
+                                                                                        payload,
+                                                                                        packetName,
+                                                                                        contentType,
+                                                                                        metadata
+                                                                                                .values())
+                                                                        : submitExisting(address);
+                                                        return failure == null
+                                                                ? resolver.observeTerminal(
+                                                                        target, submitted)
+                                                                : submitted;
                                                     }))
-                            .thenCompose(Function.identity());
+                            .thenCompose(java.util.function.Function.identity());
             return ZLinkOneWayCalls.adaptOneWay(stage);
         }
     }
@@ -592,28 +601,36 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                         .ZLinkFlowContext.call(
                                                         operationFlow,
                                                         () -> {
-                                                            if (failure == null) {
-                                                                return resolver.observeTerminal(
-                                                                        target,
-                                                                        submitExisting(
-                                                                                address,
-                                                                                replyType));
-                                                            }
-                                                            RuntimeException error =
-                                                                    SpotCallAddresses.unwrap(
-                                                                            failure);
-                                                            if (!instanceIntent
-                                                                    || activation == null
-                                                                    || !SpotTransportAddressResolver
-                                                                            .isStaleRoute(error)) {
+                                                            if (failure != null
+                                                                    && (!instanceIntent
+                                                                            || !SpotTransportAddressResolver
+                                                                                    .isStaleRoute(
+                                                                                            failure))) {
                                                                 return CompletableFuture
                                                                         .<TReply>failedFuture(
-                                                                                error);
+                                                                                SpotCallAddresses
+                                                                                        .unwrap(
+                                                                                                failure));
                                                             }
-                                                            return activateRequest(
-                                                                    activation, replyType);
+                                                            CompletionStage<TReply> submitted =
+                                                                    instanceIntent
+                                                                            ? activation == null
+                                                                                    ? CompletableFuture
+                                                                                            .failedFuture(
+                                                                                                    new ZLinkConfigurationException(
+                                                                                                            "Instance Spot runtime is not configured"))
+                                                                                    : activateRequest(
+                                                                                            activation,
+                                                                                            replyType)
+                                                                            : submitExisting(
+                                                                                    address,
+                                                                                    replyType);
+                                                            return failure == null
+                                                                    ? resolver.observeTerminal(
+                                                                            target, submitted)
+                                                                    : submitted;
                                                         }))
-                                .thenCompose(Function.identity());
+                                .thenCompose(java.util.function.Function.identity());
             } catch (RuntimeException | Error failure) {
                 ZLinkRequestMetrics.complete(
                         metric,
